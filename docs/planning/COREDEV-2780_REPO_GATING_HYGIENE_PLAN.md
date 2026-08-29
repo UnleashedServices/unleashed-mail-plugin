@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 17
+**Status:** Planning, revision 18
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,11 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r18** `5063429`: agy `APPROVE`, codex `REQUEST_CHANGES` (2 [SUBJECT], 3 [DOCUMENT]). Its first
+> finding is the reproduction's lesson repeating: **cell 5's owner is a sink, not a sensor.** C8 makes
+> the Trunk action the *final* step, so nothing after it can hash the fixture — a committed JSON
+> artifact records what someone observed, and no permitted step observes it. Revision 15 moved cell 5
+> to that artifact to satisfy the hybrid rule and thereby gave it an owner that cannot see.
 > **r16** `3c739ec`: **BOTH ARMS `APPROVE`** — the campaign's first double approval — and the
 > **REPRODUCTION on byte-identical input (r17) FAILED**: codex flipped to `REQUEST_CHANGES` and found
 > **three [SUBJECT] defects the approving run had certified clean**, one of them a cell that *cannot
@@ -63,10 +68,13 @@
 > and three of its findings (unverified launcher download, linter-plugin provenance, GHA cache
 > provenance) are **properties of the tool, not defects in this plan**. Those are now **out of scope
 > and tracked as COREDEV-2803**, under the threat model stated in §0. One codex claim was **refuted**:
-> `uses: ./.trunk/setup-ci` is at `action.yaml:289` at the pinned SHA, exactly as cited — **it
-> repeated the claim in r11 with a third number (266, then 267), and the citation was re-verified
-> from two independent fetches (the contents API and `raw.githubusercontent.com`) that are
-> byte-identical. The line is 289.**
+> `uses: ./.trunk/setup-ci` is at `action.yaml:289` at the pinned SHA, exactly as cited. **codex has
+> now made this claim in four rounds (266, then 267, twice more), and r18 called the re-verification
+> itself false.** Settled by content rather than by counting: at that SHA the file is 430 lines and
+> byte-identical across the contents API and `raw.githubusercontent.com`; **line 267 contains
+> `${GITHUB_ACTION_PATH}/determine_check_mode.sh`** and line 289 contains `uses: ./.trunk/setup-ci`.
+> The `save-annotations` citation is likewise 81, not 74 — **line 74 is `upload-series:`**. Naming
+> what is at the disputed line is the form of this refutation that a fifth round cannot re-open.
 > **r8** `0e02bfe`: codex `REQUEST_CHANGES` ([SUBJECT] 4, [DOCUMENT] 4) + agy `REQUEST_CHANGES`
 > ([SUBJECT] 3, [DOCUMENT] 2). **The r7 allowlist closed the caller's door and left three others
 > open**, all verified at the pinned SHA: `setup/locate_trunk.sh` prefers a *checked-out*
@@ -516,16 +524,21 @@ final catch-all makes exhaustiveness structural too.
 
 | # | condition | detector |
 |---|---|---|
-| 1 | `expected` cannot be read, or the manifest is malformed | **silent**, record — with no expected value there is nothing to compare against (codex, r7) |
-| 2 | the record is unreadable, or its schema is unrecognised | **silent**, record the observed shape |
+| 1 | `expected` cannot be read, or the manifest is malformed | **silent** — with no expected value there is nothing to compare against (codex, r7) |
+| 2 | the record is unreadable, or its schema is unrecognised | **silent** |
 | 3 | the entry is absent | **silent** |
-| 4 | either version is present but **not comparable** | **silent**, record — revision 7 assumed comparability and left this unassigned (codex, r7). **Comparable means parseable under SemVer 2.0.0**, and rows 6–8 order by its precedence rules (agy, r8) |
-| 5 | the versions are of **equal precedence but not identical** — SemVer ignores build metadata, so `2.8.3+local` and `2.8.3+repo` are neither `<` nor `>` nor the same string | **silent**, record. Revision 9 called row 5 "exact version" while ordering by precedence, so this pair reached the `> expected` catch-all whose description was false of it (codex, r9). `==` in rows 6–8 means **exact identity**; equal-precedence-but-different is handled here |
+| 4 | either version is present but **not comparable** | **silent** — revision 7 assumed comparability and left this unassigned (codex, r7). **Comparable means parseable under SemVer 2.0.0**, and rows 6–8 order by its precedence rules (agy, r8) |
+| 5 | the versions are of **equal precedence but not identical** — SemVer ignores build metadata, so `2.8.3+local` and `2.8.3+repo` are neither `<` nor `>` nor the same string | **silent**. Revision 9 called row 5 "exact version" while ordering by precedence, so this pair reached the `> expected` catch-all whose description was false of it (codex, r9). `==` in rows 6–8 means **exact identity**; equal-precedence-but-different is handled here |
 | 6 | `installed == expected` | **silent** — the healthy state is not a warning |
 | 7 | `installed < expected` | **warn** — the drift this detector exists for |
 | 8 | otherwise (`installed > expected`) | **silent** — a locally newer install is not drift; warning here fires on every development clone |
 
-The hook warns if **any** entry reaches row 7, and never blocks.
+The hook warns if **any** entry reaches row 7, and never blocks. **Silent means silent: it emits
+nothing at all, and records nothing** (codex, r18). Revision 17's rows promised to "record the
+observed shape" while cell 8 required silent rows to produce *no output* — a contradiction a detector
+could satisfy by exiting quietly and recording nothing, passing every cell while violating the table.
+Recording belongs to **Table B**, the one-time §3a experiment, whose observations are written to the
+evidence artifact by a human-run measurement. The per-session detector has no sink and needs none.
 
 **Table B — what the §3a experiment establishes.** The experiment runs `claude plugin update` at
 **user scope** and re-reads the record; `u` and `p` are the user and project entries.
@@ -819,9 +832,18 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    wrong implementation without killing it. The case therefore stages a file a formatter would
    certainly rewrite (mis-indented, unsorted imports) and asserts it is **byte-identical afterwards**.
 
-   **This is a hybrid under §7's rule, and revision 14 left it whole** (codex, r14): the claim is
-   about what *the real run* did, which a Python test cannot observe. Python constructs and hashes the
-   fixture; the **evidence artifact** carries the post-invocation comparison.
+   **This is a hybrid under §7's rule, and its runtime half needs a SENSOR, not a sink** (codex, r14
+   then r18). The claim is about what the real run did, which a Python test cannot observe — but the
+   rollout evidence artifact cannot observe it either: **C8 makes the Trunk action the final step**,
+   GitHub exposes no API for an ephemeral runner's worktree, and a committed JSON file records what
+   something else measured. Revision 15 satisfied the hybrid rule with an owner that cannot see.
+
+   The runtime half therefore uses **cell 1's mechanism**: the instrumented pinned-action harness,
+   which runs the action against fixtures **outside the required workflow** and can hash the tree
+   afterwards because nothing constrains *its* step order. Python still builds and hashes the fixture;
+   the harness carries the post-invocation comparison. §7's rule gains the corollary that an evidence
+   artifact is only a valid owner for something a real run **reports** — a conclusion, a check run —
+   never for state that vanishes with the runner.
    Cell 9's static `--fix` prohibition is a separate, weaker check on the configuration; this one is
    about what the run did.
 6. **quote-keep — relocation passes, and three wrong implementations fail, each for the RIGHT
@@ -900,8 +922,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     actually lets a merge through.
 
     **This cell asserts §1's contract clause by clause — C1 through C9 — and does not restate their
-    values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`). One
-    mutant per clause, each a configuration that satisfies every *other* clause:
+    values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`).
+
     **The mutant set is GENERATED from the contract registry** (`COREDEV-2780-contract.yaml`, §1) —
     one mutant per **mutation case**, keyed by its id; iterating *entries* still under-covered any
     obligation needing more than one mutation (codex, r15). **The survivor corpus runs alongside it**
@@ -1191,12 +1213,15 @@ required gate that fails on someone else's outage is worse — but it is a real 
   comparison, and the **generated** mutant set)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
   and exit-aggregation controls, and cell 8's pre-commit entry point
-* **`scripts/tests/test_trunk_check_behaviour.py`** — **new**: cells 2, 3 and 5, the observed-run
-  cells (the gate bites; it does not over-reach; it mutates no tracked file, against a deliberately
-  fixable fixture)
-* **`docs/planning/evidence/COREDEV-2780-rollout.json`** — **new**: cells 10 and 12, plus cell 8's
-  real `SessionStart` invocation. Provenance-bound observations of real runs, not unit tests — both
-  files were named by the owner table below while this inventory omitted them (codex, r10)
+* **`scripts/tests/test_trunk_check_behaviour.py`** — **new**: the *constructible* halves of cells 3
+  and 5 — building the historically-dirty and deliberately-fixable fixtures and hashing them. It does
+  **not** own cells 2 or 3's observed outcomes; the ownership table below is authoritative, and
+  revision 17's inventory contradicted it (codex, r18)
+* **`docs/planning/evidence/COREDEV-2780-rollout.json`** — **new**: cells 10 and 12, **cell 2's M2
+  step-outcome and M3 job-conclusion observations, cell 3's observed PR outcomes, C2's live-ruleset
+  half**, and cell 8's real `SessionStart` invocation. Provenance-bound observations of things a real
+  run **reports** — never runner-local state that vanishes with the job, which is why cell 5's
+  post-invocation hash moved to the harness (codex, r18)
 * **`scripts/tests/test_trunk_upstream_parity.py`** — cell 1's instrumented-launcher harness, which
   had no owning file in revision 8 (codex, r8): it runs the pinned action against per-event fixtures
   with `trunk-path` pointed at a recording launcher and compares the captured range byte-for-byte
@@ -1212,7 +1237,8 @@ asserts** (codex, r12: a Python test cannot see a GitHub step outcome or a job's
 Assigning owners one at a time reproduces that error, so the rule is stated first:
 
 > **A cell asserting the outcome of a real GitHub run — a step conclusion, a job conclusion, a check
-> run — is owned by the provenance-bound rollout evidence artifact. A cell asserting file or
+> run — is owned by the provenance-bound rollout evidence artifact; but only for what a run
+> REPORTS, never for runner-local state that vanishes when the job ends (codex, r18). A cell asserting file or
 > configuration content is owned by a Python test. A cell asserting a relationship between local
 > content and REMOTE state is a HYBRID: it is split, and each half owned by whichever can observe it.
 > No cell may be owned by something that cannot observe the thing it asserts.**
@@ -1232,7 +1258,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 1 | `test_trunk_upstream_parity.py` (range parity, empty diff, the zero-before-sha subdomain) |
 | 2 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: both halves assert a real run's outcome (the Trunk step at M2, the job conclusion at M3), which no Python test can observe |
 | 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
-| 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; `evidence/COREDEV-2780-rollout.json` carries the post-invocation byte comparison, since the claim is about what the real run did (codex, r14) |
+| 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; **`test_trunk_upstream_parity.py`'s instrumented pinned-action harness** carries the post-invocation comparison. *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
 | 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + derived mutants + runner/timeout) |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
