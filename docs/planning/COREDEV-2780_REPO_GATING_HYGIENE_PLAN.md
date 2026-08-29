@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 18
+**Status:** Planning, revision 19
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,11 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r19** `41c709c`: agy `APPROVE`, codex `REQUEST_CHANGES` (4 [SUBJECT], **0 [DOCUMENT]** — the
+> document itself is now clean). All four are the *sensor* lesson recurring one level deeper: an event
+> mapping allowlisted by name but not by option (`push.tags` is still permitted); an M2 assertion on a
+> step `outcome` the REST API does not expose; a cell-5 harness whose launcher *records and exits* and
+> so never gives the fixture a chance to change; and a Table B row that assumes `expected` is frozen.
 > **r18** `5063429`: agy `APPROVE`, codex `REQUEST_CHANGES` (2 [SUBJECT], 3 [DOCUMENT]). Its first
 > finding is the reproduction's lesson repeating: **cell 5's owner is a sink, not a sensor.** C8 makes
 > the Trunk action the *final* step, so nothing after it can hash the fixture — a committed JSON
@@ -314,9 +319,13 @@ own non-required context.
   already diverged** — only cell 11 permitted `merge_group` (codex, r8). This block is the single
   authority; cell 11 asserts these clauses by name.
 
-  **C1 — events.** Exactly `pull_request` and `push`. Not a prohibition of two triggers: an exact
-  set, so a trigger nobody thought of is excluded by default. **`merge_group` is NOT permitted** —
-  see C7.
+  **C1 — events, and each event's OPTIONS, are allowlists.** Exactly `pull_request` and `push`, and
+  within each mapping **only `branches:`** — no `tags:`, no `tags-ignore:`, no `types:`/activity
+  filters, no other option. Revision 18 allowlisted the event *names* and left their *mappings* open
+  (codex, r19): `push.tags` sits happily beside `branches:`, a force-updated tag carries a **nonzero
+  `before`** so the empty-diff guard accepts it, and Trunk then greens a *tag* range against a SHA
+  that may be a PR head — required checks match on SHA and expected app, not on the ref type that
+  triggered the run. **`merge_group` is NOT permitted** — see C7.
 
   **C2 — branches.** `branches:` present on both events, equal to the ruleset's target set.
   **No `paths:`/`paths-ignore:`** — path filtering leaves a required context Pending, which blocks.
@@ -547,19 +556,20 @@ evidence artifact by a human-run measurement. The per-session detector has no si
 |---|---|---|
 | 1 | the command exits **nonzero** | **update-failure** — first, so a partial mutation followed by a failure is never read as success. Containment **not** established |
 | 2 | **any of the three versions — `u`, `p` or `expected` — is unreadable, absent, malformed or not comparable, in EITHER the before or the after observation**; or the record's schema is unrecognised | **no outcome**; record the observed shape. Three widenings, each from a round that found the previous wording too narrow: "either entry" rather than "a targeted entry" (codex, r8); **`expected` itself**, which Table A row 1 covers and Table B did not, so an unreadable manifest left every later comparison unevaluable with no row owning it; and **the before observation**, so a `u` that was absent or malformed pre-update and is merely below `expected` after is not forced into "moved upward" or "did not move", neither of which is true of it (both codex, r15) |
-| 3 | the persistence interval has not elapsed | **PENDING — not an outcome.** No later row may be claimed yet |
-| 4 | **`p` changed at all** — either direction, whether or not `u` moved | **the update acted on a scope it did not target.** Evaluated before the reversion row because a *downward* move in `p` is both, and revision 9's ordering recorded it only as a reversion, losing the untargeted-scope signal (codex, r9; the row it then collided with was **revision 7's** row 5, not this table's — codex, r11). Record both facts; classify here |
-| 5 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
-| 6 | any entry is `> expected` | **not drift**; the run is non-evidence rather than a result |
-| 7 | `u` changed to a version of **equal precedence but different identity** (`2.8.2+old` → `2.8.2+new`) **and `u != expected`** | **no outcome**; record. It moved, so the final row's "did not move" is false of it; it did not advance, so no advance row is true either. Revision 10 left this input matching **nothing** (codex, r10), the mirror of Table A's row 5. The
+| 3 | **`expected` differs between the before and after observations** | **no outcome**; the experiment compared against a moving target. Row 2 covers `expected` being *unreadable*; it said nothing about `expected` legitimately **changing** during the interval (codex, r19) — a release landing mid-experiment left `u = p = 2.8.3` against a new `expected = 2.8.4` reaching the final row and reporting that the update "did not act on the scope it targeted", when the install had matched the target at the moment the command ran. The alternative is to freeze `expected` for the run's duration and assert it unchanged; this row states the outcome when that assertion fails |
+| 4 | the persistence interval has not elapsed | **PENDING — not an outcome.** No later row may be claimed yet |
+| 5 | **`p` changed at all** — either direction, whether or not `u` moved | **the update acted on a scope it did not target.** Evaluated before the reversion row because a *downward* move in `p` is both, and revision 9's ordering recorded it only as a reversion, losing the untargeted-scope signal (codex, r9; the row it then collided with was **revision 7's** row 5, not this table's — codex, r11). Record both facts; classify here |
+| 6 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
+| 7 | any entry is `> expected` | **not drift**; the run is non-evidence rather than a result |
+| 8 | `u` changed to a version of **equal precedence but different identity** (`2.8.2+old` → `2.8.2+new`) **and `u != expected`** | **no outcome**; record. It moved, so the final row's "did not move" is false of it; it did not advance, so no advance row is true either. Revision 10 left this input matching **nothing** (codex, r10), the mirror of Table A's row 5. The
 `u != expected` qualifier is load-bearing: without it the row **stole a genuine containment result**
 — if `expected` itself carries build metadata, `u` arriving exactly at it is an equal-precedence
 identity change *and* a success, and row 7 would have reported "no outcome" (codex, r11) |
-| 8 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
-| 9 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
-| 10 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
-| 11 | **either `u` or `p` is of equal precedence to `expected` but not identical to it** (`expected = 2.8.3+repo`, entry `2.8.3+local`) | **no outcome**; record. Table A row 5 classifies this for the *detector*; revision 12 gave Table B no equivalent, so an unchanged `u = 2.8.3+local` fell through to the final row, whose "`u < expected`" is false of it (codex, r12). Row 7 covers an identity change *relative to the previous value*; this one covers the relationship *to `expected`* — different questions |
-| 12 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–11, so its description is true of everything that reaches it |
+| 9 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
+| 10 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
+| 11 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
+| 12 | **either `u` or `p` is of equal precedence to `expected` but not identical to it** (`expected = 2.8.3+repo`, entry `2.8.3+local`) | **no outcome**; record. Table A row 5 classifies this for the *detector*; revision 12 gave Table B no equivalent, so an unchanged `u = 2.8.3+local` fell through to the final row, whose "`u < expected`" is false of it (codex, r12). Row 7 covers an identity change *relative to the previous value*; this one covers the relationship *to `expected`* — different questions |
+| 13 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–12, so its description is true of everything that reaches it |
 
 **The terms both tables depend on** (codex + agy, r5 and r6 — earlier versions were neither
 exhaustive nor mutually exclusive):
@@ -687,7 +697,12 @@ alternative turned out to be complementary rather than competing.
 - [ ] **M2** (**after M0**) — add the `trunk-check` job, diff-scoped, `continue-on-error: true`, in
       its **own workflow file** `.github/workflows/trunk-check.yml`, satisfying **every clause of
       §1's contract, C1 through C9 — except C3's `continue-on-error` prohibition, which M2 is
-      deliberately and temporarily exempt from** (codex, r10: M2 ships `continue-on-error: true` while
+      deliberately and temporarily exempt from **at JOB scope only**. Step-scoped would make cell 2's
+      M2 half unobservable (codex, r19): a step-level `continue-on-error` turns the step's *reported*
+      `conclusion` into `success` while only the in-job `steps` context still shows
+      `outcome: failure`, and C8 leaves no later step to report it — so nothing the REST API exposes
+      could carry the claim. At job scope the Trunk step's `conclusion` stays `failure` in the
+      workflow-jobs record, which the evidence artifact can bind to** (codex, r10: M2 ships `continue-on-error: true` while
       C3 forbids that exact key, so an unqualified "every clause" contradicted the milestone it
       described). The exemption ends at M3, where cell 11's C3 mutants are enabled. This list deliberately does **not** restate their values
       (codex, r9): revision 9 claimed the contract was stated once and then copied it into M2 and §7,
@@ -785,7 +800,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    deliberately bad changed file must produce a failure. But at **M2** the job ships
    `continue-on-error: true`, so the *job* still concludes green: an unqualified "fails the job" is a
    cell that **cannot pass at M2**, and revision 11 exempted only cell 11 from that window. So:
-   * **at M2** — assert the **Trunk step's own outcome** is `failure`;
+   * **at M2** — assert the Trunk step's **API-reported `conclusion`** is `failure` in the
+     workflow-jobs record (not the in-job `outcome`, which no post-hoc observer can read — codex,
+     r19). This is why M2's exemption is pinned to job scope;
    * **from M3** — assert the **job's conclusion** is `failure`, which is the property that actually
      blocks a merge.
 3. **The gate does not over-reach.** (a) A PR touching one clean file passes with the 9027-issue
@@ -840,7 +857,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
    The runtime half therefore uses **cell 1's mechanism**: the instrumented pinned-action harness,
    which runs the action against fixtures **outside the required workflow** and can hash the tree
-   afterwards because nothing constrains *its* step order. Python still builds and hashes the fixture;
+   afterwards because nothing constrains *its* step order. **But cell 1's launcher only records argv
+   and exits zero, which for this cell is no stimulus at all** (codex, r19): a fixture is trivially
+   unchanged when nothing ran, so a recorder-only harness reports green whether or not real Trunk
+   would have rewritten it. For cell 5 the launcher must **record and then delegate to the real
+   pinned Trunk**, and the case carries a **positive control**: enabling autofix must change the
+   fixture and turn this cell red. A sensor that cannot register the thing it watches for is the
+   sink problem wearing a different hat. Python still builds and hashes the fixture;
    the harness carries the post-invocation comparison. §7's rule gains the corollary that an evidence
    artifact is only a valid owner for something a real run **reports** — a conclusion, a check run —
    never for state that vanishes with the runner.
