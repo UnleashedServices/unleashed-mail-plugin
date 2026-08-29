@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 9
+**Status:** Planning, revision 10
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,14 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r9** `041f3fc`: codex `REQUEST_CHANGES` ([SUBJECT] 11) + agy `REQUEST_CHANGES` ([SUBJECT] 2).
+> **All three of agy's findings were concordant with codex**, and those three are fixed here: five
+> unowned cells, the `lint.definitions` command-override vector, and a C1→C7 cross-reference. codex's
+> count *rose* because r9's prompt asked it to enumerate an open-ended attack surface end to end —
+> and three of its findings (unverified launcher download, linter-plugin provenance, GHA cache
+> provenance) are **properties of the tool, not defects in this plan**. Those are now **out of scope
+> and tracked as COREDEV-2803**, under the threat model stated in §0. One codex claim was **refuted**:
+> `uses: ./.trunk/setup-ci` is at `action.yaml:289` at the pinned SHA, exactly as cited.
 > **r8** `0e02bfe`: codex `REQUEST_CHANGES` ([SUBJECT] 4, [DOCUMENT] 4) + agy `REQUEST_CHANGES`
 > ([SUBJECT] 3, [DOCUMENT] 2). **The r7 allowlist closed the caller's door and left three others
 > open**, all verified at the pinned SHA: `setup/locate_trunk.sh` prefers a *checked-out*
@@ -53,6 +61,28 @@
 > **Two of agy's four claims were refuted against the pinned action's source** — see §6.1 and §5 cell
 > 1; recorded so a later round does not re-raise them. **kimi is unavailable until 2026-08-31 (weekly
 > limit); the mandatory gate is codex + agy, which is unaffected.**
+
+## §0 — What this gate defends against, and what it does not
+
+**Stated here because rounds 7-9 kept re-deriving it, each time deeper.** This plan makes `trunk
+check` a diff-scoped required context. Its adversary is **the accident**: a lint regression nobody
+noticed, a linter silently dropped from the config, a gate that reports green having checked nothing.
+Every clause of §1's contract exists to close a way the gate could *look* like it ran when it did not.
+
+**It is not a defence against someone who can open a pull request against this repo.** §1's residual
+risk (b) is the reason: for `pull_request` events the workflow file itself comes from the PR, so
+anyone who can propose a change can edit `.github/workflows/trunk-check.yml` outright. Against that
+actor, the subtler routes are irrelevant — they would use the front door.
+
+So three findings from r9 are **explicitly out of scope**, filed as **COREDEV-2803**: the Trunk
+launcher is downloaded without a digest check (`locate_trunk.sh` curls and executes it); the linter
+implementations come from a tag-pinned plugin source whose tool definitions fetch binaries without
+declared digests; and GitHub Actions caches are unsigned by design. Each is real. None is closeable
+without either abandoning the action the maintainer chose to keep, or work that only pays off after
+`.github/` is under CODEOWNERS review — which is COREDEV-2803's first item.
+
+**A reviewer noting these is right about the facts and wrong about the scope.** They are recorded
+here so that observation resolves rather than re-opens.
 
 ## Overview
 
@@ -168,7 +198,7 @@ own non-required context.
 
   **C1 — events.** Exactly `pull_request` and `push`. Not a prohibition of two triggers: an exact
   set, so a trigger nobody thought of is excluded by default. **`merge_group` is NOT permitted** —
-  see C6.
+  see C7.
 
   **C2 — branches.** `branches:` present on both events, equal to the ruleset's target set.
   **No `paths:`/`paths-ignore:`** — path filtering leaves a required context Pending, which blocks.
@@ -192,8 +222,21 @@ own non-required context.
   SHA: `setup/locate_trunk.sh` uses a checked-out `.trunk/bin/trunk`, `tools/trunk` or `./trunk` in
   preference to downloading, and `action.yaml:289` *executes* a checked-out `.trunk/setup-ci` as a
   composite action, which can rewrite `TRUNK_PATH` through `GITHUB_ENV`. A PR adding any of those
-  greens its own required gate. **The job therefore carries a guard step, before the action, that
-  fails if any of those four paths exists in the checked-out tree.**
+  greens its own required gate. **The job therefore carries a guard step, immediately before the
+  action, that fails if any of those four paths exists in the checked-out tree** — and that also
+  fails on the presence of **`.trunk/user.yaml`** or **`.trunk/env.yaml`**, which override the
+  configuration cell 4 freezes (both arms, r9).
+
+  **C8 — the job's step sequence is an allowlist, in order.** Exactly: `actions/checkout` (SHA-pinned)
+  → the C6 guard → the empty-diff guard (cell 1) → the action. No other step may exist. Revision 9
+  banned `env:` but nothing stopped an *extra step* from appending to `GITHUB_PATH`, setting
+  `BASH_ENV` through `GITHUB_ENV`, or creating one of C6's prohibited paths **after** the guard had
+  already run (codex, r9). Freezing the sequence closes the ordering hole and the injection hole
+  together; the guard's adjacency to the action is part of the assertion, not a convention.
+
+  **C9 — the action itself is pinned by exact SHA.** `trunk-io/trunk-action@e1234e67…` — nothing in
+  C1–C8 required it, and cell 9 asserted only that `actions/checkout` was pinned, so a tag or a
+  different SHA satisfied every other clause (codex, r9).
 
   **C7 — a merge queue is a STOP, not a configuration (codex, r8).** Revision 8 let M4 add
   `merge_group` if the preflight found a queue. At the pinned SHA that is the forbidden false
@@ -327,12 +370,13 @@ final catch-all makes exhaustiveness structural too.
 | 1 | `expected` cannot be read, or the manifest is malformed | **silent**, record — with no expected value there is nothing to compare against (codex, r7) |
 | 2 | the record is unreadable, or its schema is unrecognised | **silent**, record the observed shape |
 | 3 | the entry is absent | **silent** |
-| 4 | either version is present but **not comparable** | **silent**, record — revision 7 assumed comparability and left this unassigned (codex, r7). **Comparable means parseable under SemVer 2.0.0**, and rows 5–7 order by its precedence rules, so pre-release and build-metadata forms (`2.8.3-alpha`, `2.8.3+build`) have defined behaviour rather than ambiguous behaviour (agy, r8) |
-| 5 | `installed == expected` | **silent** — the healthy state is not a warning |
-| 6 | `installed < expected` | **warn** — the drift this detector exists for |
-| 7 | otherwise (`installed > expected`) | **silent** — a locally newer install is not drift; warning here fires on every development clone |
+| 4 | either version is present but **not comparable** | **silent**, record — revision 7 assumed comparability and left this unassigned (codex, r7). **Comparable means parseable under SemVer 2.0.0**, and rows 6–8 order by its precedence rules (agy, r8) |
+| 5 | the versions are of **equal precedence but not identical** — SemVer ignores build metadata, so `2.8.3+local` and `2.8.3+repo` are neither `<` nor `>` nor the same string | **silent**, record. Revision 9 called row 5 "exact version" while ordering by precedence, so this pair reached the `> expected` catch-all whose description was false of it (codex, r9). `==` in rows 6–8 means **exact identity**; equal-precedence-but-different is handled here |
+| 6 | `installed == expected` | **silent** — the healthy state is not a warning |
+| 7 | `installed < expected` | **warn** — the drift this detector exists for |
+| 8 | otherwise (`installed > expected`) | **silent** — a locally newer install is not drift; warning here fires on every development clone |
 
-The hook warns if **any** entry reaches row 6, and never blocks.
+The hook warns if **any** entry reaches row 7, and never blocks.
 
 **Table B — what the §3a experiment establishes.** The experiment runs `claude plugin update` at
 **user scope** and re-reads the record; `u` and `p` are the user and project entries.
@@ -342,8 +386,8 @@ The hook warns if **any** entry reaches row 6, and never blocks.
 | 1 | the command exits **nonzero** | **update-failure** — first, so a partial mutation followed by a failure is never read as success. Containment **not** established |
 | 2 | the record is unreadable, its schema is unrecognised, **either `u` or `p` is absent**, or **either** version is not comparable | **no outcome**; record the observed shape. "Either", explicitly: revision 8 said "a targeted entry", which left `u == expected` with `p` absent falling to a catch-all whose description was false (codex, r8) |
 | 3 | the persistence interval has not elapsed | **PENDING — not an outcome.** No later row may be claimed yet |
-| 4 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
-| 5 | **`p` changed at all** — in either direction, and **regardless of whether `u` also moved** | **the update acted on a scope it did not target.** The experiment touches user scope only, so *any* movement in `p` is the strongest root-cause signal available and must be recorded as such. Revision 8 wrote this as "`p` moved while `u` did not", so a run where **both** moved fell through to the rows below and was reported as the *expected shape* (agy, r8); and a `p` that moved past `expected` was swallowed by the `> expected` row above it (codex, r8). Evaluating it here, unconditionally, fixes both |
+| 4 | **`p` changed at all** — either direction, whether or not `u` moved | **the update acted on a scope it did not target.** Evaluated before the reversion row because a *downward* move in `p` is both, and revision 9's ordering recorded it only as a reversion, losing the untargeted-scope signal it calls strongest (codex, r9). Record both facts; classify here |
+| 5 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
 | 6 | any entry is `> expected` | **not drift**; the run is non-evidence rather than a result |
 | 7 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
 | 8 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
@@ -407,16 +451,19 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
   * **Matchers** — `startup` and `resume` **only**. `SessionStart` can also fire on `clear`,
     `compact` and `fork`; a drift warning repeated on every compaction is its own alert-fatigue
     defect, and the install cannot change mid-session, so the extra sources add noise and no signal.
-  * **Deduplication** — one warning per session. The `session_id` arrives in the hook's JSON stdin;
-    the marker is a file named for it under the plugin state directory, created with `O_EXCL` so two
-    concurrent invocations cannot both warn, and swept on a age threshold rather than accumulating.
+  * **Deduplication** — one warning per session, with the literals declared rather than gestured at
+    (codex, r9). The `session_id` arrives in the hook's JSON stdin. The marker is
+    `${CLAUDE_PLUGIN_DATA}/drift-warned/<session_id>`, created with `O_EXCL` **before** the warning is
+    emitted, so two concurrent invocations cannot both warn and a crash between create and emit fails
+    silent rather than warning twice. Markers older than **7 days** are swept on entry.
   * **Output protocol** — the warning is emitted as **`{"systemMessage": "…"}`**, not bare stdout
     (agy, r8). A `SessionStart` hook's plain stdout is injected into the **agent's context**, so a
     warning printed that way is read by the model and never seen by the developer — a detector whose
     output only the assistant can see does not warn anyone.
-  * **Timeout** — a small explicit value. The default for a synchronous command hook is **600
-    seconds**, and a detector that can hang a session start for ten minutes is worse than the drift
-    it reports.
+  * **Timeout** — **`timeout: 5`** (seconds), declared on the hook entry. The default for a
+    synchronous command hook is **600 seconds**, and a detector that can hang a session start for ten
+    minutes is worse than the drift it reports. Five seconds is ~100x the detector's work (two small
+    JSON reads); anything slower than that is a broken detector, and failing fast is the right answer.
   * **Mode selection** — the detector takes an explicit mode operand (`--index` for the pre-commit
     surface, `--worktree` for this one) rather than inferring it from the environment; the two
     surfaces read different bytes on purpose, and inference is how they would silently converge.
@@ -439,12 +486,11 @@ alternative turned out to be complementary rather than competing.
 - [ ] **M1** (independent of M0/M2) — COREDEV-2798 class-specific content-addressing, anchors
       demoted, `:342`/`:355` updated, cells 6–7 with negative controls.
 - [ ] **M2** (**after M0**) — add the `trunk-check` job, diff-scoped, `continue-on-error: true`, in
-      its **own workflow file** `.github/workflows/trunk-check.yml`. Its `on:` is **exactly**
-      `pull_request` and `push`, **each carrying `branches:` equal to the ruleset's target set** —
-      revision 7 established that requirement in §1 and §7 but omitted it here, so an implementer
-      working from this list alone would have violated §1 (agy, r7). No `workflow_dispatch`, no path
-      filters, not a job inside `plugin-ci.yml`, **no `if:` guard**, and the action's inputs per §1's
-      allowlist. See §1 for why each of those was a bypass.
+      its **own workflow file** `.github/workflows/trunk-check.yml`, satisfying **every clause of
+      §1's contract, C1 through C9**. This list deliberately does **not** restate their values
+      (codex, r9): revision 9 claimed the contract was stated once and then copied it into M2 and §7,
+      which is how the trigger set diverged in the first place. §1 is the authority; cell 11 is the
+      enforcement. Read them, do not paraphrase them.
 - [ ] **M2a** (**after M2 — the step revision 3 was missing entirely, codex r3**) — land the job on
       `alpha` too. GitHub runs the workflow **version present at the event's ref**, so a job merged
       only to `main` never executes for an `alpha` PR: `alpha` would carry the config but emit no
@@ -521,7 +567,15 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    asserts nothing about the lint. **"Proven" must name a harness, not a hope (codex, r7):** run the
    pinned action against per-event fixtures with `trunk-path` pointing at an instrumented launcher
    that records its argv, then compare the captured range arguments **byte-for-byte** against the
-   guard step's output. *(That is the one legitimate use of `trunk-path` — inside the harness, never
+   guard step's output.
+
+   **One push subdomain runs `--all`, and the guard must refuse it (codex, r9).** At the pinned SHA,
+   `push.sh` branches on `GITHUB_EVENT_BEFORE == 0000…0` — the shape GitHub sends when a branch is
+   created or a tag is pushed — and runs `trunk check --ci --all`, which is precisely the 9027-finding
+   whole-tree run §1 forbids, inside the required context. The empty-diff guard therefore **also fails
+   when `github.event.before` is all zeros on a push**, rather than letting the action reach that
+   branch. Fail-closed: a push whose diff cannot be resolved is not a push that gets to lint the tree.
+   Its own fixture. *(That is the one legitimate use of `trunk-path` — inside the harness, never
    in the shipped workflow, where §1's allowlist forbids it.)* (agy paired this with a claimed "§1 prohibition
    on custom step wrappers" — **no such prohibition exists in this document**; §1 constrains the
    action's *inputs*, not the job's steps. The mechanism gap was real, the contradiction was not.)
@@ -535,9 +589,16 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    expectation out of `.trunk/trunk.yaml` — **making a silently reduced configuration authoritative
    over the assertion meant to detect it**, the exact shape this plan's Overview names. The cell
    instead carries **the 19 expected linter names as literals** (20 enabled, minus
-   `markdown-link-check`). Fails if any of the 19 is missing, if
-   an unlisted linter appears, or if the exclusion list grows — **and it fails when
-   `.trunk/trunk.yaml` is reduced**, which the revision-5 wording could not.
+   `markdown-link-check`) **and a frozen digest over the entire `lint:` block**. Fails if any of the
+   19 is missing, if an unlisted linter appears, if the exclusion list grows, or if the block's bytes
+   change at all — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
+   could not.
+
+   **Names alone were not enough (both arms, r9).** A PR can keep all 19 names and still disable
+   every linter by overriding `lint.definitions[].commands[].run` to `exit 0`, widening
+   `success_codes`, or adding a global `ignore`. A membership oracle sees nothing wrong. The digest
+   over the whole block catches any of those, and C6 covers the sibling route of adding
+   `.trunk/user.yaml` or `.trunk/env.yaml` to override the file entirely.
 
    **What this cell does and does not prove (codex + agy, r6).** It is a *membership* oracle over the
    configuration, not proof that each linter executes: a static parse cannot show that `shellcheck`
@@ -553,7 +614,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    **in the same commit, under review, with the reason recorded**; a **version-only** bump does not
    touch the oracle, because the oracle holds names, not versions. A coordinated edit to config and
    oracle together is out of this cell's reach by construction — that is what review is for.
-5. **No autofix.** The job never mutates the tree.
+5. **No autofix: the job introduces no tracked-source mutation.** Narrower than revision 9's "never
+   mutates the tree", which was false (codex, r9) — the pinned action itself creates `.trunk/setup-ci`
+   and appends it to `.git/info/exclude`. The invariant that matters, and that is tested: **no tracked
+   file's bytes change**, and no autofix is applied.
 6. **quote-keep — relocation passes, and three wrong implementations fail, each for the RIGHT
    reason** (codex + agy, r5). Prepend to `CHANGELOG.md` → green with no edit. Then: content change →
    red; **duplicate source line → red** (kills "at least one"); and the `:342`/`:355` dependencies
@@ -596,7 +660,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    absent-or-false, no custom `--upstream`, no `--fix`, `actions/checkout` SHA-pinned — and
    **`arguments:` PRESENT and equal to §6.4's declared literal as a whole string** (§1) — absence is
    a failure, not a permitted variant (codex, r5), and an appended argument cannot pass a substring
-   test.
+   test — **and `trunk-io/trunk-action` is pinned to the exact SHA of §1's C9**, with tag-reference
+   and different-SHA mutants. Revision 9 asserted only that `actions/checkout` was pinned, so a
+   re-tagged or swapped action satisfied every other clause (codex, r9).
 10. **The chosen §6.1 annotation mechanism is present and works** on a non-fork PR — no 403. Under
     option (b) that is checkable rather than merely observed: assert the run takes the
     `--github-annotate-file` branch (**not** `--github-annotate`) and that the `trunk-annotations`
@@ -608,18 +674,30 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     required check (codex, r7) — revision 7 said "success", which is narrower than the set that
     actually lets a merge through.
 
-    **This cell asserts §1's contract clause by clause — C1 through C7 — and does not restate their
+    **This cell asserts §1's contract clause by clause — C1 through C9 — and does not restate their
     values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`). One
     mutant per clause, each a configuration that satisfies every *other* clause:
-    * **C1** add a third trigger · **C2** drop `branches:`, or add `paths:` · **C3** an `if:` on the
-      Trunk step, a `needs:` whose dependency fails, `continue-on-error` at either level ·
-      **C4** any unlisted `with:` key, `trunk-path` and `post-init` specifically ·
-      **C5** `env: {TRUNK_PATH: /bin/true}` at job level and at step level ·
-      **C6** each of the four repository paths in turn, each a no-op executable exiting 0 ·
-      **C7** `merge_group` present at all.
+    **One mutant per ATOMIC rule, not per clause** (codex, r9: a single mutant cannot exercise the
+    independent parser paths inside a multi-part clause):
+    * **C1** — a third trigger added; and, separately, a *required* trigger missing.
+    * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
+      present; `paths-ignore:` present.
+    * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
+      `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
+      invocations; **two** Trunk invocations.
+    * **C4** — each of `trunk-path` and `post-init`; plus one arbitrary unlisted key.
+    * **C5** — `env: {TRUNK_PATH: /bin/true}` at job level, and again at step level.
+    * **C6** — each of the four launcher paths in turn, and each of `.trunk/user.yaml`,
+      `.trunk/env.yaml`. **The `.trunk/setup-ci` fixture must be a VALID composite action that exits
+      green** (codex, r9) — `uses: ./.trunk/setup-ci` expects an action directory, so a bare no-op
+      executable reds because it is *malformed*, and the mutant would survive deletion of C6 while
+      still appearing to be caught.
+    * **C7** — `merge_group` present at all.
+    * **C8** — an extra step inserted before the action; the C6 guard moved away from its adjacency.
+    * **C9** — the action referenced by tag; the action referenced by a different SHA.
 
-    Each mutant must produce a **red cell**, and — per the lesson of cells 6 and 7 — must be shown to
-    do so for **its own reason**, not through a sibling clause.
+    Each mutant must produce a **red cell** and — per the lesson of cells 6 and 7 — must be shown to
+    do so **for its own reason**, identified by its own diagnostic, not through a sibling clause.
 
     The C6 mutants matter most, because they are the ones a **pull request** can introduce: the
     guard step must fail on a checked-out `.trunk/bin/trunk`, `tools/trunk`, `./trunk` or
@@ -807,16 +885,14 @@ required gate that fails on someone else's outage is worse — but it is a real 
 
 ## §7 — Files Changed
 
-* **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow
-  (§1): `on:` is `pull_request` + `push` to the gated bases, with **no `workflow_dispatch`, no
-  `workflow_call`, no path filters, and no job-level `if:`** — each of those reintroduces a state in
-  which the context reports a **merge-satisfying** conclusion (`success`, `skipped` or `neutral`)
-  without a real Trunk run. SHA-pinned action + checkout, no
-  `check-mode`/`post-annotations`/custom upstream, `arguments:` set to §6.4's declared literal
-  (stated there, not here), `save-annotations: true` with `contents: read` (§6.1's decision), and an
-  explicit empty-diff guard step (cell 1), **and the C6 repository-supplied-launcher guard step** —
-  which fails, before the action runs, if the checked-out tree contains `.trunk/bin/trunk`,
-  `tools/trunk`, `./trunk` or `.trunk/setup-ci`. **No `env:` on the job or the step** (C5).
+* **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow and
+  satisfies **§1's contract, clauses C1–C9** — the event set, the branch filters, the absence of
+  anything that skips or masks, the `with:` allowlist, the `env:` prohibition, the
+  repository-supplied-launcher guard, the merge-queue stop, the frozen step sequence, and the action's
+  exact SHA pin. Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's `arguments:`
+  literal, and cell 1's empty-diff guard step. **Values are stated in §1 and §6, never here** — this
+  is a file inventory, and revision 9's copy of the contract into this entry is exactly the
+  divergence risk §1's singularity exists to remove (codex, r9).
 * `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
   which is exactly why `trunk-check` may not live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
@@ -842,13 +918,37 @@ required gate that fails on someone else's outage is worse — but it is a real 
   forbids it in the shipped workflow.)*
 * **`scripts/tests/test_session_start_drift_hook.py`** — §3b's `SessionStart` contract: matcher set,
   `${CLAUDE_PROJECT_DIR}` resolution, the `O_EXCL` dedup marker under concurrent invocation, the
-  `systemMessage` output shape, and the timeout against a sleeping detector (cell 8)
+  `systemMessage` output shape, and the timeout against a sleeping detector (cell 8, SessionStart half)
+
+**Every cell's owner, stated explicitly** — revision 9 claimed each cell had one and **five did not**
+(both arms, r9: cells 2, 3, 5, 10 and 12 were unassigned, and 6–7 only implied):
+
+| cell | owner |
+|---|---|
+| 1 | `test_trunk_upstream_parity.py` (range parity, empty diff, the zero-before-sha subdomain) |
+| 2, 3, 5 | `test_trunk_check_behaviour.py` — **new**: the gate bites, does not over-reach, and mutates no tracked file. These are *observed-run* cells, not parse cells, and revision 9 left them ownerless |
+| 4, 9, 11, 14 | `test_trunk_check_workflow.py` (parse + census + mutants) |
+| 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
+| 8 | `test_session_start_drift_hook.py` (SessionStart half) + `test_precommit_trunk_gate.py` (pre-commit entry point) |
+| 10, 12 | `docs/planning/evidence/COREDEV-2780-rollout.json` — **evidence, not a unit test**: the annotation artifact and the dual-base provenance-bound check runs are observations of real runs, recorded as a committed artifact the way COREDEV-2711 §3a's measurement was. Saying so is what makes them ownable |
+| 13 | `test_precommit_trunk_gate.py` |
 
 ## §8 — Notes
 
 **Revision 1's largest defect was not technical.** It was written without reading COREDEV-2771's
 planning document, which contains a section addressed to this ticket handing over six reviewed
 defects. Both reviewers re-derived that work. Grep `docs/planning/` for the predecessor first.
+
+**Revision 9's most useful finding was one this plan should NOT act on.** Asked to enumerate the
+execution surface end to end, codex returned eleven [SUBJECT] findings — up from four — and three of
+them were true statements about *Trunk and GitHub Actions* rather than defects in this plan: the
+launcher is downloaded without a digest check, linters come from a tag-pinned plugin source, and
+Actions caches are unsigned. All real. None closeable without abandoning the action the maintainer
+chose to keep. **A review can be correct and still be answering a question the work is not asking**,
+and the tell was the count rising as the prompt widened. §0 now states the threat model so that
+observation resolves instead of re-opening, and COREDEV-2803 carries the work if the exposure ever
+justifies it. The concordant signal was elsewhere and much smaller: both arms independently found the
+five unowned cells, the `lint.definitions` override, and one wrong cross-reference.
 
 **Revision 8's largest defect was closing one door on a hallway.** The r7 allowlist correctly
 constrained what the *caller* passes — and the action takes its launcher from three other places the
