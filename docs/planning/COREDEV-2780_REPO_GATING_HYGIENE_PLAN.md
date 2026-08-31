@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 21
+**Status:** Planning, revision 22
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r21** `c22991a`: codex `REQUEST_CHANGES` ([SUBJECT] 9) + agy `APPROVE_WITH_NOTES` ([SUBJECT] 2),
+> **concordant on all three defects revision 21 introduced in its own repair** — C1 still forbade the
+> `types:` that C2 now requires, cell 11's replacement mutant (`tags:`) is no more constructible under
+> `pull_request` than the `push.tags` it replaced, and the `origin/main` fix reached Table A but not
+> §3b. *Fixing a fix-one-site defect by fixing one site.* codex's tenth finding — a fifth attempt at
+> the `action.yaml` citations, this time **quoting invented text** at all four lines — is refuted in §8
+> against a fresh byte-identical fetch.
 > **SWEEP** (pre-r21, not a gate round): a ten-lens adversarial pass over revision 20 by Claude
 > subagents — 49 findings, and **eight of ten independent lenses converged on the same defect**:
 > revision 20's push-leg split was applied to **C1 only**, leaving §1's Resolution, C2, cell 11's
@@ -92,8 +99,14 @@
 > provenance) are **properties of the tool, not defects in this plan**. Those are now **out of scope
 > and tracked as COREDEV-2803**, under the threat model stated in §0. One codex claim was **refuted**:
 > `uses: ./.trunk/setup-ci` is at `action.yaml:289` at the pinned SHA, exactly as cited. **codex has
-> now made this claim in four rounds (266, then 267, twice more), and r18 called the re-verification
-> itself false.** Settled by content rather than by counting: at that SHA the file is 430 lines and
+> now made this claim in FIVE rounds, and in r21 escalated from asserting wrong numbers to QUOTING
+> INVENTED TEXT at them** — claiming 289 held `run_with_timeout.sh pull_request.sh`, 267 held
+> `if: env.INPUT_SETUP_DEPS == 'true'`, 81 held `post-annotations:` and 74 held `save-annotations:`.
+> A fourth fetch, byte-identical to the previous three (430 lines, sha256 `c84c1c16f55a406c`), shows
+> **74 `upload-series:`, 81 `save-annotations:`, 89 `post-annotations:`, 267
+> `determine_check_mode.sh`, 289 `uses: ./.trunk/setup-ci`.** Its whole claim sits one input-block
+> early. A quoted line is a checkable artifact like any other, and both arms have now fabricated
+> one.** Settled by content rather than by counting: at that SHA the file is 430 lines and
 > byte-identical across the contents API and `raw.githubusercontent.com`; **line 267 contains
 > `${GITHUB_ACTION_PATH}/determine_check_mode.sh`** and line 289 contains `uses: ./.trunk/setup-ci`.
 > The `save-annotations` citation is likewise 81, not 74 — **line 74 is `upload-series:`**. Naming
@@ -340,9 +353,20 @@ own non-required context.
   already diverged** — only cell 11 permitted `merge_group` (codex, r8). This block is the single
   authority; cell 11 asserts these clauses by name.
 
+  **C0 — the workflow ROOT mapping is an allowlist.** Only `name`, `on`, `permissions`, `jobs`.
+  **`concurrency` is prohibited at workflow and job level** (codex, r21): a constant concurrency group
+  makes GitHub **cancel the in-flight run** when a new one starts, and a cancelled required check is
+  not a passing one — a rapid second push would leave the context `cancelled` or pending on the SHA a
+  merge is waiting on. Converting the job mapping to an allowlist in revision 21 left the root open,
+  which is the same level-above defect one level further out.
+
   **C1 — one event, and its OPTIONS are an allowlist.** `.github/workflows/trunk-check.yml` is
-  `pull_request` **only**, and within that mapping **only `branches:`** — no `tags:`, no
-  `tags-ignore:`, no `types:`/activity filters, no other option.
+  `pull_request` **only**, and within that mapping **only `branches:` and `types:`** — no `tags:`,
+  no `tags-ignore:`, no `paths:`/`paths-ignore:`, no other option. **`types:` is permitted here
+  because C2 REQUIRES it**; revision 21 added that requirement to C2 and left this clause forbidding
+  it, so no workflow, registry entry or generated mutant could satisfy both (codex + agy, r21). The
+  distinction C1 draws is not "no activity filters" but **no filter that NARROWS reachability** — a
+  `types:` set that is a strict superset of the default widens it, and C2 pins the exact set.
 
   **The `push` leg moved OUT of the required context (codex, r20).** Revision 19 emitted the same
   `trunk-check` context for both events, and required checks match on SHA and expected app — *not* on
@@ -357,8 +381,10 @@ own non-required context.
   and then left it in no milestone, no §7 inventory entry and under no clause — a workflow the plan
   requires to exist that nothing creates. Its contract is deliberately smaller: `on: push` with
   `branches:` equal to the ruleset's target set, the same SHA-pinned action and checkout as C4/C8/C9
-  require, and **`continue-on-error: true` permanently**, so it can never block and nothing is tempted
-  to require it later. **Cell 16 asserts it is absent from the ruleset's required contexts** — the
+  require, **the same empty-diff and zero-`before` guard the required job carries** — the canary is the
+  only leg that can reach `push.sh`'s `--all` branch, so the guard belongs where the hazard is — and
+  **`continue-on-error: true` permanently**, so it can never block and nothing is tempted to require
+  it later. **Cell 16 asserts it is absent from the ruleset's required contexts** — the
   property that keeps cross-event substitution closed.
 
   *(The option allowlist above is what revision 19 added after finding the event **names** allowlisted
@@ -435,8 +461,12 @@ own non-required context.
   every other input must be absent.
 
   **`persist-credentials: false` is required, and revision 20 forbade it (sweep).** `actions/checkout`
-  leaves the job's credential in `.git/config` by default, which is exactly what zizmor's
-  **`artipacked`** rule reports — and zizmor is one of the **19 linters this gate itself requires**,
+  persists the job's credential by default — **in `.git/config` below v6, and in `$RUNNER_TEMP` from
+  v6** (codex, r21: revision 21 stated the storage location categorically while the plan pins no
+  checkout generation). Either way it persists, and either way zizmor's **`artipacked`** rule reports
+  it unless later steps genuinely need the credential — which none of these four steps do. C9's SHA
+  pin fixes the generation, so the storage detail is determined at implementation and recorded there
+  rather than asserted here — and zizmor is one of the **19 linters this gate itself requires**,
   running under the `auditor` persona. So revision 20's allowlist would have produced a workflow that
   **fails the gate it defines**, with the only in-workflow remedy prohibited. `.github/zizmor.yml` is
   deliberately empty of ignores and documents suppression as the last resort; setting the input is the
@@ -562,8 +592,24 @@ single-caller claim (codex, r7).
 **Why that one, and why it survives the bootstrap problem.** A session bound to 2.7.0 cannot execute
 a detector shipped only in 2.8.4+. The hook is not shipped by the plugin — it lives in the
 **checkout** and runs from it, so it is current regardless of which install a session loaded. It
-compares `~/.claude/plugins/installed_plugins.json` against the repo's
-`.claude-plugin/plugin.json`, needing no session environment and no plugin code.
+compares `~/.claude/plugins/installed_plugins.json` against
+**`.claude-plugin/plugin.json` as of `origin/main`**, needing no session environment and no plugin
+code.
+
+**Both surfaces read `origin/main`, and revision 21 propagated that to Table A only** (codex, r21).
+Earlier revisions had pre-commit read the *staged* manifest and `SessionStart` the *worktree*; both
+are wrong for the same reason Table A now states — the working tree and the index are where the
+version-bump rule *raises* the version, so either would warn on the healthy state for a whole
+branch's life. The `--index`/`--worktree` mode operand accordingly selects **which installs to
+report on**, not which manifest to compare against; keeping it as a manifest selector would have
+re-enforced the superseded design.
+
+**`origin/main` is a local bookmark, so freshness is part of the contract** (codex, r21). It is only
+as current as the last `git fetch`, and a detector that silently compares against a month-old
+bookmark misses exactly the drift it exists to find. The detector therefore records the bookmark's
+age with every run and, per Table A row 1, is **silent when it cannot establish one** — it never
+guesses. It does **not** fetch: a read-only detector that reaches the network on every session start
+or commit would be a worse defect than the drift it reports.
 
 **Which copy of that manifest, per surface (codex, r7).** The pre-commit surface claims to catch "a
 version claim about to be committed" — so it must read the **staged** manifest,
@@ -844,11 +890,14 @@ alternative turned out to be complementary rather than competing.
       A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
 
 - [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
-      §7's file inventory and in no milestone, and this plan lands **five or six separate shipping
-      PRs** (M0, M1, M2+M2b, M2a, M5a, M6) — one bump cannot serve them. **Each PR that changes a
+      §7's file inventory and in no milestone, and this plan lands **six separate shipping PRs**
+      (M1, M2+M2b, M2a, **M3**, M5a, M6) — one bump cannot serve them. **Each PR that changes a
       shipped asset carries its own bump**: `plugin.json`, the README H1, the README's newest
-      `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. M0 and M4 are the
-      exceptions — a branch sync and a ruleset edit ship no plugin asset. `validate-version-sync.sh`
+      `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. **M3 belongs on that list**
+      — it edits the workflow on both bases to remove `continue-on-error`, a shipped-asset change that
+      revision 21 omitted while demanding a bump on every such PR (codex, r21). **M0 and M4 are the
+      only exceptions** — a branch sync and a ruleset edit ship no plugin asset; revision 21 listed M0
+      as shipping and then exempted it two lines later. `validate-version-sync.sh`
       only checks the four sites **agree**, not that they **moved**, so agreement at a stale version
       passes: the bump is a milestone obligation, not something the validator will catch.
 
@@ -859,6 +908,13 @@ M3 and M4 are gated on evidence, not schedule.
 Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff passes having checked nothing.
 
 1. **The diff is non-empty and correct per event — and the job, not just the test, detects it.**
+   *(Scope, corrected: the REQUIRED job runs on `pull_request` only, so its own case is the PR range.
+   The `push` cases below belong to the canary and to the parity harness, which evaluates fixtures for
+   both events — revision 21 left this cell describing a two-event required job, and put the push
+   `--all` branch "inside the required context" where it no longer is (codex + agy, r21). **The
+   zero-`before` guard is therefore a CANARY obligation**: it is the push leg that can reach
+   `push.sh`'s `--all` branch, so C1's canary contract carries that guard and cell 16 observes it — a
+   canary without it would ship while this cell's harness passed.)*
    Assert the *resolved* upstream/diff on `pull_request`, `push` to `main`, and `push` to `alpha`.
    **The mechanism was missing in revision 3 (agy, r3, in part):** `trunk check` exits **0** when the
    resolved diff matches no files, so the action alone reports green having checked nothing — which
@@ -890,6 +946,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      r19). This is why M2's exemption is pinned to job scope;
    * **from M3** — assert the **job's conclusion** is `failure`, which is the property that actually
      blocks a merge.
+   * **also from M3 — a real RETARGET case** (codex, r21). The `types:` widening is a *static* clause
+     assertion; nothing yet observes that it works. Open a PR against one base, let `trunk-check`
+     land, then **retarget it to the other base** and assert the context that satisfies the rule is a
+     **new run against the new base's range** — not the earlier same-SHA result. Without `edited` in
+     the set the old run persists and this case fails, which is the discrimination the clause needs.
 3. **The gate does not over-reach** — *asserted from M3, when the job can actually fail*. At M2 the
    job ships `continue-on-error: true`, so its "passes" halves cannot fail and its "still failing"
    half cannot pass; like cell 2, this cell is milestone-qualified rather than unqualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
@@ -1054,9 +1115,18 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
     (codex, r14). The generator must at minimum produce:
     * **C1/C2** — a second trigger added (`push`, `workflow_dispatch`); the `pull_request` event
-      **removed**; a `tags:` mapping option; **one arbitrary unlisted mapping option**; `branches:`
-      **absent**; `branches:` unequal to the ruleset set; and **`types:` reduced to the default set**
-      (which drops `edited` and reintroduces the stale-base pass).
+      **removed**; **`paths:` added** (a real, valid `pull_request` option that narrows); **one
+      arbitrary unlisted mapping option**; `branches:` **absent**; `branches:` unequal to the ruleset
+      set; **`types:` reduced to the default set** (dropping `edited`, reintroducing the stale-base
+      pass); and **`types:` REMOVED entirely** — its failure mode is omission, and a validator that
+      checks the value only when the key is present rejects the reduced-set mutant while accepting an
+      absent one (codex, r21).
+
+      **The `tags:` mutant is dropped as unconstructible (agy, r21):** `tags:` is not a valid
+      `pull_request` mapping option at all, so that mutant fails **schema** validation rather than
+      contract validation — exactly the defect that retired `push.tags` one revision earlier, in the
+      case written to replace it. A narrowing option that *is* valid under `pull_request` is `paths:`,
+      which is what the case now uses.
 
       **Two of revision 20's cases were dead on arrival and are replaced (sweep).** "A valid
       `push.tags` mapping option" and "a `types:` activity filter" were written against the two-event
@@ -1158,8 +1228,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     * a staged clean file commits with the 9027 backlog present (so the hook is not `--all`);
     * `--no-fix` is passed, and **neither the index nor the worktree is modified** by the hook — this
       Trunk version applies fixes automatically otherwise (codex, r5);
-    * the check runs under its declared timeout, using a **macOS-portable** mechanism, exercised
-      against a sleeping fake `trunk` on the PATH;
+    * the check runs under its declared timeout — **asserted as the literal `120`, not merely "some
+      timeout"** (codex, r21): a test that derives its sleep threshold from whatever the
+      implementation declares accepts any value, covering the line without covering its operand. The
+      constant is mutated, and the mechanism must be **macOS-portable**, exercised against a sleeping
+      fake `trunk` on the PATH;
     * the hook's **exit code aggregates**, asserted by making an *earlier* hook command fail while
       the trunk check succeeds — appending a passing command after `.githooks/pre-commit:7` would
       otherwise mask its nonzero result.
@@ -1190,12 +1263,20 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     census at all. The census must model the reusable-workflow form and **fail closed** — never
     silently count zero — on any name it cannot resolve statically.
 15. **The job's runner and timeout are what §1 requires, and §1 matches its registry.** Assert
-    `runs-on: ubuntu-latest` and an explicit `timeout-minutes`; **and assert the rendered C1–C9 prose
+    `runs-on: ubuntu-latest` and **`timeout-minutes: 15`** — a *concrete* ceiling, mutated as an
+    operand. Revision 21 required only that the key *exist*, which `timeout-minutes: 360` satisfies
+    while being **GitHub's default six-hour ceiling** — a timeout that changes nothing (codex, r21).
+    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert the rendered C1–C9 prose
     agrees with `COREDEV-2780-contract.yaml`**, so the registry cannot silently diverge from the
     document that explains it. §1 has required both since revision 2 and
     **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
     hang until the platform's six-hour ceiling while the required context sits pending.
-16. **The push canary is NOT a required context, and never becomes one** (sweep). Assert that
+16. **The push canary is not a required context AT ROLLOUT, and M4 re-reads it** (sweep; scoped
+    codex r21). A committed ruleset observation is a **point-in-time read** — it cannot prove "never",
+    and claiming so would be a cell asserting more than its owner can see. The honest claim is
+    rollout-time absence, **re-verified in M4's post-edit readback** alongside the other conditions
+    checked there. Continuous monitoring is out of scope; nothing here prevents a later maintainer
+    from requiring the canary, which is why §1's contract states the reason it must stay unrequired. Assert that
     `trunk-check-push` is absent from ruleset `Control`'s required-status-check list, that its
     workflow carries `continue-on-error: true`, and that it exists at all — revision 20 required the
     file to exist while no milestone created it and no inventory listed it. This is the cell that
@@ -1386,7 +1467,10 @@ required gate that fails on someone else's outage is worse — but it is a real 
   split: the **workflow** is the sensor — it runs the pinned action against per-event fixtures with an
   instrumented launcher, and uploads the captured argv and post-run tree hashes as an artifact; the
   **Python test** asserts against that artifact. Same shape as cells 10/12: a real run reports, a test
-  judges. Carries cell 1's range parity and cell 5's post-invocation comparison: it runs the pinned action against per-event fixtures
+  judges. **The harness's action inputs are EXTRACTED from `.github/workflows/trunk-check.yml` and
+  digest-bound to it, not written independently** (codex, r21): a harness that invokes its own
+  non-fixing form proves only that *that* form does not mutate, while the shipped job could invoke an
+  autofixing one and still reach this cell green. The harness must run what ships. Carries cell 1's range parity and cell 5's post-invocation comparison: it runs the pinned action against per-event fixtures
   with `trunk-path` pointed at a recording launcher and compares the captured range byte-for-byte
   against the guard step's output. *(The harness is the one legitimate use of `trunk-path`; §1's C4
   forbids it in the shipped workflow.)*
