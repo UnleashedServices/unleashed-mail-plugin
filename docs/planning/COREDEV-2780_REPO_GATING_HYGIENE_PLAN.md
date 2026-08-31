@@ -1,8 +1,8 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 27
+**Status:** Planning, revision 28
 **Created:** 2026-08-28
-**Last Updated:** 2026-08-28
+**Last Updated:** 2026-08-31
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
 
 > **r1** `04048c7`: codex + agy both `REQUEST_CHANGES`. Concordant: §2's fix was wrong for
@@ -11,6 +11,14 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **GATED at revision 27** (`0e3dccb`, digest `628beceeb2277ea6`): **r28** codex `APPROVE_WITH_NOTES`
+> + agy `APPROVE_WITH_NOTES`, and **r29 REPRODUCED that double approval on byte-identical input** —
+> the campaign's first approval to survive the reproduction the r16 double approval failed. Combined
+> verdict persisted under `.verdicts/`. **Kimi K3 at `max`** (verified from `wire.jsonl`, not
+> self-reported) then reviewed the same bytes as a **non-gating third lens** and also returned
+> `APPROVE_WITH_NOTES` — finding two things twenty-nine rounds of diff-reading could not, because no
+> edit ever touched them: **the plan never tested that a red check blocks a merge**, and **it had no
+> way to turn the gate off**. Revision 28 folds those in, with codex's four r28 notes.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -301,7 +309,10 @@ distinction the GitHub doc actually draws is what the two kinds of filter skip o
   base that touches only excluded paths requires a context the workflow never produces, leaving it
   **Pending, which blocks merging** — a false pass traded for a permanent block.
 
-**No `if:` on the job, and none on the Trunk step** — see cell 11 for the full prohibition set.
+**No `if:` on the job, and none on ANY of the five steps** — C3 widened this after an `if: false` on
+a *guard* step was found to preserve both the frozen sequence and the frozen body digests while
+removing the guard entirely; the two-site wording that defect named survived here. See C3 and cell 11
+for the full prohibition set.
 
 This does not change the context name: a required check names a job's **effective check name** — its
 `name:` where present, else the job id (cell 14) — never the workflow, so the context stays
@@ -384,6 +395,15 @@ own non-required context.
   Revision 8 copied the event set and the input allowlist into §1, M2, cell 11 and §7, **and they had
   already diverged** — only cell 11 permitted `merge_group` (codex, r8). This block is the single
   authority; cell 11 asserts these clauses by name.
+
+* **THE CONTRACT'S TEETH DEPEND ON `validate` STAYING A REQUIRED CONTEXT.** Every clause below is
+  enforced by the Python suites, which run **only** inside `plugin-ci.yml`'s `validate` job. If that
+  context were ever dropped from ruleset `Control`, a contract-breaking edit to `trunk-check.yml` would
+  merge green behind a passing `trunk-check`, and nothing here would notice. **Verified live at
+  revision 28**: `Control` requires `validate`, `py39-smoke`, `secret-scan`, `load-check` and
+  `redactor-equivalence (ubuntu-latest)`, all under integration 15368. The dependency holds — but it
+  was unstated, and an unstated dependency is one nobody re-checks (kimi, third lens). M4's readback
+  compares the canonical ruleset, so a payload dropping `validate` is caught there.
 
   **C0 — the workflow ROOT mapping is an allowlist, and `permissions` is PINNED BY VALUE.** Only
   `name`, `on`, `permissions`, `jobs` — and `permissions:` must be exactly **`contents: read`**
@@ -479,7 +499,7 @@ own non-required context.
   enumerating *prohibited* keys, so a key nobody thought to forbid was permitted by default — the same
   shape, at the one level that had not yet been converted. The prohibitions below remain as the
   named-and-tested cases *within* that allowlist: No `if:` and no `continue-on-error` on the job or on
-  **any of the four steps** — revision 12 named only the job and the Trunk step, so `if: false` on a
+  **any of the five steps** — revision 12 named only the job and the Trunk step, so `if: false` on a
   *guard* step preserved both the frozen sequence and the frozen body digest while removing the guard
   entirely (codex, r12). No `needs:`; no `strategy.matrix`; **no workflow- or job-level
   `defaults.run`**, which can redirect `shell` or `working-directory` for every step at once. Exactly
@@ -509,7 +529,10 @@ own non-required context.
   configuration cell 4 freezes (both arms, r9).
 
   **C8 — the job's step sequence is an allowlist, in order.** Exactly: `actions/checkout` (SHA-pinned)
-  → the empty-diff guard (cell 1) → **the C6 guard** → the action. No other step may exist.
+  → **the C6a resolver-digest guard** → the empty-diff guard (cell 1) → **the C6 launcher-path guard**
+  → the action. No other step may exist. The two guards are separate because their correct positions
+  differ: C6a's must precede the step that *executes* the resolver, and C6's must be the last thing
+  before the action so nothing can create a launcher path behind its back.
 
   **The order matters and revision 10 had it wrong (codex, r10).** C6 requires its guard *immediately*
   before the action; revision 10's C8 placed the empty-diff guard between the two, so a permitted,
@@ -530,7 +553,7 @@ own non-required context.
   persists the job's credential by default — **in `.git/config` below v6, and in `$RUNNER_TEMP` from
   v6** (codex, r21: revision 21 stated the storage location categorically while the plan pins no
   checkout generation). Either way it persists, and either way zizmor's **`artipacked`** rule reports
-  it unless later steps genuinely need the credential — which none of these four steps do. C9's SHA
+  it unless later steps genuinely need the credential — which none of these five steps do. C9's SHA
   pin fixes the generation, so the storage detail is determined at implementation and recorded there
   rather than asserted here — and zizmor is one of the **19 linters this gate itself requires**,
   running under the `auditor` persona. So revision 20's allowlist would have produced a workflow that
@@ -551,7 +574,7 @@ own non-required context.
   every clause C0–C9 passed. **Each run body is pinned by digest, and neither may write to
   `$GITHUB_ENV` or `$GITHUB_PATH` at all.** And it is the **complete step mapping** that is frozen,
   not the `run:` body alone (codex, r12): `shell`, `working-directory`, `if`, `continue-on-error`,
-  `env` and every other key on each of the four steps, so a step cannot be neutralised by a sibling
+  `env` and every other key on each of the five steps, so a step cannot be neutralised by a sibling
   key while its body hashes unchanged. Changing either step is then a reviewed change, which is
   the same standing the workflow itself has. Revision 9
   banned `env:` but nothing stopped an *extra step* from appending to `GITHUB_PATH`, setting
@@ -571,7 +594,18 @@ own non-required context.
   the empty-diff guard passes on a range the action never lints, which is inherited defect 3 wearing a
   new file name. **The script is therefore its own `content_digest` registry entry**, pinned by
   digest, with its own mutation case (edit the resolver, expect red) and its own diagnostic — and the
-  C6 guard step verifies that digest before the action runs, alongside the four launcher paths.
+  digest is verified **before the step that EXECUTES the script**, which is not the same place as C6's
+  launcher guard.
+
+  **This needs two guard steps, and the plan had one** (regression check, r28). C6's guard must be
+  **last** before the action, so nothing can create a prohibited launcher path after it has looked
+  (r10). But the resolver is executed by the **empty-diff guard**, which C8 orders *earlier* — so a
+  single guard placed before the action verifies the resolver's digest only after the resolver has
+  already run. Under §0's threat model that still fails closed (the C6 guard reds the job and the
+  action never runs), but "verify, then execute" is the property C6a exists for, and executing an
+  edited script first is not it. **C8's sequence therefore becomes five steps:** `actions/checkout` →
+  **the C6a resolver-digest guard** → the empty-diff guard → **the C6 launcher-path guard** → the
+  action.
 
   **C7 — a merge queue is a STOP, not a configuration (codex, r8).** Revision 8 let M4 add
   `merge_group` if the preflight found a queue. At the pinned SHA that is the forbidden false
@@ -581,9 +615,23 @@ own non-required context.
   **stop and redesign** — a compatible action revision, or an explicitly validated mode, chosen and
   tested before the context is required. Never add the trigger and hope.
 
-  **Residual risks, named rather than implied.** *(a)* This contract enumerates the extension points
+  **Residual risks, named rather than implied.** *(c)* **Twin-targeting one head at both bases.**
+  Required checks match on **SHA + expected app**, not on the triggering event — which is the fact
+  that forced push↔PR substitution closed, by giving the canary a different context name. The same mechanism survives
+  *within* `pull_request`: if one branch is ever PR'd to `main` **and** `alpha` simultaneously, both
+  runs post a check named `trunk-check` onto the same head SHA and the ruleset evaluates the latest, so
+  a `main` PR can be satisfied by the run that linted the `alpha..head` range. Both are real Trunk
+  runs, so this is a **wrong range**, never an absent lint, and post-M0 the two ranges are nearly
+  identical — but it is exactly Q1's envelope, and no edit ever touched it, so twenty-nine rounds of
+  diff-reading could not surface it (kimi, third lens). **The rule: never twin-target one head at both
+  bases.** This repo's promotion flow is feature→`alpha`, then `alpha`→`main`, where the heads differ,
+  so the rule costs nothing here. *(a)* This contract enumerates the extension points
   that exist **at the pinned SHA**; a future version may add another, so a Dependabot pin bump must
-  re-run cell 11's mutants rather than being merged as routine. *(b)* For `pull_request` events the
+  re-run cell 11's mutants rather than being merged as routine — **and must RE-DERIVE the enumeration
+  itself, which re-running mutants does not do** (kimi, third lens). C4, C5 and C6's extension-point
+  list was obtained by reading the action's source *at the pinned SHA*; a new revision can add an
+  input, a launcher-search path, or another `uses:` of a checked-out file, and the existing mutants
+  would all still pass while the new door stood open. *(b)* For `pull_request` events the
   workflow file itself comes from the PR, so a same-repo PR can edit the gate — inherent to Actions
   gating, mitigated by review/CODEOWNERS on `.github/`, and **out of scope here** but real.
 * **`arguments:` is GOVERNED, and its value is DECLARED (agy r3; corrected codex r5).** Verified at
@@ -613,9 +661,16 @@ Revision 2 said "no `--filter`" in §1 while §6.4 recommended splitting `markdo
 recommended two mutually exclusive things.
 
 The rule that survives: **no *undeclared* filter.** A silent reduction to one linter is the hazard;
-a declared, justified, cell-enforced exclusion is not the same thing. Concretely, cell 4 asserts the
-job runs **exactly** the configured set minus an **explicitly enumerated** exclusion list, and fails
-if any linter outside that list is missing **or** if the exclusion list grows without a plan change.
+a declared, justified, cell-enforced exclusion is not the same thing.
+
+**How cell 4 enforces it — NOT "the configured set minus the exclusions".** That revision-5
+formulation stood here as normative §1 text long after cell 4 identified it as the defect and replaced
+it: reading the expectation out of `.trunk/trunk.yaml` makes a **silently reduced configuration
+authoritative over the assertion meant to detect it**, which is the primary hazard this ticket exists
+to close. §1 is the declared authority, so an implementer following this paragraph built exactly the
+blind oracle. Cell 4 instead carries **the 19 expected linter names as frozen literals plus a digest
+over the `lint:` block with version specifiers normalised out**, and fails if a name is missing, an
+unlisted linter appears, the exclusion list grows, or the block changes other than by a version pin.
 
 ## §2 — COREDEV-2798: identity is CLASS-SPECIFIC
 
@@ -640,7 +695,11 @@ rejected it: that fails against a currently-correct tree.
   its line assertion.
 
 **Two existing line dependencies must change with it** (codex, r2): the observed-site set comparison
-at `test_transcript_path_inventory.py:342` and the fixed-line hash check at `:355`.
+at `test_transcript_path_inventory.py:342` (`quote_keep_sites = {_site_key(site) …}`) and the
+fixed-line hash check at **`:358`** (`_sha256(lines[site["line"] - 1]) != site["sourceSha256"]`).
+**Cited by content, with the line as a hint** — `:355` is the enclosing `class == "quote-keep"` guard,
+not the hash, and this plan carried that wrong pin from revision 2 through the gate. Line pins rot;
+that is COREDEV-2798's entire thesis, one section above.
 
 **Exactly-one, not at-least-one.** Cells 6–7 in revision 2 passed against three wrong
 implementations; §5 cells 6–7 now carry the negative controls that kill them.
@@ -884,12 +943,19 @@ alternative turned out to be complementary rather than competing.
       is already present on `origin/main` — verified. COREDEV-2771's separate-PR requirement is still
       met: the config arrives on the sync PR, which is not the PR that adds the job. Revision 3's
       second step was therefore redundant work on an already-satisfied precondition.
+- [ ] **M0a** (**before M2 — required files that no milestone created**) — write
+      `docs/planning/COREDEV-2780-contract.yaml` (the typed, case-bearing registry §1's clauses are
+      rendered from and cell 11's mutants generated from) and
+      `docs/planning/COREDEV-2780-survivors.yaml` (the independently-maintained survivor corpus). Cell
+      11 and cell 15 cannot be written before these exist, and §7 required both while §4 scheduled
+      neither.
 - [ ] **M1** (independent of M0/M2) — COREDEV-2798 class-specific content-addressing, anchors
-      demoted, `:342`/`:355` updated, cells 6–7 with negative controls.
-- [ ] **M2** (**after M0**) — add the `trunk-check` job, diff-scoped, `continue-on-error: true` **at
-      job scope**, in
+      demoted, `:342`/`:358` updated, cells 6–7 with negative controls.
+- [ ] **M2** (**after M0**) — create **`scripts/ci/resolve-trunk-range.sh`** (C6a's shared resolver,
+      which the guard invokes from the moment the workflow exists) and add the `trunk-check` job,
+      diff-scoped, `continue-on-error: true` **at job scope**, in
       its **own workflow file** `.github/workflows/trunk-check.yml`, satisfying **every clause of
-      §1's contract, C0 through C9 — except C3's `continue-on-error` prohibition, which M2 is
+      §1's contract, C0 through C9 and C6a — except C3's `continue-on-error` prohibition, which M2 is
       deliberately and temporarily exempt from **at JOB scope only**. Step-scoped would make cell 2's
       M2 half unobservable (codex, r19): a step-level `continue-on-error` turns the step's *reported*
       `conclusion` into `success` while only the in-job `steps` context still shows
@@ -902,15 +968,21 @@ alternative turned out to be complementary rather than competing.
       which is how the trigger set diverged in the first place. §1 is the authority; cell 11 is the
       enforcement. Read them, do not paraphrase them.
 - [ ] **M2a** (**after M2 — the step revision 3 was missing entirely, codex r3**) — land the job on
-      `alpha` too. GitHub runs the workflow **version present at the event's ref**, so a job merged
+      `alpha` too, **and `scripts/ci/resolve-trunk-range.sh` with it**: the resolver is created "with
+      M2" on `main`, and a literal or interrupted cherry-pick could otherwise place a workflow on
+      `alpha` whose guard invokes a script that is not there (codex, r28). C6a's digest check and cell
+      12 would block progression to M4, but the landing should not depend on a later gate to catch it. GitHub runs the workflow **version present at the event's ref**, so a job merged
       only to `main` never executes for an `alpha` PR: `alpha` would carry the config but emit no
       `trunk-check` check run. Requiring the context at M4 would then make it **unsatisfiable on
       `alpha`** — COREDEV-2767's exact failure, aimed at the other protected base.
 - [ ] **M2b** (**with M2 — the file revision 20 required and never scheduled, sweep**) — create
       `.github/workflows/trunk-check-push.yml`: the non-required `trunk-check-push` canary, `on: push`
-      with the ruleset's branches, the same pinned action and checkout, `permissions: contents: read`,
-      the empty-diff and zero-`before` guards, and `continue-on-error: true` permanently **at job
-      scope**. Land it on both bases alongside M2a. Cell 16 asserts it **is not required at rollout** — not
+      satisfying **C1's canary contract in full** — `on: push` with the ruleset's branches, the
+      C4/C8/C9 action and checkout pins, **C5's `env:` prohibition, C6's repository-launcher guard**,
+      `permissions: contents: read`, the empty-diff and zero-`before` guards **both invoking C6a's
+      shared resolver**, and `continue-on-error: true` permanently **at job scope**. This milestone is
+      the build instruction, and it previously omitted the C5/C6 execution-integrity controls that C1
+      requires and cell 16 asserts — so following it shipped a canary the cell believed was governed. Land it on both bases alongside M2a. Cell 16 asserts it **is not required at rollout** — not
       "never", which the cell explicitly declines to claim from a point-in-time ruleset read (codex,
       r25).
 - [ ] **M2c** (**with M2 — required by §7 and by cells 1 and 5, and scheduled by nothing**) — create
@@ -927,7 +999,11 @@ alternative turned out to be complementary rather than competing.
       **It therefore fires on REAL events, on dedicated fixture refs**: `pull_request` with
       `branches: [harness-base]`, and `push` with `branches: ['harness/**']`. Filters are safe here
       precisely because it is **non-required** — a skipped harness leaves no context pending. It is
-      invoked at M2c and again before M4; it writes `parity-<event>.json` with the captured argv, the resolved range and the
+      invoked at M2c and again before M4. **`harness-base` and `harness/**` are permanent repository
+      citizens, not scratch refs** — they are needed again at every Dependabot pin bump to re-derive
+      the extension-point enumeration, so they are documented in `CLAUDE.md` beside the gate list, and
+      deleting them is a change rather than tidying (kimi, third lens). It writes
+      `parity-<event>.json` with the captured argv, the resolved range and the
       pre/post tree hashes; and the milestone **accepts the artifact against that schema** before the
       cells that own it may be marked done.
 - [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
@@ -974,7 +1050,11 @@ alternative turned out to be complementary rather than competing.
       1. both base tips still carry a byte-equivalent strict job;
       2. the effective check name;
       3. the ruleset's own target conditions — the `main`/`alpha` set is live configuration, not a
-         constant this plan may assume (codex, r7);
+         constant this plan may assume (codex, r7). **STOP if that set is wider than `{main, alpha}`**:
+         a third protected base would need its own M0/M2a/M2b/M3 evidence before the context could be
+         required there, and requiring it without that evidence is COREDEV-2767 exactly. C2's hybrid
+         equality assertion would red on it at rollout, but the preflight should not depend on a later
+         cell to notice (kimi, third lens);
       4. **`trunk-check-push` ABSENT from the required-context list**, before and after (cell 16's
          re-verification — an M4 payload could otherwise require the canary and still satisfy the
          readback, leaving ordinary PRs pending and giving a `main`→`alpha` PR a same-SHA substitute).
@@ -982,8 +1062,11 @@ alternative turned out to be complementary rather than competing.
       **Must CHANGE, in exactly one direction** — roll back if not:
       5. `trunk-check` is **absent** from the required contexts in the pre-read and **present with its
          expected `integration_id`** in the post-read;
-      6. **and the CANONICAL RULESET is otherwise byte-identical** — not merely the required-context
-         list. The update API exposes the whole surface: enforcement, bypass actors, target
+      6. **and NOTHING ELSE changes**: the canonical ruleset is byte-identical **except for that one
+         entry** — which is what "exactly one semantic difference" means, and is not a demand that the
+         ruleset be unchanged (that would be the same unsatisfiable readback revision 24 shipped, in a
+         new form). Compare the two canonical documents, subtract the intended entry, require the
+         remainder to be equal. This covers far more than the required-context The update API exposes the whole surface: enforcement, bypass actors, target
          conditions, name, and every other rule (review requirements, signing, deletion protection).
          A payload can add `trunk-check` while altering any of those and satisfy a five-field
          readback (codex, r26). **Compare canonical pre/post rulesets and require exactly one
@@ -1004,6 +1087,16 @@ alternative turned out to be complementary rather than competing.
       commit regardless of which workflow revision produced it. M4 would then require a green that was
       never strict.
 
+      **The mechanism, because the obvious button does not work** (kimi, third lens): "Re-run" keeps
+      the original `GITHUB_WORKFLOW_SHA`, so a re-run can **never** satisfy the provenance test below —
+      an implementer can click it indefinitely. Only a **newly triggered** run qualifies: close/reopen,
+      or a push. Two dispositions follow, both implied by the merge-ref model and neither previously
+      stated: **stale same-repo PR branches do NOT need a rebase**, because the `pull_request` merge ref
+      picks the workflow up from the base — close/reopen suffices; and a **fork PR with maintainer-edits
+      disabled cannot be refreshed by the maintainer at all**, which under `bypass_actors: []` means the
+      disposition is "close it, or wait for the author". Decide that before M4 blocks on one — it is the
+      exact incident class (unmergeable PRs, no bypass) this plan cites as its motivation.
+
       **Qualify by workflow PROVENANCE, not by timestamp** (codex, r27): a maintainer can "refresh" an
       advisory M2 run by **re-running** it after M3, and a re-run retains the original `GITHUB_SHA` and
       `GITHUB_REF` while acquiring a post-M3 timestamp — so a time comparison accepts a check still
@@ -1012,6 +1105,17 @@ alternative turned out to be complementary rather than competing.
       that test **before** the ruleset write. **M4 is also resumable**: after any interruption,
       re-audit both refresh provenance and canonical ruleset state before continuing, since a
       half-completed M4 is indistinguishable from an untouched one by timestamp alone.
+- [ ] **M4a** (**immediately after M4 — the plan reached revision 27 requiring neither of these**) —
+      **prove the gate does what it exists to do, then prove it can be turned off.**
+      1. **Cell 17, the enforcement smoke test.** Attempt to merge the deliberately-red sacrificial PR
+         and record that GitHub **refuses**; confirm a green PR merges. Every other observation in this
+         plan is pre-requirement and verifies what the workflow and rule *contain* — this is the only
+         one that verifies the ruleset's *behaviour*.
+      2. **Rehearse the §6.2a rollback.** Remove the `trunk-check` context, confirm the previously
+         blocked merge becomes possible, re-add it, and re-run cell 17. An untested rollback is a
+         plan, not a remedy — and with `bypass_actors: []` it is the only remedy there is.
+      Both outcomes land in the rollout evidence artifact. **If either fails, roll the ruleset back to
+      its pre-M4 canonical state** and return to M3.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
@@ -1019,8 +1123,12 @@ alternative turned out to be complementary rather than competing.
       only datum behind revision 23's `120` was a single 7s one-file run, which says nothing about a
       cold linter-cache bootstrap or a large staged changeset — and this hook **blocks**, so a false
       timeout changes shipped behaviour. **M5a's first step is to measure a representative upper
-      envelope** (cold cache, largest realistic staged set); the measured value is then **recorded in
-      this plan and becomes the authoritative constant**, which cell 13 asserts and mutates.
+      envelope** (cold cache, largest realistic staged set); the measured value, **plus explicit
+      headroom for slower hardware**, is then **recorded in this plan and becomes the authoritative
+      constant**, which cell 13 asserts and mutates. **The headroom is not optional** (kimi, third
+      lens): the envelope is measured on one developer Mac while the constant is asserted in CI across
+      a Linux leg and different Darwin hardware, so a value fitted tightly to the measurement makes
+      cell 13's clean slow-path case **fail against a correct implementation** on a slower runner.
       Revision 23 wrote `120` into M5a, told cell 13 to assert the literal `120`, and *also* said the
       constant moves if the envelope exceeds it — three statements that cannot all hold (codex, r24).
       **If the envelope exceeds the recorded constant, the plan is revised and re-reviewed** rather
@@ -1034,15 +1142,18 @@ alternative turned out to be complementary rather than competing.
 
 - [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
       §7's file inventory and in no milestone, and this plan lands **at least seven shipping PRs** —
-      M1, M2+M2b, M2a, **M3 on `main` and M3 on `alpha` (two)**, M5a, M6 — one bump cannot serve them.
+      **M0a**, M1, M2+M2b+**M2c**, M2a, **M3 on `main` and M3 on `alpha` (two)**, M5a, M6 — one bump
+      cannot serve them; M0a ships the registry and survivor corpus, and M2c ships the harness workflow
+      and its fixture refs.
       M3 edits the workflow on **both** bases and the plan specifies no single-PR mechanism for that,
       so it is two landings, not one (codex, r23). **Each PR that changes a
       shipped asset carries its own bump**: `plugin.json`, the README H1, the README's newest
       `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. **M3 belongs on that list**
       — it edits the workflow on both bases to remove `continue-on-error`, a shipped-asset change that
-      revision 21 omitted while demanding a bump on every such PR (codex, r21). **M0, M4 and M5 are the
-      only exceptions** — a branch sync, a ruleset edit and running the §3a experiment ship no plugin
-      asset; revision 21 listed M0
+      revision 21 omitted while demanding a bump on every such PR (codex, r21). **M0, M4, M4a and M5 are the
+      only exceptions** — a branch sync, a ruleset edit, a ruleset rehearsal and running the §3a
+      experiment ship no plugin asset. **This list is closed, so every milestone added later must be
+      placed on one side of it explicitly**; M2c and M4a were both added without it being revisited; revision 21 listed M0
       as shipping and then exempted it two lines later. `validate-version-sync.sh`
       only checks the four sites **agree**, not that they **moved**, so agreement at a stale version
       passes: the bump is a milestone obligation, not something the validator will catch.
@@ -1188,14 +1299,18 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    pinned Trunk**, and the case carries a **positive control**: enabling autofix must change the
    fixture and turn this cell red. A sensor that cannot register the thing it watches for is the
    sink problem wearing a different hat. Python still builds and hashes the fixture;
-   the harness carries the post-invocation comparison. §7's rule gains the corollary that an evidence
+   the harness carries the post-invocation comparison. **Its collection and upload steps run under
+   `if: always()`** (codex, r28): the deliberately-fixable fixture is *meant* to make the real Trunk
+   step fail, and subsequent steps otherwise inherit the implicit `success()` condition and skip the
+   post-run hashing entirely — the evidence would simply never be produced. The action's conclusion is
+   recorded separately from the hash comparison. §7's rule gains the corollary that an evidence
    artifact is only a valid owner for something a real run **reports** — a conclusion, a check run —
    never for state that vanishes with the runner.
    Cell 9's static `--fix` prohibition is a separate, weaker check on the configuration; this one is
    about what the run did.
 6. **quote-keep — relocation passes, and three wrong implementations fail, each for the RIGHT
    reason** (codex + agy, r5). Prepend to `CHANGELOG.md` → green with no edit. Then: content change →
-   red; **duplicate source line → red** (kills "at least one"); and the `:342`/`:355` dependencies
+   red; **duplicate source line → red** (kills "at least one"); and the `:342`/`:358` dependencies
    still hold.
 
    **Two of those three controls were confounded exactly as cell 7's was, and revision 4 fixed only
@@ -1290,7 +1405,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     required check (codex, r7) — revision 7 said "success", which is narrower than the set that
     actually lets a merge through.
 
-    **This cell asserts §1's contract clause by clause — C0 through C9 — and does not restate their
+    **This cell asserts §1's contract clause by clause — C0 through C9 AND C6a — and does not restate their
     values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`).
 
     **The mutant set is GENERATED from the contract registry** (`COREDEV-2780-contract.yaml`, §1) —
@@ -1317,7 +1432,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       three static permission mutants in C0's prose and listed none here, so the minimum the generator
       had to produce omitted all of them (codex, r25).
     * **C6a** — edit `scripts/ci/resolve-trunk-range.sh` while leaving the invoking `run:` bodies
-      untouched: the C6 guard must red on the digest mismatch. Without this case the script is
+      untouched: the guard must red on the digest mismatch **and must do so BEFORE the empty-diff step
+      executes the edited script** — assert the failing step is the C6a guard, not a later one, since
+      a guard that reds after execution proves the wrong property. Without this case the script is
       repository-supplied and ungoverned, which is inherited defect 3 under a new file name.
     * **C0** — `concurrency` at the workflow root; `concurrency` on the job; and one arbitrary key
       outside the root allowlist.
@@ -1362,8 +1479,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       Every checkout and input mutant was a *prohibited-key addition*; the obligations whose failure
       mode is a **missing** key were untested, so a validator checking only for forbidden keys passed
       everything. Add: `lfs:` **removed** and `lfs: false`; `persist-credentials:` **removed** and set
-      `true`; `arguments:` removed (above); `branches:` removed (C1/C2 above); and **each of C8's four steps DELETED, as four separate
-      cases with their own diagnostics** — cases are first-class and produce one mutant each, so
+      `true`; `arguments:` removed (above); `branches:` removed (C1/C2 above); and **each of C8's FIVE steps DELETED, as five separate
+      cases with their own diagnostics** — including the C6a resolver-digest guard, whose deletion
+      un-verifies the script before it executes — cases are first-class and produce one mutant each, so
       revision 22's single "a step deleted" case (motivated by the empty-diff guard) left a validator
       that requires *that* step while accepting omission of the **C6 guard** passing every listed
       mutant, shipping the repository-launcher hole (codex, r24).
@@ -1382,13 +1500,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       to `$GITHUB_PATH`** (codex r11 and r12: freezing the sequence never constrained what the allowed
       steps *do*, and `$GITHUB_PATH` was prohibited without ever being mutated); on
       `actions/checkout`, each of `sparse-checkout`, `ref`, `repository`, `path`, **`filter`, and one
-      arbitrary key outside the allowlist**; on **each of the four steps** an `if: false` and a
+      arbitrary key outside the allowlist**; on **each of the five steps** an `if: false` and a
       `continue-on-error: true`; on the **two `run:` steps only**, a changed `shell` **and a changed
       `working-directory`**; and a `defaults.run` at workflow and at job level.
 
       **`shell` is valid only on `run:` steps** (codex, r17): `actions/checkout` and the Trunk action
       are `uses:` steps, where `actionlint` rejects `shell` as an unexpected key — so revision 16's
-      "each of the four steps" produced two mutants that fail **schema validation** instead of with
+      "each of the four steps" (as it then was) produced two mutants that fail **schema validation** instead of with
       their own contract diagnostic, breaking this cell's own case-validity requirement and making
       **cell 11 unable to pass at M2**. The `uses:` steps are mutated through valid keys instead
       (their `with:` inputs and an added `env:`). And `working-directory` is frozen by C8 while
@@ -1485,7 +1603,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     `runs-on: ubuntu-latest` and **`timeout-minutes: 15`** — a *concrete* ceiling, mutated as an
     operand. Revision 21 required only that the key *exist*, which `timeout-minutes: 360` satisfies
     while being **GitHub's default six-hour ceiling** — a timeout that changes nothing (codex, r21).
-    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert the rendered C0–C9 prose
+    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert the rendered C0–C9 **and C6a** prose
     agrees with `COREDEV-2780-contract.yaml`**, so the registry cannot silently diverge from the
     document that explains it. §1 has required both since revision 2 and
     **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
@@ -1504,9 +1622,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     and claiming so would be a cell asserting more than its owner can see. The honest claim is
     rollout-time absence, **re-verified in M4's post-edit readback** alongside the other conditions
     checked there. Continuous monitoring is out of scope; nothing here prevents a later maintainer
-    from requiring the canary, which is why §1's contract states the reason it must stay unrequired. Assert that
-    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list, that its
-    workflow carries `continue-on-error: true` **at job scope**, and that it exists at all — revision 20 required the
+    from requiring the canary, which is why §1's contract states the reason it must stay unrequired. Assert **every obligation C1's canary contract states** — it exists; `on: push` with `branches:`
+    equal to the ruleset's target set; the C4/C8/C9 action and checkout pins; C5's `env:` prohibition;
+    C6's repository-launcher guard; the empty-diff and zero-`before` guards, both invoking C6a's shared
+    resolver; `permissions: contents: read`; `continue-on-error: true` **at job scope**; and that
+    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list. **The three-item
+    form this instruction previously carried — existence, `continue-on-error`, ruleset absence — is
+    exactly what r24 proved insufficient**, and it survived directly beneath the paragraph saying so — revision 20 required the
     file to exist while no milestone created it and no inventory listed it. This is the cell that
     keeps cross-event substitution closed: the split only works while the canary stays unrequired.
 
@@ -1517,10 +1639,30 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     run; the alternative — a lint-failing commit pushed straight to protected `main` — is what the
     ruleset exists to prevent. **The stimulus is a provenance-bound disposable fork** whose default
     branch is named `main`, carrying the same canary workflow at the same SHA pins; the failing commit
-    lands there. Record that the **Trunk step's `conclusion` is `failure` while the job's is
+    lands there. **Enabling Actions in that fork is part of the step** — GitHub disables them on forks
+    until someone turns them on, so without it the stimulus silently produces nothing and this cell's
+    runtime half is quietly unfalsifiable (kimi, third lens). Record that the **Trunk step's `conclusion` is `failure` while the job's is
     `success`** — the job-versus-step `continue-on-error` distinction this cell exists to prove.
     Without a milestone that produces the stimulus, the evidence artifact stays empty and the cell
     is unfalsifiable.
+
+17. **A red check actually BLOCKS a merge, and a green one does not** — observed after M4, against
+    the live ruleset. Attempt to merge the deliberately-red sacrificial PR and record that **GitHub
+    refuses**, **and that the stated reason names `trunk-check`** — not merely that some refusal
+    occurred. `Control` requires five other contexts, so a merge attempt can be refused for reasons
+    having nothing to do with this gate, and a cell that accepts any refusal is the confounded control
+    this plan repaired in cells 6, 7 and 12 and then rebuilt in the cell added to test the gate itself
+    (regression check, r28). The sacrificial PR must be green on every other required context, and the
+    recorded evidence names the blocking check. Then confirm a green PR merges. Owner:
+    `evidence/COREDEV-2780-rollout.json`.
+
+    **This is the only cell that tests the ruleset's BEHAVIOUR rather than its bytes, and the plan
+    reached revision 27 without it** (kimi, third lens). Every other observation here is
+    *pre-requirement*: M3's green and red runs, cell 12's provenance-bound check runs, M4's canonical
+    readback — all of them verify what the workflow and the rule *contain*, and none of them verifies
+    the property the entire plan exists to produce. It is also the cheapest cell in the document. An
+    absence like this cannot surface in a diff, which is why twenty-nine rounds of incremental review
+    did not find it.
 
 ## §6 — STRUCTURAL DECISIONS
 
@@ -1591,6 +1733,34 @@ failing required check blocks every merge with no override, and adding a context
 emits check runs previously made `main` unmergeable (COREDEV-2767). M4 is gated on M3's evidence
 **and** on maintainer instruction.
 
+### 6.2a — DAY-2 ROLLBACK: how the gate gets turned OFF
+
+**The plan reached revision 27 with no answer to this, and it is the most conspicuous absence in the
+document** (kimi, third lens). Everything in §4 concerns turning the gate *on* safely; nothing covered
+the incident where it is on and wrong — a Trunk infrastructure outage, a linter upgrade that reds every
+PR, a false-positive class nobody anticipated. With `bypass_actors: []` there is no override, so the
+only remedy is an emergency ruleset edit, and "who can do that, and how" cannot live in one person's
+head while `main` is unmergeable. This repository has already shipped that incident once.
+
+* **The remedy** is to remove the `trunk-check` context from ruleset `Control`'s required-status-check
+  rule — *not* to delete the workflow (a deleted workflow produces no check run, which leaves the
+  required context **pending** and blocks merges just as hard, only less obviously).
+* **Who can perform it:** an account with repository admin. Record the holders in the ticket, not here.
+* **The call**, written out so it is not composed under pressure — read the ruleset, drop the one
+  entry, write it back, and confirm by re-reading:
+  `gh api repos/<owner>/<repo>/rulesets/16082567` → remove the `trunk-check` entry from the
+  `required_status_checks` rule's parameters → `gh api --method PUT …/rulesets/16082567 --input -`.
+* **Verify it works BEFORE relying on it.** M4 rehearses the rollback immediately after the smoke test
+  of cell 17: remove the context, confirm a previously-blocked merge becomes possible, then re-add it
+  and re-run cell 17. An untested rollback is a plan, not a remedy.
+* **Both ruleset writes here carry M4's readback discipline** — the rehearsal in M4a and any real
+  incident rollback. Capture the canonical ruleset before and after, admit **exactly one semantic
+  difference** (the `trunk-check` entry appearing or disappearing), and confirm every other rule,
+  enforcement setting, bypass list and target condition is byte-identical. An emergency edit made
+  under pressure is *more* likely to carry an accidental change, not less, and this plan already
+  requires that discipline of the M4 write that is made calmly.
+* **Then re-enter at M3** — the gate returns only through the same evidence path that admitted it.
+
 ### 6.3 — `.githooks/pre-commit` — **DECIDED 2026-08-28 (maintainer): WIRE IT**
 
 Local diff-scoped check measured at **7s for one changed file**; every current hook validator is
@@ -1636,6 +1806,12 @@ copies agree with each other.
 round-trip per commit, failing on someone else's outage, is exactly the "gate red by default" trap
 §1 rejects. Link-checking stays in the scheduled job on both surfaces.
 
+**And it is ENFORCED on both surfaces, not only the CI one.** Cell 9 asserts the workflow's
+`arguments:` equals this literal as a whole string; **cell 13 asserts the same literal in the
+pre-commit invocation**, with the same whole-string match and the same mutants (appended flag, absent
+argument). A literal that is required in two places and checked in one is a declaration, not a
+control.
+
 **Losing cost, previously unstated (codex, r2): no merge-time detection of newly broken links.** A
 PR may introduce a dead link and merge; the scheduled job reports it afterwards. Accepted, because a
 required gate that fails on someone else's outage is worse — but it is a real loss, not a free win.
@@ -1647,12 +1823,16 @@ required gate that fails on someone else's outage is worse — but it is a real 
   *this* script, so parity is a property of one implementation rather than an agreement between
   independently-written resolvers that might all be wrong.
   Pinned by **C6a's own `content_digest` entry** — *not* by C8's run-body digest, which cannot reach a
-  file the body merely invokes (draft check, r27). Created by M2c alongside the harness; named here
+  file the body merely invokes (draft check, r27). **Created by M2**, because the required workflow's
+  guard invokes it from the moment that workflow exists — M2a and M2b carry it to `alpha` and to the
+  canary, and M2c's harness invokes the same file. Two statements previously named different creators
+  (M2 and M2c), and under the M2c reading `main` would get a workflow whose guard invokes a script that
+  is not there; named here
   because revision 26 required "one shared shipped script" and inventoried none (codex, r27).
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
   per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
   `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
-  payload or fixture, validity check, and expected diagnostic. §1's C0–C9 prose is rendered from it,
+  payload or fixture, validity check, and expected diagnostic. §1's C0–C9 **and C6a** prose is rendered from it,
   cell 11's mutants are generated by iterating its **cases**, and cell 15 asserts prose and registry
   agree. It exists because "derived from the clause text" is not a mechanism when the clause text is
   prose (codex, r13); it is typed and case-bearing because a flat `(id, path, value)` schema could not
@@ -1662,13 +1842,15 @@ required gate that fails on someone else's outage is worse — but it is a real 
   survived a round of this gate, maintained **independently of the registry** so that a registry edit
   silently dropping an obligation reddens something the rendering lint cannot see (§1).
 * **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow and
-  satisfies **§1's contract, clauses C0–C9** — the **workflow-root allowlist with `permissions`
+  satisfies **§1's contract, clauses C0–C9 and C6a** — the **workflow-root allowlist with `permissions`
   pinned by value**, the event set and its option allowlist, the branch filters and `types:` set, the
   absence of anything that skips or masks, the `with:` allowlist, the `env:` prohibition, the
   repository-supplied-launcher guard, the merge-queue stop, the frozen step sequence and run-body
-  digests, and the action's exact SHA pin — **ten clauses, C0 through C9**; the gloss previously
-  enumerated nine, having been written before C0 existed. Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's `arguments:`
-  literal, and cell 1's empty-diff guard step. **Values are stated in §1 and §6, never here** — this
+  digests, and the action's exact SHA pin — **eleven clauses, C0 through C9 plus C6a** — the shared resolver's own
+  `content_digest` obligation; the gloss said nine before C0 existed and ten before C6a did, and a
+  count that trails the contract is how a clause ends up unenforced (codex, r28). Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's `arguments:`
+  literal, and the **five-step sequence** (checkout, the C6a resolver-digest guard, the empty-diff
+  guard, the C6 launcher-path guard, the action). **Values are stated in §1 and §6, never here** — this
   is a file inventory, and revision 9's copy of the contract into this entry is exactly the
   divergence risk §1's singularity exists to remove (codex, r9).
 * **`.github/workflows/trunk-check-push.yml` — NEW.** The non-required `trunk-check-push` canary
@@ -1710,7 +1892,8 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * **`docs/planning/evidence/COREDEV-2780-rollout.json`** — **new**: cells 10 and 12, **cell 2's M2
   step-**conclusion** and M3 job-conclusion observations with their `trunk_step_diagnostic` field
   (the workflow-jobs API exposes `conclusion`, never `outcome` — codex, r20), **cell 16's ruleset read
-  and its canary runtime control**, cell 3's observed PR outcomes, C2's live-ruleset
+  and its canary runtime control**, **cell 17's post-M4 enforcement smoke test and the §6.2a rollback
+  rehearsal (M4a)**, cell 3's observed PR outcomes, C2's live-ruleset
   half**, and cell 8's real `SessionStart` invocation. Provenance-bound observations of things a real
   run **reports** — never runner-local state that vanishes with the job, which is why cell 5's
   post-invocation hash moved to the harness (codex, r18)
@@ -1760,7 +1943,8 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
 | 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; the **`trunk-parity-harness.yml` workflow** runs the pinned action and reports the post-invocation hashes, which `test_trunk_upstream_parity.py` asserts against — a unittest cannot itself run a composite action (sweep). *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
 | 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + generated mutants + runner/timeout) |
-| 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, branches, SHA pins, zero-`before` guard, `permissions` by value; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
+| 17 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: it asserts the live ruleset's *behaviour* (a merge attempt refused, then a green one accepted), which nothing static can observe |
+| 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, SHA pins, both guards and their shared resolver, C5's `env:` prohibition, C6's launcher guard, `permissions` by value, and that `branches:` is well-formed and non-empty. **`branches:` EQUALLING the ruleset's live target set is a local-vs-remote comparison** and therefore hybrid under §7's own rule, exactly as C2 is for the required workflow — the evidence artifact carries that half; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
 | 10 | **hybrid**: `test_trunk_check_workflow.py` pins `permissions` by value at both scopes (a wider token yields identical runtime evidence, so only a static check discriminates it — codex, r25); `evidence/COREDEV-2780-rollout.json` carries the annotation-artifact observation |
