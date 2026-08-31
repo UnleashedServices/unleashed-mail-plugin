@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 26
+**Status:** Planning, revision 27
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,11 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
+> `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
+> and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
+> Round 26 (checked) found zero self-introduced defects; round 27 (unchecked) found two. The check is
+> now mandatory before every commit, not optional.
 > **r26** `cc5e8e2`: **agy `APPROVE_WITH_NOTES` with [SUBJECT] 0** — "both document notes will
 > naturally settle during implementation" — and codex `REQUEST_CHANGES` (7 findings). **None of
 > codex's seven was traceable to revision 25's own edits** (grep-verified), the first revision in six
@@ -328,7 +333,7 @@ own non-required context.
   |---|---|---|
   | `yaml` | a workflow key that must be present with a value, or absent | set / clear / alter the key at its path |
   | `repo_fixture` | a path that must not exist in the checked-out tree (C6) | materialise it — and for `.trunk/setup-ci`, as a **valid composite action that exits green**, not a bare executable |
-  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block) | edit the bytes while preserving the surrounding shape |
+  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block, **C6a's shared resolver script**) | edit the bytes while preserving the surrounding shape |
   | `remote_relation` | local content that must equal live remote state (C2) | diverge the local half, and separately the remote half |
 
   **Mutation CASES are first-class, and the generator iterates cases rather than entries**
@@ -425,10 +430,15 @@ own non-required context.
   and then left it in no milestone, no §7 inventory entry and under no clause — a workflow the plan
   requires to exist that nothing creates. Its contract is deliberately smaller: `on: push` with
   `branches:` equal to the ruleset's target set, the same SHA-pinned action and checkout as C4/C8/C9
-  require, **its own empty-diff guard AND the zero-`before` guard** — stated directly, not by reference
-  to the required job, which is `pull_request`-only and therefore carries no zero-`before` branch at
-  all; the canary is the only leg that can reach `push.sh`'s `--all` branch, so the guard belongs
-  where the hazard is — and
+  require, **the empty-diff guard AND the zero-`before` guard, both invoking C6a's SHARED resolver** —
+  stated directly, not by reference to the required job, which is `pull_request`-only and carries no
+  zero-`before` branch at all. The canary is the only leg that can reach `push.sh`'s `--all` branch, so
+  the guard belongs where the hazard is — and it is the leg whose range drift is most expensive, which
+  is why it uses the one shared implementation rather than a third independent one (draft check, r27).
+  **The canary also carries C5's `env:` prohibition and C6's repository-launcher guard** — cell 16
+  demands the C4/C5/C6 execution-integrity controls, and revision 22's "deliberately smaller" list
+  omitted them, so the two disagreed about what the canary must satisfy. A shipped, push-triggered
+  workflow that runs the pinned action needs them exactly as much as the required one does — and
   **`continue-on-error: true` permanently, AT JOB SCOPE**, so it can never block and nothing is
   tempted to require it later. **`permissions:` is pinned to exactly `contents: read` here as well**
   — the canary is the plan's other shipped workflow, and an invariant that holds only for the required
@@ -552,6 +562,16 @@ own non-required context.
   **C9 — the action itself is pinned by exact SHA.** `trunk-io/trunk-action@e1234e67…` — nothing in
   C1–C8 required it, and cell 9 asserted only that `actions/checkout` was pinned, so a tag or a
   different SHA satisfied every other clause (codex, r9).
+
+  **C6a — the shared range resolver is REPOSITORY-SUPPLIED, and is governed like one.**
+  `scripts/ci/resolve-trunk-range.sh` lives in the checked-out tree, so C8's run-body digest **cannot**
+  reach it: a `run:` body that invokes the script hashes identically whatever the script contains, and
+  moving the guard's substance there would re-open exactly the hole C8 exists to close — on C6's own
+  premise that *the repository may not supply the tool that tests it*. A PR could edit the resolver so
+  the empty-diff guard passes on a range the action never lints, which is inherited defect 3 wearing a
+  new file name. **The script is therefore its own `content_digest` registry entry**, pinned by
+  digest, with its own mutation case (edit the resolver, expect red) and its own diagnostic — and the
+  C6 guard step verifies that digest before the action runs, alongside the four launcher paths.
 
   **C7 — a merge queue is a STOP, not a configuration (codex, r8).** Revision 8 let M4 add
   `merge_group` if the preflight found a queue. At the pinned SHA that is the forbidden false
@@ -753,8 +773,11 @@ exhaustive nor mutually exclusive):
   entry is compared.
 * **Persistence needs a named interval**, recorded with the run; before it elapses the result is
   *pending*, which is why Table B carries an explicit interim row rather than leaving a gap.
-* The **record's readability and schema** are captured on every run, so an unrecognised shape is
-  distinguishable from drift in both tables.
+* The **record's readability and schema** are what Table A row 2 and Table B row 2 classify on. They
+  are *observed*, not *recorded*: the runtime detector "emits nothing at all, and records nothing"
+  (§3b), so only **Table B's one-time experiment** writes anything down, into the evidence artifact.
+  Revision 18 withdrew the per-run recording promise and this bullet kept it — the same contradiction
+  codex found at the rows, surviving at the terms list (draft check, r27).
 
 It **never blocks a commit.** A version-drift detector that fails `git commit` would be a worse
 defect than the one it reports.
@@ -895,10 +918,16 @@ alternative turned out to be complementary rather than competing.
       action against per-event fixtures with an instrumented launcher and publishes the captured argv
       and post-run tree hashes as an artifact. Cells 1 and 5 are unownable without it.
 
-      **Its trigger and collection path are specified, or the artifact is never produced** (codex,
-      r26): `on: workflow_dispatch` **only** — it is non-required, so the skipped-success hazard that
-      bans dispatch from `trunk-check` does not apply here — invoked explicitly at M2c and again
-      before M4; it writes `parity-<event>.json` with the captured argv, the resolved range and the
+      **Its trigger must produce the EVENTS it measures** (codex, r27). Revision 26 made it
+      `workflow_dispatch`-only, which is self-defeating: the pinned action maps `workflow_dispatch` to
+      **`check-mode=all`** — the very reason dispatch is banned from `trunk-check` — and
+      `GITHUB_EVENT_NAME` cannot be overridden, since GitHub forbids overriding `GITHUB_*` variables.
+      Naming an artifact `parity-pull_request.json` does not make the action take its PR path, so the
+      harness could never produce cell 1's PR/push ranges nor exercise the mode cell 5 assesses.
+      **It therefore fires on REAL events, on dedicated fixture refs**: `pull_request` with
+      `branches: [harness-base]`, and `push` with `branches: ['harness/**']`. Filters are safe here
+      precisely because it is **non-required** — a skipped harness leaves no context pending. It is
+      invoked at M2c and again before M4; it writes `parity-<event>.json` with the captured argv, the resolved range and the
       pre/post tree hashes; and the milestone **accepts the artifact against that schema** before the
       cells that own it may be marked done.
 - [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
@@ -963,14 +992,26 @@ alternative turned out to be complementary rather than competing.
          dropping another required context** passed both reads — the destructive outcome this readback
          most needs to catch, opened by the fix for a checklist that could not pass.
 
-      **Every open PR whose latest `trunk-check` predates the strict M3 deployment must be refreshed
-      — on both bases — not merely those with no context at all** (codex, r26). Two populations, and
+      **Every open PR whose latest `trunk-check` is not PROVABLY from the strict workflow must be
+      refreshed — on both bases — not merely those with no context at all** (codex, r26; population
+      corrected r27-draft). Stating the population by *timestamp* excluded the very case the
+      correction below exists to close: a re-run of an advisory M2 run carries a **post-M3**
+      timestamp, so it does not "predate the strict M3 deployment" and would never enter the
+      refresh set. Two populations, and
       revision 25 handled one: PRs predating M2/M2a have no context and sit pending (agy, r6); but a
       PR opened *during* M2 already carries a **successful** `trunk-check` produced while the job was
       advisory, M3 does not re-run it, and a required check is satisfied by an existing success on the
       commit regardless of which workflow revision produced it. M4 would then require a green that was
-      never strict. Enumerate by comparing each open PR's latest matching check against the M3
-      deployment time, and refresh as part of the change, not after it.
+      never strict.
+
+      **Qualify by workflow PROVENANCE, not by timestamp** (codex, r27): a maintainer can "refresh" an
+      advisory M2 run by **re-running** it after M3, and a re-run retains the original `GITHUB_SHA` and
+      `GITHUB_REF` while acquiring a post-M3 timestamp — so a time comparison accepts a check still
+      bound to the advisory workflow revision. Require a **newly triggered** run bound to the strict
+      workflow's bytes (`GITHUB_WORKFLOW_SHA` or equivalent), and require every affected PR to pass
+      that test **before** the ruleset write. **M4 is also resumable**: after any interruption,
+      re-audit both refresh provenance and canonical ruleset state before continuing, since a
+      half-completed M4 is indistinguishable from an untouched one by timestamp alone.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
@@ -1020,15 +1061,23 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    zero-`before` guard is therefore a CANARY obligation**: it is the push leg that can reach
    `push.sh`'s `--all` branch, so C1's canary contract carries that guard and cell 16 observes it — a
    canary without it would ship while this cell's harness passed.)*
-   Assert the *resolved* upstream/diff on `pull_request`, `push` to `main`, and `push` to `alpha`.
+   Assert the *resolved* upstream/diff for the `pull_request` path and for the `push` path, **on the
+   harness's fixture refs** — `harness-base` and `harness/**` — not on `push` to `main`/`alpha`
+   (draft check, r27). Only the canary fires on those branches, and the canary carries no instrumented
+   launcher (`trunk-path` is the harness's sole legitimate use; C4 forbids it elsewhere), so it cannot
+   report the argv this cell's byte-for-byte parity needs. The *event path* through the pinned action
+   is what matters and the fixture refs exercise it; naming the protected branches made the
+   enumeration read as satisfiable when it was not.
    **The mechanism was missing in revision 3 (agy, r3, in part):** `trunk check` exits **0** when the
    resolved diff matches no files, so the action alone reports green having checked nothing — which
    *is* inherited defect 3. The job therefore carries an explicit step that resolves the diff and
    **fails when it is empty**, before the action runs. **That step's computed range must be proven
    identical to the range the pinned action passes to Trunk** (codex, r6) — two independently
    correct-looking resolvers drift, and a guard that checks a *different* range than the one linted
-   asserts nothing about the lint. **The resolver lives in ONE shared shipped script** that both the
-   workflow's guard step and the harness invoke (codex, r26): revision 25 digest-bound the harness's
+   asserts nothing about the lint. **The resolver lives in ONE shared shipped script** — `scripts/ci/resolve-trunk-range.sh`, governed
+   by **C6a** — invoked by the required workflow's guard step, **the canary's guard step**, and the
+   harness (codex, r26; the canary was missing from the invoker list, and its guard is the one whose
+   drift is most expensive — draft check, r27): revision 25 digest-bound the harness's
    *action inputs* to the workflow and left its range resolution independent, so a correct oracle
    could agree with Trunk while the shipped guard used the wrong range — and C8 would merely freeze
    that wrong body. With one implementation, parity is a property rather than an agreement between two
@@ -1267,6 +1316,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       a single widened scope at each; and the key **absent** at each. Six cases: revision 24 declared
       three static permission mutants in C0's prose and listed none here, so the minimum the generator
       had to produce omitted all of them (codex, r25).
+    * **C6a** — edit `scripts/ci/resolve-trunk-range.sh` while leaving the invoking `run:` bodies
+      untouched: the C6 guard must red on the digest mismatch. Without this case the script is
+      repository-supplied and ungoverned, which is inherited defect 3 under a new file name.
     * **C0** — `concurrency` at the workflow root; `concurrency` on the job; and one arbitrary key
       outside the root allowlist.
     * **GENERIC UNLISTED-KEY mutants at EVERY allowlist boundary** (codex, r26). Naming only the keys
@@ -1458,9 +1510,14 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     file to exist while no milestone created it and no inventory listed it. This is the cell that
     keeps cross-event substitution closed: the split only works while the canary stays unrequired.
 
-    **M2b must CAUSE a controlled canary failure, or the runtime half is never observed** (codex,
-    r26): push a deliberately lint-failing commit to a scratch branch matching the canary's
-    `branches:`, and record that the **Trunk step's `conclusion` is `failure` while the job's is
+    **M2b must CAUSE a controlled canary failure, and the stimulus must be REACHABLE** (codex, r26,
+    corrected r27). Revision 26 said "a scratch branch matching the canary's `branches:`" — but those
+    branches are exactly the ruleset's target set, `main` and `alpha`, and `push.branches` matches the
+    branch actually pushed, so no additional in-repo branch can match and the workflow would never
+    run; the alternative — a lint-failing commit pushed straight to protected `main` — is what the
+    ruleset exists to prevent. **The stimulus is a provenance-bound disposable fork** whose default
+    branch is named `main`, carrying the same canary workflow at the same SHA pins; the failing commit
+    lands there. Record that the **Trunk step's `conclusion` is `failure` while the job's is
     `success`** — the job-versus-step `continue-on-error` distinction this cell exists to prove.
     Without a milestone that produces the stimulus, the evidence artifact stays empty and the cell
     is unfalsifiable.
@@ -1585,6 +1642,13 @@ required gate that fails on someone else's outage is worse — but it is a real 
 
 ## §7 — Files Changed
 
+* **`scripts/ci/resolve-trunk-range.sh` — NEW.** The single shared range resolver (cell 1): the
+  workflow's empty-diff guard step, the canary's guard step, and `trunk-parity-harness.yml` all invoke
+  *this* script, so parity is a property of one implementation rather than an agreement between
+  independently-written resolvers that might all be wrong.
+  Pinned by **C6a's own `content_digest` entry** — *not* by C8's run-body digest, which cannot reach a
+  file the body merely invokes (draft check, r27). Created by M2c alongside the harness; named here
+  because revision 26 required "one shared shipped script" and inventoried none (codex, r27).
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
   per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
   `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
