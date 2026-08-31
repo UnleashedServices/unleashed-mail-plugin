@@ -1860,7 +1860,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
   which is exactly why `trunk-check` may not live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
-  `:355` updated
+  `:358` updated
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
   anchor lines demoted to hints for prepend-only sites
 * `CLAUDE.md` — gate-list update
