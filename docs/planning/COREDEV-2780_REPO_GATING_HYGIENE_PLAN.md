@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 29
+**Status:** Planning, revision 30
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-31
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -371,8 +371,9 @@ own non-required context.
   * **a survivor corpus**, maintained *independently of the rendered authority*: every mutant that has
     ever survived a round of this gate stays in a corpus that must keep failing. A registry edit that
     silently drops an obligation reddens the corpus even though the rendering lint is happy;
-  * **the end-to-end behaviour cells** (1, 2, 3, 5, 12), which observe real runs and do not consult
-    the registry at all.
+  * **the end-to-end behaviour cells** (1, 2, 3, 5, 12 **and 17**), which observe real runs and do not
+    consult the registry at all — cell 17 most of all, since it observes the ruleset's behaviour rather
+    than any file's contents.
 
   What remains genuinely unmechanisable is *arbitrary* completeness, and what guards that is the
   registry being small, diffable and reviewed.
@@ -450,7 +451,10 @@ own non-required context.
   and then left it in no milestone, no §7 inventory entry and under no clause — a workflow the plan
   requires to exist that nothing creates. Its contract is deliberately smaller: `on: push` with
   `branches:` equal to the ruleset's target set, the same SHA-pinned action and checkout as C4/C8/C9
-  require, **the empty-diff guard AND the zero-`before` guard, both invoking C6a's SHARED resolver** —
+  require — **including C8's checkout INPUT allowlist, `persist-credentials: false` among it**, since
+  the canary needs no authenticated Git after checkout, checkout defaults credential persistence to
+  *true*, and zizmor's `artipacked` is one of the 19 linters this gate requires, so a canary without it
+  ships the very finding the gate reports (codex, r31) — **the empty-diff guard AND the zero-`before` guard, both invoking C6a's SHARED resolver** —
   stated directly, not by reference to the required job, which is `pull_request`-only and carries no
   zero-`before` branch at all. The canary is the only leg that can reach `push.sh`'s `--all` branch, so
   the guard belongs where the hazard is — and it is the leg whose range drift is most expensive, which
@@ -459,8 +463,14 @@ own non-required context.
   demands the C4/C5/C6 execution-integrity controls, and revision 22's "deliberately smaller" list
   omitted them, so the two disagreed about what the canary must satisfy. A shipped, push-triggered
   workflow that runs the pinned action needs them exactly as much as the required one does — and
-  **`continue-on-error: true` permanently, AT JOB SCOPE**, so it can never block and nothing is
-  tempted to require it later. **`permissions:` is pinned to exactly `contents: read` here as well**
+  **`continue-on-error: true` permanently, AT JOB SCOPE.** **The canary cannot block because its
+  context is NOT REQUIRED** — not because the job goes green: job-scope `continue-on-error` leaves the
+  job concluding `failure` and merely stops it failing the workflow *run* (cell 16's corrected tuple).
+  Revision 29 fixed the tuple and left "can never block" here resting on the wrong mechanism (codex,
+  r31). The scope still matters for a different reason: *step*-scope would rewrite the Trunk step's
+  conclusion to `success` and make the canary blind to the failure it exists to surface. **And if
+  `trunk-check-push` were ever required, ordinary PRs would sit pending — it is a push-only context —
+  which is the second reason it must stay unrequired.** **`permissions:` is pinned to exactly `contents: read` here as well**
   — the canary is the plan's other shipped workflow, and an invariant that holds only for the required
   one is half an invariant. **Scope is load-bearing and revision 22 left it unstated** (codex,
   r25): a *step*-scoped `continue-on-error` rewrites the Trunk step's reported `conclusion` to
@@ -572,10 +582,12 @@ own non-required context.
   two, so a validator could pin the old pair while letting the new C6a guard become `exit 0` or compare
   the wrong digest).
   Freezing the sequence stopped a *new* step being added; it did nothing about what the allowed steps
-  *do*. Either may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the C6 guard
-  inspects paths, not inherited runner state — so the action would resolve a no-op launcher while
-  every clause C0–C9 passed. **Each run body is pinned by digest, and neither may write to
-  `$GITHUB_ENV` or `$GITHUB_PATH` at all.** And it is the **complete step mapping** that is frozen,
+  *do*. **Any of the three** may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the
+  C6 guard inspects paths, not inherited runner state — so the action would resolve a no-op launcher
+  while every clause passed. **Each of the three run bodies is pinned by its own digest, and NONE of
+  them may write to `$GITHUB_ENV` or `$GITHUB_PATH` at all.** *(The count survived two corrections in
+  the pronouns — "either", "neither", "changing either" — which a grep for "two" cannot find; that is
+  why this paragraph is now written without pronouns at all.)* And it is the **complete step mapping** that is frozen,
   not the `run:` body alone (codex, r12): `shell`, `working-directory`, `if`, `continue-on-error`,
   `env` and every other key on each of the five steps, so a step cannot be neutralised by a sibling
   key while its body hashes unchanged. Changing either step is then a reviewed change, which is
@@ -981,7 +993,10 @@ alternative turned out to be complementary rather than competing.
 - [ ] **M2b** (**with M2 — the file revision 20 required and never scheduled, sweep**) — create
       `.github/workflows/trunk-check-push.yml`: the non-required `trunk-check-push` canary, `on: push`
       satisfying **C1's canary contract in full** — `on: push` with the ruleset's branches, the
-      C4/C8/C9 action and checkout pins, **C5's `env:` prohibition, C6's repository-launcher guard**,
+      C4/C8/C9 action and checkout pins **including `persist-credentials: false`** — the canary needs no
+  authenticated Git after checkout, checkout defaults credential persistence to *true*, and zizmor's
+  `artipacked` is one of the 19 linters this gate itself requires, so a canary without it introduces
+  the very finding the gate reports (codex, r31), **C5's `env:` prohibition, C6's repository-launcher guard**,
       `permissions: contents: read`, the empty-diff and zero-`before` guards **both invoking C6a's
       shared resolver**, and `continue-on-error: true` permanently **at job scope**. This milestone is
       the build instruction, and it previously omitted the C5/C6 execution-integrity controls that C1
@@ -1133,6 +1148,22 @@ alternative turned out to be complementary rather than competing.
         M4a is not complete until that is read back and recorded.
       * **The sacrificial PR is closed before M4a exits**, so no red PR outlives the window in which
         the gate was deliberately removed.
+
+      **The ungated interval is live, and the restart guard alone does not make it safe** (codex,
+      r31). Preventing *this* procedure from merging the red PR after an interruption does nothing
+      about **anyone else** merging during the window — and least of all about **auto-merge**, which
+      executes by itself the moment the remaining required checks are satisfied. The sacrificial PR is
+      deliberately arranged to satisfy *everything except* `trunk-check`, so removing that context is
+      precisely the condition auto-merge is waiting for. Therefore:
+      * **Preflight**: enumerate open PRs against both bases and confirm **none** has auto-merge
+        enabled or sits in a merge queue. If any does, M4a does not start.
+      * **Observe mergeability READ-ONLY.** "Confirm the previously-blocked merge becomes possible"
+        means reading the PR's mergeability state — **never calling the merge endpoint**. Revision 29's
+        wording did not forbid proving the point by actually merging, into a protected base, with the
+        gate switched off.
+      * **Hold an exclusive window**: announce it, and keep it as short as the two reads require.
+      * **After restoring the context**, verify both protected base tips are where they were and that
+        no PR merged during the interval. An unexpected merge is an incident, not a footnote.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
@@ -1511,8 +1542,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       still appearing to be caught.
     * **C7** — `merge_group` present at all.
     * **C8** — an extra step inserted before the action; the C6 guard moved away from its adjacency;
-      **a mutation inside a permitted `run:` step** — in **both** permitted steps, and in four
-      forms: creating one of C6's paths (the case revision 10's ordering made unkillable), writing
+      **a mutation inside a permitted `run:` step** — in **each of the three** permitted steps (the
+      C6a digest guard, the empty-diff guard, the C6 launcher guard), each with its **own independently
+      identified body-digest case**, and in four forms: creating one of C6's paths (the case revision 10's ordering made unkillable), writing
       `TRUNK_PATH=/bin/true` to `$GITHUB_ENV`, writing `BASH_ENV=…` to `$GITHUB_ENV`, and **writing
       to `$GITHUB_PATH`** (codex r11 and r12: freezing the sequence never constrained what the allowed
       steps *do*, and `$GITHUB_PATH` was prohibited without ever being mutated); on
@@ -1708,7 +1740,11 @@ the event's ref — syncing `alpha` *before* M2 brings the config but not the jo
 
 So the sequence is: **(1)** sync `alpha` to `main` (lands the config) → **(2)** add the job on `main`
 (M2, in its own workflow) → **(3)** land the job on `alpha` (M2a) → **(4)** make both bases strict
-(M3) → **(5)** add the required context to ruleset `Control`, with evidence from both bases.
+(M3) → **(5)** add the required context to ruleset `Control`, with evidence from both bases → **(6)**
+**M4a: prove a red check actually blocks a merge, and rehearse the rollback** (cell 17, §6.2a). Step 6
+is not optional decoration — a sequence ending at step 5 ships the gate having never observed it block
+anything and with no tested way to turn it off, which is exactly what revisions 28-29 added (codex,
+r31).
 
 **Step (5) is not "gate `main`" (codex + agy, r5).** `Control` targets `main` *and* `alpha`, so
 adding the context gates **both** simultaneously — which is precisely why steps (2)–(4) exist. The
@@ -1880,8 +1916,9 @@ required gate that fails on someone else's outage is worse — but it is a real 
   is a file inventory, and revision 9's copy of the contract into this entry is exactly the
   divergence risk §1's singularity exists to remove (codex, r9).
 * **`.github/workflows/trunk-check-push.yml` — NEW.** The non-required `trunk-check-push` canary
-  (§1's C1): `on: push` with the ruleset's branches, the same SHA-pinned action and checkout,
-  `continue-on-error: true` permanently at **job scope**. Created by M2b, asserted by cell 16. Revision 20 required
+  (§1's C1): it satisfies **C1's canary contract in full** — values are stated there, not restated
+  here, because three independent enumerations of this file's obligations have already drifted apart
+  once. Created by M2b, asserted by cell 16. Revision 20 required
   this file to exist and listed it nowhere (sweep).
 * `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
   which is exactly why `trunk-check` may not live in it
