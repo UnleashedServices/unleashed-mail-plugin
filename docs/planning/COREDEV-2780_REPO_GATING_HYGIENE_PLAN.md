@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 22
+**Status:** Planning, revision 23
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,16 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r22** `bf13637`: codex `REQUEST_CHANGES` (5 [SUBJECT], 3 [DOCUMENT], down from 9/2) + agy
+> `APPROVE_WITH_NOTES`. **codex dropped the `action.yaml` citation dispute** after five rounds, given
+> the time to fetch the file and the instruction to paste what it found. Three of its five were mine,
+> and all three were one shape: **revision 22 APPENDED a correction and left the superseded text
+> standing**, so two contradictory normative statements coexisted and an implementer could follow
+> either — §3b said both surfaces read `origin/main` *and* kept the paragraph sending pre-commit to
+> the index; C0 was added while every authoritative range still read C1–C9; the new freshness rule
+> contradicted Table A's "silent records nothing". **Revision 23 deletes rather than appends.**
+> (r22's codex arm timed out at 1800s mid-verification — no verdict, so it counted as nothing; r23
+> re-ran the same bytes at 3300s.)
 > **r21** `c22991a`: codex `REQUEST_CHANGES` ([SUBJECT] 9) + agy `APPROVE_WITH_NOTES` ([SUBJECT] 2),
 > **concordant on all three defects revision 21 introduced in its own repair** — C1 still forbade the
 > `types:` that C2 now requires, cell 11's replacement mutant (`tags:`) is no more constructible under
@@ -482,7 +492,7 @@ own non-required context.
   Freezing the sequence stopped a *new* step being added; it did nothing about what the allowed steps
   *do*. Either may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the C6 guard
   inspects paths, not inherited runner state — so the action would resolve a no-op launcher while
-  every clause C1–C9 passed. **Each run body is pinned by digest, and neither may write to
+  every clause C0–C9 passed. **Each run body is pinned by digest, and neither may write to
   `$GITHUB_ENV` or `$GITHUB_PATH` at all.** And it is the **complete step mapping** that is frozen,
   not the `run:` body alone (codex, r12): `shell`, `working-directory`, `if`, `continue-on-error`,
   `env` and every other key on each of the four steps, so a step cannot be neutralised by a sibling
@@ -604,21 +614,16 @@ branch's life. The `--index`/`--worktree` mode operand accordingly selects **whi
 report on**, not which manifest to compare against; keeping it as a manifest selector would have
 re-enforced the superseded design.
 
-**`origin/main` is a local bookmark, so freshness is part of the contract** (codex, r21). It is only
-as current as the last `git fetch`, and a detector that silently compares against a month-old
-bookmark misses exactly the drift it exists to find. The detector therefore records the bookmark's
-age with every run and, per Table A row 1, is **silent when it cannot establish one** — it never
-guesses. It does **not** fetch: a read-only detector that reaches the network on every session start
-or commit would be a worse defect than the drift it reports.
-
-**Which copy of that manifest, per surface (codex, r7).** The pre-commit surface claims to catch "a
-version claim about to be committed" — so it must read the **staged** manifest,
-`git show :.claude-plugin/plugin.json`, not the worktree file. Reading the worktree would warn, or
-stay silent, about bytes that are not being committed, and it is the same index-versus-worktree
-confusion cell 13 already forbids for the trunk check. The `SessionStart` surface reads the
-**worktree**, because that is what the live editing session observes — **not** because it lacks an
-index; a normal checkout has one, and revision 8's rationale was simply false even though the
-behaviour it justified is right (codex, r8).
+**`origin/main` is a local bookmark — a STATED LIMITATION, not a mechanism.** It is only as current
+as the last `git fetch`, so a stale bookmark makes the detector under-report: it will miss a release
+newer than the last fetch. Revision 22 tried to answer this by "recording the bookmark's age with
+every run", which was **not implementable** — it defined no age, source, threshold or consequence —
+and **contradicted Table A's rule that silent rows emit and record nothing** (codex, r23). Both are
+withdrawn. The detector does **not** fetch (a read-only detector reaching the network on every
+session start or commit would be a worse defect than the drift it reports), and it does **not**
+record. Its failure mode is therefore **under-reporting on a stale clone, never a false positive** —
+which is the correct direction for a non-blocking advisory, and is recorded here as an accepted
+limit rather than dressed up as a control.
 
 **Reachability is a PRECONDITION, not a property (codex, r3)** — *for the pre-commit surface*; the
 `SessionStart` surface has its own, different preconditions, recorded in the alternatives table
@@ -812,7 +817,7 @@ alternative turned out to be complementary rather than competing.
       demoted, `:342`/`:355` updated, cells 6–7 with negative controls.
 - [ ] **M2** (**after M0**) — add the `trunk-check` job, diff-scoped, `continue-on-error: true`, in
       its **own workflow file** `.github/workflows/trunk-check.yml`, satisfying **every clause of
-      §1's contract, C1 through C9 — except C3's `continue-on-error` prohibition, which M2 is
+      §1's contract, C0 through C9 — except C3's `continue-on-error` prohibition, which M2 is
       deliberately and temporarily exempt from **at JOB scope only**. Step-scoped would make cell 2's
       M2 half unobservable (codex, r19): a step-level `continue-on-error` turns the step's *reported*
       `conclusion` into `success` while only the in-job `steps` context still shows
@@ -870,7 +875,11 @@ alternative turned out to be complementary rather than competing.
       **Immediately before the ruleset edit, re-fetch both base tips** and confirm each still carries
       a byte-equivalent strict job. **"Immediately before" is still a read/edit race**, so verify
       again *after* the edit — both tips, the effective check name, the required context and its
-      expected integration, **and the ruleset's own target conditions** (the `main`/`alpha` set is
+      expected integration, **and that `trunk-check-push` is ABSENT from the required-context list**
+      (cell 16's re-verification, which revision 22 asserted in the cell and never added to this
+      checklist — codex, r23; an M4 payload could otherwise require the canary and still satisfy the
+      written readback, leaving ordinary PRs pending and giving a `main`→`alpha` PR a same-SHA
+      substitute). **Roll back on any violation, including that one.** **and the ruleset's own target conditions** (the `main`/`alpha` set is
       live configuration, not a constant this plan may assume — codex, r7) — and roll the rule back
       if any of them moved.
 
@@ -880,8 +889,13 @@ alternative turned out to be complementary rather than competing.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
       macOS-portable **`timeout: 120` seconds** — required in three places by revision 20 and given a
-      value in none (sweep); 120s is ~17x the measured 7s single-file run, so it fires only on a hung
-      check, never on a slow one — and **exit-code aggregation that cannot mask an earlier hook
+      value in none (sweep). **The justification is a budget, not a proof** (codex, r23): the only
+      measurement behind it is a single 7s one-file run, which says nothing about a cold linter-cache
+      bootstrap or a large staged changeset, and this hook **blocks**, so a false timeout changes
+      shipped behaviour. M5a therefore measures a representative upper envelope (cold cache, largest
+      realistic staged set) before fixing the constant, and cell 13 carries a **clean slow-path case**
+      that must not trip it. If the envelope exceeds 120s the constant moves; the accepted
+      false-timeout budget is recorded either way — and **exit-code aggregation that cannot mask an earlier hook
       failure**. Blocking on newly introduced findings, never `--all`. Update `CLAUDE.md`'s gate
       list. Independent of M2/M4 — it gates commits, not merges. Cell 13 carries the controls.
 - [ ] **M6** — implement §3b's detector and wire it to **both** surfaces (§3b): the project
@@ -890,8 +904,10 @@ alternative turned out to be complementary rather than competing.
       A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
 
 - [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
-      §7's file inventory and in no milestone, and this plan lands **six separate shipping PRs**
-      (M1, M2+M2b, M2a, **M3**, M5a, M6) — one bump cannot serve them. **Each PR that changes a
+      §7's file inventory and in no milestone, and this plan lands **at least seven shipping PRs** —
+      M1, M2+M2b, M2a, **M3 on `main` and M3 on `alpha` (two)**, M5a, M6 — one bump cannot serve them.
+      M3 edits the workflow on **both** bases and the plan specifies no single-PR mechanism for that,
+      so it is two landings, not one (codex, r23). **Each PR that changes a
       shipped asset carries its own bump**: `plugin.json`, the README H1, the README's newest
       `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. **M3 belongs on that list**
       — it edits the workflow on both bases to remove `continue-on-error`, a shipped-asset change that
@@ -930,7 +946,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    **One push subdomain runs `--all`, and the guard must refuse it (codex, r9).** At the pinned SHA,
    `push.sh` branches on `GITHUB_EVENT_BEFORE == 0000…0` — the shape GitHub sends when a branch is
    created or a tag is pushed — and runs `trunk check --ci --all`, which is precisely the 9027-finding
-   whole-tree run §1 forbids, inside the required context. The empty-diff guard therefore **also fails
+   whole-tree run §1 forbids. **That branch is reachable only from the CANARY** — the required
+   workflow has no `push` event — so C1's canary contract carries this guard and cell 16 observes it;
+   revision 21 corrected the scope at the head of this cell and left this sentence saying "inside the
+   required context" (codex, r23). The empty-diff guard therefore **also fails
    when `github.event.before` is all zeros on a push**, rather than letting the action reach that
    branch. Fail-closed: a push whose diff cannot be resolved is not a push that gets to lint the tree.
    Its own fixture. *(That is the one legitimate use of `trunk-path` — inside the harness, never
@@ -1092,7 +1111,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     required check (codex, r7) — revision 7 said "success", which is narrower than the set that
     actually lets a merge through.
 
-    **This cell asserts §1's contract clause by clause — C1 through C9 — and does not restate their
+    **This cell asserts §1's contract clause by clause — C0 through C9 — and does not restate their
     values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`).
 
     **The mutant set is GENERATED from the contract registry** (`COREDEV-2780-contract.yaml`, §1) —
@@ -1114,6 +1133,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
     (codex, r14). The generator must at minimum produce:
+    * **C0** — `concurrency` at the workflow root; `concurrency` on the job; and one arbitrary key
+      outside the root allowlist. **Revision 22 added C0 and left every authoritative range reading
+      C1–C9** (codex, r23), so an implementation could omit it from the registry and ship the exact
+      cancellation hazard C0 exists to prevent — a clause with no range and no mutant is decoration.
     * **C1/C2** — a second trigger added (`push`, `workflow_dispatch`); the `pull_request` event
       **removed**; **`paths:` added** (a real, valid `pull_request` option that narrows); **one
       arbitrary unlisted mapping option**; `branches:` **absent**; `branches:` unequal to the ruleset
@@ -1266,7 +1289,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     `runs-on: ubuntu-latest` and **`timeout-minutes: 15`** — a *concrete* ceiling, mutated as an
     operand. Revision 21 required only that the key *exist*, which `timeout-minutes: 360` satisfies
     while being **GitHub's default six-hour ceiling** — a timeout that changes nothing (codex, r21).
-    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert the rendered C1–C9 prose
+    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert the rendered C0–C9 prose
     agrees with `COREDEV-2780-contract.yaml`**, so the registry cannot silently diverge from the
     document that explains it. §1 has required both since revision 2 and
     **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
@@ -1403,7 +1426,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
   per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
   `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
-  payload or fixture, validity check, and expected diagnostic. §1's C1–C9 prose is rendered from it,
+  payload or fixture, validity check, and expected diagnostic. §1's C0–C9 prose is rendered from it,
   cell 11's mutants are generated by iterating its **cases**, and cell 15 asserts prose and registry
   agree. It exists because "derived from the clause text" is not a mechanism when the clause text is
   prose (codex, r13); it is typed and case-bearing because a flat `(id, path, value)` schema could not
@@ -1413,7 +1436,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
   survived a round of this gate, maintained **independently of the registry** so that a registry edit
   silently dropping an obligation reddens something the rendering lint cannot see (§1).
 * **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow and
-  satisfies **§1's contract, clauses C1–C9** — the event set, the branch filters, the absence of
+  satisfies **§1's contract, clauses C0–C9** — the event set, the branch filters, the absence of
   anything that skips or masks, the `with:` allowlist, the `env:` prohibition, the
   repository-supplied-launcher guard, the merge-queue stop, the frozen step sequence, and the action's
   exact SHA pin. Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's `arguments:`
@@ -1502,7 +1525,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 
 | cell | owner |
 |---|---|
-| 1 | `test_trunk_upstream_parity.py` (range parity, empty diff, the zero-before-sha subdomain) |
+| 1 | **hybrid**: the `trunk-parity-harness.yml` workflow is the **sensor** — it runs the pinned action against per-event fixtures and reports the captured range; `test_trunk_upstream_parity.py` is the **judge**. Revision 22 named only the judge here while §7's inventory described the split correctly (codex, r23) |
 | 2 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: both halves assert a real run's outcome (the Trunk step at M2, the job conclusion at M3), which no Python test can observe |
 | 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
 | 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; the **`trunk-parity-harness.yml` workflow** runs the pinned action and reports the post-invocation hashes, which `test_trunk_upstream_parity.py` asserts against — a unittest cannot itself run a composite action (sweep). *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
@@ -1518,6 +1541,17 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 **Revision 1's largest defect was not technical.** It was written without reading COREDEV-2771's
 planning document, which contains a section addressed to this ticket handing over six reviewed
 defects. Both reviewers re-derived that work. Grep `docs/planning/` for the predecessor first.
+
+**Revisions 20-22 share one mechanical failure: I APPENDED corrections instead of DELETING what they
+replaced.** Each time the new rule and the superseded rule stood side by side as normative text, and
+an implementer following either would be within the document — §3b told both surfaces to read
+`origin/main` in one paragraph and sent pre-commit to the index in the next; C0 was added while every
+authoritative range still enumerated C1–C9; cell 1 carried a corrected scope directly above a sentence
+asserting the old one; a freshness rule was written that contradicted Table A's silence rule. This is
+**distinct from the fix-one-site family**: there a sibling was *missed*, here the original was *left
+standing deliberately*, as history, in a document whose reader cannot tell history from specification.
+**A correction that does not delete is not a correction — it is a second opinion.** Revision 23
+deletes, and the round records at the top of this document are where superseded designs belong.
 
 **Revision 13's two new mechanisms were both holed by the round that reviewed them — and that is
 the mechanisms working, not failing.** Asked to attack the derivation and the ownership rule directly
