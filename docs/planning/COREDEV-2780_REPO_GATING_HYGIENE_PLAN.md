@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 25
+**Status:** Planning, revision 26
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,11 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r26** `cc5e8e2`: **agy `APPROVE_WITH_NOTES` with [SUBJECT] 0** — "both document notes will
+> naturally settle during implementation" — and codex `REQUEST_CHANGES` (7 findings). **None of
+> codex's seven was traceable to revision 25's own edits** (grep-verified), the first revision in six
+> where the author introduced nothing: revision 25's four-lens pre-commit check absorbed them before
+> the gate saw them. The seven are pre-existing depth, mostly *executable-contract* gaps.
 > **r24** `ff09b20`: codex `REQUEST_CHANGES` (4 [SUBJECT], 4 [DOCUMENT], down from 7/2) + agy
 > `APPROVE_WITH_NOTES`. **Five of the eight were propagation failures from revision 24's own edits** —
 > in the revision whose commit message said "derive the family by grep". The gap: I grepped the
@@ -889,6 +894,13 @@ alternative turned out to be complementary rather than competing.
       `.github/workflows/trunk-parity-harness.yml`, the **non-required** sensor that runs the pinned
       action against per-event fixtures with an instrumented launcher and publishes the captured argv
       and post-run tree hashes as an artifact. Cells 1 and 5 are unownable without it.
+
+      **Its trigger and collection path are specified, or the artifact is never produced** (codex,
+      r26): `on: workflow_dispatch` **only** — it is non-required, so the skipped-success hazard that
+      bans dispatch from `trunk-check` does not apply here — invoked explicitly at M2c and again
+      before M4; it writes `parity-<event>.json` with the captured argv, the resolved range and the
+      pre/post tree hashes; and the milestone **accepts the artifact against that schema** before the
+      cells that own it may be marked done.
 - [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
       lands HERE, not at M2** (codex, r8): M2 deliberately ships `continue-on-error: true` while C3
       forbids it, so asserting C3 at M2 would make the suite intentionally red. The cell is written
@@ -941,14 +953,24 @@ alternative turned out to be complementary rather than competing.
       **Must CHANGE, in exactly one direction** — roll back if not:
       5. `trunk-check` is **absent** from the required contexts in the pre-read and **present with its
          expected `integration_id`** in the post-read;
-      6. **and the required-context list is otherwise IDENTICAL** — same members, same integrations,
-         nothing dropped or altered. Narrowing the comparison to `trunk-check` alone (revision 25's
+      6. **and the CANONICAL RULESET is otherwise byte-identical** — not merely the required-context
+         list. The update API exposes the whole surface: enforcement, bypass actors, target
+         conditions, name, and every other rule (review requirements, signing, deletion protection).
+         A payload can add `trunk-check` while altering any of those and satisfy a five-field
+         readback (codex, r26). **Compare canonical pre/post rulesets and require exactly one
+         semantic difference — the intended required-status-check entry.** Narrowing the comparison to `trunk-check` alone (revision 25's
          repair of revision 24's impossible readback) meant a payload that **adds `trunk-check` while
          dropping another required context** passed both reads — the destructive outcome this readback
          most needs to catch, opened by the fix for a checklist that could not pass.
 
-      **Open PRs predating M2/M2a** will not have produced the context and will sit pending until
-      rebased or updated (agy, r6). Enumerate and rebase them as part of the change, not after it.
+      **Every open PR whose latest `trunk-check` predates the strict M3 deployment must be refreshed
+      — on both bases — not merely those with no context at all** (codex, r26). Two populations, and
+      revision 25 handled one: PRs predating M2/M2a have no context and sit pending (agy, r6); but a
+      PR opened *during* M2 already carries a **successful** `trunk-check` produced while the job was
+      advisory, M3 does not re-run it, and a required check is satisfied by an existing success on the
+      commit regardless of which workflow revision produced it. M4 would then require a green that was
+      never strict. Enumerate by comparing each open PR's latest matching check against the M3
+      deployment time, and refresh as part of the change, not after it.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
@@ -1005,7 +1027,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    **fails when it is empty**, before the action runs. **That step's computed range must be proven
    identical to the range the pinned action passes to Trunk** (codex, r6) — two independently
    correct-looking resolvers drift, and a guard that checks a *different* range than the one linted
-   asserts nothing about the lint. **"Proven" must name a harness, not a hope (codex, r7):** run the
+   asserts nothing about the lint. **The resolver lives in ONE shared shipped script** that both the
+   workflow's guard step and the harness invoke (codex, r26): revision 25 digest-bound the harness's
+   *action inputs* to the workflow and left its range resolution independent, so a correct oracle
+   could agree with Trunk while the shipped guard used the wrong range — and C8 would merely freeze
+   that wrong body. With one implementation, parity is a property rather than an agreement between two
+   things that might both be wrong. **"Proven" must name a harness, not a hope (codex, r7):** run the
    pinned action against per-event fixtures with `trunk-path` pointing at an instrumented launcher
    that records its argv, then compare the captured range arguments **byte-for-byte** against the
    guard step's output.
@@ -1158,28 +1185,35 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    * **`SessionStart`** cannot be proved by the planned suite (codex, r10, refined r11): the
      repository *does* install Claude Code later in `plugin-ci.yml`, but **the Python suites run
      before that step**, and §7 leaves the workflow unchanged — so any "real entry point" assertion there would be a parser or
-     emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly**:
-     CI asserts the *declaration* (matcher set, `${CLAUDE_PROJECT_DIR}` resolution, **`timeout: 5`
-     as a literal, mutated as an operand** — asserting the key alone accepts the 600-second default
-     this contract exists to override, the same defect cell 15 had — the
-     `systemMessage` shape, **a filename-hostile `session_id`** — one containing `/` and one exceeding
-     a path component's length limit, with a mutation that removes the hashing — because the contract
-     requires `sha256(session_id)` precisely since the identifier is opaque, and revision 16 tested
-     the requirement nowhere: an implementation using the raw id passes the matcher, concurrency and
-     aged-marker cases and then **fails open** (codex, r17); the `O_EXCL` marker under concurrent
-     invocation **and under aged-marker
-     resumption** — a session whose marker was swept past the retention window warns again, which is
-     exactly why the promise is per-window rather than per-session (codex, r11). **The retention
-     constant is discriminated in the terms the design actually uses**: repeated invocation **within one
-     bucket** warns once, invocation **across a bucket boundary** warns again *even minutes apart*,
-     and the **bucket-width constant `604800` is mutated**. An aged-marker test alone is satisfied by a
-     detector sweeping at six days — covering the line without covering its operand (codex, r12) — but
-     the age-threshold phrasing that replaced it ("just under seven days must NOT sweep") described a
-     mechanism §3b **abandoned at revision 13** for epoch buckets, and would fail against a correct
-     implementation: under buckets, a marker created shortly before a boundary is swept while hours
-     old) against the documented stdin contract; and the *real* session-start invocation is recorded once as a
-     **committed evidence artifact**, the same standing cells 10 and 12 have. Claiming a CI proof this
-     repo's pipeline cannot produce would be a cell that cannot pass.
+     emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly.**
+
+     **CI asserts the DECLARATION**, against the documented stdin contract — rewritten as a list
+     because successive revisions appended into one run-on sentence until its parentheses no longer
+     balanced (codex, r26):
+     * the matcher set, and `${CLAUDE_PROJECT_DIR}` resolution for both hook entry and script;
+     * **`timeout: 5` as a literal, mutated as an operand** — asserting the key alone accepts the
+       600-second default this contract exists to override, the same defect cell 15 had;
+     * the **`systemMessage`** output shape;
+     * **a filename-hostile `session_id`** — one containing `/`, one exceeding a path component's
+       length limit — with a mutation that removes the hashing. The contract requires
+       `sha256(session_id)` precisely because the identifier is opaque, and revision 16 tested that
+       nowhere: an implementation using the raw id passes the matcher, concurrency and aged-marker
+       cases and then **fails open** (codex, r17);
+     * the `O_EXCL` marker under **concurrent invocation** and under **aged-marker resumption** — a
+       session whose marker was swept past the retention window warns again, which is exactly why the
+       promise is per-window rather than per-session (codex, r11);
+     * **the retention constant, discriminated in the terms the design actually uses**: repeated
+       invocation **within one bucket** warns once, invocation **across a bucket boundary** warns
+       again *even minutes apart*, and the **bucket-width constant `604800` is mutated**. An
+       aged-marker test alone is satisfied by a detector sweeping at six days — covering the line
+       without covering its operand (codex, r12) — while the age-threshold phrasing that replaced it
+       ("just under seven days must NOT sweep") described a mechanism §3b **abandoned at revision 13**
+       for epoch buckets, and would fail against a correct implementation: under buckets a marker
+       created shortly before a boundary is swept while hours old.
+
+     **The real session-start invocation** is recorded once as a **committed evidence artifact**, the
+     same standing cells 10 and 12 have. Claiming a CI proof this repo's pipeline cannot produce would
+     be a cell that cannot pass.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
    **absent** (not "absent-or-false": C4 is an allowlist, and `post-annotations: false` is an unlisted
    key *present* in `with:`, which cell 11's arbitrary-unlisted-key mutant reds — the two cells
@@ -1198,8 +1232,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     artifact is produced, uploaded by the action's own SHA-pinned `actions/upload-artifact` step
     under `if: always() && env.TRUNK_UPLOAD_ANNOTATIONS == 'true'`. **No added token scope**: the
     upload uses the Actions runtime, not `GITHUB_TOKEN` permissions, so `contents: read` stands.
-11. **There is no state in which `trunk-check` reports a *merge-satisfying* conclusion without the
-    real Trunk having run.** GitHub counts **`success`, `skipped` and `neutral`** as satisfying a
+11. **The workflow admits no configuration that would let `trunk-check` report a merge-satisfying
+    conclusion without the real Trunk running** — a **structural** invariant over the workflow's
+    bytes, which is what this cell's parse/mutation owner can actually observe (codex, r26). Revision
+    25's title claimed the *runtime* property; that belongs to cells 2, 12 and 16, which watch real
+    runs. The distinction matters because a cell whose title outruns its owner is how this plan
+    repeatedly acquired assertions nothing could evaluate. GitHub counts **`success`, `skipped` and `neutral`** as satisfying a
     required check (codex, r7) — revision 7 said "success", which is narrower than the set that
     actually lets a merge through.
 
@@ -1230,7 +1268,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       three static permission mutants in C0's prose and listed none here, so the minimum the generator
       had to produce omitted all of them (codex, r25).
     * **C0** — `concurrency` at the workflow root; `concurrency` on the job; and one arbitrary key
-      outside the root allowlist. **Revision 22 added C0 and left every authoritative range reading
+      outside the root allowlist.
+    * **GENERIC UNLISTED-KEY mutants at EVERY allowlist boundary** (codex, r26). Naming only the keys
+      this campaign happened to think of leaves a blacklist detector passing every listed mutant while
+      violating the exact-key allowlists of C1, C3 and C8. One arbitrary *valid* unlisted key at each
+      boundary: a **`schedule`** event; a job key such as **`container`**, `services` or
+      `environment`; and a complete-step key such as **`id`** or `timeout-minutes`. **Revision 22 added C0 and left every authoritative range reading
       C1–C9** (codex, r23), so an implementation could omit it from the registry and ship the exact
       cancellation hazard C0 exists to prevent — a clause with no range and no mutant is decoration.
     * **C1/C2** — a second trigger added (`push`, `workflow_dispatch`); the `pull_request` event
@@ -1414,6 +1457,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     workflow carries `continue-on-error: true` **at job scope**, and that it exists at all — revision 20 required the
     file to exist while no milestone created it and no inventory listed it. This is the cell that
     keeps cross-event substitution closed: the split only works while the canary stays unrequired.
+
+    **M2b must CAUSE a controlled canary failure, or the runtime half is never observed** (codex,
+    r26): push a deliberately lint-failing commit to a scratch branch matching the canary's
+    `branches:`, and record that the **Trunk step's `conclusion` is `failure` while the job's is
+    `success`** — the job-versus-step `continue-on-error` distinction this cell exists to prove.
+    Without a milestone that produces the stimulus, the evidence artifact stays empty and the cell
+    is unfalsifiable.
 
 ## §6 — STRUCTURAL DECISIONS
 
