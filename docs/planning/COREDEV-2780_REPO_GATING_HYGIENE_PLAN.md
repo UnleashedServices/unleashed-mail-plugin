@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 28
+**Status:** Planning, revision 29
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-31
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -350,7 +350,7 @@ own non-required context.
   **Mutation CASES are first-class, and the generator iterates cases rather than entries**
   (codex, r15). One mutant per *entry* still under-covers, because several obligations need more than
   one mutation to be exercised: C1 must both **add** a trigger and **remove** a required one; C2 must
-  diverge the **local** side and the **remote** side separately; C8's two run steps need **four forms
+  diverge the **local** side and the **remote** side separately; C8's three run steps need **four forms
   each**; and a generic `content_digest` byte edit passes while a validator that *normalises away*
   `$GITHUB_PATH` lines before hashing survives — only an independently encoded `$GITHUB_PATH` case
   kills that one.
@@ -567,7 +567,10 @@ own non-required context.
   lints a 130-byte pointer and reports green. That is an accident, not an attack — squarely §0's
   threat model — and it is the one checkout input whose *default* is the hazard.
 
-  **And the two permitted `run:` steps are frozen BY CONTENT, not merely by position (codex, r11).**
+  **And ALL THREE permitted `run:` steps are frozen BY CONTENT, not merely by position** (codex, r11;
+  count corrected r30 — splitting the guards in revision 28 made a third one, and the freeze still said
+  two, so a validator could pin the old pair while letting the new C6a guard become `exit 0` or compare
+  the wrong digest).
   Freezing the sequence stopped a *new* step being added; it did nothing about what the allowed steps
   *do*. Either may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the C6 guard
   inspects paths, not inherited runner state — so the action would resolve a no-op launcher while
@@ -1116,6 +1119,20 @@ alternative turned out to be complementary rather than competing.
          plan, not a remedy — and with `bypass_actors: []` it is the only remedy there is.
       Both outcomes land in the rollout evidence artifact. **If either fails, roll the ruleset back to
       its pre-M4 canonical state** and return to M3.
+
+      **M4a IS DESTRUCTIVE AND MUST BE INTERRUPTION-SAFE** (codex, r30). Step 2 removes the required
+      context: an interruption there leaves the repository **ungated**, and restarting M4a from step 1
+      would then merge the deliberately-red PR into a protected base. M4 was given resumable state
+      handling and this milestone was added without it. Therefore:
+      * **Read the canonical ruleset before entry and before every destructive transition.** If
+        `trunk-check` is **absent**, do NOT attempt step 1's merge — that is the ungated state, not the
+        starting state; either restore the context and restart, or resume explicitly at the removal
+        checkpoint.
+      * **The mandatory final state is: `trunk-check` present with its expected `integration_id`, the
+        canonical ruleset otherwise identical to its pre-M4a bytes, and cell 17 re-observed green.**
+        M4a is not complete until that is read back and recorded.
+      * **The sacrificial PR is closed before M4a exits**, so no red PR outlives the window in which
+        the gate was deliberately removed.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
@@ -1501,8 +1518,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       steps *do*, and `$GITHUB_PATH` was prohibited without ever being mutated); on
       `actions/checkout`, each of `sparse-checkout`, `ref`, `repository`, `path`, **`filter`, and one
       arbitrary key outside the allowlist**; on **each of the five steps** an `if: false` and a
-      `continue-on-error: true`; on the **two `run:` steps only**, a changed `shell` **and a changed
-      `working-directory`**; and a `defaults.run` at workflow and at job level.
+      `continue-on-error: true`; on the **three `run:` steps only** — the C6a digest guard, the
+      empty-diff guard and the C6 launcher guard — a changed `shell`, a changed `working-directory`,
+      an exact-form mutation of each body, and an **omission** of each; and a `defaults.run` at workflow and at job level.
 
       **`shell` is valid only on `run:` steps** (codex, r17): `actions/checkout` and the Trunk action
       are `uses:` steps, where `actionlint` rejects `shell` as an unexpected key — so revision 16's
@@ -1603,7 +1621,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     `runs-on: ubuntu-latest` and **`timeout-minutes: 15`** — a *concrete* ceiling, mutated as an
     operand. Revision 21 required only that the key *exist*, which `timeout-minutes: 360` satisfies
     while being **GitHub's default six-hour ceiling** — a timeout that changes nothing (codex, r21).
-    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert the rendered C0–C9 **and C6a** prose
+    Fifteen minutes is ~6x the existing `validate` job's runtime; **and assert that the rendered C0–C9 and C6a prose
     agrees with `COREDEV-2780-contract.yaml`**, so the registry cannot silently diverge from the
     document that explains it. §1 has required both since revision 2 and
     **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
@@ -1641,8 +1659,16 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     branch is named `main`, carrying the same canary workflow at the same SHA pins; the failing commit
     lands there. **Enabling Actions in that fork is part of the step** — GitHub disables them on forks
     until someone turns them on, so without it the stimulus silently produces nothing and this cell's
-    runtime half is quietly unfalsifiable (kimi, third lens). Record that the **Trunk step's `conclusion` is `failure` while the job's is
-    `success`** — the job-versus-step `continue-on-error` distinction this cell exists to prove.
+    runtime half is quietly unfalsifiable (kimi, third lens). Record the tuple **Trunk step `failure` / canary job `failure` / workflow run not failed** — job-level
+    `continue-on-error` does **not** make the job conclude `success`; it stops the job's failure from
+    failing the *workflow run*, and it is *step*-level that rewrites a step's conclusion to success
+    (codex, r30). Revision 28 asked for step-`failure` with job-`success`, which that scope cannot
+    produce — an impossible tuple, and the cell could never pass. **The canary can never block because
+    its context is not required, not because its job concludes green.**
+
+    **Bind the failure to the expected lint diagnostic**, as cells 2 and 12 do: a checkout, setup,
+    download or fetch failure yields the same three conclusions while Trunk never reached lint
+    evaluation, so an unbound cell certifies a canary that never linted anything.
     Without a milestone that produces the stimulus, the evidence artifact stays empty and the cell
     is unfalsifiable.
 
@@ -1750,8 +1776,8 @@ head while `main` is unmergeable. This repository has already shipped that incid
   entry, write it back, and confirm by re-reading:
   `gh api repos/<owner>/<repo>/rulesets/16082567` → remove the `trunk-check` entry from the
   `required_status_checks` rule's parameters → `gh api --method PUT …/rulesets/16082567 --input -`.
-* **Verify it works BEFORE relying on it.** M4 rehearses the rollback immediately after the smoke test
-  of cell 17: remove the context, confirm a previously-blocked merge becomes possible, then re-add it
+* **Verify it works BEFORE relying on it.** **M4a** rehearses the rollback immediately after cell 17's
+  smoke test: remove the context, confirm a previously-blocked merge becomes possible, then re-add it
   and re-run cell 17. An untested rollback is a plan, not a remedy.
 * **Both ruleset writes here carry M4's readback discipline** — the rehearsal in M4a and any real
   incident rollback. Capture the canonical ruleset before and after, admit **exactly one semantic
@@ -1832,7 +1858,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
   per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
   `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
-  payload or fixture, validity check, and expected diagnostic. §1's C0–C9 **and C6a** prose is rendered from it,
+  payload or fixture, validity check, and expected diagnostic. §1's C0–C9 and C6a prose is rendered from it,
   cell 11's mutants are generated by iterating its **cases**, and cell 15 asserts prose and registry
   agree. It exists because "derived from the clause text" is not a mechanism when the clause text is
   prose (codex, r13); it is typed and case-bearing because a flat `(id, path, value)` schema could not
