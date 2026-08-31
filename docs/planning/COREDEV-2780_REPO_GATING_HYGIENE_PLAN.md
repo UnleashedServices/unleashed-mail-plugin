@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 20
+**Status:** Planning, revision 21
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,17 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **SWEEP** (pre-r21, not a gate round): a ten-lens adversarial pass over revision 20 by Claude
+> subagents — 49 findings, and **eight of ten independent lenses converged on the same defect**:
+> revision 20's push-leg split was applied to **C1 only**, leaving §1's Resolution, C2, cell 11's
+> mutants, §4 and §7 all describing a two-event required workflow that no longer exists. The largest
+> single-member-of-a-family miss of the campaign, and my own fix caused it. The sweep also found four
+> defects twenty gate rounds had not: a retargeted PR never re-runs (`pull_request`'s default activity
+> set excludes `edited`, and C1 forbids `types:`); `persist-credentials: false` is forbidden by C8 yet
+> is the only remedy for zizmor's `artipacked`, so the gate's workflow trips the gate's own linter;
+> Table A's `expected` is the working manifest, which the version-bump rule keeps one bump AHEAD, so
+> the detector warns on every developer machine; and the pre-commit timeout is required in three
+> places and valued in none.
 > **r20** `e831240`: agy `APPROVE`, codex `REQUEST_CHANGES` (5 [SUBJECT], 1 [DOCUMENT]). Two matter.
 > **Cross-event range substitution**: one workflow emitted the *same* required context for
 > `pull_request` and `push`, so a PR could be satisfied by the `push` run on its head SHA — which
@@ -227,7 +238,9 @@ have *certified* the bypass. The same doc gives the general rule directly: **"Av
 workflows that can be skipped."**
 
 **Resolution: `trunk-check` moves to its own workflow file, `.github/workflows/trunk-check.yml`,
-whose `on:` contains `pull_request` and `push` and *no* `workflow_dispatch`.** The job is then
+whose `on:` contains **`pull_request` only** and *no* `workflow_dispatch`.** (Revision 20 moved the
+push leg out of the required context but left this sentence, C2, cell 11's cases, §4 and §7 all
+describing the two-event workflow — the push leg's own home is `trunk-check-push.yml`, below.) The job is then
 unreachable on dispatch by construction rather than by condition, so there is no skipped-success
 state to exploit.
 
@@ -235,7 +248,8 @@ state to exploit.
 scoped "to the gated bases" *and* banned every filter — **authorising no configuration at all**. The
 distinction the GitHub doc actually draws is what the two kinds of filter skip on:
 
-* **`branches: [main, alpha]`** — REQUIRED, on both `pull_request` and `push`, and it must match the
+* **`branches: [main, alpha]`** — REQUIRED on the required workflow's single `pull_request` event
+  (and, separately, on the non-required push canary), and it must match the
   ruleset's target set exactly. A PR into an ungated base does not need the context, so nothing is
   left pending; a mismatch in either direction is the COREDEV-2767 shape.
 * **`paths:` / `paths-ignore:`** — PROHIBITED. These skip on *changed files*, so a PR into a gated
@@ -337,16 +351,42 @@ own non-required context.
   a strictly smaller diff. Cell 1 proved each range correct independently and could never prove *which
   run* satisfied the rule. The push leg is now `.github/workflows/trunk-check-push.yml` with job id
   **`trunk-check-push`** — a different context name, deliberately **not required**, kept as a
-  post-merge canary. Only a pull request can satisfy `trunk-check`. Revision 18 allowlisted the event *names* and left their *mappings* open
-  (codex, r19): `push.tags` sits happily beside `branches:`, a force-updated tag carries a **nonzero
-  `before`** so the empty-diff guard accepts it, and Trunk then greens a *tag* range against a SHA
-  that may be a PR head — required checks match on SHA and expected app, not on the ref type that
-  triggered the run. **`merge_group` is NOT permitted** — see C7.
+  post-merge canary. Only a pull request can satisfy `trunk-check`.
 
-  **C2 — branches.** `branches:` present on both events, equal to the ruleset's target set.
+  **The canary is a SHIPPED FILE and is governed (sweep).** Revision 20 invented it in this paragraph
+  and then left it in no milestone, no §7 inventory entry and under no clause — a workflow the plan
+  requires to exist that nothing creates. Its contract is deliberately smaller: `on: push` with
+  `branches:` equal to the ruleset's target set, the same SHA-pinned action and checkout as C4/C8/C9
+  require, and **`continue-on-error: true` permanently**, so it can never block and nothing is tempted
+  to require it later. **Cell 16 asserts it is absent from the ruleset's required contexts** — the
+  property that keeps cross-event substitution closed.
+
+  *(The option allowlist above is what revision 19 added after finding the event **names** allowlisted
+  and their **mappings** open — `push.tags` beside `branches:`, a force-updated tag carrying a nonzero
+  `before`, and Trunk greening a tag range against a SHA that may be a PR head, since required checks
+  match on SHA and expected app rather than on the triggering ref type. That hazard now lives entirely
+  in the canary's contract, because the required workflow no longer has a `push` event at all.)* **`merge_group` is NOT permitted** — see C7.
+
+  **C2 — branches, and the activity set.** `branches:` present on the workflow's single
+  `pull_request` event, equal to the ruleset's target set.
+
+  **`types:` is REQUIRED here, not forbidden — and this reverses revision 19.** `pull_request`'s
+  default activity set is `opened, synchronize, reopened`, which **excludes `edited`** — the event
+  fired when a PR is **retargeted to a different base**. With the default set, retargeting produces no
+  new run, so the required context keeps whatever the previous run reported *against the old base*: a
+  green check computed over the wrong diff. So the workflow declares
+  **`types: [opened, synchronize, reopened, edited]`** — an explicit *widening*. C1's prohibition is on
+  filters that **narrow** reachability; this one is the opposite, and conflating the two would have
+  shipped a stale-base pass.
   **No `paths:`/`paths-ignore:`** — path filtering leaves a required context Pending, which blocks.
 
-  **C3 — nothing skips or masks, on ANY step.** No `if:` and no `continue-on-error` on the job or on
+  **C3 — the JOB mapping is an allowlist, and nothing skips or masks on any step.** The job's own
+  keys are `runs-on`, `timeout-minutes`, `permissions`, `steps` — and nothing else. **This was the
+  last level still closed by a blacklist (sweep):** the event mapping, the action's inputs and the
+  checkout's inputs were each converted to allowlists across revisions 8-20 while the job mapping kept
+  enumerating *prohibited* keys, so a key nobody thought to forbid was permitted by default — the same
+  shape, at the one level that had not yet been converted. The prohibitions below remain as the
+  named-and-tested cases *within* that allowlist: No `if:` and no `continue-on-error` on the job or on
   **any of the four steps** — revision 12 named only the job and the Trunk step, so `if: false` on a
   *guard* step preserved both the frozen sequence and the frozen body digest while removing the guard
   entirely (codex, r12). No `needs:`; no `strategy.matrix`; **no workflow- or job-level
@@ -390,8 +430,17 @@ own non-required context.
   enough (codex, r10): it accepts `ref`, `repository`, `path`, `filter` and `sparse-checkout`, and a
   well-meaning sparse-checkout optimisation can leave changed files **absent from disk** while git
   metadata still yields a non-empty range — so the empty-diff guard passes and Trunk lints files that
-  are not there. That is an *accident*, squarely inside §0's threat model. Only `fetch-depth` may be
-  set **and `lfs: true`**; every other input must be absent.
+  are not there. That is an *accident*, squarely inside §0's threat model. The permitted set is
+  **`fetch-depth` (optional), `lfs: true` (required), and `persist-credentials: false` (required)**;
+  every other input must be absent.
+
+  **`persist-credentials: false` is required, and revision 20 forbade it (sweep).** `actions/checkout`
+  leaves the job's credential in `.git/config` by default, which is exactly what zizmor's
+  **`artipacked`** rule reports — and zizmor is one of the **19 linters this gate itself requires**,
+  running under the `auditor` persona. So revision 20's allowlist would have produced a workflow that
+  **fails the gate it defines**, with the only in-workflow remedy prohibited. `.github/zizmor.yml` is
+  deliberately empty of ignores and documents suppression as the last resort; setting the input is the
+  first. It is a hardening, so requiring it costs nothing.
 
   **`lfs` is required, not merely permitted (codex, r13).** `actions/checkout` defaults it to
   `false`, so a PR that legitimately introduces `.gitattributes` with an LFS-tracked source checks out
@@ -544,8 +593,13 @@ disjoint by wording and failed twice — codex and agy each found pairs that mat
 inputs that matched nothing. Ordering makes exclusivity **structural** rather than asserted, and a
 final catch-all makes exhaustiveness structural too.
 
-**Table A — the detector at runtime.** Evaluated per scope entry; `expected` is the version in
-`.claude-plugin/plugin.json`.
+**Table A — the detector at runtime.** Evaluated per scope entry. **`expected` is
+`.claude-plugin/plugin.json` as of `origin/main` — NOT the working tree (sweep).** The working tree is
+where the version-bump rule *raises* the version, so it sits one bump **ahead** of anything a consumer
+can pull for the whole life of a feature branch: reading it would make row 7 warn on every developer's
+machine, every session, after every bump — a false positive on the healthy state, which is exactly the
+"red by default, so people stop reading it" trap §1 rejects for CI. What the detector is *for* is an
+install lagging what is **published**, so it compares against the published manifest.
 
 | # | condition | detector |
 |---|---|---|
@@ -729,6 +783,10 @@ alternative turned out to be complementary rather than competing.
       only to `main` never executes for an `alpha` PR: `alpha` would carry the config but emit no
       `trunk-check` check run. Requiring the context at M4 would then make it **unsatisfiable on
       `alpha`** — COREDEV-2767's exact failure, aimed at the other protected base.
+- [ ] **M2b** (**with M2 — the file revision 20 required and never scheduled, sweep**) — create
+      `.github/workflows/trunk-check-push.yml`: the non-required `trunk-check-push` canary, `on: push`
+      with the ruleset's branches, the same pinned action and checkout, `continue-on-error: true`
+      permanently. Land it on both bases alongside M2a. Cell 16 asserts it never becomes required.
 - [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
       lands HERE, not at M2** (codex, r8): M2 deliberately ships `continue-on-error: true` while C3
       forbids it, so asserting C3 at M2 would make the suite intentionally red. The cell is written
@@ -775,13 +833,24 @@ alternative turned out to be complementary rather than competing.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
-      macOS-portable timeout, and **exit-code aggregation that cannot mask an earlier hook
+      macOS-portable **`timeout: 120` seconds** — required in three places by revision 20 and given a
+      value in none (sweep); 120s is ~17x the measured 7s single-file run, so it fires only on a hung
+      check, never on a slow one — and **exit-code aggregation that cannot mask an earlier hook
       failure**. Blocking on newly introduced findings, never `--all`. Update `CLAUDE.md`'s gate
       list. Independent of M2/M4 — it gates commits, not merges. Cell 13 carries the controls.
 - [ ] **M6** — implement §3b's detector and wire it to **both** surfaces (§3b): the project
       `SessionStart` hook, which fires when a stale install starts running — the defect as actually
       reported — and `.githooks/pre-commit` (§6.3 decided: wire it). Runtime behaviour per **Table
       A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
+
+- [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
+      §7's file inventory and in no milestone, and this plan lands **five or six separate shipping
+      PRs** (M0, M1, M2+M2b, M2a, M5a, M6) — one bump cannot serve them. **Each PR that changes a
+      shipped asset carries its own bump**: `plugin.json`, the README H1, the README's newest
+      `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. M0 and M4 are the
+      exceptions — a branch sync and a ruleset edit ship no plugin asset. `validate-version-sync.sh`
+      only checks the four sites **agree**, not that they **moved**, so agreement at a stale version
+      passes: the bump is a milestone obligation, not something the validator will catch.
 
 M3 and M4 are gated on evidence, not schedule.
 
@@ -821,7 +890,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      r19). This is why M2's exemption is pinned to job scope;
    * **from M3** — assert the **job's conclusion** is `failure`, which is the property that actually
      blocks a merge.
-3. **The gate does not over-reach.** (a) A PR touching one clean file passes with the 9027-issue
+3. **The gate does not over-reach** — *asserted from M3, when the job can actually fail*. At M2 the
+   job ships `continue-on-error: true`, so its "passes" halves cannot fail and its "still failing"
+   half cannot pass; like cell 2, this cell is milestone-qualified rather than unqualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
    backlog present. (b) A PR touching a **historically dirty** file passes for its pre-existing
    findings while still failing for newly introduced ones.
 4. **The configured linter set MEMBERSHIP is frozen in the test, not derived from the configuration
@@ -982,18 +1053,32 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
     (codex, r14). The generator must at minimum produce:
-    * **C1** — a third trigger added; a *required* trigger missing; **a valid `push.tags` mapping
-      option**; **a `types:` activity filter**; and **one arbitrary unlisted mapping option** — the
-      clause's option allowlist arrived in revision 19 with no cases opposite it, so a validator
-      checking event names and required `branches` while ignoring extra mapping keys passed every
-      listed case (codex, r20). *Generation cannot invent an absent registry case*: a clause and its
-      cases must land together.
+    * **C1/C2** — a second trigger added (`push`, `workflow_dispatch`); the `pull_request` event
+      **removed**; a `tags:` mapping option; **one arbitrary unlisted mapping option**; `branches:`
+      **absent**; `branches:` unequal to the ruleset set; and **`types:` reduced to the default set**
+      (which drops `edited` and reintroduces the stale-base pass).
+
+      **Two of revision 20's cases were dead on arrival and are replaced (sweep).** "A valid
+      `push.tags` mapping option" and "a `types:` activity filter" were written against the two-event
+      clause; after revision 20 narrowed C1 to `pull_request` only, `push.tags` **cannot be
+      constructed** in this workflow, and `types:` went from prohibited to *required* (C2). A mutant
+      that cannot be built is not a mutant. *Generation cannot invent an absent registry case, and it
+      cannot retire a stale one either* — a clause and its cases must land, and change, together.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
       present; `paths-ignore:` present.
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
-    * **C4** — each of `trunk-path` and `post-init`; plus one arbitrary unlisted key.
+    * **C4** — each of `trunk-path` and `post-init`; one arbitrary unlisted key; **and `arguments:`
+      absent** (its failure mode is omission, not addition — absent means `markdown-link-check` runs
+      in the required job).
+    * **REQUIRED-PRESENT obligations need OMISSION cases, which revision 20 had none of (sweep).**
+      Every checkout and input mutant was a *prohibited-key addition*; the obligations whose failure
+      mode is a **missing** key were untested, so a validator checking only for forbidden keys passed
+      everything. Add: `lfs:` **removed** and `lfs: false`; `persist-credentials:` **removed** and set
+      `true`; `arguments:` removed (above); `branches:` removed (C1/C2 above); and **a step DELETED
+      from C8's four-step sequence** — revision 20 mutated insertion and reordering but never removal,
+      so deleting the empty-diff guard satisfied every generated case.
     * **C5** — `env: {TRUNK_PATH: /bin/true}` at **workflow** level, at job level, and at step
       level: three independent mutants, because revision 10's clause covered only two of the scopes.
     * **C6** — each of the four launcher paths in turn, and each of `.trunk/user.yaml`,
@@ -1110,6 +1195,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     document that explains it. §1 has required both since revision 2 and
     **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
     hang until the platform's six-hour ceiling while the required context sits pending.
+16. **The push canary is NOT a required context, and never becomes one** (sweep). Assert that
+    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list, that its
+    workflow carries `continue-on-error: true`, and that it exists at all — revision 20 required the
+    file to exist while no milestone created it and no inventory listed it. This is the cell that
+    keeps cross-event substitution closed: the split only works while the canary stays unrequired.
 
 ## §6 — STRUCTURAL DECISIONS
 
@@ -1249,6 +1339,10 @@ required gate that fails on someone else's outage is worse — but it is a real 
   literal, and cell 1's empty-diff guard step. **Values are stated in §1 and §6, never here** — this
   is a file inventory, and revision 9's copy of the contract into this entry is exactly the
   divergence risk §1's singularity exists to remove (codex, r9).
+* **`.github/workflows/trunk-check-push.yml` — NEW.** The non-required `trunk-check-push` canary
+  (§1's C1): `on: push` with the ruleset's branches, the same SHA-pinned action and checkout,
+  `continue-on-error: true` permanently. Created by M2b, asserted by cell 16. Revision 20 required
+  this file to exist and listed it nowhere (sweep).
 * `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
   which is exactly why `trunk-check` may not live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
@@ -1286,8 +1380,13 @@ required gate that fails on someone else's outage is worse — but it is a real 
   half**, and cell 8's real `SessionStart` invocation. Provenance-bound observations of things a real
   run **reports** — never runner-local state that vanishes with the job, which is why cell 5's
   post-invocation hash moved to the harness (codex, r18)
-* **`scripts/tests/test_trunk_upstream_parity.py`** — cell 1's instrumented-launcher harness, which
-  had no owning file in revision 8 (codex, r8): it runs the pinned action against per-event fixtures
+* **`.github/workflows/trunk-parity-harness.yml` (NEW, non-required) + `scripts/tests/test_trunk_upstream_parity.py`.**
+  **A Python unittest cannot run a composite action (sweep)** — `uses:` is resolved by the Actions
+  runner, not by `unittest`, so revision 20's owner could not execute the mechanism it described. The
+  split: the **workflow** is the sensor — it runs the pinned action against per-event fixtures with an
+  instrumented launcher, and uploads the captured argv and post-run tree hashes as an artifact; the
+  **Python test** asserts against that artifact. Same shape as cells 10/12: a real run reports, a test
+  judges. Carries cell 1's range parity and cell 5's post-invocation comparison: it runs the pinned action against per-event fixtures
   with `trunk-path` pointed at a recording launcher and compares the captured range byte-for-byte
   against the guard step's output. *(The harness is the one legitimate use of `trunk-path`; §1's C4
   forbids it in the shipped workflow.)*
@@ -1322,8 +1421,9 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 1 | `test_trunk_upstream_parity.py` (range parity, empty diff, the zero-before-sha subdomain) |
 | 2 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: both halves assert a real run's outcome (the Trunk step at M2, the job conclusion at M3), which no Python test can observe |
 | 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
-| 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; **`test_trunk_upstream_parity.py`'s instrumented pinned-action harness** carries the post-invocation comparison. *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
-| 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + derived mutants + runner/timeout) |
+| 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; the **`trunk-parity-harness.yml` workflow** runs the pinned action and reports the post-invocation hashes, which `test_trunk_upstream_parity.py` asserts against — a unittest cannot itself run a composite action (sweep). *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
+| 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + generated mutants + runner/timeout) |
+| 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's shape and its permanent `continue-on-error`; `evidence/COREDEV-2780-rollout.json` carries the ruleset read showing `trunk-check-push` absent from the required contexts |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
 | 10, 12 | `docs/planning/evidence/COREDEV-2780-rollout.json` — **evidence, not a unit test**: the annotation artifact and the dual-base provenance-bound check runs are observations of real runs, recorded as a committed artifact the way COREDEV-2711 §3a's measurement was. Saying so is what makes them ownable |
