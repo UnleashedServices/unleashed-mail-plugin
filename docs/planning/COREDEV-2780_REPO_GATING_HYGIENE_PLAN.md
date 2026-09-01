@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 35
+**Status:** Planning, revision 36
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -91,6 +91,18 @@
 > phrasing in §7's cell-16 ownership row — it said "live target set", so the sweep that qualified the
 > other five, keyed on "ruleset's target set", could not see it. *A grep for one phrasing is not a
 > sweep of the concept — the same lesson this document records about counts and pronouns.*
+> **r37** `16bd361` (revision 35), codex alone, `TREE=clean`: `REQUEST_CHANGES` ([SUBJECT] 1,
+> [RESIDUE] 2). The [SUBJECT] is revision 35's own, and it is the reach-versus-kill defect **inside the
+> cell written to enforce sharing**: "a spy on `resolve()` is reached from both entry points" is
+> satisfied by a comparator that calls `resolve()` for the spy and then **ignores its result**, and by
+> one visible wrapper **dispatching to two private resolvers** — both currently correct, both passing
+> every family case, the one-definition count and the spy. Revision 36 makes cell 15 prove **data
+> flow**: an entry-distinct sentinel returned from `resolve()` must GOVERN each entry point's result
+> and diagnostic. *Observing that a function was called is not observing that its answer was used.*
+> The residue was three more target-set wordings — M2b's "the ruleset's branches" and cell 11's two
+> "ruleset set", **one of which wraps across a line break** so the previous phrase-keyed sweep could
+> not see it — and a "both comparators" plurality left standing beside the new single parameterised
+> comparator. *Third consecutive round whose only findings were the previous repair's.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1128,7 +1140,7 @@ alternative turned out to be complementary rather than competing.
       `alpha`** — COREDEV-2767's exact failure, aimed at the other protected base.
 - [ ] **M2b** (**with M2 — the file revision 20 required and never scheduled, sweep**) — create
       `.github/workflows/trunk-check-push.yml`: the non-required `trunk-check-push` canary, `on: push`
-      satisfying **C1's canary contract in full** — `on: push` with the ruleset's branches, the
+      satisfying **C1's canary contract in full** — `on: push` with the ruleset's **resolved** branches (C2's `resolve()`), the
       C4/C8/C9 action and checkout pins **including `persist-credentials: false`** — the canary needs no
   authenticated Git after checkout, checkout defaults credential persistence to *true*, and zizmor's
   `artipacked` is one of the 19 linters this gate itself requires, so a canary without it introduces
@@ -1670,8 +1682,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       cancellation hazard C0 exists to prevent — a clause with no range and no mutant is decoration.
     * **C1/C2** — a second trigger added (`push`, `workflow_dispatch`); the `pull_request` event
       **removed**; **`paths:` added** (a real, valid `pull_request` option that narrows); **one
-      arbitrary unlisted mapping option**; `branches:` **absent**; `branches:` unequal to the ruleset
-      set; **`types:` reduced to the default set** (dropping `edited`, reintroducing the stale-base
+      arbitrary unlisted mapping option**; `branches:` **absent**; `branches:` unequal to the resolved
+      ruleset set; **`types:` reduced to the default set** (dropping `edited`, reintroducing the stale-base
       pass); and **`types:` REMOVED entirely** — its failure mode is omission, and a validator that
       checks the value only when the key is present rejects the reduced-set mutant while accepting an
       absent one (codex, r21).
@@ -1688,7 +1700,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       constructed** in this workflow, and `types:` went from prohibited to *required* (C2). A mutant
       that cannot be built is not a mutant. *Generation cannot invent an absent registry case, and it
       cannot retire a stale one either* — a clause and its cases must land, and change, together.
-    * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
+    * **C2** — `branches:` absent; `branches:` present but unequal to the resolved ruleset set; `paths:`
       present; `paths-ignore:` present.
     * **THE RESOLVER'S DOMAIN IS COVERED BY A PARAMETERISED FAMILY, NOT A HAND-PICKED THREE**
       (codex, r34 then r35). Revision 33 wrote three remote-side cases — an exact literal in
@@ -1708,19 +1720,27 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       entries with separate owners — so revision 33's cases, attached to C2 alone, would have left the
       canary comparator with revision 32's include-only behaviour while every C2 case passed and cell
       16 passed against today's empty `exclude`. **One implementation, as with C6a's shared range
-      resolver**: `resolve()` is written once and both comparators call it.
+      resolver**: `resolve()` is written once, and both registry-entry invocations go through it.
 
       **And that sharing is ENFORCED, not conventional** (codex, r36). "Both comparators call the same
       helper" is invisible to every observable check: two independently written but *currently correct*
       resolvers pass all twelve generated cases, cell 15's registry-versus-prose comparison, and both
       rollout comparisons — and then drift apart on the next edit, which is precisely the failure C6a
       exists to prevent. **The comparator is therefore ONE function PARAMETERISED BY REGISTRY ENTRY**,
-      invoked once per entry, so a second resolver path cannot exist to be asserted about; and the
-      `(side, form)` family is **declared once and referenced by both entries**, never copied into
-      each. Cell 15 additionally asserts the structural fact directly — exactly one `resolve()`
-      definition exists, and a spy bound to that name is reached by **both** comparator entry points.
-      *A property that only holds while nobody writes a second copy is a convention; the parameterised
-      form makes it a fact.*
+      invoked once per entry point, so a second resolver path cannot exist to be asserted about; and
+      the `(side, form)` family is **declared once in the registry and REFERENCED BY ENTRY ID from
+      both entries**, never inlined into each — cell 15 rejects a duplicated inline family.
+
+      **Cell 15 proves DATA FLOW, not invocation** (codex, r37). "A spy on `resolve()` is reached from
+      both entry points" is satisfied by a comparator that calls `resolve()` for the spy's benefit and
+      then **ignores or overrides its result** with an entry-specific helper, and equally by a single
+      visible `resolve()` wrapper that **dispatches to two private resolvers**. Both are currently
+      correct, so both pass every family case, the one-definition count and the spy — while violating
+      the single-resolution-path property the assertion exists to establish. The cell therefore
+      **substitutes an entry-DISTINCT sentinel return from `resolve()` and requires each entry point's
+      result and diagnostic to be GOVERNED BY that returned value** — a comparator that discards it
+      yields the wrong sentinel and reds. *Observing that a function was called is not observing that
+      its answer was used: this cell had the reach-versus-kill defect it exists to prevent.*
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
