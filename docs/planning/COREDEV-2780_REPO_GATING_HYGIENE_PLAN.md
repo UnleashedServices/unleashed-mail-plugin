@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 32
+**Status:** Planning, revision 33
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -43,6 +43,24 @@
 > document could have seen. Live values read the same day are now recorded where they are relied on:
 > target set, `strict_required_status_checks_policy: false`, `integration_id` 15368, no merge-queue
 > rule, 0 open PRs.
+> **r34** `6fc7dce` (revision 32), **codex arm run ALONE**: `REQUEST_CHANGES` ([SUBJECT] 1,
+> [RESIDUE] 1) — down from 5 and 3. It confirmed the five r33 repairs hold: cell 17's read-only
+> observation **does** discriminate (an optional failing check yields `UNSTABLE`, not `BLOCKED`, and
+> naming `trunk-check` removes the last confounder), M4a's substitution leaves a fail-closed state at
+> every interruption, §6.2a's six-field projection matches GitHub's writable PUT schema and its removal
+> is exact, and the detector's per-caller operand closes the foreign-manifest case on both surfaces.
+> **Both remaining findings were introduced by revision 32 itself** — the repair carrying the next
+> defect, one round after that pattern was named in this very record. The resolved-target-set rule
+> expanded `include` and **ignored `ref_name.exclude`**, which GitHub treats as a veto, so an
+> `exclude`-blind resolver compares against a set strictly larger than the one in force and cell 11's
+> single alias case *reached* it; and M4's condition 3 still read "unchanged" plus "not wider than
+> `{main, alpha}`", neither of which catches a **same-cardinality** default-branch retarget. Revision
+> 33 defines `resolve()` once as **include minus exclude**, fails closed on `~ALL` and on patterns,
+> adds three exclusion-side mutation cases, and states M4's equality directly. The [RESIDUE] was a
+> restore instruction one redirect short of executable.
+> **The r33 round was VOID (harness exit 3) and its cause is now known**: the two arms ran
+> concurrently and gemini's teardown landed inside codex's window. `git fetch` was measured and ruled
+> out. **Run the arms SEQUENTIALLY** — r34 did, and reported `TREE=clean`.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -515,9 +533,22 @@ own non-required context.
   against the raw one** (draft check, r33). `Control`'s `conditions.ref_name.include` is
   **`["~DEFAULT_BRANCH", "refs/heads/alpha"]`** — read live 2026-09-01 — **not** `[main, alpha]`.
   Every site that requires `branches:` to *equal* that set — this clause, C1's canary contract, cell
-  16's remote half and M4's readback condition 3 — compares against the set obtained by **expanding
-  `~DEFAULT_BRANCH` to the repository's current `default_branch`, expanding `~ALL` if it ever appears,
-  and stripping the `refs/heads/` prefix**, then comparing as sets. A literal string comparison
+  16's remote half and M4's readback condition 3 — compares against the **RESOLVED** set, defined here
+  once and referred to everywhere else as *the resolved target set*:
+
+  > `resolve(conditions.ref_name)` = { expand each `include` entry } **MINUS** { expand each `exclude`
+  > entry }, where expansion maps `~DEFAULT_BRANCH` to the repository's current `default_branch`,
+  > strips a `refs/heads/` prefix, and **FAILS CLOSED** — the comparison reds rather than resolving —
+  > on `~ALL` or on any entry containing a `fnmatch` metacharacter (`*`, `?`, `[`), because a pattern
+  > denotes a set this plan cannot enumerate and silently treating it as a literal is how an
+  > over-broad target passes a set comparison.
+
+  **`exclude` is part of the target set and revision 32's rule omitted it** (codex, r34). GitHub
+  defines an excluded pattern as **vetoing** the condition, so `include` alone is not what the ruleset
+  targets: an implementation that ignores `exclude` compares against a set strictly larger than the one
+  in force, and a base removed from the gate by an exclusion still reads as gated. Live value
+  2026-09-01: **`include: ["~DEFAULT_BRANCH", "refs/heads/alpha"]`, `exclude: []`** — so it costs
+  nothing today and closes silently if anyone ever adds one. A literal string comparison, meanwhile,
   **fails against a correct implementation**, so the assertion written to catch drift would itself be
   the thing that reds.
 
@@ -1143,12 +1174,18 @@ alternative turned out to be complementary rather than competing.
       **Must be UNCHANGED across both reads** — roll back if any differs:
       1. both base tips still carry a byte-equivalent strict job;
       2. the effective check name;
-      3. the ruleset's own target conditions — the `main`/`alpha` set is live configuration, not a
-         constant this plan may assume (codex, r7). **STOP if that set is wider than `{main, alpha}`**:
-         a third protected base would need its own M0/M2a/M2b/M3 evidence before the context could be
-         required there, and requiring it without that evidence is COREDEV-2767 exactly. C2's hybrid
-         equality assertion would red on it at rollout, but the preflight should not depend on a later
-         cell to notice (kimi, third lens);
+      3. the ruleset's own target conditions — live configuration, not a constant this plan may
+         assume (codex, r7). **Resolve them FRESHLY here, per C2's `resolve()` — `include` minus
+         `exclude`, aliases expanded, patterns failing closed — and require that resolved set to EQUAL
+         the `branches:` of both `trunk-check.yml` and `trunk-check-push.yml`** (codex, r34). Revision
+         32 phrased this as "unchanged across both reads" plus "not wider than `{main, alpha}`", and
+         neither is the property: a **same-cardinality** retarget (the default branch moved to another
+         branch) is not wider and not textually changed, so it passes both halves while the workflows
+         now name a base the ruleset no longer targets. **STOP if the resolved set is anything other
+         than the two bases carrying M3 evidence**: a third protected base would need its own
+         M0/M2a/M2b/M3 evidence first, and requiring the context without it is COREDEV-2767 exactly.
+         C2's hybrid equality assertion would red at rollout, but the preflight must not depend on a
+         later cell to notice (kimi, third lens);
       4. **`trunk-check-push` ABSENT from the required-context list**, before and after (cell 16's
          re-verification — an M4 payload could otherwise require the canary and still satisfy the
          readback, leaving ordinary PRs pending and giving a `main`→`alpha` PR a same-SHA substitute).
@@ -1625,8 +1662,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       present; `paths-ignore:` present. **And, as C2's remote-side case, an injected ruleset
       observation whose `~DEFAULT_BRANCH` RESOLVES to a branch the workflow's `branches:` does not
       name** (draft check, r33) — the local half is untouched and every string in the repository is
-      unchanged, so this is the one C2 case a literal comparison cannot kill. Per the `remote_relation`
-      kind it mutates the injected observation, never the live ruleset.
+      unchanged, so this is the one C2 case a literal comparison cannot kill. **And three EXCLUSION-side
+      cases, which revision 32's single alias case left uncovered** (codex, r34): an injected
+      observation adding `refs/heads/alpha` to `exclude` (the resolved set shrinks while `include` is
+      unchanged — an `exclude`-blind resolver *reaches*); one adding `~ALL` to `include`; and one
+      adding a metacharacter pattern such as `refs/heads/*`. The last two must **fail closed**, so
+      their expected diagnostic is the resolver's refusal, not an equality mismatch. Per the
+      `remote_relation` kind all of them mutate the injected observation, never the live ruleset.
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
@@ -1960,10 +2002,18 @@ head while `main` is unmergeable. This repository has already shipped that incid
   diff <(jq -S "$PROJ" ruleset.before.json) <(jq -S "$PROJ" ruleset.after.json)
   ```
 
-  The diff must show **exactly one** difference — the `trunk-check` entry gone. Anything else is
-  restored by re-applying step 3 with `jq -S "$PROJ" ruleset.before.json`. **Keep
-  `ruleset.before.json`**: it is the only record of the pre-incident state, and M4a's resume path
-  reads it.
+  The diff must show **exactly one** difference — the `trunk-check` entry gone. **If it shows
+  anything else, restore** by projecting the captured BEFORE state and PUTting that (codex, r34:
+  "re-apply step 3" named a command that consumes `ruleset.put.json`, while the recovery `jq` only
+  writes stdout — the restore was one redirect short of executable):
+
+  ```bash
+  jq "$PROJ" ruleset.before.json > ruleset.restore.json
+  gh api --method PUT "repos/$R/rulesets/16082567" --input ruleset.restore.json
+  ```
+
+  **Keep `ruleset.before.json`**: it is the only record of the pre-incident state, and M4a's resume
+  path reads it.
 * **Verify it works BEFORE relying on it.** **M4a** rehearses this call immediately after cell 17's
   smoke test — as a **substitution**, replacing `trunk-check` with a placeholder context nothing
   produces, so the repository stays blocked throughout, then restoring it. The rehearsal's observation
