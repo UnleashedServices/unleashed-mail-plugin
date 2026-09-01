@@ -22,8 +22,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -42,6 +44,26 @@ ARGUMENTS_LITERAL = "--filter=-markdown-link-check"   # §6.4, stated once THERE
 EXPECTED_RUNNER = "ubuntu-latest"
 EXPECTED_TIMEOUT_MINUTES = 15        # a CONCRETE ceiling; "a timeout exists" is satisfied by 360
 EXPECTED_CONTEXT = "trunk-check"
+CANARY_CONTEXT = "trunk-check-push"
+CANARY_PATH = REPO / ".github/workflows/trunk-check-push.yml"
+# Executed by Cell16_TheCanaryMeetsItsWholeContract against INJECTED ruleset observations — the
+# `remote_relation` kind mutates the observation, never the live ruleset.
+# Executed by C6AndC6aGuardsExecuteAgainstFixtureTrees, which runs the SHIPPED guard bodies against a
+# temporary tree rather than deferring them to a real CI run.
+FIXTURE_EXECUTED_CASES = {
+    "C6.no-repository-supplied-launcher/trunk-bin",
+    "C6.no-repository-supplied-launcher/tools-trunk",
+    "C6.no-repository-supplied-launcher/dot-trunk",
+    "C6.no-repository-supplied-launcher/setup-ci",
+    "C6.no-repository-supplied-launcher/user-yaml",
+    "C6.no-repository-supplied-launcher/env-yaml",
+    "C6a.resolver-pinned-by-digest/edit-resolver",
+}
+CELL16_INJECTED_CASES = {
+    "C16.canary-not-required/present",
+    "C16.canary-branches-equal-resolved-target-set/local-divergence",
+    "C2.branches-equal-resolved-target-set/local-divergence",
+}
 EXPECTED_STEPS = ["checkout", "guard-resolver-digest", "guard-empty-diff", "guard-launcher-path", "trunk"]
 C6_GUARDED_PATHS = (
     ".trunk/bin/trunk", "tools/trunk", "./trunk",
@@ -62,6 +84,30 @@ EXCLUDED_LINTER = "markdown-link-check"
 # cell 2's M2 half unobservable.
 M2_ADVISORY_EXEMPTION = {"continue-on-error"}
 
+# C8 — ALL THREE permitted `run:` steps are frozen BY CONTENT, not merely by position.
+#
+# Freezing the SEQUENCE stopped a new step being added; it did nothing about what the allowed steps DO.
+# Any of the three may write `TRUNK_PATH=/bin/true` to $GITHUB_ENV or create one of C6's paths, and the
+# C6 guard inspects paths, not inherited runner state — so the action would resolve a no-op launcher
+# while every structural clause passed. The freeze lives HERE because a workflow cannot hash its own
+# bodies; changing one is then a reviewed change, the same standing the workflow itself has.
+#
+# Per ENTRY, because the two files' guards genuinely differ: the required workflow's empty-diff guard
+# echoes the changed-file list, the canary's does not, and each C6a guard pins its own copy of the
+# resolver digest.
+EXPECTED_RUN_BODY_DIGESTS = {
+    "required": {
+        "guard-resolver-digest": "82a473fe61372c01cfdf2ef1a5e48f7b6c4322299fef0fcfb9419bb70a888a33",
+        "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
+        "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
+    },
+    "canary": {
+        "guard-resolver-digest": "5966ae3eb1d4c7d73e718d40fb7b5b754b74a2b8b8232527da5980a940542801",
+        "guard-empty-diff": "a016908553fc6e7096e02b3877eecd6c73aafc859a77da804aedeb388375ce7a",
+        "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
+    },
+}
+
 
 def _load_workflow() -> dict:
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
@@ -77,7 +123,12 @@ def _root_keys(workflow: dict) -> set[str]:
 
 
 def _job(workflow: dict) -> dict:
-    return workflow["jobs"][EXPECTED_CONTEXT]
+    """The single job, whichever entry this workflow is — both files declare exactly one."""
+    return next(iter(workflow["jobs"].values()))
+
+
+def _job_id(workflow: dict) -> str:
+    return next(iter(workflow["jobs"]))
 
 
 def _steps(workflow: dict) -> list[dict]:
@@ -90,6 +141,21 @@ def _step(workflow: dict, name: str) -> dict:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _required_contexts(ruleset: dict) -> list[str]:
+    """The ruleset's required status-check contexts. ONE reader, so the injected-observation mutant
+    exercises the same code path as the live read — a mutant evaluated by a different implementation
+    than production tests nothing about production."""
+    return [check["context"]
+            for rule in ruleset["rules"] if rule["type"] == "required_status_checks"
+            for check in rule["parameters"]["required_status_checks"]]
+
+
+def _live_ruleset() -> dict:
+    return json.loads(subprocess.run(
+        ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567"],
+        capture_output=True, text=True, check=True).stdout)
 
 
 def _resolve_target_set() -> set[str]:
@@ -140,8 +206,18 @@ def _normalised_lint_block(config_text: str) -> str:
     return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(block, sort_keys=True))
 
 
-def contract_problems(workflow: dict, *, milestone: str = "M2") -> list[str]:
-    """§1's contract, clause by clause, as diagnostics. Cell 11 mutates against THIS."""
+def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "required") -> list[str]:
+    """§1's contract, clause by clause, as diagnostics. Cell 11 mutates against THIS.
+
+    ONE implementation for BOTH entries. C0, C3-C9 and C6a are identical for the required workflow and
+    the canary — the plan's own answer to two comparators drifting — and the two places they genuinely
+    differ are branched on explicitly rather than forked into a second copy:
+
+      * the EVENT (C1/C2's `pull_request` with its `types:` widening, versus the canary's `on: push`);
+      * `continue-on-error`, which is M2's temporary JOB-scoped exemption on the required workflow and
+        a PERMANENT, REQUIRED, job-scoped obligation on the canary.
+    """
+    is_canary = entry == "canary"
     problems: list[str] = []
     on = _on(workflow)
     job = _job(workflow)
@@ -159,12 +235,18 @@ def contract_problems(workflow: dict, *, milestone: str = "M2") -> list[str]:
         problems.append("job-level `concurrency` is prohibited")
 
     # C1 / C7 — one event, and its options are an allowlist.
-    for event in sorted(set(on) - {"pull_request"}):
+    expected_event = "push" if is_canary else "pull_request"
+    for event in sorted(set(on) - {expected_event}):
         problems.append(
             "event set: `merge_group` is prohibited (check_mode=none is a false success)"
             if event == "merge_group" else f"event set: unlisted event `{event}`")
-    if "pull_request" not in on:
-        problems.append("event set: `pull_request` is absent")
+    if expected_event not in on:
+        problems.append(f"event set: `{expected_event}` is absent")
+    elif is_canary:
+        for option in sorted(set(on["push"] or {}) - {"branches"}):
+            problems.append(f"push options: unlisted option `{option}`")
+        if "branches" not in on["push"]:
+            problems.append("branches: key is absent")
     else:
         for option in sorted(set(on["pull_request"] or {}) - {"branches", "types"}):
             problems.append(f"pull_request options: unlisted option `{option}`"
@@ -180,15 +262,19 @@ def contract_problems(workflow: dict, *, milestone: str = "M2") -> list[str]:
 
     # C3 — the JOB mapping is an allowlist, and nothing skips or masks.
     allowed_job = {"runs-on", "timeout-minutes", "permissions", "steps", "name"}
-    if milestone == "M2":
+    if is_canary or milestone == "M2":
         allowed_job |= M2_ADVISORY_EXEMPTION
     for key in sorted(set(job) - allowed_job):
         problems.append(f"job mapping: unlisted key `{key}`")
+    if is_canary and job.get("continue-on-error") is not True:
+        # REQUIRED-PRESENT and permanent here. Its failure mode is omission, and an absent key would
+        # let the canary's failure fail the workflow run.
+        problems.append("canary: job-scoped `continue-on-error` is absent")
     if job.get("permissions") != {"contents": "read"}:
         problems.append(f"job permissions: expected `contents: read`, found {job.get('permissions')!r}")
     if "if" in job:
         problems.append("job: `if:` is prohibited (a skipped job reports Success)")
-    if milestone != "M2" and job.get("continue-on-error"):
+    if not is_canary and milestone != "M2" and job.get("continue-on-error"):
         problems.append("job: `continue-on-error:` is prohibited")
     if "defaults" in workflow:
         problems.append("workflow `defaults.run` is prohibited")
@@ -230,6 +316,9 @@ def contract_problems(workflow: dict, *, milestone: str = "M2") -> list[str]:
         # adjacency to the action exists to close, from inside a step the sequence allows.
         if label != "guard-launcher-path" and any(path in body for path in C6_GUARDED_PATHS):
             problems.append(f"step `{label}`: creates a prohibited launcher path")
+        frozen = EXPECTED_RUN_BODY_DIGESTS[entry].get(label)
+        if frozen is not None and hashlib.sha256(body.encode("utf-8")).hexdigest() != frozen:
+            problems.append(f"step `{label}`: run body digest mismatch")
 
     # C5 — no `env:` at workflow, job OR step scope.
     if "env" in workflow:
@@ -722,7 +811,49 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
              "checkout inputs: unlisted input `path`"),
             ("C8.checkout-inputs-allowlist/arbitrary-input", at_with("checkout", "submodules", True),
              "checkout inputs: unlisted input `submodules`"),
+            # Each run step gets its OWN independently identified body-digest case: a validator could
+            # otherwise pin two of the three and let the newest guard become `exit 0`.
+            ("C8.run-bodies-frozen/body-digest-guard-resolver-digest",
+             lambda w: _step(w, "guard-resolver-digest").update(
+                 {"run": _step(w, "guard-resolver-digest")["run"] + "\n:"}),
+             "step `guard-resolver-digest`: run body digest mismatch"),
+            ("C8.run-bodies-frozen/body-digest-guard-empty-diff",
+             lambda w: _step(w, "guard-empty-diff").update(
+                 {"run": _step(w, "guard-empty-diff")["run"] + "\n:"}),
+             "step `guard-empty-diff`: run body digest mismatch"),
+            ("C8.run-bodies-frozen/body-digest-guard-launcher-path",
+             lambda w: _step(w, "guard-launcher-path").update(
+                 {"run": _step(w, "guard-launcher-path")["run"] + "\n:"}),
+             "step `guard-launcher-path`: run body digest mismatch"),
         ]
+
+    def _canary_mutants(self):
+        """The canary's own cases. Its contract differs in exactly two places, so it gets exactly the
+        mutants those two places imply — plus the shared ones, which the required entry already runs
+        against the SAME checker, so duplicating them here would add executions and no discrimination.
+        """
+        def move_to_step(w):
+            _job(w).pop("continue-on-error")
+            _step(w, "trunk")["continue-on-error"] = True
+
+        return [
+            ("C16.canary-continue-on-error-job-scope/absent",
+             lambda w: _job(w).pop("continue-on-error"),
+             "canary: job-scoped `continue-on-error` is absent"),
+            ("C16.canary-continue-on-error-job-scope/step-scope", move_to_step,
+             "step `trunk`: `continue-on-error:` is prohibited"),
+        ]
+
+    def test_every_canary_mutant_fails_with_its_own_diagnostic(self):
+        canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual([], contract_problems(copy.deepcopy(canary), entry="canary"),
+                         "the shipped canary must be a passing positive control")
+        for case_id, mutate, diagnostic in self._canary_mutants():
+            with self.subTest(case=case_id):
+                mutant = copy.deepcopy(canary)
+                mutate(mutant)
+                problems = contract_problems(mutant, entry="canary")
+                self.assertIn(diagnostic, problems, f"{case_id} did not produce its own diagnostic")
 
     def test_the_shipped_workflow_is_a_passing_positive_control(self):
         """Every mutant below starts from a GREEN baseline, or it proves nothing."""
@@ -754,6 +885,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             with self.subTest(case=case[0]):
                 self.assertIn(case[0], declared)
 
+    def test_the_named_execution_sets_reference_only_declared_cases(self):
+        """A stale id in these sets would silently inflate the coverage the test above reports."""
+        declared = {case["id"]
+                    for obligation in self.registry["obligations"]
+                    for case in obligation.get("cases", [])}
+        for case_id in sorted(FIXTURE_EXECUTED_CASES | CELL16_INJECTED_CASES):
+            with self.subTest(case=case_id):
+                self.assertIn(case_id, declared)
+
     def test_every_declared_case_is_executed_here_or_provably_needs_external_machinery(self):
         """No silent gap between what the registry declares and what this cell runs.
 
@@ -764,7 +904,9 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         already kills — reporting LESS coverage than exists, which is the mirror of the defect this
         test exists to prevent.
         """
-        executed = {case[0] for case in self._yaml_mutants()}
+        executed = ({case[0] for case in self._yaml_mutants()}
+                    | {case[0] for case in self._canary_mutants()}
+                    | CELL16_INJECTED_CASES | FIXTURE_EXECUTED_CASES)
         declared, deferred = set(), []
         for obligation in self.registry["obligations"]:
             for case in obligation.get("cases", []):
@@ -785,7 +927,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                     f"{case_id} ({kind}/{op}/{side}) is executable here and must not be deferred",
                 )
         self.assertGreater(len(executed), 0)
-        self.assertGreater(len(deferred), 0)
+        # Every declared case is now executed somewhere in this file. The deferral machinery above is
+        # kept because it is what KEEPS that true: a case added to the registry that nothing runs will
+        # land in `deferred` and must then justify itself, rather than quietly reducing coverage.
+        self.assertEqual([], deferred, f"{len(deferred)} declared case(s) are executed nowhere")
+        self.assertEqual(declared, executed & declared)
 
 
 class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
@@ -809,6 +955,178 @@ class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
         for entry in self.survivors["survivors"]:
             self.assertNotIn(entry["id"], registry_ids)
 
+
+class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
+    """Revision 22 gave the canary a contract and had this cell assert only THREE things — existence,
+    `continue-on-error`, and ruleset absence — so a canary with the wrong branches, no zero-`before`
+    guard, or `trunk-path: /bin/true` passed cells 1, 11 and 16 alike. Every canary obligation is
+    asserted here, through the same checker the required entry uses."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+
+    def test_the_canary_satisfies_its_whole_contract(self):
+        self.assertEqual([], contract_problems(self.canary, entry="canary"))
+
+    def test_it_emits_a_different_context_from_the_required_workflow(self):
+        """The split only works while the two contexts differ — this is what keeps cross-event
+        substitution closed."""
+        self.assertEqual(CANARY_CONTEXT, _job_id(self.canary))
+        self.assertNotEqual(EXPECTED_CONTEXT, _job_id(self.canary))
+
+    def test_continue_on_error_is_job_scoped_and_permanent(self):
+        self.assertIs(True, _job(self.canary).get("continue-on-error"))
+        for step in _steps(self.canary):
+            self.assertNotIn("continue-on-error", step, f"step {step.get('name')!r}")
+
+    def test_it_carries_the_execution_integrity_controls_and_the_shared_resolver(self):
+        """Revision 22's "deliberately smaller" list omitted C5/C6, so the milestone and the cell
+        disagreed about what the canary must satisfy."""
+        guard = _step(self.canary, "guard-launcher-path")["run"]
+        for path in C6_GUARDED_PATHS:
+            self.assertIn(path, guard)
+        self.assertNotIn("env", self.canary)
+        self.assertNotIn("env", _job(self.canary))
+        executor = _step(self.canary, "guard-empty-diff")["run"]
+        self.assertIn("scripts/ci/resolve-trunk-range.sh", executor)
+        pinned = re.search(r"expected='([a-f0-9]{64})'",
+                           _step(self.canary, "guard-resolver-digest")["run"])
+        self.assertEqual(_sha256_file(RESOLVER_PATH), pinned.group(1))
+
+    def test_the_zero_before_guard_is_reached_through_the_shared_resolver(self):
+        """The canary is the ONLY leg that can reach push.sh's `--all` branch, so the guard belongs
+        where the hazard is — and it is the one shared implementation, not a third independent one."""
+        completed = subprocess.run(
+            ["bash", str(RESOLVER_PATH)],
+            capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "GITHUB_EVENT_NAME": "push",
+                 "GITHUB_REF_NAME": "main",
+                 "GITHUB_EVENT_BEFORE": "0" * 40},
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("--all", completed.stderr)
+
+    # ---- the remote halves, against INJECTED observations -------------------------------------
+    def test_canary_branches_equal_the_resolved_target_set(self):
+        on = _on(self.canary)["push"]
+        self.assertEqual(_resolve_target_set(), set(on["branches"]))
+
+    def test_an_injected_divergent_target_set_is_detected(self):
+        """C16.canary-branches-equal-resolved-target-set/local-divergence — the resolved set moves
+        while every string in the repository stays put."""
+        resolved = _resolve_ref_name(
+            {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []}, "trunk")
+        self.assertNotEqual(resolved, set(_on(self.canary)["push"]["branches"]))
+
+    def test_the_canary_is_not_a_required_context_at_rollout(self):
+        """A point-in-time read: it cannot prove "never", and claiming so would assert more than this
+        owner can see. M4's post-edit readback re-verifies it."""
+        self.assertNotIn(CANARY_CONTEXT, _required_contexts(_live_ruleset()))
+
+    def test_an_injected_required_canary_is_detected(self):
+        """C16.canary-not-required/present — mutates the OBSERVATION, never the live ruleset.
+
+        The injected document is fed to `_required_contexts`, the same reader the live assertion
+        above uses. Asserting against a hand-built list instead would have tested the fixture.
+        """
+        injected = copy.deepcopy(_live_ruleset())
+        for rule in injected["rules"]:
+            if rule["type"] == "required_status_checks":
+                rule["parameters"]["required_status_checks"].append(
+                    {"context": CANARY_CONTEXT, "integration_id": 15368})
+        contexts = _required_contexts(injected)
+        self.assertIn(CANARY_CONTEXT, contexts, "the injected observation must be constructible")
+        # And the live one is still clean — the mutation touched the copy only.
+        self.assertNotIn(CANARY_CONTEXT, _required_contexts(_live_ruleset()))
+
+class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
+    """The remaining registry cases, run by EXECUTING THE SHIPPED GUARD BODIES.
+
+    These are `repo_fixture` and `content_digest` kinds: they need a checked-out tree, so a parser
+    cannot evaluate them. Rather than defer them to a real CI run, the guard's own bytes are lifted out
+    of the workflow and run against a temporary tree — which tests what ships, not a reimplementation
+    of it. A test that re-implements the guard proves the test correct, not the guard.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        workflow = _load_workflow()
+        cls.c6_guard = _step(workflow, "guard-launcher-path")["run"]
+        cls.c6a_guard = _step(workflow, "guard-resolver-digest")["run"]
+
+    @staticmethod
+    def _shimmed_path(tmp: Path) -> str:
+        """`sha256sum` is GNU coreutils; the runner is ubuntu-latest but developers are not. Shim it
+        onto PATH from `shasum` so the SHIPPED body runs unmodified on both."""
+        import shutil
+        if shutil.which("sha256sum"):
+            return os.environ["PATH"]
+        shim = tmp / "_shim"
+        shim.mkdir(exist_ok=True)
+        script = shim / "sha256sum"
+        script.write_text('#!/bin/sh\nexec shasum -a 256 "$@"\n', encoding="utf-8")
+        script.chmod(0o755)
+        return f"{shim}:{os.environ['PATH']}"
+
+    def _run(self, script: str, cwd: Path):
+        return subprocess.run(["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
+                              env={"PATH": self._shimmed_path(cwd), "HOME": str(cwd)})
+
+    def test_the_c6_guard_passes_on_a_clean_tree(self):
+        """The positive control: every case below must start from a guard that says yes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(0, self._run(self.c6_guard, Path(tmp)).returncode)
+
+    def test_each_of_the_six_launcher_paths_is_caught_separately(self):
+        """A guard that catches five of six is a gate with one door open, so each is its own case."""
+        for path in C6_GUARDED_PATHS:
+            with self.subTest(fixture=path):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    # NOT `lstrip("./")` — that strips CHARACTERS, so `.trunk/bin/trunk` became
+                    # `trunk/bin/trunk` and the guard caught `./trunk` instead. The case still went
+                    # red, for the wrong path: reachability, not discrimination. Asserting the
+                    # specific path in stderr is what exposed it.
+                    relative = path[2:] if path.startswith("./") else path
+                    target = root / relative
+                    if path == ".trunk/setup-ci":
+                        # MUST be a VALID composite action that exits green. `uses: ./.trunk/setup-ci`
+                        # expects an action DIRECTORY, so a bare executable reds because it is
+                        # MALFORMED — and would survive deletion of C6 while appearing to be caught.
+                        target.mkdir(parents=True)
+                        (target / "action.yml").write_text(
+                            "name: setup-ci\nruns:\n  using: composite\n  steps:\n"
+                            "    - run: 'true'\n      shell: bash\n", encoding="utf-8")
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                        target.chmod(0o755)
+                    completed = self._run(self.c6_guard, root)
+                    self.assertNotEqual(0, completed.returncode, f"{path} was not caught")
+                    self.assertIn(path, completed.stderr)
+
+    def test_the_c6a_guard_accepts_the_shipped_resolver_and_rejects_an_edited_one(self):
+        """C6a.resolver-pinned-by-digest/edit-resolver — the invoking run bodies are left UNTOUCHED,
+        which is exactly the hole C8's body digest cannot see."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts/ci").mkdir(parents=True)
+            target = root / "scripts/ci/resolve-trunk-range.sh"
+            target.write_bytes(RESOLVER_PATH.read_bytes())
+            self.assertEqual(0, self._run(self.c6a_guard, root).returncode,
+                             "the shipped resolver must satisfy its own pinned digest")
+
+            target.write_bytes(RESOLVER_PATH.read_bytes() + b"\necho tampered\n")
+            completed = self._run(self.c6a_guard, root)
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn("digest mismatch", completed.stderr)
+
+    def test_the_digest_guard_would_fire_before_the_resolver_ever_runs(self):
+        """"Verify, then execute" is the property C6a exists for. Under §0's threat model an edited
+        resolver still fails closed at the C6 guard, but that is the wrong step reporting it."""
+        names = [step.get("name") for step in _steps(_load_workflow())]
+        self.assertLess(names.index("guard-resolver-digest"), names.index("guard-empty-diff"))
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

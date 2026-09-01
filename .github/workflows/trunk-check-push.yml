@@ -1,0 +1,89 @@
+# COREDEV-2780 — the NON-REQUIRED push canary.
+#
+# WHY THIS FILE IS SEPARATE FROM trunk-check.yml. Revision 19 emitted the SAME `trunk-check` context
+# for `pull_request` and `push`, and required checks match on SHA and expected app — NOT on the
+# triggering event. So a main->alpha PR could be satisfied by the PUSH run on its head SHA, which lints
+# `before..head` rather than the wider `alpha..head` PR range: a green required check over a
+# strictly smaller diff. Cell 1 could prove each range correct and never prove WHICH RUN satisfied the
+# rule. The push leg therefore emits a DIFFERENT context name and is deliberately NOT required.
+#
+# IT CANNOT BLOCK BECAUSE ITS CONTEXT IS NOT REQUIRED — not because its job goes green. Job-scoped
+# `continue-on-error` leaves the job concluding FAILURE and merely stops it failing the workflow RUN;
+# that distinction is the whole point, because a canary whose failure is invisible is not a canary.
+# And if `trunk-check-push` were ever made required, ordinary PRs would sit pending forever — it is a
+# push-only context — which is the second reason it must stay unrequired.
+name: trunk-check-push
+
+on:
+  push:
+    branches: [main, alpha]
+
+permissions:
+  contents: read
+
+jobs:
+  trunk-check-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # PERMANENT, and at JOB scope. STEP scope would rewrite the Trunk step's reported `conclusion` to
+    # `success`, leaving only the in-job `outcome` as failure — which the REST API never exposes —
+    # producing a canary structurally incapable of showing the failure it exists to surface.
+    continue-on-error: true
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          lfs: true
+          # The canary needs no authenticated Git after checkout, checkout defaults credential
+          # persistence to TRUE, and zizmor's `artipacked` is one of the 19 linters this gate itself
+          # requires — so a canary without this ships the very finding the gate reports.
+          persist-credentials: false
+
+      - name: guard-resolver-digest
+        run: |
+          set -euo pipefail
+          expected='5f42591b2cc3a0f85b7e19c9ee0d7a2c652fd7fc546c3944f5eb52ba9b99a8ff'
+          actual="$(sha256sum scripts/ci/resolve-trunk-range.sh | cut -d' ' -f1)"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "C6a: scripts/ci/resolve-trunk-range.sh digest mismatch" >&2
+            exit 1
+          fi
+
+      - name: guard-empty-diff
+        # THE ZERO-`before` GUARD LIVES HERE, not in the required workflow, because this is the only
+        # leg that can reach it: at the pinned SHA `push.sh` branches on
+        # `GITHUB_EVENT_BEFORE == 0000…0` — the shape GitHub sends when a branch is CREATED or a tag
+        # is pushed — and runs `trunk check --ci --all`, the 9027-finding whole-tree run §1 forbids.
+        # The shared resolver refuses that case, so the guard fails closed: a push whose diff cannot be
+        # resolved is not a push that gets to lint the tree.
+        run: |
+          set -euo pipefail
+          resolved="$(bash scripts/ci/resolve-trunk-range.sh)"
+          upstream="${resolved#upstream=}"
+          if [ -z "${upstream}" ] || [ "${upstream}" = "${resolved}" ]; then
+            echo "cell 1: resolver produced no upstream: ${resolved}" >&2
+            exit 1
+          fi
+          if [ -z "$(git diff --name-only "${upstream}" HEAD)" ]; then
+            echo "cell 1: resolved diff against ${upstream} is EMPTY — refusing a green run that lints nothing" >&2
+            exit 1
+          fi
+
+      - name: guard-launcher-path
+        run: |
+          set -euo pipefail
+          for path in .trunk/bin/trunk tools/trunk ./trunk .trunk/setup-ci .trunk/user.yaml .trunk/env.yaml; do
+            if [ -e "${path}" ]; then
+              echo "C6: the repository supplies ${path}, which the action would prefer over a verified download" >&2
+              exit 1
+            fi
+          done
+
+      - name: trunk
+        uses: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa
+        with:
+          arguments: --filter=-markdown-link-check
+          save-annotations: true
