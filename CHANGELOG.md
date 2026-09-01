@@ -13,6 +13,19 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.4] — 2026-09-01
+
+### Fixed
+
+- **COREDEV-2798** — the COREDEV-2619 transcript-path inventory pinned line numbers in files that are
+  *prepended to*, so every release shifted them and reddened `test_transcript_path_inventory.py` for a
+  release rather than for a defect. Sites in `CHANGELOG.md` and `README.md` are now content-addressed:
+  a `quote-keep` payload must hash to its frozen `sourceSha256` **exactly once**, and a `rewrite`
+  destination block must occur **exactly once**; `line`, `destination.line`, `precedingAnchorLine` and
+  `followingAnchorLine` are re-derived hints there. The demotion is **scoped** — every other file keeps
+  its line assertion, and a test proves it. Regenerating the manifest each release was rejected as the
+  repair: it would make the tree authoritative over the assertion meant to detect the tree changing.
+
 ## [2.8.3] — 2026-08-28
 
 ### Fixed

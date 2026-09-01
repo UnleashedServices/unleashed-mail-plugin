@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.3
+# UnleashedMail — Claude Code Plugin v2.8.4
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,17 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.4
+
+- **COREDEV-2798 — the transcript inventory is CONTENT-ADDRESSED in prepend-only files.**
+  `CHANGELOG.md` and `README.md` are prepended to on every release, so every physical line below the
+  insertion point shifts and the COREDEV-2619 inventory's line pins went stale on a schedule — the
+  drift proof reddened for a release rather than for a defect. Identity for sites in those two files
+  is now the payload: a quote-keep line must hash to its frozen `sourceSha256` **exactly once**, and a
+  rewrite's destination block must occur **exactly once**, with `line`, `destination.line` and both
+  anchor lines demoted to re-derived hints. Every other file keeps its line assertion. Exactly-one,
+  never at-least-one — a duplicate leaves the site ambiguous and now reds with its own diagnostic.
 
 ### v2.8.3
 

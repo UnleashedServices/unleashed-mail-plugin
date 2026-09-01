@@ -7,7 +7,9 @@ import copy
 import hashlib
 import json
 import subprocess
+import sys
 import unittest
+import unittest.mock
 from collections import Counter
 import re
 from pathlib import Path
@@ -60,6 +62,17 @@ EXPECTED_CONTRACT_COUNTS = {
     "S-WRAPPER": 1,
 }
 EXPECTED_SCHEMA_VERSION = 2
+# COREDEV-2798.  These files are PREPENDED TO — CHANGELOG.md gains a section per release and
+# README.md gains a What's-New entry — so every physical line below the insertion point shifts and a
+# line pin in them is a value that goes stale on a schedule.  Regenerating the frozen manifest each
+# release is not the repair: it would make the tree authoritative over the assertion meant to detect
+# the tree changing.  For these files identity is CONTENT-ADDRESSED, and the manifest's `line`,
+# `destination.line`, `precedingAnchorLine` and `followingAnchorLine` are re-derived HINTS rather
+# than assertions.  Every other file keeps its line assertion unchanged.
+#
+# Frozen HERE rather than read from the manifest, for the same reason EXPECTED_LITERALS is: an oracle
+# derived from the data under test cannot detect that data changing.
+PREPEND_ONLY_FILES = frozenset({"CHANGELOG.md", "README.md"})
 SHA256_LENGTH = 64
 
 
@@ -138,6 +151,48 @@ def _tracked_tree() -> dict[str, list[bytes]]:
 
 def _site_key(site: dict) -> tuple[str, int]:
     return site["path"], site["line"]
+
+
+def _quote_keep_positions(site: dict, lines: list[bytes]) -> list[int]:
+    """1-based line numbers whose whole payload hashes to the site's frozen sourceSha256."""
+    return [
+        index
+        for index, payload in enumerate(lines, 1)
+        if _sha256(payload) == site["sourceSha256"]
+    ]
+
+
+def _resolved_site_key(site: dict, tree: dict[str, list[bytes]]) -> tuple[str, int]:
+    """The site's LIVE key: content-addressed in prepend-only files, declared elsewhere.
+
+    Used for the observed-vs-declared literal set comparison, which is otherwise line-keyed and so
+    reports both a missing and a surviving literal for every prepend (COREDEV-2798).  Falls back to
+    the declared line when the content is absent or ambiguous, so that the dedicated per-site checks
+    below emit the specific diagnostic instead of this set difference emitting a confusing pair.
+    """
+    if site["path"] not in PREPEND_ONLY_FILES:
+        return _site_key(site)
+    lines = tree.get(site["path"])
+    if lines is None:
+        return _site_key(site)
+    positions = _quote_keep_positions(site, lines)
+    return (site["path"], positions[0]) if len(positions) == 1 else _site_key(site)
+
+
+def _destination_occurrences(site: dict, destination_lines: list[bytes]) -> list[int]:
+    """0-based start offsets at which the frozen destination payload block occurs."""
+    return _sequence_positions(destination_lines, _destination_payloads(site))
+
+
+def _legacy_source_survives(site: dict, lines: list[bytes]) -> bool:
+    """Does the deliberately-deleted legacy source payload still exist in its own file?
+
+    A module-level predicate rather than an inline `any(...)` so cell 7's control can MUTATE it —
+    the restored-legacy-source case also reds through the independent observed-literal census, so
+    "the case is red" proves reachability, not discrimination.  Deleting this branch must make its
+    diagnostic disappear, and only a separately addressable branch can be shown to do that.
+    """
+    return any(_sha256(payload) == site["sourceSha256"] for payload in lines)
 
 
 def _is_sha256(value: object) -> bool:
@@ -339,7 +394,11 @@ def _observed_literal_sites(manifest: dict, tree: dict[str, list[bytes]]) -> set
 def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
     problems = []
     sites = manifest["sites"]
-    quote_keep_sites = {_site_key(site) for site in sites if site["class"] == "quote-keep"}
+    # COREDEV-2798: keyed on the site's RESOLVED line, so a prepend that shifts a quote-keep literal
+    # does not report it simultaneously missing (declared line) and surviving (observed line).
+    quote_keep_sites = {
+        _resolved_site_key(site, tree) for site in sites if site["class"] == "quote-keep"
+    }
     observed_sites = _observed_literal_sites(manifest, tree)
     for path, line in sorted(quote_keep_sites - observed_sites):
         problems.append(f"{path}:{line}: quote-keep output literal is missing")
@@ -353,13 +412,23 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
             problems.append(f"{location}: classified file is missing")
             continue
         if site["class"] == "quote-keep":
-            if site["line"] > len(lines):
+            if site["path"] in PREPEND_ONLY_FILES:
+                # Identity is the payload, not its position.  EXACTLY ONE, never "at least one":
+                # a duplicated source line would otherwise satisfy the assertion while leaving the
+                # site genuinely ambiguous, and the two counts get their own diagnostics so cells 6
+                # and 7 discriminate the branch under test rather than a sibling.
+                positions = _quote_keep_positions(site, lines)
+                if not positions:
+                    problems.append(f"{location}: quote-keep payload hash drifted")
+                elif len(positions) > 1:
+                    problems.append(f"{location}: quote-keep payload hash is not unique")
+            elif site["line"] > len(lines):
                 problems.append(f"{location}: quote-keep physical line is missing")
             elif _sha256(lines[site["line"] - 1]) != site["sourceSha256"]:
                 problems.append(f"{location}: quote-keep payload hash drifted")
             continue
 
-        if any(_sha256(payload) == site["sourceSha256"] for payload in lines):
+        if _legacy_source_survives(site, lines):
             problems.append(f"{location}: legacy source payload survives")
 
         destination = site["destination"]
@@ -368,8 +437,27 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
         if destination_lines is None:
             problems.append(f"{location}: destination file is missing: {_destination_path(site)}")
             continue
-        start = destination["line"] - 1
         expected_payloads = _destination_payloads(site)
+        if _destination_path(site) in PREPEND_ONLY_FILES:
+            # Content-addressed: `destination.line` is a hint here, so a prepend that shifts the
+            # block is not drift.  Deleting or editing the block still reds, because the block then
+            # occurs zero times.  Same exactly-one rule, with its own two diagnostics.
+            occurrences = _destination_occurrences(site, destination_lines)
+            if not occurrences:
+                problems.append(f"{location}: destination payload block is missing")
+            elif len(occurrences) > 1:
+                problems.append(f"{location}: destination payload block is not unique")
+            else:
+                start = occurrences[0]
+                problems.extend(
+                    _contract_problems(
+                        location,
+                        site["contracts"],
+                        destination_lines[start : start + len(expected_payloads)],
+                    )
+                )
+            continue
+        start = destination["line"] - 1
         stop = start + len(expected_payloads)
         if stop > len(destination_lines):
             problems.append(
@@ -428,9 +516,21 @@ def _occupied_destination_count(manifest: dict, tree: dict[str, list[bytes]]) ->
     for site in manifest["sites"]:
         if site["class"] != "rewrite":
             continue
+        # DELIBERATELY WEAK, and POSITIONAL ONLY.  This counter exists so the deletion mutation can
+        # be shown NOT to be caught by a guard that merely counts occupied slots — that is what forces
+        # the payload comparison to be the thing doing the discriminating.  Content-addressing it
+        # would make it re-implement the real check and red for the same reason as the assertion under
+        # test: the confounded control this suite repairs in cells 6 and 7.
+        #
+        # A POSITIONAL control is therefore meaningless for a content-addressed site, whose declared
+        # line is an explicitly stale hint (COREDEV-2798) — reading that line measures an unrelated
+        # slot.  Those sites are skipped, and the deletion case keeps its other two weak controls,
+        # the observed-literal set and the nonempty-line count, both of which do survive the mutation.
+        if _destination_path(site) in PREPEND_ONLY_FILES:
+            continue
         lines = tree[_destination_path(site)]
-        start = site["destination"]["line"] - 1
         width = len(site["destination"]["payloads"])
+        start = site["destination"]["line"] - 1
         slot = lines[start : start + width]
         if len(slot) == width and all(slot):
             occupied += 1
@@ -463,13 +563,23 @@ class M3_1_InventoryDrift(unittest.TestCase):
         baseline_literals = _observed_literal_sites(self.manifest, self.completed_tree)
         baseline_nonempty = _nonempty_line_count(self.completed_tree)
         baseline_occupied = _occupied_destination_count(self.manifest, self.completed_tree)
-        self.assertEqual(EXPECTED_TOTALS["rewrite"], baseline_occupied)
+        positional_rewrites = sum(
+            1 for site in rewrites if _destination_path(site) not in PREPEND_ONLY_FILES
+        )
+        # Every rewrite except the content-addressed ones, which this positional control skips.
+        self.assertEqual(EXPECTED_TOTALS["rewrite"] - 1, positional_rewrites)
+        self.assertEqual(positional_rewrites, baseline_occupied)
         for site in rewrites:
             with self.subTest(location=site["location"]):
                 mutated = dict(self.completed_tree)
                 lines = list(mutated[_destination_path(site)])
-                start = site["destination"]["line"] - 1
                 width = len(site["destination"]["payloads"])
+                if _destination_path(site) in PREPEND_ONLY_FILES:
+                    occurrences = _destination_occurrences(site, lines)
+                    self.assertEqual(1, len(occurrences))
+                    start = occurrences[0]
+                else:
+                    start = site["destination"]["line"] - 1
                 self.assertEqual(_destination_payloads(site), lines[start : start + width])
                 line_count = len(lines)
                 # Delete the expected payload while retaining nonempty physical
@@ -490,11 +600,14 @@ class M3_1_InventoryDrift(unittest.TestCase):
                     _observed_literal_sites(self.manifest, mutated),
                 )
                 problems = _tree_problems(self.manifest, mutated)
-                self.assertIn(
-                    f"{site['location']}: destination payload drifted at final line "
-                    f"{site['destination']['line']}",
-                    problems,
-                )
+                if _destination_path(site) in PREPEND_ONLY_FILES:
+                    expected = f"{site['location']}: destination payload block is missing"
+                else:
+                    expected = (
+                        f"{site['location']}: destination payload drifted at final line "
+                        f"{site['destination']['line']}"
+                    )
+                self.assertIn(expected, problems)
 
     def test_each_rewrite_same_file_relocation_is_detected_with_counts_unchanged(self):
         rewrites = [site for site in self.manifest["sites"] if site["class"] == "rewrite"]
@@ -502,6 +615,13 @@ class M3_1_InventoryDrift(unittest.TestCase):
         baseline_literals = _observed_literal_sites(self.manifest, self.completed_tree)
         for site in rewrites:
             with self.subTest(location=site["location"]):
+                if _destination_path(site) in PREPEND_ONLY_FILES:
+                    # COREDEV-2798: identity here is the payload, not its position, so a same-file
+                    # relocation is exactly what a prepend does and is DELIBERATELY not drift.  The
+                    # discrimination this case supplies for line-addressed destinations is supplied
+                    # for these by the deletion case above (the block then occurs zero times) and by
+                    # the duplicate case (two occurrences), both of which still red.
+                    continue
                 mutated = dict(self.completed_tree)
                 lines = list(mutated[_destination_path(site)])
                 original_payload_counts = Counter(lines)
@@ -552,6 +672,201 @@ class M3_1_InventoryDrift(unittest.TestCase):
         self.assertIn(
             f"SECURITY.md:{new_line}: output literal survives outside the quote-keep set",
             _tree_problems(self.manifest, mutated),
+        )
+
+
+class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
+    """COREDEV-2798 cells 6 and 7 — identity is CLASS-SPECIFIC, and the demotion is SCOPED.
+
+    Cell 6 (quote-keep) and cell 7 (rewrite) each prove the same three things for their class: a
+    prepend passes with NO manifest edit; a content change reds; and a DUPLICATE reds — the last
+    because "at least one" would accept an ambiguous site, and three wrong implementations passed
+    the revision-2 form of these cells.  Every case asserts its OWN diagnostic rather than merely
+    that the case is red: several of these mutations also trip the independent observed-literal
+    census, so redness alone proves reachability and not discrimination.
+    """
+
+    PREPEND = [
+        b"## [9.9.9] - 2099-01-01",
+        b"",
+        b"### Added",
+        b"",
+        b"- A synthetic release section, to shift every physical line below it.",
+        b"",
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = _load_manifest()
+        cls.tree = _tracked_tree()
+        # Selected by LITERAL PATH, never through PREPEND_ONLY_FILES.  Deriving the fixtures from
+        # the constant under test would make this class unable to see that constant being wrong —
+        # the same oracle-from-the-data-under-test defect COREDEV-2798 exists to remove.  With
+        # literals, emptying the constant makes these cases FAIL rather than vanish.
+        cls.quote_keep = next(
+            site
+            for site in cls.manifest["sites"]
+            if site["class"] == "quote-keep" and site["path"] == "CHANGELOG.md"
+        )
+        cls.rewrite = next(
+            site
+            for site in cls.manifest["sites"]
+            if site["class"] == "rewrite" and _destination_path(site) == "README.md"
+        )
+
+    def _prepended(self, path: str) -> dict[str, list[bytes]]:
+        """The real tree with a synthetic section prepended to `path` — nothing else changed."""
+        mutated = dict(self.tree)
+        # After the title block, exactly as a release does; the offset is irrelevant to the assertion.
+        mutated[path] = list(self.PREPEND) + list(self.tree[path])
+        return mutated
+
+    def _problems_for(self, site: dict, problems: list[str]) -> list[str]:
+        return [problem for problem in problems if problem.startswith(site["location"] + ":")]
+
+    # ---- the property the ticket exists for -------------------------------------------------
+
+    def test_baseline_real_tree_is_clean(self):
+        self.assertEqual([], _tree_problems(self.manifest, self.tree))
+
+    def test_quote_keep_survives_a_prepend_with_no_manifest_edit(self):
+        path = self.quote_keep["path"]
+        baseline = _quote_keep_positions(self.quote_keep, self.tree[path])
+        self.assertEqual(1, len(baseline), "fixture must start from exactly one occurrence")
+        mutated = self._prepended(path)
+        # The literal really did move: this case would be vacuous if it had not.  Anchored to the
+        # TREE's current position, never to the manifest's declared line — that line is a hint here,
+        # and a test that assumes it is live cannot survive the very prepend it exists to allow.
+        self.assertEqual(
+            [baseline[0] + len(self.PREPEND)],
+            _quote_keep_positions(self.quote_keep, mutated[path]),
+        )
+        self.assertEqual([], _tree_problems(self.manifest, mutated))
+
+    def test_rewrite_destination_survives_a_prepend_with_no_manifest_edit(self):
+        path = _destination_path(self.rewrite)
+        baseline = _destination_occurrences(self.rewrite, self.tree[path])
+        self.assertEqual(1, len(baseline), "fixture must start from exactly one occurrence")
+        mutated = self._prepended(path)
+        self.assertEqual(
+            [baseline[0] + len(self.PREPEND)],
+            _destination_occurrences(self.rewrite, mutated[path]),
+        )
+        self.assertEqual([], _tree_problems(self.manifest, mutated))
+
+    # ---- cell 6: quote-keep, three wrong implementations ------------------------------------
+
+    def test_quote_keep_content_change_is_detected(self):
+        site = self.quote_keep
+        mutated = dict(self.tree)
+        lines = list(self.tree[site["path"]])
+        position = _quote_keep_positions(site, lines)[0]
+        lines[position - 1] = b"# COREDEV-2798 mutated quote-keep payload"
+        mutated[site["path"]] = lines
+        self.assertIn(
+            f"{site['location']}: quote-keep payload hash drifted",
+            _tree_problems(self.manifest, mutated),
+        )
+
+    def test_quote_keep_duplicate_source_line_is_detected(self):
+        """Kills "at least one": a duplicated payload leaves the site genuinely ambiguous."""
+        site = self.quote_keep
+        mutated = dict(self.tree)
+        lines = list(self.tree[site["path"]])
+        position = _quote_keep_positions(site, lines)[0]
+        lines.insert(position, lines[position - 1])
+        mutated[site["path"]] = lines
+        self.assertEqual(2, len(_quote_keep_positions(site, mutated[site["path"]])))
+        self.assertIn(
+            f"{site['location']}: quote-keep payload hash is not unique",
+            _tree_problems(self.manifest, mutated),
+        )
+
+    def test_line_addressed_quote_keep_still_asserts_its_line(self):
+        """The demotion is SCOPED: a non-prepend-only site keeps its line assertion."""
+        site = next(
+            candidate
+            for candidate in self.manifest["sites"]
+            if candidate["class"] == "quote-keep"
+            and candidate["path"] not in ("CHANGELOG.md", "README.md")
+        )
+        mutated = dict(self.tree)
+        mutated[site["path"]] = list(self.PREPEND) + list(self.tree[site["path"]])
+        problems = self._problems_for(site, _tree_problems(self.manifest, mutated))
+        self.assertIn(f"{site['location']}: quote-keep payload hash drifted", problems)
+
+    # ---- cell 7: rewrite, three wrong implementations ---------------------------------------
+
+    def test_rewrite_destination_payload_change_is_detected(self):
+        site = self.rewrite
+        path = _destination_path(site)
+        mutated = dict(self.tree)
+        lines = list(self.tree[path])
+        start = _destination_occurrences(site, lines)[0]
+        lines[start] = b"# COREDEV-2798 mutated destination payload"
+        mutated[path] = lines
+        self.assertIn(
+            f"{site['location']}: destination payload block is missing",
+            _tree_problems(self.manifest, mutated),
+        )
+
+    def test_rewrite_duplicate_destination_block_is_detected(self):
+        site = self.rewrite
+        path = _destination_path(site)
+        mutated = dict(self.tree)
+        lines = list(self.tree[path])
+        start = _destination_occurrences(site, lines)[0]
+        width = len(_destination_payloads(site))
+        lines[start:start] = lines[start : start + width]
+        mutated[path] = lines
+        self.assertEqual(2, len(_destination_occurrences(site, mutated[path])))
+        self.assertIn(
+            f"{site['location']}: destination payload block is not unique",
+            _tree_problems(self.manifest, mutated),
+        )
+
+    def test_restored_legacy_source_diagnostic_is_load_bearing(self):
+        """The r3 lesson: this case ALSO reds through the independent literal census.
+
+        Restoring a legacy source reintroduces its output literal, so the observed-literal census
+        fires too and the case is red either way.  It is therefore not enough that the case is red:
+        the SPECIFIC diagnostic must be emitted, AND deleting the branch that emits it must make it
+        disappear.  Without the second half, deleting the assertion would leave the case red and this
+        control would still "pass" — reachability mistaken for discrimination.
+        """
+        site = self.rewrite
+        # A restored legacy source is a line carrying the retired output literal.  Its exact bytes
+        # are unrecoverable from a hash, so the fixture supplies the line and the manifest copy is
+        # re-pinned to it: the same two observable consequences, constructed rather than guessed.
+        restored = b"Transcripts are written to /tmp/" + b"agy-out.txt by the capture wrapper."
+        manifest = copy.deepcopy(self.manifest)
+        mutated_site = next(
+            entry for entry in manifest["sites"] if entry["location"] == site["location"]
+        )
+        mutated_site["sourceSha256"] = _sha256(restored)
+
+        mutated = dict(self.tree)
+        lines = list(self.tree[site["path"]])
+        lines.insert(site["line"] - 1, restored)
+        mutated[site["path"]] = lines
+        self.assertTrue(_legacy_source_survives(mutated_site, mutated[site["path"]]))
+
+        diagnostic = f"{site['location']}: legacy source payload survives"
+        problems = _tree_problems(manifest, mutated)
+        self.assertIn(diagnostic, problems)
+        # The confounder is real and present, which is what makes the mutation below necessary.
+        self.assertTrue(
+            any("output literal survives outside the quote-keep set" in problem for problem in problems),
+            "the independent literal census must also fire, or this control is not confounded",
+        )
+
+        with unittest.mock.patch.object(
+            sys.modules[__name__], "_legacy_source_survives", lambda site, lines: False
+        ):
+            without_branch = _tree_problems(manifest, mutated)
+        self.assertNotIn(diagnostic, without_branch)
+        self.assertNotEqual(
+            [], without_branch, "the case must stay red for its other reason"
         )
 
 
