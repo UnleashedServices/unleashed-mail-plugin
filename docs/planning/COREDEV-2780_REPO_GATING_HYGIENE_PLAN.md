@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 31
+**Status:** Planning, revision 32
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -19,6 +19,30 @@
 > `APPROVE_WITH_NOTES` — finding two things twenty-nine rounds of diff-reading could not, because no
 > edit ever touched them: **the plan never tested that a red check blocks a merge**, and **it had no
 > way to turn the gate off**. Revision 28 folds those in, with codex's four r28 notes.
+> **r33** `21ab700` (revision 31): **codex `REQUEST_CHANGES` ([SUBJECT] 5, [RESIDUE] 3) + agy
+> `APPROVE` ([SUBJECT] 0, [RESIDUE] 0)** — the campaign's widest divergence, and the *approving* arm was
+> the wrong one. Every codex finding was verified against the text before being acted on; none was
+> fabricated. Two are revision 31's own repair carrying the next defect: the new
+> `git -C "${CLAUDE_PROJECT_DIR}"` anchor is **correct for `SessionStart` and wrong for
+> `.githooks/pre-commit`**, where git sets the hook's *working directory* and not that variable — and a
+> value inherited from a different worktree silently reads a **foreign manifest**; and revision 31 left
+> §3b still claiming the detector needs "no session environment". The other three are older and worse.
+> **Cell 17 fails destructively**: "attempt to merge the red PR and record that GitHub refuses" *lands
+> that PR on a protected base* in exactly the case the cell exists to detect, because revision 29's
+> read-only discipline reached M4a's rollback step and not the smoke test one line above it.
+> **M4a's "exclusive window" was a convention it could not enforce** — GitHub offers no atomic
+> exclusion and auto-merge acts unattended. And **§6.2a was not executable**: a piped GET carries
+> response-only fields the PUT rejects. Revision 32 makes every M4a observation **read-only**, converts
+> the rollback rehearsal into a **fail-closed substitution** so the repository is never ungated, and
+> rewrites §6.2a as a runbook **executed against the live ruleset before being published**.
+> **A sixth [SUBJECT] came from neither arm** (draft check, r33): `Control`'s target set is
+> **`["~DEFAULT_BRANCH", "refs/heads/alpha"]`**, not `[main, alpha]`, so every "equal to the ruleset's
+> target set" comparison here reds against a *correct* implementation — and because the alias is
+> resolved by GitHub at evaluation time, **changing the default branch silently retargets the ruleset
+> while no string in this repository changes**. That is COREDEV-2767 by a route no comparison in this
+> document could have seen. Live values read the same day are now recorded where they are relied on:
+> target set, `strict_required_status_checks_policy: false`, `integration_id` 15368, no merge-queue
+> rule, 0 open PRs.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -487,6 +511,24 @@ own non-required context.
   **C2 — branches, and the activity set.** `branches:` present on the workflow's single
   `pull_request` event, equal to the ruleset's target set.
 
+  **"The ruleset's target set" means the RESOLVED set, and this plan reached revision 31 comparing
+  against the raw one** (draft check, r33). `Control`'s `conditions.ref_name.include` is
+  **`["~DEFAULT_BRANCH", "refs/heads/alpha"]`** — read live 2026-09-01 — **not** `[main, alpha]`.
+  Every site that requires `branches:` to *equal* that set — this clause, C1's canary contract, cell
+  16's remote half and M4's readback condition 3 — compares against the set obtained by **expanding
+  `~DEFAULT_BRANCH` to the repository's current `default_branch`, expanding `~ALL` if it ever appears,
+  and stripping the `refs/heads/` prefix**, then comparing as sets. A literal string comparison
+  **fails against a correct implementation**, so the assertion written to catch drift would itself be
+  the thing that reds.
+
+  **The alias is why this matters beyond formatting.** `~DEFAULT_BRANCH` is resolved by GitHub at
+  evaluation time, so changing the repository's default branch **silently retargets the ruleset**
+  while the workflow's `branches:` still names the old one. PRs into the new default branch would then
+  require `trunk-check` from a workflow that does not fire for them — a permanently pending context on
+  a base with `bypass_actors: []`, which is COREDEV-2767 exactly. **No string comparison can see it,
+  because neither string changes.** C2's and cell 16's hybrid halves therefore carry a mutation case in
+  which the resolved default branch differs from the workflow's `branches:`, and it must red.
+
   **`types:` is REQUIRED here, not forbidden — and this reverses revision 19.** `pull_request`'s
   default activity set is `opened, synchronize, reopened`, which **excludes `edited`** — the event
   fired when a PR is **retargeted to a different base**. With the default set, retargeting produces no
@@ -586,7 +628,7 @@ own non-required context.
   *do*. **Any of the three** may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the
   C6 guard inspects paths, not inherited runner state — so the action would resolve a no-op launcher
   while every clause passed. **Each of the three run bodies is pinned by its own digest, and NONE of
-  them may write to `$GITHUB_ENV` or `$GITHUB_PATH` at all.** *(The count survived two corrections in
+  them may write to `$GITHUB_ENV` or `$GITHUB_PATH` at all.** *(The count survived three corrections in
   the pronouns — "either", "neither", "changing either" — which a grep for "two" cannot find; that is
   why this paragraph is now written without pronouns at all.)* And it is the **complete step mapping** that is frozen,
   not the `run:` body alone (codex, r12): `shell`, `working-directory`, `if`, `continue-on-error`,
@@ -746,17 +788,34 @@ single-caller claim (codex, r7).
 a detector shipped only in 2.8.4+. The hook is not shipped by the plugin — it lives in the
 **checkout** and runs from it, so it is current regardless of which install a session loaded. It
 compares `~/.claude/plugins/installed_plugins.json` against
-**`.claude-plugin/plugin.json` as of `origin/main`**, needing no session environment and no plugin
-code.
+**`.claude-plugin/plugin.json` as of `origin/main`**, needing no plugin code and no reviewer session.
 
-**The git operation is ANCHORED to the project repository: `git -C "${CLAUDE_PROJECT_DIR}" show
-origin/main:.claude-plugin/plugin.json`** (codex, r32). A bare `git show origin/main:…` looks
-conforming and works whenever a test invokes it from the repository root — and silently takes Table A
-row 1's "`expected` cannot be read" path when `SessionStart` fires from an unrelated current
-directory, which the hook contract explicitly warns is possible. The detector then reports nothing,
-forever, on exactly the machines it exists to warn. Requiring `${CLAUDE_PROJECT_DIR}` for the hook
-entry and the script path was not enough: **the path test proves the script was found, not that git
-resolved the intended repository.**
+**The git operation is ANCHORED, and the ROOT IS AN EXPLICIT OPERAND SUPPLIED BY EACH CALLER**
+(codex, r32 then r33). A bare `git show origin/main:…` looks conforming and works whenever a test
+invokes it from the repository root — and silently takes Table A row 1's "`expected` cannot be read"
+path when `SessionStart` fires from an unrelated current directory, which the hook contract explicitly
+warns is possible. The detector then reports nothing, forever, on exactly the machines it exists to
+warn. **The path test proves the script was found, not that git resolved the intended repository.**
+
+**But `git -C "${CLAUDE_PROJECT_DIR}"` is wrong for the OTHER caller, and revision 31 shipped it to
+both** (codex, r33). Git does not set `CLAUDE_PROJECT_DIR` for a hook — it sets the hook's *working
+directory* to the worktree root. Three cases follow and only the first is benign:
+
+* **unset, without `nounset`** — the expansion is empty, and `git -C ""` leaves the working directory
+  unchanged (measured, git 2.54.0), so pre-commit works **by accident**;
+* **unset, under `set -u`** — the script aborts before Table A classifies anything;
+* **non-empty but inherited from a DIFFERENT project or worktree** — the commit is in repository B
+  while the variable still names repository A, so git reads **A's** manifest. That is either a silent
+  misclassification as Table A row 1 or, worse, a **false comparison against a foreign manifest**. A
+  developer machine carrying several worktrees of this repository makes that ordinary, not exotic.
+
+**The contract: `scripts/detect-plugin-version-drift.sh` takes the repository root as its FIRST
+POSITIONAL OPERAND and never reads `CLAUDE_PROJECT_DIR` itself.** The `SessionStart` hook passes
+`"${CLAUDE_PROJECT_DIR}"`; `.githooks/pre-commit` passes `"$(git rev-parse --show-toplevel)"`, which
+git's own hook contract makes correct because it runs the hook from the worktree. A missing, empty or
+non-repository operand is Table A row 1 — **silent**, reached by classification rather than by
+accident. The root is passed rather than discovered precisely so that neither caller depends on an
+ambient variable the other does not have.
 
 **Both surfaces read `origin/main`, and revision 21 propagated that to Table A only** (codex, r21).
 Earlier revisions had pre-commit read the *staged* manifest and `SessionStart` the *worktree*; both
@@ -953,8 +1012,10 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     minutes is worse than the drift it reports. Five seconds is ~100x the detector's work (two small
     JSON reads); anything slower than that is a broken detector, and failing fast is the right answer.
 
-  Cell 8 exercises the matcher set, `${CLAUDE_PROJECT_DIR}` resolution **and the anchored git
-  lookup from an unrelated cwd**, the timeout against a sleeping detector, the dedup marker under
+  Cell 8 exercises the matcher set, `${CLAUDE_PROJECT_DIR}` resolution, **the anchored git lookup
+  from an unrelated cwd, and the root OPERAND on BOTH surfaces — pre-commit with that variable unset,
+  empty and pointing at a different repository**, the timeout against a sleeping detector, the dedup
+  marker under
   concurrent invocation **and aged-marker resumption**, **a filename-hostile `session_id` with a
   hash-removal mutation**, **the bucket-boundary cases and the `604800` mutation**, and the
   `systemMessage` shape — the cell's own text is authoritative and this summary had drifted narrower
@@ -1140,45 +1201,67 @@ alternative turned out to be complementary rather than competing.
       half-completed M4 is indistinguishable from an untouched one by timestamp alone.
 - [ ] **M4a** (**immediately after M4 — the plan reached revision 27 requiring neither of these**) —
       **prove the gate does what it exists to do, then prove it can be turned off.**
-      1. **Cell 17, the enforcement smoke test.** Attempt to merge the deliberately-red sacrificial PR
-         and record that GitHub **refuses**; confirm a green PR merges. Every other observation in this
-         plan is pre-requirement and verifies what the workflow and rule *contain* — this is the only
-         one that verifies the ruleset's *behaviour*.
-      2. **Rehearse the §6.2a rollback.** Remove the `trunk-check` context, confirm the previously
-         blocked merge becomes possible, re-add it, and re-run cell 17. An untested rollback is a
-         plan, not a remedy — and with `bypass_actors: []` it is the only remedy there is.
+      1. **Cell 17, the enforcement smoke test — READ-ONLY.** Record that the deliberately-red
+         sacrificial PR is **`blocked`** with the reason naming `trunk-check`, and that a green PR is
+         **`clean`**. **No merge endpoint is called, on either half** (codex, r33): the red half's
+         failure mode is landing that PR on a protected base, and the green half would advance a base
+         tip this milestone's own readback requires unchanged. Every other observation in this plan is
+         pre-requirement and verifies what the workflow and rule *contain* — this is the only one that
+         verifies the ruleset's *behaviour*.
+      2. **Rehearse the §6.2a rollback — as a SUBSTITUTION, so the repository is never ungated.**
+         In one PUT, replace the `trunk-check` entry with a placeholder required context that
+         **nothing produces** (`trunk-check-rollback-rehearsal`); observe read-only that the red PR is
+         still `blocked` but that its blocking reason **no longer names `trunk-check`**; then restore
+         the original entry and remove the placeholder, and re-run cell 17. That observation is what
+         the rehearsal exists for — it proves the documented call removes the entry it targets — and it
+         is obtained without any interval in which a merge could occur. An untested rollback is a plan,
+         not a remedy, and with `bypass_actors: []` it is the only remedy there is.
+
+         **Why a substitution rather than a removal** (codex, r33). Removing the context and leaving
+         nothing is *the ungated state*: between the PUT and its restoration anyone can merge, and
+         **auto-merge fires by itself** the moment the remaining required checks pass. Revision 30
+         answered that with a preflight, an announcement and a retrospective base-tip readback — but a
+         preflight is a snapshot, GitHub offers **no atomic exclusion**, and a readback detects a merge
+         only after it has landed. "An exclusive window" was therefore a convention this plan could not
+         enforce, asserted as though it could. Keeping a placeholder context that nothing satisfies
+         makes the interval **fail-closed**: every PR stays blocked throughout, auto-merge included, so
+         the guarantee no longer depends on nobody acting for the duration.
       Both outcomes land in the rollout evidence artifact. **If either fails, roll the ruleset back to
       its pre-M4 canonical state** and return to M3.
 
-      **M4a IS DESTRUCTIVE AND MUST BE INTERRUPTION-SAFE** (codex, r30). Step 2 removes the required
-      context: an interruption there leaves the repository **ungated**, and restarting M4a from step 1
-      would then merge the deliberately-red PR into a protected base. M4 was given resumable state
-      handling and this milestone was added without it. Therefore:
-      * **Read the canonical ruleset before entry and before every destructive transition.** If
-        `trunk-check` is **absent**, do NOT attempt step 1's merge — that is the ungated state, not the
-        starting state; either restore the context and restart, or resume explicitly at the removal
-        checkpoint.
-      * **The mandatory final state is: `trunk-check` present with its expected `integration_id`, the
-        canonical ruleset otherwise identical to its pre-M4a bytes, and cell 17 re-observed green.**
-        M4a is not complete until that is read back and recorded.
-      * **The sacrificial PR is closed before M4a exits**, so no red PR outlives the window in which
-        the gate was deliberately removed.
-
-      **The ungated interval is live, and the restart guard alone does not make it safe** (codex,
-      r31). Preventing *this* procedure from merging the red PR after an interruption does nothing
-      about **anyone else** merging during the window — and least of all about **auto-merge**, which
-      executes by itself the moment the remaining required checks are satisfied. The sacrificial PR is
-      deliberately arranged to satisfy *everything except* `trunk-check`, so removing that context is
-      precisely the condition auto-merge is waiting for. Therefore:
-      * **Preflight**: enumerate open PRs against both bases and confirm **none** has auto-merge
-        enabled or sits in a merge queue. If any does, M4a does not start.
-      * **Observe mergeability READ-ONLY.** "Confirm the previously-blocked merge becomes possible"
-        means reading the PR's mergeability state — **never calling the merge endpoint**. Revision 29's
-        wording did not forbid proving the point by actually merging, into a protected base, with the
-        gate switched off.
-      * **Hold an exclusive window**: announce it, and keep it as short as the two reads require.
-      * **After restoring the context**, verify both protected base tips are where they were and that
-        no PR merged during the interval. An unexpected merge is an incident, not a footnote.
+      **M4a TOUCHES THE LIVE RULESET AND MUST BE INTERRUPTION-SAFE** (codex, r30 then r33). Step 2
+      rewrites the required-context list, so an interruption between its two PUTs leaves `Control` in
+      the rehearsal state rather than the finished one. Under the **substitution** model that state is
+      **fail-closed** — the placeholder keeps every PR blocked — so an interruption costs availability,
+      not safety. That is the whole reason for the substitution: revisions 28-31 removed the context
+      outright, and no preflight, announcement or retrospective readback can make a genuinely ungated
+      interval safe, because GitHub offers no atomic exclusion and **auto-merge acts without anyone
+      present**. Therefore:
+      * **Read the canonical ruleset before entry and before every transition, and classify the state
+        by what it contains**: `trunk-check` present and no placeholder = the start (or finished)
+        state; **placeholder present = interrupted mid-rehearsal**, resume at the restore PUT;
+        **neither present = the repository is UNGATED**, which the substitution model should never
+        produce — stop, restore `trunk-check` from the recorded pre-M4a canonical document, and
+        re-enter at step 1 rather than continuing.
+      * **Preflight, and RE-READ immediately before each PUT.** Enumerate open PRs against both bases
+        and confirm none has auto-merge enabled or sits in a merge queue. The entry preflight is a
+        snapshot; the read that decides is the one taken immediately before the write, because the
+        interval between them is exactly where a new merge-ready PR appears. *(Read 2026-09-01: **0
+        open PRs** against either base, and `Control` carries **no merge-queue rule**.)*
+      * **`strict_required_status_checks_policy` is READ and recorded, never assumed** (codex, r33).
+        **Live value 2026-09-01: `false`.** It matters because under `true` a PR whose base has moved
+        is out-of-date and stays blocked *for that reason* — which would make cell 17's observation
+        ambiguous, since `blocked` would no longer isolate `trunk-check`. If the live read returns
+        `true`, M4a **stops** and this plan is revised; the cell's discrimination depends on the value.
+      * **NOTHING in M4a calls the merge endpoint** — neither half of cell 17, nor the rehearsal.
+        Revision 29 forbade the merge call in the rollback step only, and revisions 28-31 left step 1
+        and cell 17 instructing one (codex, r33).
+      * **The mandatory final state is: `trunk-check` present with its expected `integration_id`, no
+        placeholder context, the canonical ruleset otherwise identical to its pre-M4a bytes, and cell
+        17 re-observed.** M4a is not complete until that is read back and recorded.
+      * **The sacrificial PR is closed before M4a exits.**
+      * **Afterwards, verify both protected base tips are where they were.** M4a merges nothing, so any
+        movement is another actor's — an incident, not a footnote.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
@@ -1204,7 +1287,7 @@ alternative turned out to be complementary rather than competing.
       A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
 
 - [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
-      §7's file inventory and in no milestone, and this plan lands **at least seven shipping PRs** —
+      §7's file inventory and in no milestone, and this plan lands **eight shipping PRs** —
       **M0a**, M1, M2+M2b+**M2c**, M2a, **M3 on `main` and M3 on `alpha` (two)**, M5a, M6 — one bump
       cannot serve them; M0a ships the registry and survivor corpus, and M2c ships the harness workflow
       and its fixture refs.
@@ -1420,8 +1503,14 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      * the matcher set, and `${CLAUDE_PROJECT_DIR}` resolution for both hook entry and script;
      * **the git lookup resolves the PROJECT repository from an unrelated working directory** —
        invoke the detector with `cwd` set outside the repo and assert it still reads the intended
-       `origin/main` manifest, with a mutation that drops `git -C` and must red. Without this the
-       cell proves the script was located, not that it looked in the right place (codex, r32);
+       `origin/main` manifest, with a mutation that drops the root operand and must red. Without this
+       the cell proves the script was located, not that it looked in the right place (codex, r32);
+     * **the root is an OPERAND, proved on BOTH surfaces** (codex, r33). Revision 31's case covered
+       `SessionStart` only, and the defect it left was on the other surface. So: run the **pre-commit**
+       entry with `CLAUDE_PROJECT_DIR` **unset**, **empty**, and **set to a DIFFERENT repository**, and
+       assert all three still compare against the repository being committed to — the third is the one
+       that silently reads a foreign manifest, and it is the case a passing `SessionStart` test cannot
+       see. Mutate the operand away in each, and each must red with its own diagnostic;
      * **`timeout: 5` as a literal, mutated as an operand** — asserting the key alone accepts the
        600-second default this contract exists to override, the same defect cell 15 had;
      * the **`systemMessage`** output shape;
@@ -1533,7 +1622,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       that cannot be built is not a mutant. *Generation cannot invent an absent registry case, and it
       cannot retire a stale one either* — a clause and its cases must land, and change, together.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
-      present; `paths-ignore:` present.
+      present; `paths-ignore:` present. **And, as C2's remote-side case, an injected ruleset
+      observation whose `~DEFAULT_BRANCH` RESOLVES to a branch the workflow's `branches:` does not
+      name** (draft check, r33) — the local half is untouched and every string in the repository is
+      unchanged, so this is the one C2 case a literal comparison cannot kill. Per the `remote_relation`
+      kind it mutates the injected observation, never the live ruleset.
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
@@ -1724,14 +1817,31 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     is unfalsifiable.
 
 17. **A red check actually BLOCKS a merge, and a green one does not** — observed after M4, against
-    the live ruleset. Attempt to merge the deliberately-red sacrificial PR and record that **GitHub
-    refuses**, **and that the stated reason names `trunk-check`** — not merely that some refusal
-    occurred. `Control` requires five other contexts, so a merge attempt can be refused for reasons
-    having nothing to do with this gate, and a cell that accepts any refusal is the confounded control
-    this plan repaired in cells 6, 7 and 12 and then rebuilt in the cell added to test the gate itself
-    (regression check, r28). The sacrificial PR must be green on every other required context, and the
-    recorded evidence names the blocking check. Then confirm a green PR merges. Owner:
-    `evidence/COREDEV-2780-rollout.json`.
+    the live ruleset, **entirely READ-ONLY**. Record that the deliberately-red sacrificial PR's
+    mergeability state is **`blocked`** and **that the blocking reason names `trunk-check`** — not
+    merely that it is blocked. `Control` requires five other contexts, so a PR can be blocked for
+    reasons having nothing to do with this gate, and a cell that accepts any block is the confounded
+    control this plan repaired in cells 6, 7 and 12 and then rebuilt in the cell added to test the gate
+    itself (regression check, r28). The sacrificial PR must be green on every other required context,
+    and the recorded evidence names the blocking check. Then record that a green PR's state is
+    **`clean`**. Owner: `evidence/COREDEV-2780-rollout.json`.
+
+    **THIS CELL MUST NEVER CALL THE MERGE ENDPOINT, and revisions 28-31 told it to** (codex, r33).
+    "Attempt to merge the red PR and record that GitHub refuses" has a failure mode that *is the
+    damage*: if the rule is absent or ineffective — **the exact defect this cell exists to detect** —
+    the endpoint does not refuse, it returns 200 and **lands the deliberately-red PR on a protected
+    base**. M4a's fallback restores the ruleset; nothing reverts that merge. The read-only discipline
+    revision 29 gave M4a's *rollback* step was never propagated to the *smoke test* one step above it
+    — the fix-one-site family, in the cell added to test the gate itself. The green half is read-only
+    for the same reason and one more: merging it advances a protected base tip, which M4a's own final
+    readback requires to be unchanged.
+
+    **What read-only observation does and does not prove, scoped rather than overclaimed.**
+    `mergeable_state` *is* the ruleset's own evaluation of the PR, so observing `blocked` with
+    `trunk-check` named is an observation of the rule's behaviour and not of any file's contents —
+    which is this cell's whole purpose. It does **not** prove the merge endpoint would return 405, and
+    the only way to prove that is to call it, which is the destructive act. That residual is accepted
+    deliberately: an unproved 405 is cheaper than a red PR merged into `main`.
 
     **This is the only cell that tests the ruleset's BEHAVIOUR rather than its bytes, and the plan
     reached revision 27 without it** (kimi, third lens). Every other observation here is
@@ -1827,13 +1937,39 @@ head while `main` is unmergeable. This repository has already shipped that incid
   rule — *not* to delete the workflow (a deleted workflow produces no check run, which leaves the
   required context **pending** and blocks merges just as hard, only less obviously).
 * **Who can perform it:** an account with repository admin. Record the holders in the ticket, not here.
-* **The call**, written out so it is not composed under pressure — read the ruleset, drop the one
-  entry, write it back, and confirm by re-reading:
-  `gh api repos/<owner>/<repo>/rulesets/16082567` → remove the `trunk-check` entry from the
-  `required_status_checks` rule's parameters → `gh api --method PUT …/rulesets/16082567 --input -`.
-* **Verify it works BEFORE relying on it.** **M4a** rehearses the rollback immediately after cell 17's
-  smoke test: remove the context, confirm a previously-blocked merge becomes possible, then re-add it
-  and re-run cell 17. An untested rollback is a plan, not a remedy.
+* **The call**, written out so it is not composed under pressure. **A ruleset GET returns
+  response-only fields the PUT rejects** — `id`, `node_id`, `created_at`, `updated_at`, `source`,
+  `source_type`, `_links`, `current_user_can_bypass` — so the body must be an explicit **projection**,
+  never a piped GET (codex, r33). Verified by executing the projection against the live ruleset: it
+  round-trips byte-identically and removes exactly the one entry.
+
+  ```bash
+  R=UnleashedServices/unleashed-mail-plugin
+  PROJ='{name,target,enforcement,bypass_actors,conditions,rules}'
+  # 1. capture the canonical BEFORE state
+  gh api "repos/$R/rulesets/16082567" > ruleset.before.json
+  # 2. project to the writable schema and drop the trunk-check entry
+  jq "$PROJ | (.rules[] | select(.type==\"required_status_checks\")
+               | .parameters.required_status_checks) |=
+              map(select(.context != \"trunk-check\"))" \
+     ruleset.before.json > ruleset.put.json
+  # 3. write it back
+  gh api --method PUT "repos/$R/rulesets/16082567" --input ruleset.put.json
+  # 4. confirm: exactly one semantic difference
+  gh api "repos/$R/rulesets/16082567" > ruleset.after.json
+  diff <(jq -S "$PROJ" ruleset.before.json) <(jq -S "$PROJ" ruleset.after.json)
+  ```
+
+  The diff must show **exactly one** difference — the `trunk-check` entry gone. Anything else is
+  restored by re-applying step 3 with `jq -S "$PROJ" ruleset.before.json`. **Keep
+  `ruleset.before.json`**: it is the only record of the pre-incident state, and M4a's resume path
+  reads it.
+* **Verify it works BEFORE relying on it.** **M4a** rehearses this call immediately after cell 17's
+  smoke test — as a **substitution**, replacing `trunk-check` with a placeholder context nothing
+  produces, so the repository stays blocked throughout, then restoring it. The rehearsal's observation
+  is that the red PR's blocking reason **stops naming `trunk-check`**, read-only. An untested rollback
+  is a plan, not a remedy. *(A real incident rollback is the plain removal below — there the ungated
+  state is the intended outcome, because the gate is what is broken.)*
 * **Both ruleset writes here carry M4's readback discipline** — the rehearsal in M4a and any real
   incident rollback. Capture the canonical ruleset before and after, admit **exactly one semantic
   difference** (the `trunk-check` entry appearing or disappearing), and confirm every other rule,
@@ -1993,11 +2129,13 @@ required gate that fails on someone else's outage is worse — but it is a real 
   against the guard step's output. *(The harness is the one legitimate use of `trunk-path`; §1's C4
   forbids it in the shipped workflow.)*
 * **`scripts/tests/test_session_start_drift_hook.py`** — §3b's `SessionStart` contract: matcher set,
-  `${CLAUDE_PROJECT_DIR}` resolution **and the `git -C`-anchored lookup from an unrelated cwd**, the
+  `${CLAUDE_PROJECT_DIR}` resolution **and the anchored lookup from an unrelated cwd**, the
   `O_EXCL` dedup marker under concurrent invocation **and aged-marker resumption**, **the
   filename-hostile `session_id` and hash-removal mutation**, **the bucket-boundary cases and the
   `604800` mutation**, the `systemMessage` output shape, and the timeout against a sleeping detector
-  (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower)
+  (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower).
+  **The root-operand cases on the pre-commit surface — unset, empty, and naming a different
+  repository — belong to `test_precommit_trunk_gate.py`**, which owns that entry point (codex, r33)
 
 **Ownership follows a RULE, and the table below applies it** — revision 9 claimed every cell had an
 owner and five did not; revision 12 gave cell 2 an owner that **cannot observe what the cell
@@ -2028,7 +2166,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
 | 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; the **`trunk-parity-harness.yml` workflow** runs the pinned action and reports the post-invocation hashes, which `test_trunk_upstream_parity.py` asserts against — a unittest cannot itself run a composite action (sweep). *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
 | 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + generated mutants + runner/timeout) |
-| 17 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: it asserts the live ruleset's *behaviour* (a merge attempt refused, then a green one accepted), which nothing static can observe |
+| 17 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: it asserts the live ruleset's *behaviour* (the red PR observed `blocked` with `trunk-check` named, the green one `clean`), which nothing static can observe. **Both observations are reads; this cell never calls the merge endpoint** (codex, r33) |
 | 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, SHA pins, both guards and their shared resolver, C5's `env:` prohibition, C6's launcher guard, `permissions` by value, and that `branches:` is well-formed and non-empty. **`branches:` EQUALLING the ruleset's live target set is a local-vs-remote comparison** and therefore hybrid under §7's own rule, exactly as C2 is for the required workflow — the evidence artifact carries that half; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
