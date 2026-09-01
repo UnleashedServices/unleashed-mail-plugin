@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 33
+**Status:** Planning, revision 34
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -61,6 +61,23 @@
 > **The r33 round was VOID (harness exit 3) and its cause is now known**: the two arms ran
 > concurrently and gemini's teardown landed inside codex's window. `git fetch` was measured and ruled
 > out. **Run the arms SEQUENTIALLY** — r34 did, and reported `TREE=clean`.
+> **r35** `c101424` (revision 33), codex alone, `TREE=clean`: `REQUEST_CHANGES` ([SUBJECT] 2,
+> [RESIDUE] 1). It confirmed **the resolver formula itself is sound** — include-union minus
+> exclude-veto, `~DEFAULT_BRANCH` expansion, `refs/heads/` stripping, fail-closed on `~ALL` and
+> patterns — and that the API exposes no further branch-target selector. **Both findings were again
+> revision 33's own, and both were the same shape: a rule that quantifies over a domain, covered by
+> hand-picked examples.** Revision 33's three cases were an exact literal in `exclude`, `~ALL` in
+> `include` and `*` in `include`; a resolver that subtracts literal excludes, refuses `~ALL` and `*`
+> on the **include side only**, and literalises **exclude** patterns and `?`/`[` passes all three —
+> and `exclude: ["refs/heads/a*"]` then keeps `alpha` while GitHub vetoes it. And the cases were
+> attached to **C2 alone**, while cell 16's remote half is a separate registry entry with a separate
+> owner, so the canary comparator could keep include-only behaviour with every C2 case green.
+> Revision 34 replaces the hand-picked three with a **parameterised `(side, form)` family** — sides
+> `include`/`exclude`, forms literal / `~DEFAULT_BRANCH` / `~ALL` / `*` / `?` / `[`, twelve cases with
+> equality-versus-refusal diagnostics that must be distinguishable — and requires **one shared
+> `resolve()` implementation called by both comparators**, the same answer C6a already gives for the
+> range resolver. *Enumeration is not a class; this is the third consecutive round in which my own
+> repair carried the next defect.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -345,7 +362,7 @@ distinction the GitHub doc actually draws is what the two kinds of filter skip o
 
 * **`branches: [main, alpha]`** — REQUIRED on the required workflow's single `pull_request` event
   (and, separately, on the non-required push canary), and it must match the
-  ruleset's target set exactly. A PR into an ungated base does not need the context, so nothing is
+  ruleset's **resolved** target set exactly (C2's `resolve()`). A PR into an ungated base does not need the context, so nothing is
   left pending; a mismatch in either direction is the COREDEV-2767 shape.
 * **`paths:` / `paths-ignore:`** — PROHIBITED. These skip on *changed files*, so a PR into a gated
   base that touches only excluded paths requires a context the workflow never produces, leaving it
@@ -492,7 +509,7 @@ own non-required context.
   **The canary is a SHIPPED FILE and is governed (sweep).** Revision 20 invented it in this paragraph
   and then left it in no milestone, no §7 inventory entry and under no clause — a workflow the plan
   requires to exist that nothing creates. Its contract is deliberately smaller: `on: push` with
-  `branches:` equal to the ruleset's target set, the same SHA-pinned action and checkout as C4/C8/C9
+  `branches:` equal to the ruleset's **resolved** target set (C2's `resolve()`), the same SHA-pinned action and checkout as C4/C8/C9
   require — **including C8's checkout INPUT allowlist, `persist-credentials: false` among it**, since
   the canary needs no authenticated Git after checkout, checkout defaults credential persistence to
   *true*, and zizmor's `artipacked` is one of the 19 linters this gate requires, so a canary without it
@@ -1176,7 +1193,7 @@ alternative turned out to be complementary rather than competing.
       2. the effective check name;
       3. the ruleset's own target conditions — live configuration, not a constant this plan may
          assume (codex, r7). **Resolve them FRESHLY here, per C2's `resolve()` — `include` minus
-         `exclude`, aliases expanded, patterns failing closed — and require that resolved set to EQUAL
+         `exclude`, `~DEFAULT_BRANCH` expanded, `~ALL` and patterns failing closed — and require that resolved set to EQUAL
          the `branches:` of both `trunk-check.yml` and `trunk-check-push.yml`** (codex, r34). Revision
          32 phrased this as "unchanged across both reads" plus "not wider than `{main, alpha}`", and
          neither is the property: a **same-cardinality** retarget (the default branch moved to another
@@ -1659,16 +1676,28 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       that cannot be built is not a mutant. *Generation cannot invent an absent registry case, and it
       cannot retire a stale one either* — a clause and its cases must land, and change, together.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
-      present; `paths-ignore:` present. **And, as C2's remote-side case, an injected ruleset
-      observation whose `~DEFAULT_BRANCH` RESOLVES to a branch the workflow's `branches:` does not
-      name** (draft check, r33) — the local half is untouched and every string in the repository is
-      unchanged, so this is the one C2 case a literal comparison cannot kill. **And three EXCLUSION-side
-      cases, which revision 32's single alias case left uncovered** (codex, r34): an injected
-      observation adding `refs/heads/alpha` to `exclude` (the resolved set shrinks while `include` is
-      unchanged — an `exclude`-blind resolver *reaches*); one adding `~ALL` to `include`; and one
-      adding a metacharacter pattern such as `refs/heads/*`. The last two must **fail closed**, so
-      their expected diagnostic is the resolver's refusal, not an equality mismatch. Per the
-      `remote_relation` kind all of them mutate the injected observation, never the live ruleset.
+      present; `paths-ignore:` present.
+    * **THE RESOLVER'S DOMAIN IS COVERED BY A PARAMETERISED FAMILY, NOT A HAND-PICKED THREE**
+      (codex, r34 then r35). Revision 33 wrote three remote-side cases — an exact literal in
+      `exclude`, `~ALL` in `include`, `*` in `include` — and a wrong resolver that subtracts literal
+      excludes, refuses `~ALL` and `*` on the **include** side only, and treats **exclude** patterns
+      and `?`/`[` as literals **passes all three**. With `exclude: ["refs/heads/a*"]` GitHub vetoes
+      `alpha` while that resolver keeps it and still accepts equality with `[main, alpha]`. Hand-picking
+      cases for a rule that quantifies over *every entry on both sides* is the enumeration-is-not-a-class
+      defect this document names elsewhere. **The generator therefore emits one case per
+      `(side, form)` pair** — sides **`include`** and **`exclude`**; forms **exact literal**,
+      **`~DEFAULT_BRANCH`**, **`~ALL`**, **`*`**, **`?`**, **`[`** — twelve cases, each with its own
+      diagnostic. The literal and `~DEFAULT_BRANCH` forms expect an **equality** diagnostic; `~ALL` and
+      the three metacharacter forms expect the resolver's **refusal**, and the two diagnostics must be
+      distinguishable or a literalising resolver survives behind a shared message.
+    * **AND THE SAME FAMILY RUNS AGAINST BOTH COMPARATORS** (codex, r35). C2 governs the required
+      workflow and **cell 16's remote half governs the canary**, and they are separate registry
+      entries with separate owners — so revision 33's cases, attached to C2 alone, would have left the
+      canary comparator with revision 32's include-only behaviour while every C2 case passed and cell
+      16 passed against today's empty `exclude`. **One implementation, as with C6a's shared range
+      resolver**: `resolve()` is written once, both comparators call that one implementation, and the
+      `(side, form)` family is generated against **both** registry entries. Two independently-written
+      resolvers is the same defect C6a exists to prevent, one field over.
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
@@ -1827,7 +1856,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     rollout-time absence, **re-verified in M4's post-edit readback** alongside the other conditions
     checked there. Continuous monitoring is out of scope; nothing here prevents a later maintainer
     from requiring the canary, which is why §1's contract states the reason it must stay unrequired. Assert **every obligation C1's canary contract states** — it exists; `on: push` with `branches:`
-    equal to the ruleset's target set; the C4/C8/C9 action and checkout pins; C5's `env:` prohibition;
+    equal to the ruleset's **resolved** target set (C2's `resolve()`, `include` minus `exclude`); the C4/C8/C9 action and checkout pins; C5's `env:` prohibition;
     C6's repository-launcher guard; the empty-diff and zero-`before` guards, both invoking C6a's shared
     resolver; `permissions: contents: read`; `continue-on-error: true` **at job scope**; and that
     `trunk-check-push` is absent from ruleset `Control`'s required-status-check list. **The three-item
@@ -1838,7 +1867,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
     **M2b must CAUSE a controlled canary failure, and the stimulus must be REACHABLE** (codex, r26,
     corrected r27). Revision 26 said "a scratch branch matching the canary's `branches:`" — but those
-    branches are exactly the ruleset's target set, `main` and `alpha`, and `push.branches` matches the
+    branches are exactly the ruleset's resolved target set, `main` and `alpha`, and `push.branches` matches the
     branch actually pushed, so no additional in-repo branch can match and the workflow would never
     run; the alternative — a lint-failing commit pushed straight to protected `main` — is what the
     ruleset exists to prevent. **The stimulus is a provenance-bound disposable fork** whose default
@@ -2200,7 +2229,7 @@ Assigning owners one at a time reproduces that error, so the rule is stated firs
 > No cell may be owned by something that cannot observe the thing it asserts.**
 
 **The hybrid case was missing and C2 is one (codex, r13):** it requires the workflow's `branches:` to
-*equal the live ruleset's target set*, and the workflow-parsing Python test can see the YAML but not
+*equal the live ruleset's **resolved** target set* (C2's `resolve()`), and the workflow-parsing Python test can see the YAML but not
 the remote ruleset — while this plan elsewhere insists those target conditions are live configuration
 and must not be assumed. So C2 splits: the Python owner asserts the local shape and that the set is
 non-empty; the **authenticated evidence artifact** asserts equality against the ruleset as read at
