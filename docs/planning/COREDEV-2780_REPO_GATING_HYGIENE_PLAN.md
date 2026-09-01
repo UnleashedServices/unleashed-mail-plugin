@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 36
+**Status:** Planning, revision 37
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -103,6 +103,21 @@
 > "ruleset set", **one of which wraps across a line break** so the previous phrase-keyed sweep could
 > not see it — and a "both comparators" plurality left standing beside the new single parameterised
 > comparator. *Third consecutive round whose only findings were the previous repair's.*
+> **r38** `d321614` (revision 36), codex alone, `TREE=clean`: `REQUEST_CHANGES` ([SUBJECT] 1,
+> [RESIDUE] 1), and it closed the regress by naming the enforceable shape. The sentinel killed the
+> "call then ignore" comparator but **not** the other implementation the cell names: a public
+> `resolve()` wrapper **dispatching to two private resolvers** passes the sentinel test — substituting
+> the wrapper's return bypasses both private paths — and passes every family case, because both
+> privates are currently correct. Revision 37 stops asserting a property *about* the implementation
+> and **removes the shape**: `resolve(ref_name, default_branch)` is **entry-agnostic**, taking no entry
+> id and no entry-derived argument, so there is nothing to dispatch on; resolution happens **once,
+> before entry selection**, and cell 15 substitutes **one shared sentinel at that boundary**.
+> codex also settled the expansion arithmetic: a family reference expands as
+> `(entry_id, family_case_id)` — twelve cases, **24 executions**. It found **no further unqualified
+> target-set wording**, and confirmed the semantics coherent from C2 through C1, M2b, cell 11, cell 16,
+> M4 and §7, with sharing enforcement the only item still open. *Three encodings were needed here
+> because the first two asserted something about the implementation; the third deletes the argument
+> that would let divergence be written.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1715,7 +1730,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       diagnostic. The literal and `~DEFAULT_BRANCH` forms expect an **equality** diagnostic; `~ALL` and
       the three metacharacter forms expect the resolver's **refusal**, and the two diagnostics must be
       distinguishable or a literalising resolver survives behind a shared message.
-    * **AND THE SAME FAMILY RUNS AGAINST BOTH COMPARATORS** (codex, r35). C2 governs the required
+    * **AND THE SAME FAMILY RUNS AGAINST BOTH REGISTRY-ENTRY INVOCATIONS** (codex, r35). C2 governs the required
       workflow and **cell 16's remote half governs the canary**, and they are separate registry
       entries with separate owners — so revision 33's cases, attached to C2 alone, would have left the
       canary comparator with revision 32's include-only behaviour while every C2 case passed and cell
@@ -1729,18 +1744,27 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       exists to prevent. **The comparator is therefore ONE function PARAMETERISED BY REGISTRY ENTRY**,
       invoked once per entry point, so a second resolver path cannot exist to be asserted about; and
       the `(side, form)` family is **declared once in the registry and REFERENCED BY ENTRY ID from
-      both entries**, never inlined into each — cell 15 rejects a duplicated inline family.
+      both entries**, never inlined into each — cell 15 rejects a duplicated inline family. A reference
+      expands as `(entry_id, family_case_id)`, so the twelve cases produce **24 executions** across the
+      two entries (codex, r38).
 
-      **Cell 15 proves DATA FLOW, not invocation** (codex, r37). "A spy on `resolve()` is reached from
-      both entry points" is satisfied by a comparator that calls `resolve()` for the spy's benefit and
-      then **ignores or overrides its result** with an entry-specific helper, and equally by a single
-      visible `resolve()` wrapper that **dispatches to two private resolvers**. Both are currently
-      correct, so both pass every family case, the one-definition count and the spy — while violating
-      the single-resolution-path property the assertion exists to establish. The cell therefore
-      **substitutes an entry-DISTINCT sentinel return from `resolve()` and requires each entry point's
-      result and diagnostic to be GOVERNED BY that returned value** — a comparator that discards it
-      yields the wrong sentinel and reds. *Observing that a function was called is not observing that
-      its answer was used: this cell had the reach-versus-kill defect it exists to prevent.*
+      **`resolve()` IS ENTRY-AGNOSTIC, AND RESOLUTION HAPPENS ONCE BEFORE ENTRY SELECTION**
+      (codex, r37 then r38). Two weaker encodings were tried and both left a live drift path. A spy
+      proving `resolve()` is *reached* from both entry points is satisfied by a comparator that calls
+      it for the spy's benefit and then **ignores its result**. An entry-distinct sentinel fixes that
+      one and still does not kill the other implementation it names: a public `resolve()` wrapper
+      **dispatching to two private resolvers** passes the sentinel test (substituting the wrapper's
+      return bypasses both private paths) *and* every family case (both privates are currently
+      correct) — and then they drift.
+
+      **The signature is the enforcement.** `resolve(ref_name, default_branch)` takes **no entry id and
+      no entry-derived argument**, so there is nothing to dispatch on and a per-entry private resolver
+      cannot be written behind it. The comparator resolves the observation **once, before selecting an
+      entry**, and passes that one result into both entry comparisons. Cell 15 substitutes a **single
+      shared sentinel at that boundary** and requires **both** entry-specific results and diagnostics
+      to be governed by it. *Two encodings failed here because each asserted a property ABOUT the
+      implementation; this one removes the shape instead — the argument that would make divergence
+      expressible does not exist.*
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
