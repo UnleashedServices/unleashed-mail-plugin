@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.6
+# UnleashedMail — Claude Code Plugin v2.8.7
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,17 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.7
+
+- **COREDEV-2801 (M6) — the plugin-version drift detector, on both surfaces.**
+  `scripts/detect-plugin-version-drift.sh` warns when the version a session is *running* lags what
+  `origin/main` serves — the defect as reported, where a version no source served stayed reachable.
+  It lives in the checkout rather than the plugin, so a session bound to a stale install can still run
+  it. `expected` is read from **`origin/main`**, never the worktree: the version-bump rule keeps the
+  tree one bump ahead for a whole feature branch, so reading it would warn on every developer machine
+  permanently. Wired to the project `SessionStart` hook (matchers `startup|resume`, `timeout: 5`) and
+  to `.githooks/pre-commit`. Silent on seven of Table A's eight rows, and it never blocks.
 
 ### v2.8.6
 

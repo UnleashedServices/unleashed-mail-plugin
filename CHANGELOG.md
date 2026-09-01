@@ -13,6 +13,31 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.7] — 2026-09-01
+
+### Added
+
+- **COREDEV-2801 (M6)** — `scripts/detect-plugin-version-drift.sh`, the drift detector, plus its two
+  callers: the project `SessionStart` hook in `.claude/settings.json` (matchers `startup|resume` only,
+  `timeout: 5` as a literal) and `.githooks/pre-commit`. It takes the **repository root as an explicit
+  positional operand** and never reads `CLAUDE_PROJECT_DIR` itself — git does not set that variable for
+  hooks, and a value inherited from another project would compare against a foreign manifest, which
+  fails as a *wrong answer* rather than an error. `expected` comes from `origin/main`. Table A's eight
+  rows are implemented exactly: only `installed < expected` warns, and silent means silent — no output
+  and no marker. The `SessionStart` surface dedups per session per seven-day epoch bucket with an
+  `O_EXCL` create whose window is encoded in the marker NAME, so a live marker is never unlinked and
+  two concurrent invocations cannot both warn. `session_id` is hashed because it is documented as
+  opaque with no filename-safety contract.
+- **COREDEV-2801 (M6)** — `scripts/tests/test_session_start_drift_hook.py` (27 tests: the declaration,
+  the anchored lookup, all eight Table A rows, the output protocol, dedup, bucket boundary and
+  concurrency) and `scripts/tests/test_precommit_trunk_gate.py` (the second caller and the hook's
+  exit-code aggregation; cell 13's trunk-check controls arrive with M5a).
+
+### Changed
+
+- `.githooks/pre-commit` now **aggregates its exit code**. Appending any passing command after the
+  checks would otherwise mask a nonzero result from them.
+
 ## [2.8.6] — 2026-09-01
 
 ### Added

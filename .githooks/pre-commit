@@ -3,10 +3,27 @@
 # Install: git config core.hooksPath .githooks
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)/scripts"
+status=0
 
 if [ -f "$SCRIPT_DIR/pre-commit-checks.sh" ]; then
-    bash "$SCRIPT_DIR/pre-commit-checks.sh"
+    bash "$SCRIPT_DIR/pre-commit-checks.sh" || status=$?
 else
     echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR"
     exit 0
 fi
+
+# COREDEV-2801 §3b — the drift detector's second surface, for the case where hooks are disabled in the
+# session but not in git. ADVISORY AND NON-BLOCKING: it never contributes to `status`, because a stale
+# install is a thing to know about, not a reason to refuse a commit. Silent on every Table A row but
+# one, so an equal or locally-newer install cannot train anyone to ignore it.
+#
+# THE ROOT IS PASSED EXPLICITLY, derived here rather than inherited: git runs this hook from the
+# worktree, so `--show-toplevel` is correct — while CLAUDE_PROJECT_DIR may be unset, empty, or left
+# over from a DIFFERENT project, which would compare against a foreign manifest.
+if [ -x "$SCRIPT_DIR/detect-plugin-version-drift.sh" ]; then
+    bash "$SCRIPT_DIR/detect-plugin-version-drift.sh" "$(git rev-parse --show-toplevel)" || true
+fi
+
+# THE EXIT CODE AGGREGATES. Appending any passing command after the checks above would otherwise mask
+# a nonzero result from them — a hook that swallows a prior failure is worse than no hook.
+exit "$status"
