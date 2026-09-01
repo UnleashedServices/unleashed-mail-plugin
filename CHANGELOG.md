@@ -13,6 +13,41 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.6] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M2)** — `.github/workflows/trunk-check.yml`, the diff-scoped trunk gate, in its own
+  workflow file because `plugin-ci.yml` carries `workflow_dispatch` and the pinned action autodetects
+  that event as `check-mode=all`. The job is unreachable on dispatch **by construction** rather than
+  behind an `if:` guard: a job skipped by a conditional reports *Success*, and a required context is
+  satisfied by it. Five steps in C8's order — checkout, the C6a resolver-digest guard, the empty-diff
+  guard, the C6 launcher-path guard, the action. Ships `continue-on-error: true` at **job scope only**,
+  the declared M2 exemption, removed at M3.
+- **COREDEV-2780 (M2)** — `scripts/ci/resolve-trunk-range.sh`, the single shared range resolver. Its
+  logic is transcribed from the pinned action's `pull_request.sh` and `push.sh` rather than assumed,
+  and it **fails closed** on an all-zero `github.event.before` — the branch-creation/tag-push shape
+  where the action runs `trunk check --ci --all`.
+- **COREDEV-2780 (M2b)** — `.github/workflows/trunk-check-push.yml`, the non-required push canary. It
+  emits a **different context name** on purpose: required checks match on SHA and expected app, not on
+  the triggering event, so a shared context let a `main`→`alpha` PR be satisfied by the push run on its
+  head SHA — a green required check over a strictly smaller diff.
+- **COREDEV-2780 (M2c)** — `.github/workflows/trunk-parity-harness.yml` and
+  `scripts/ci/parity-recorder.sh`, the non-required sensor for cells 1 and 5, plus
+  `scripts/tests/test_trunk_upstream_parity.py`, its judge. The harness fires on **real** events on the
+  permanent `harness-base` / `harness/**` refs, because the action maps `workflow_dispatch` to
+  `check-mode=all` and `GITHUB_EVENT_NAME` cannot be overridden. Its action inputs are **extracted from
+  the shipped workflow and digest-bound to it** — a harness that invokes its own non-fixing form proves
+  only that *that* form does not mutate.
+- **COREDEV-2780** — `scripts/tests/test_trunk_check_workflow.py`: cells 4, 9, 14, 15, cell 10's static
+  half and cell 11's generator, which executes **all 81 declared registry cases**, including the C6
+  fixtures and C6a's resolver case by running the **shipped guard bodies** against a temporary tree.
+
+### Changed
+
+- `CLAUDE.md` — the local gate's `shellcheck` line now covers `scripts/ci/*.sh`, and `harness-base` /
+  `harness/**` are documented as permanent repository refs that a Dependabot pin bump needs.
+
 ## [2.8.5] — 2026-09-01
 
 ### Added

@@ -64,7 +64,7 @@ VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json
 bash scripts/test-hooks.sh                                         # hook stdin-contract harness
 python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
 python3 -m unittest discover -s scripts/tests                      # scripts suite (review-verdict gate)
-shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
+shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
 python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
 python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md   # line-pinned citations rot when files shift
 git diff --check "$(git merge-base origin/main HEAD)" HEAD                                              # whitespace, as CI checks it
@@ -102,6 +102,13 @@ Linux-friendly plugin repo — no Xcode).
 
 ## Repository conventions
 
+- **`harness-base` and `harness/**` are PERMANENT repository refs, not scratch branches** (COREDEV-2780
+  M2c). `.github/workflows/trunk-parity-harness.yml` fires on real `pull_request` / `push` events
+  against them because the pinned Trunk action maps `workflow_dispatch` to `check-mode=all` and
+  `GITHUB_EVENT_NAME` cannot be overridden — so a dispatch-only harness could never produce the PR and
+  push ranges cell 1 compares. They are needed again at **every Dependabot bump of the action pin**, to
+  re-derive the extension-point enumeration that re-running mutants does not cover. **Deleting them is
+  a change, not tidying.**
 - **Branches:** `feat/COREDEV-XXXX-short-description` (use the Epic key when spanning children). Work in a
   dedicated `.claude/worktrees/<name>` worktree — never flip the main checkout's branch.
 - **Commits:** `type(COREDEV-XXXX): description` — ticket is **mandatory**. Types: `feat`, `fix`, `chore`,

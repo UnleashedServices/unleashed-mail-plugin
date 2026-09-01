@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.5
+# UnleashedMail — Claude Code Plugin v2.8.6
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,19 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.6
+
+- **COREDEV-2780 (M2 + M2b + M2c) — `trunk check` is wired, diff-scoped, as an advisory job.**
+  `.github/workflows/trunk-check.yml` (the future required context, `continue-on-error` at job scope
+  until M3), `.github/workflows/trunk-check-push.yml` (the non-required push canary, deliberately a
+  different context name so a push run can never satisfy a PR's required check), and
+  `.github/workflows/trunk-parity-harness.yml` (the non-required sensor for cells 1 and 5). All three
+  share **one** range resolver, `scripts/ci/resolve-trunk-range.sh`, whose logic is transcribed from
+  the pinned action's own `pull_request.sh` / `push.sh` and which **fails closed** on the zero-`before`
+  push that would otherwise send the action down its `--all` branch.
+  `trunk check --all` is never run: it reports 9027 lint findings on a clean tree, and a gate that is
+  red by default is a gate people learn to ignore.
 
 ### v2.8.5
 
