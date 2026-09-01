@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.4
+# UnleashedMail — Claude Code Plugin v2.8.5
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,17 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.5
+
+- **COREDEV-2780 (M0a) — the trunk-check contract is a STRUCTURED REGISTRY.**
+  `docs/planning/COREDEV-2780-contract.yaml` carries one entry per atomic obligation with a stable id,
+  a typed target kind (`yaml`, `repo_fixture`, `content_digest`, `remote_relation`) and first-class
+  mutation **cases** — 26 obligations across C0–C9, C6a and the canary, expanding to **105 generated
+  mutants**. §1's clause prose is rendered from it, so there is no prose to parse and nothing to drift
+  from. `COREDEV-2780-survivors.yaml` carries the **14 mutants that have survived** a formulation of
+  this gate, maintained independently so that a registry edit silently dropping an obligation reds
+  something the rendering lint cannot see.
 
 ### v2.8.4
 

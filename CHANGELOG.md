@@ -13,6 +13,25 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.5] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M0a)** — `docs/planning/COREDEV-2780-contract.yaml`, the structured contract registry
+  §1's C0–C9 and C6a prose is rendered from and cell 11's mutants are generated from: 26 obligations,
+  each with a stable id, a typed target kind and one or more mutation **cases** declaring operator,
+  side, target, payload-or-fixture, a validity check and its own expected diagnostic. 81 direct cases
+  plus a `(side, form)` resolver family (2 sides × 6 forms) referenced by both workflow entries = **105
+  generated mutants**. The kinds exist because a flat `(id, path, value)` schema could not express C6's
+  repository fixtures, C2's live-remote relation or C8's digest semantics — under-coverage by
+  construction. Cases are first-class because one mutant per *entry* still under-covers any obligation
+  needing several.
+- **COREDEV-2780 (M0a)** — `docs/planning/COREDEV-2780-survivors.yaml`, the survivor corpus: the **14
+  mutants that have survived** a formulation of this gate across rounds 5–38, each recorded with the
+  formulation that let it through, what it would have shipped, and why it must now fail. Maintained
+  **independently of the registry** and self-contained by design — an entry that resolved through a
+  registry id would vanish with the obligation it exists to outlive, which is the failure it detects.
+
 ## [2.8.4] — 2026-09-01
 
 ### Fixed
