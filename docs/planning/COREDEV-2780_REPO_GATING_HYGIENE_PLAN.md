@@ -1,8 +1,8 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 30
+**Status:** Planning, revision 31
 **Created:** 2026-08-28
-**Last Updated:** 2026-08-31
+**Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
 
 > **r1** `04048c7`: codex + agy both `REQUEST_CHANGES`. Concordant: §2's fix was wrong for
@@ -498,7 +498,8 @@ own non-required context.
   **No `paths:`/`paths-ignore:`** — path filtering leaves a required context Pending, which blocks.
 
   **C3 — the JOB mapping is an allowlist, and nothing skips or masks on any step.** The job's own
-  keys are `runs-on`, `timeout-minutes`, `permissions`, `steps` — and nothing else, **with
+  keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name` (cell 14's
+  effective check name, which takes precedence over the job id when present) — and nothing else, **with
   `permissions:` pinned to exactly `contents: read` here as well as at the root**. GitHub calculates
   the token workflow-level *then* job-level, so a job-level `permissions: write-all` widens the
   effective token while satisfying both allowlists — revision 24 pinned the value at C0 and left the
@@ -590,7 +591,7 @@ own non-required context.
   why this paragraph is now written without pronouns at all.)* And it is the **complete step mapping** that is frozen,
   not the `run:` body alone (codex, r12): `shell`, `working-directory`, `if`, `continue-on-error`,
   `env` and every other key on each of the five steps, so a step cannot be neutralised by a sibling
-  key while its body hashes unchanged. Changing either step is then a reviewed change, which is
+  key while its body hashes unchanged. Changing any of the three is then a reviewed change, which is
   the same standing the workflow itself has. Revision 9
   banned `env:` but nothing stopped an *extra step* from appending to `GITHUB_PATH`, setting
   `BASH_ENV` through `GITHUB_ENV`, or creating one of C6's prohibited paths **after** the guard had
@@ -747,6 +748,15 @@ a detector shipped only in 2.8.4+. The hook is not shipped by the plugin — it 
 compares `~/.claude/plugins/installed_plugins.json` against
 **`.claude-plugin/plugin.json` as of `origin/main`**, needing no session environment and no plugin
 code.
+
+**The git operation is ANCHORED to the project repository: `git -C "${CLAUDE_PROJECT_DIR}" show
+origin/main:.claude-plugin/plugin.json`** (codex, r32). A bare `git show origin/main:…` looks
+conforming and works whenever a test invokes it from the repository root — and silently takes Table A
+row 1's "`expected` cannot be read" path when `SessionStart` fires from an unrelated current
+directory, which the hook contract explicitly warns is possible. The detector then reports nothing,
+forever, on exactly the machines it exists to warn. Requiring `${CLAUDE_PROJECT_DIR}` for the hook
+entry and the script path was not enough: **the path test proves the script was found, not that git
+resolved the intended repository.**
 
 **Both surfaces read `origin/main`, and revision 21 propagated that to Table A only** (codex, r21).
 Earlier revisions had pre-commit read the *staged* manifest and `SessionStart` the *worktree*; both
@@ -943,8 +953,12 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     minutes is worse than the drift it reports. Five seconds is ~100x the detector's work (two small
     JSON reads); anything slower than that is a broken detector, and failing fast is the right answer.
 
-  Cell 8 exercises the matcher set, the timeout against a sleeping detector, the dedup marker under
-  concurrent invocation, and the `systemMessage` shape;
+  Cell 8 exercises the matcher set, `${CLAUDE_PROJECT_DIR}` resolution **and the anchored git
+  lookup from an unrelated cwd**, the timeout against a sleeping detector, the dedup marker under
+  concurrent invocation **and aged-marker resumption**, **a filename-hostile `session_id` with a
+  hash-removal mutation**, **the bucket-boundary cases and the `604800` mutation**, and the
+  `systemMessage` shape — the cell's own text is authoritative and this summary had drifted narrower
+  than it (codex, r32);
 * **`.githooks/pre-commit`** — fires at commit time, and covers the case
   where hooks are disabled in the session but not in git.
 
@@ -1024,7 +1038,8 @@ alternative turned out to be complementary rather than competing.
       `parity-<event>.json` with the captured argv, the resolved range and the
       pre/post tree hashes; and the milestone **accepts the artifact against that schema** before the
       cells that own it may be marked done.
-- [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
+- [ ] **M3** (**two landings — one PR per base; MV requires a version bump on each**) — remove
+      `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
       lands HERE, not at M2** (codex, r8): M2 deliberately ships `continue-on-error: true` while C3
       forbids it, so asserting C3 at M2 would make the suite intentionally red. The cell is written
       at M2 and enabled at M3, with M2's advisory window explicitly exempted. — revision 5 said only
@@ -1403,6 +1418,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      because successive revisions appended into one run-on sentence until its parentheses no longer
      balanced (codex, r26):
      * the matcher set, and `${CLAUDE_PROJECT_DIR}` resolution for both hook entry and script;
+     * **the git lookup resolves the PROJECT repository from an unrelated working directory** —
+       invoke the detector with `cwd` set outside the repo and assert it still reads the intended
+       `origin/main` manifest, with a mutation that drops `git -C` and must red. Without this the
+       cell proves the script was located, not that it looked in the right place (codex, r32);
      * **`timeout: 5` as a literal, mutated as an operand** — asserting the key alone accepts the
        600-second default this contract exists to override, the same defect cell 15 had;
      * the **`systemMessage`** output shape;
@@ -1974,8 +1993,11 @@ required gate that fails on someone else's outage is worse — but it is a real 
   against the guard step's output. *(The harness is the one legitimate use of `trunk-path`; §1's C4
   forbids it in the shipped workflow.)*
 * **`scripts/tests/test_session_start_drift_hook.py`** — §3b's `SessionStart` contract: matcher set,
-  `${CLAUDE_PROJECT_DIR}` resolution, the `O_EXCL` dedup marker under concurrent invocation, the
-  `systemMessage` output shape, and the timeout against a sleeping detector (cell 8, SessionStart half)
+  `${CLAUDE_PROJECT_DIR}` resolution **and the `git -C`-anchored lookup from an unrelated cwd**, the
+  `O_EXCL` dedup marker under concurrent invocation **and aged-marker resumption**, **the
+  filename-hostile `session_id` and hash-removal mutation**, **the bucket-boundary cases and the
+  `604800` mutation**, the `systemMessage` output shape, and the timeout against a sleeping detector
+  (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower)
 
 **Ownership follows a RULE, and the table below applies it** — revision 9 claimed every cell had an
 owner and five did not; revision 12 gave cell 2 an owner that **cannot observe what the cell
