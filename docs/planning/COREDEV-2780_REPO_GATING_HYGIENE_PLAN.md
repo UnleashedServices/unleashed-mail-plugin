@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 34
+**Status:** Planning, revision 35
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -78,6 +78,19 @@
 > `resolve()` implementation called by both comparators**, the same answer C6a already gives for the
 > range resolver. *Enumeration is not a class; this is the third consecutive round in which my own
 > repair carried the next defect.*
+> **r36** `57fd03b` (revision 34), codex alone, `TREE=clean`: `REQUEST_CHANGES` ([SUBJECT] 1,
+> [RESIDUE] 1) — "the plan is very close". It confirmed the `(side, form)` family is **complete for
+> the settled API domain**: two sides, six forms, all twelve constructible from injected observations,
+> no third side and no seventh form, and the refusal cases cannot hide behind an equality diagnostic.
+> The single remaining [SUBJECT] is the one revision 34 introduced: **"both comparators call the same
+> `resolve()`" is invisible to every observable check** — two independently written but currently
+> correct resolvers pass all twelve cases, cell 15's comparison and both rollout comparisons, then
+> drift on the next edit. Revision 35 makes the comparator **one function parameterised by registry
+> entry**, so a second resolver path cannot exist, declares the family once rather than copying it,
+> and has cell 15 assert the structural fact. The [RESIDUE] was a **sixth** unqualified target-set
+> phrasing in §7's cell-16 ownership row — it said "live target set", so the sweep that qualified the
+> other five, keyed on "ruleset's target set", could not see it. *A grep for one phrasing is not a
+> sweep of the concept — the same lesson this document records about counts and pronouns.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1695,9 +1708,19 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       entries with separate owners — so revision 33's cases, attached to C2 alone, would have left the
       canary comparator with revision 32's include-only behaviour while every C2 case passed and cell
       16 passed against today's empty `exclude`. **One implementation, as with C6a's shared range
-      resolver**: `resolve()` is written once, both comparators call that one implementation, and the
-      `(side, form)` family is generated against **both** registry entries. Two independently-written
-      resolvers is the same defect C6a exists to prevent, one field over.
+      resolver**: `resolve()` is written once and both comparators call it.
+
+      **And that sharing is ENFORCED, not conventional** (codex, r36). "Both comparators call the same
+      helper" is invisible to every observable check: two independently written but *currently correct*
+      resolvers pass all twelve generated cases, cell 15's registry-versus-prose comparison, and both
+      rollout comparisons — and then drift apart on the next edit, which is precisely the failure C6a
+      exists to prevent. **The comparator is therefore ONE function PARAMETERISED BY REGISTRY ENTRY**,
+      invoked once per entry, so a second resolver path cannot exist to be asserted about; and the
+      `(side, form)` family is **declared once and referenced by both entries**, never copied into
+      each. Cell 15 additionally asserts the structural fact directly — exactly one `resolve()`
+      definition exists, and a spy bound to that name is reached by **both** comparator entry points.
+      *A property that only holds while nobody writes a second copy is a convention; the parameterised
+      form makes it a fact.*
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
@@ -2246,7 +2269,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; the **`trunk-parity-harness.yml` workflow** runs the pinned action and reports the post-invocation hashes, which `test_trunk_upstream_parity.py` asserts against — a unittest cannot itself run a composite action (sweep). *Not* the evidence artifact — C8 makes the action the final step, so nothing in the required workflow can hash the tree afterwards, and an artifact records what something else observed (codex, r18) |
 | 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + generated mutants + runner/timeout) |
 | 17 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: it asserts the live ruleset's *behaviour* (the red PR observed `blocked` with `trunk-check` named, the green one `clean`), which nothing static can observe. **Both observations are reads; this cell never calls the merge endpoint** (codex, r33) |
-| 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, SHA pins, both guards and their shared resolver, C5's `env:` prohibition, C6's launcher guard, `permissions` by value, and that `branches:` is well-formed and non-empty. **`branches:` EQUALLING the ruleset's live target set is a local-vs-remote comparison** and therefore hybrid under §7's own rule, exactly as C2 is for the required workflow — the evidence artifact carries that half; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
+| 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, SHA pins, both guards and their shared resolver, C5's `env:` prohibition, C6's launcher guard, `permissions` by value, and that `branches:` is well-formed and non-empty. **`branches:` EQUALLING the ruleset's live RESOLVED target set (C2's `resolve()`) is a local-vs-remote comparison** and therefore hybrid under §7's own rule, exactly as C2 is for the required workflow — the evidence artifact carries that half; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
 | 10 | **hybrid**: `test_trunk_check_workflow.py` pins `permissions` by value at both scopes (a wider token yields identical runtime evidence, so only a static check discriminates it — codex, r25); `evidence/COREDEV-2780-rollout.json` carries the annotation-artifact observation |
