@@ -6,14 +6,13 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import unittest
 import unittest.mock
 from collections import Counter
-import re
 from pathlib import Path
-
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json"
@@ -39,7 +38,11 @@ EXPECTED_SCAN_EXCLUSIONS = {
 EXPECTED_FILE_COUNTS = {
     "CHANGELOG.md": {"sites": 1, "rewrite": 0, "quote-keep": 1},
     "README.md": {"sites": 1, "rewrite": 1, "quote-keep": 0},
-    "docs/audits/PLUGIN_AUDIT_2026-07-19.md": {"sites": 4, "rewrite": 0, "quote-keep": 4},
+    "docs/audits/PLUGIN_AUDIT_2026-07-19.md": {
+        "sites": 4,
+        "rewrite": 0,
+        "quote-keep": 4,
+    },
     "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md": {
         "sites": 1,
         "rewrite": 0,
@@ -134,7 +137,11 @@ def _tracked_tree() -> dict[str, list[bytes]]:
         check=True,
         capture_output=True,
     )
-    paths = set(completed.stdout.decode("utf-8", errors="surrogateescape").rstrip("\0").split("\0"))
+    paths = set(
+        completed.stdout.decode("utf-8", errors="surrogateescape")
+        .rstrip("\0")
+        .split("\0")
+    )
     # Include this step's untracked deliverables so the human can run M3.1 before staging them.
     paths.update(
         {
@@ -204,18 +211,23 @@ def _is_sha256(value: object) -> bool:
 def _derived_file_counts(sites: list[dict]) -> dict[str, dict[str, int]]:
     counts = {}
     for site in sites:
-        entry = counts.setdefault(site["path"], {"sites": 0, "rewrite": 0, "quote-keep": 0})
+        entry = counts.setdefault(
+            site["path"], {"sites": 0, "rewrite": 0, "quote-keep": 0}
+        )
         entry["sites"] += 1
         if site.get("class") in ("rewrite", "quote-keep"):
             entry[site["class"]] += 1
     return counts
 
 
-def _contract_problems(location: str, contracts: list[str], payloads: list[bytes]) -> list[str]:
+def _contract_problems(
+    location: str, contracts: list[str], payloads: list[bytes]
+) -> list[str]:
     problems = []
     joined = b"\n".join(payloads)
     if "S-PRECLEAN" in contracts and (
-        b"rm -f" in joined or any(literal.encode("utf-8") in joined for literal in EXPECTED_LITERALS)
+        b"rm -f" in joined
+        or any(literal.encode("utf-8") in joined for literal in EXPECTED_LITERALS)
     ):
         problems.append(f"{location}: destination violates S-PRECLEAN")
     # The wrapper is named, not path-spelled. The single S-WRAPPER destination moved into
@@ -233,7 +245,13 @@ def _contract_problems(location: str, contracts: list[str], payloads: list[bytes
     # than `--allocated` directly. Symmetric with the gemini whitelist entry.
     if "S-CAPTURE" in contracts and not any(
         token in joined
-        for token in (b"--allocated", b"GEMINI_TRANSCRIPT", b"CODEX_TRANSCRIPT", b"allocated", b"reserved")
+        for token in (
+            b"--allocated",
+            b"GEMINI_TRANSCRIPT",
+            b"CODEX_TRANSCRIPT",
+            b"allocated",
+            b"reserved",
+        )
     ):
         problems.append(f"{location}: destination lacks S-CAPTURE evidence")
     # `REVIEWER_SPEC` replaces `PERSIST_SPEC`: the synthesis recipe no longer classifies the spec
@@ -242,8 +260,7 @@ def _contract_problems(location: str, contracts: list[str], payloads: list[bytes
     # further upstream. Enumerated rather than a `_SPEC` pattern, so a new spelling has to be added
     # deliberately instead of matching by accident.
     if "S-THREAD" in contracts and not any(
-        token in joined
-        for token in (b"TRANSCRIPT", b"allocated", b"REVIEWER_SPEC")
+        token in joined for token in (b"TRANSCRIPT", b"allocated", b"REVIEWER_SPEC")
     ):
         problems.append(f"{location}: destination lacks S-THREAD evidence")
     return problems
@@ -253,7 +270,10 @@ def _manifest_problems(manifest: dict) -> list[str]:
     problems = []
     if manifest.get("schemaVersion") != EXPECTED_SCHEMA_VERSION:
         problems.append(f"schemaVersion must be {EXPECTED_SCHEMA_VERSION}")
-    if manifest.get("ticket") != "COREDEV-2619" or manifest.get("step") != "S-INVENTORY":
+    if (
+        manifest.get("ticket") != "COREDEV-2619"
+        or manifest.get("step") != "S-INVENTORY"
+    ):
         problems.append("ticket/step identity drifted")
     if manifest.get("frozenCommit") != FROZEN_COMMIT:
         problems.append("frozenCommit drifted")
@@ -289,11 +309,18 @@ def _manifest_problems(manifest: dict) -> list[str]:
         classification = site.get("class")
         expected = EXPECTED_FILE_COUNTS.get(path, {}).get(classification, 0)
         if classification not in ("rewrite", "quote-keep") or expected == 0:
-            problems.append(f"{location}: class {classification!r} contradicts the frozen file class")
+            problems.append(
+                f"{location}: class {classification!r} contradicts the frozen file class"
+            )
         else:
             class_counts[classification] += 1
         reason = site.get("reason")
-        if not isinstance(reason, str) or not reason.strip() or "\n" in reason or "\r" in reason:
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or "\n" in reason
+            or "\r" in reason
+        ):
             problems.append(f"{location}: reason must be one nonempty line")
         if not _is_sha256(site.get("sourceSha256")):
             problems.append(f"{location}: sourceSha256 is not lowercase SHA-256")
@@ -337,29 +364,41 @@ def _manifest_problems(manifest: dict) -> list[str]:
                     for payload in raw_payloads
                 )
             ):
-                problems.append(f"{location}: destination payloads must be nonempty physical lines")
+                problems.append(
+                    f"{location}: destination payloads must be nonempty physical lines"
+                )
                 continue
             payloads = [payload.encode("utf-8") for payload in raw_payloads]
             payload_sha256 = destination.get("payloadSha256")
             if not _is_sha256(payload_sha256):
-                problems.append(f"{location}: destination payloadSha256 is not lowercase SHA-256")
+                problems.append(
+                    f"{location}: destination payloadSha256 is not lowercase SHA-256"
+                )
             elif payload_sha256 != _destination_sha256(payloads):
-                problems.append(f"{location}: destination payloadSha256 does not hash its payload block")
+                problems.append(
+                    f"{location}: destination payloadSha256 does not hash its payload block"
+                )
             if any(
                 literal.encode("utf-8") in payload
                 for literal in EXPECTED_LITERALS
                 for payload in payloads
             ):
-                problems.append(f"{location}: destination retains a legacy output literal")
+                problems.append(
+                    f"{location}: destination retains a legacy output literal"
+                )
             problems.extend(_contract_problems(location, contracts, payloads))
             destination_path = destination.get("path", path)
             if not isinstance(destination_path, str) or not destination_path:
-                problems.append(f"{location}: destination path must be a nonempty string")
+                problems.append(
+                    f"{location}: destination path must be a nonempty string"
+                )
             destination_identities.append(
                 (destination_path, destination_line, payload_sha256)
             )
         elif any(key in site for key in ("contracts", "destination") + anchor_keys):
-            problems.append(f"{location}: quote-keep must not carry rewrite-only fields")
+            problems.append(
+                f"{location}: quote-keep must not carry rewrite-only fields"
+            )
 
     if len(destination_identities) != len(set(destination_identities)):
         problems.append("rewrite destination identities are not unique")
@@ -378,7 +417,9 @@ def _manifest_problems(manifest: dict) -> list[str]:
     return problems
 
 
-def _observed_literal_sites(manifest: dict, tree: dict[str, list[bytes]]) -> set[tuple[str, int]]:
+def _observed_literal_sites(
+    manifest: dict, tree: dict[str, list[bytes]]
+) -> set[tuple[str, int]]:
     literals = tuple(literal.encode("utf-8") for literal in EXPECTED_LITERALS)
     pattern = re.compile(EXPECTED_LITERAL_PATTERN.pattern.encode("ascii"))
     exclusions = set(manifest["scanExclusions"])
@@ -397,13 +438,17 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
     # COREDEV-2798: keyed on the site's RESOLVED line, so a prepend that shifts a quote-keep literal
     # does not report it simultaneously missing (declared line) and surviving (observed line).
     quote_keep_sites = {
-        _resolved_site_key(site, tree) for site in sites if site["class"] == "quote-keep"
+        _resolved_site_key(site, tree)
+        for site in sites
+        if site["class"] == "quote-keep"
     }
     observed_sites = _observed_literal_sites(manifest, tree)
     for path, line in sorted(quote_keep_sites - observed_sites):
         problems.append(f"{path}:{line}: quote-keep output literal is missing")
     for path, line in sorted(observed_sites - quote_keep_sites):
-        problems.append(f"{path}:{line}: output literal survives outside the quote-keep set")
+        problems.append(
+            f"{path}:{line}: output literal survives outside the quote-keep set"
+        )
 
     for site in sites:
         location = site["location"]
@@ -421,7 +466,9 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
                 if not positions:
                     problems.append(f"{location}: quote-keep payload hash drifted")
                 elif len(positions) > 1:
-                    problems.append(f"{location}: quote-keep payload hash is not unique")
+                    problems.append(
+                        f"{location}: quote-keep payload hash is not unique"
+                    )
             elif site["line"] > len(lines):
                 problems.append(f"{location}: quote-keep physical line is missing")
             elif _sha256(lines[site["line"] - 1]) != site["sourceSha256"]:
@@ -435,7 +482,9 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
         # The legacy-source check above is about the SOURCE file; the destination may live elsewhere.
         destination_lines = tree.get(_destination_path(site))
         if destination_lines is None:
-            problems.append(f"{location}: destination file is missing: {_destination_path(site)}")
+            problems.append(
+                f"{location}: destination file is missing: {_destination_path(site)}"
+            )
             continue
         expected_payloads = _destination_payloads(site)
         if _destination_path(site) in PREPEND_ONLY_FILES:
@@ -470,7 +519,9 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
                 f"{location}: destination payload drifted at final line {destination['line']}"
             )
         else:
-            problems.extend(_contract_problems(location, site["contracts"], actual_payloads))
+            problems.extend(
+                _contract_problems(location, site["contracts"], actual_payloads)
+            )
     return problems
 
 
@@ -558,11 +609,15 @@ class M3_1_InventoryDrift(unittest.TestCase):
         self.assertEqual([], _tree_problems(self.manifest, self.completed_tree))
 
     def test_each_rewrite_destination_deletion_is_detected_with_counts_unchanged(self):
-        rewrites = [site for site in self.manifest["sites"] if site["class"] == "rewrite"]
+        rewrites = [
+            site for site in self.manifest["sites"] if site["class"] == "rewrite"
+        ]
         self.assertEqual(EXPECTED_TOTALS["rewrite"], len(rewrites))
         baseline_literals = _observed_literal_sites(self.manifest, self.completed_tree)
         baseline_nonempty = _nonempty_line_count(self.completed_tree)
-        baseline_occupied = _occupied_destination_count(self.manifest, self.completed_tree)
+        baseline_occupied = _occupied_destination_count(
+            self.manifest, self.completed_tree
+        )
         positional_rewrites = sum(
             1 for site in rewrites if _destination_path(site) not in PREPEND_ONLY_FILES
         )
@@ -580,7 +635,9 @@ class M3_1_InventoryDrift(unittest.TestCase):
                     start = occurrences[0]
                 else:
                     start = site["destination"]["line"] - 1
-                self.assertEqual(_destination_payloads(site), lines[start : start + width])
+                self.assertEqual(
+                    _destination_payloads(site), lines[start : start + width]
+                )
                 line_count = len(lines)
                 # Delete the expected payload while retaining nonempty physical
                 # slots, so a guard that only counts sites/lines still passes.
@@ -601,7 +658,9 @@ class M3_1_InventoryDrift(unittest.TestCase):
                 )
                 problems = _tree_problems(self.manifest, mutated)
                 if _destination_path(site) in PREPEND_ONLY_FILES:
-                    expected = f"{site['location']}: destination payload block is missing"
+                    expected = (
+                        f"{site['location']}: destination payload block is missing"
+                    )
                 else:
                     expected = (
                         f"{site['location']}: destination payload drifted at final line "
@@ -610,7 +669,9 @@ class M3_1_InventoryDrift(unittest.TestCase):
                 self.assertIn(expected, problems)
 
     def test_each_rewrite_same_file_relocation_is_detected_with_counts_unchanged(self):
-        rewrites = [site for site in self.manifest["sites"] if site["class"] == "rewrite"]
+        rewrites = [
+            site for site in self.manifest["sites"] if site["class"] == "rewrite"
+        ]
         self.assertEqual(EXPECTED_TOTALS["rewrite"], len(rewrites))
         baseline_literals = _observed_literal_sites(self.manifest, self.completed_tree)
         for site in rewrites:
@@ -656,10 +717,15 @@ class M3_1_InventoryDrift(unittest.TestCase):
             with self.subTest(location=site["location"]):
                 mutated = copy.deepcopy(self.manifest)
                 mutated_site = mutated["sites"][site_index]
-                mutated_site["class"] = "quote-keep" if site["class"] == "rewrite" else "rewrite"
+                mutated_site["class"] = (
+                    "quote-keep" if site["class"] == "rewrite" else "rewrite"
+                )
                 problems = _manifest_problems(mutated)
                 self.assertTrue(
-                    any(problem.startswith(site["location"] + ":") for problem in problems),
+                    any(
+                        problem.startswith(site["location"] + ":")
+                        for problem in problems
+                    ),
                     f"reclassifying {site['location']} was not attributed to that identity: {problems}",
                 )
 
@@ -722,7 +788,11 @@ class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
         return mutated
 
     def _problems_for(self, site: dict, problems: list[str]) -> list[str]:
-        return [problem for problem in problems if problem.startswith(site["location"] + ":")]
+        return [
+            problem
+            for problem in problems
+            if problem.startswith(site["location"] + ":")
+        ]
 
     # ---- the property the ticket exists for -------------------------------------------------
 
@@ -732,7 +802,9 @@ class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
     def test_quote_keep_survives_a_prepend_with_no_manifest_edit(self):
         path = self.quote_keep["path"]
         baseline = _quote_keep_positions(self.quote_keep, self.tree[path])
-        self.assertEqual(1, len(baseline), "fixture must start from exactly one occurrence")
+        self.assertEqual(
+            1, len(baseline), "fixture must start from exactly one occurrence"
+        )
         mutated = self._prepended(path)
         # The literal really did move: this case would be vacuous if it had not.  Anchored to the
         # TREE's current position, never to the manifest's declared line — that line is a hint here,
@@ -746,7 +818,9 @@ class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
     def test_rewrite_destination_survives_a_prepend_with_no_manifest_edit(self):
         path = _destination_path(self.rewrite)
         baseline = _destination_occurrences(self.rewrite, self.tree[path])
-        self.assertEqual(1, len(baseline), "fixture must start from exactly one occurrence")
+        self.assertEqual(
+            1, len(baseline), "fixture must start from exactly one occurrence"
+        )
         mutated = self._prepended(path)
         self.assertEqual(
             [baseline[0] + len(self.PREPEND)],
@@ -838,10 +912,14 @@ class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
         # A restored legacy source is a line carrying the retired output literal.  Its exact bytes
         # are unrecoverable from a hash, so the fixture supplies the line and the manifest copy is
         # re-pinned to it: the same two observable consequences, constructed rather than guessed.
-        restored = b"Transcripts are written to /tmp/" + b"agy-out.txt by the capture wrapper."
+        restored = (
+            b"Transcripts are written to /tmp/" + b"agy-out.txt by the capture wrapper."
+        )
         manifest = copy.deepcopy(self.manifest)
         mutated_site = next(
-            entry for entry in manifest["sites"] if entry["location"] == site["location"]
+            entry
+            for entry in manifest["sites"]
+            if entry["location"] == site["location"]
         )
         mutated_site["sourceSha256"] = _sha256(restored)
 
@@ -856,7 +934,10 @@ class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
         self.assertIn(diagnostic, problems)
         # The confounder is real and present, which is what makes the mutation below necessary.
         self.assertTrue(
-            any("output literal survives outside the quote-keep set" in problem for problem in problems),
+            any(
+                "output literal survives outside the quote-keep set" in problem
+                for problem in problems
+            ),
             "the independent literal census must also fire, or this control is not confounded",
         )
 

@@ -40,9 +40,13 @@ TRUNK_CONFIG = REPO / ".trunk/trunk.yaml"
 
 # ---- frozen literals: the oracle, never derived from the artifact under test --------------------
 ACTION_PIN = "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
-ARGUMENTS_LITERAL = "--filter=-markdown-link-check"   # §6.4, stated once THERE and matched whole
+ARGUMENTS_LITERAL = (
+    "--filter=-markdown-link-check"  # §6.4, stated once THERE and matched whole
+)
 EXPECTED_RUNNER = "ubuntu-latest"
-EXPECTED_TIMEOUT_MINUTES = 15        # a CONCRETE ceiling; "a timeout exists" is satisfied by 360
+EXPECTED_TIMEOUT_MINUTES = (
+    15  # a CONCRETE ceiling; "a timeout exists" is satisfied by 360
+)
 EXPECTED_CONTEXT = "trunk-check"
 CANARY_CONTEXT = "trunk-check-push"
 CANARY_PATH = REPO / ".github/workflows/trunk-check-push.yml"
@@ -64,18 +68,46 @@ CELL16_INJECTED_CASES = {
     "C16.canary-branches-equal-resolved-target-set/local-divergence",
     "C2.branches-equal-resolved-target-set/local-divergence",
 }
-EXPECTED_STEPS = ["checkout", "guard-resolver-digest", "guard-empty-diff", "guard-launcher-path", "trunk"]
+EXPECTED_STEPS = [
+    "checkout",
+    "guard-resolver-digest",
+    "guard-empty-diff",
+    "guard-launcher-path",
+    "trunk",
+]
 C6_GUARDED_PATHS = (
-    ".trunk/bin/trunk", "tools/trunk", "./trunk",
-    ".trunk/setup-ci", ".trunk/user.yaml", ".trunk/env.yaml",
+    ".trunk/bin/trunk",
+    "tools/trunk",
+    "./trunk",
+    ".trunk/setup-ci",
+    ".trunk/user.yaml",
+    ".trunk/env.yaml",
 )
 # 20 enabled minus §6.4's declared exclusion. Held as literals: a membership oracle regenerated from
 # the config under test cannot detect that config being reduced.
-EXPECTED_LINTERS = frozenset({
-    "zizmor", "gitleaks", "trufflehog", "bandit", "checkov", "mypy", "ruff", "shellcheck",
-    "actionlint", "pinact", "git-diff-check", "markdownlint", "codespell", "black", "isort",
-    "prettier", "shfmt", "taplo", "yamllint",
-})
+EXPECTED_LINTERS = frozenset(
+    {
+        "zizmor",
+        "gitleaks",
+        "trufflehog",
+        "bandit",
+        "checkov",
+        "mypy",
+        "ruff",
+        "shellcheck",
+        "actionlint",
+        "pinact",
+        "git-diff-check",
+        "markdownlint",
+        "codespell",
+        "black",
+        "isort",
+        "prettier",
+        "shfmt",
+        "taplo",
+        "yamllint",
+    }
+)
 EXCLUDED_LINTER = "markdown-link-check"
 
 # M2 ships job-scoped `continue-on-error: true` and C3 forbids it. The exemption is JOB SCOPE ONLY and
@@ -97,12 +129,12 @@ M2_ADVISORY_EXEMPTION = {"continue-on-error"}
 # resolver digest.
 EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
-        "guard-resolver-digest": "82a473fe61372c01cfdf2ef1a5e48f7b6c4322299fef0fcfb9419bb70a888a33",
+        "guard-resolver-digest": "b3b88e3d7eaf12f775381833d6a8a212162d777cd9eb14d9e0f8beb4c65c52a8",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
     "canary": {
-        "guard-resolver-digest": "5966ae3eb1d4c7d73e718d40fb7b5b754b74a2b8b8232527da5980a940542801",
+        "guard-resolver-digest": "546144aca6bd6266d24fd3aae1e91bc0d61c1623062c6803f035f3b9d5236009",
         "guard-empty-diff": "a016908553fc6e7096e02b3877eecd6c73aafc859a77da804aedeb388375ce7a",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
@@ -147,15 +179,27 @@ def _required_contexts(ruleset: dict) -> list[str]:
     """The ruleset's required status-check contexts. ONE reader, so the injected-observation mutant
     exercises the same code path as the live read — a mutant evaluated by a different implementation
     than production tests nothing about production."""
-    return [check["context"]
-            for rule in ruleset["rules"] if rule["type"] == "required_status_checks"
-            for check in rule["parameters"]["required_status_checks"]]
+    return [
+        check["context"]
+        for rule in ruleset["rules"]
+        if rule["type"] == "required_status_checks"
+        for check in rule["parameters"]["required_status_checks"]
+    ]
 
 
 def _live_ruleset() -> dict:
-    return json.loads(subprocess.run(
-        ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567"],
-        capture_output=True, text=True, check=True).stdout)
+    return json.loads(
+        subprocess.run(
+            [
+                "gh",
+                "api",
+                "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
 
 
 def _resolve_target_set() -> set[str]:
@@ -170,22 +214,38 @@ def _resolve_target_set() -> set[str]:
     per-entry private resolver cannot be written behind it. Callers resolve ONCE and pass the result
     into each entry's comparison.
     """
-    ruleset = json.loads(subprocess.run(
-        ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567"],
-        capture_output=True, text=True, check=True).stdout)
-    default_branch = json.loads(subprocess.run(
-        ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin"],
-        capture_output=True, text=True, check=True).stdout)["default_branch"]
+    ruleset = json.loads(
+        subprocess.run(
+            [
+                "gh",
+                "api",
+                "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    default_branch = json.loads(
+        subprocess.run(
+            ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )["default_branch"]
     return _resolve_ref_name(ruleset["conditions"]["ref_name"], default_branch)
 
 
 def _resolve_ref_name(ref_name: dict, default_branch: str) -> set[str]:
     def expand(entry: str) -> str:
         if entry == "~ALL" or any(ch in entry for ch in "*?["):
-            raise ValueError(f"target set unresolvable: refusing to enumerate {entry!r}")
+            raise ValueError(
+                f"target set unresolvable: refusing to enumerate {entry!r}"
+            )
         if entry == "~DEFAULT_BRANCH":
             return default_branch
-        return entry[len("refs/heads/"):] if entry.startswith("refs/heads/") else entry
+        return entry.removeprefix("refs/heads/")
 
     include = {expand(entry) for entry in ref_name.get("include", [])}
     exclude = {expand(entry) for entry in ref_name.get("exclude", [])}
@@ -206,7 +266,9 @@ def _normalised_lint_block(config_text: str) -> str:
     return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(block, sort_keys=True))
 
 
-def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "required") -> list[str]:
+def contract_problems(
+    workflow: dict, *, milestone: str = "M2", entry: str = "required"
+) -> list[str]:
     """§1's contract, clause by clause, as diagnostics. Cell 11 mutates against THIS.
 
     ONE implementation for BOTH entries. C0, C3-C9 and C6a are identical for the required workflow and
@@ -225,10 +287,14 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
     names = [step.get("name") for step in steps]
 
     # C0 — the workflow ROOT mapping is an allowlist, and `permissions` is pinned BY VALUE.
-    for key in sorted(_root_keys(workflow) - {"name", "on", "permissions", "jobs"}):
-        problems.append(f"root mapping: unlisted key `{key}`")
+    problems.extend(
+        f"root mapping: unlisted key `{key}`"
+        for key in sorted(_root_keys(workflow) - {"name", "on", "permissions", "jobs"})
+    )
     if workflow.get("permissions") != {"contents": "read"}:
-        problems.append(f"root permissions: expected `contents: read`, found {workflow.get('permissions')!r}")
+        problems.append(
+            f"root permissions: expected `contents: read`, found {workflow.get('permissions')!r}"
+        )
     if "concurrency" in workflow:
         problems.append("workflow-level `concurrency` is prohibited")
     if "concurrency" in job:
@@ -236,22 +302,32 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
 
     # C1 / C7 — one event, and its options are an allowlist.
     expected_event = "push" if is_canary else "pull_request"
-    for event in sorted(set(on) - {expected_event}):
-        problems.append(
+    problems.extend(
+        (
             "event set: `merge_group` is prohibited (check_mode=none is a false success)"
-            if event == "merge_group" else f"event set: unlisted event `{event}`")
+            if event == "merge_group"
+            else f"event set: unlisted event `{event}`"
+        )
+        for event in sorted(set(on) - {expected_event})
+    )
     if expected_event not in on:
         problems.append(f"event set: `{expected_event}` is absent")
     elif is_canary:
-        for option in sorted(set(on["push"] or {}) - {"branches"}):
-            problems.append(f"push options: unlisted option `{option}`")
+        problems.extend(
+            f"push options: unlisted option `{option}`"
+            for option in sorted(set(on["push"] or {}) - {"branches"})
+        )
         if "branches" not in on["push"]:
             problems.append("branches: key is absent")
     else:
-        for option in sorted(set(on["pull_request"] or {}) - {"branches", "types"}):
-            problems.append(f"pull_request options: unlisted option `{option}`"
-                            if option not in ("paths", "paths-ignore")
-                            else f"pull_request options: `{option}` narrows reachability")
+        problems.extend(
+            (
+                f"pull_request options: unlisted option `{option}`"
+                if option not in ("paths", "paths-ignore")
+                else f"pull_request options: `{option}` narrows reachability"
+            )
+            for option in sorted(set(on["pull_request"] or {}) - {"branches", "types"})
+        )
         # C2 — branches, and the activity set.
         if "branches" not in on["pull_request"]:
             problems.append("branches: key is absent")
@@ -264,14 +340,17 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
     allowed_job = {"runs-on", "timeout-minutes", "permissions", "steps", "name"}
     if is_canary or milestone == "M2":
         allowed_job |= M2_ADVISORY_EXEMPTION
-    for key in sorted(set(job) - allowed_job):
-        problems.append(f"job mapping: unlisted key `{key}`")
+    problems.extend(
+        f"job mapping: unlisted key `{key}`" for key in sorted(set(job) - allowed_job)
+    )
     if is_canary and job.get("continue-on-error") is not True:
         # REQUIRED-PRESENT and permanent here. Its failure mode is omission, and an absent key would
         # let the canary's failure fail the workflow run.
         problems.append("canary: job-scoped `continue-on-error` is absent")
     if job.get("permissions") != {"contents": "read"}:
-        problems.append(f"job permissions: expected `contents: read`, found {job.get('permissions')!r}")
+        problems.append(
+            f"job permissions: expected `contents: read`, found {job.get('permissions')!r}"
+        )
     if "if" in job:
         problems.append("job: `if:` is prohibited (a skipped job reports Success)")
     if not is_canary and milestone != "M2" and job.get("continue-on-error"):
@@ -281,31 +360,58 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
     if "defaults" in job:
         problems.append("job `defaults.run` is prohibited")
     if job.get("runs-on") != EXPECTED_RUNNER:
-        problems.append(f"job: expected `runs-on: {EXPECTED_RUNNER}`, found {job.get('runs-on')!r}")
+        problems.append(
+            f"job: expected `runs-on: {EXPECTED_RUNNER}`, found {job.get('runs-on')!r}"
+        )
     if job.get("timeout-minutes") != EXPECTED_TIMEOUT_MINUTES:
-        problems.append(f"job: expected `timeout-minutes: {EXPECTED_TIMEOUT_MINUTES}`, "
-                        f"found {job.get('timeout-minutes')!r}")
+        problems.append(
+            f"job: expected `timeout-minutes: {EXPECTED_TIMEOUT_MINUTES}`, "
+            f"found {job.get('timeout-minutes')!r}"
+        )
 
-    invocations = sum(1 for step in steps if ACTION_PIN.split("@")[0] in str(step.get("uses", "")))
+    invocations = sum(
+        1
+        for step in steps
+        if ACTION_PIN.split("@", maxsplit=1)[0] in str(step.get("uses", ""))
+    )
     if invocations != 1:
-        problems.append(f"steps: expected exactly one Trunk invocation, found {invocations}")
+        problems.append(
+            f"steps: expected exactly one Trunk invocation, found {invocations}"
+        )
 
     # C8 — the step sequence is an allowlist, in order.
     if names != EXPECTED_STEPS:
-        for expected in EXPECTED_STEPS:
-            if expected not in names:
-                problems.append(f"step sequence: `{expected}` is absent")
-        for actual in names:
-            if actual not in EXPECTED_STEPS:
-                problems.append(f"step sequence: unexpected step before `trunk`")
-        if sorted(filter(None, names)) == sorted(EXPECTED_STEPS) and names != EXPECTED_STEPS:
-            problems.append("step sequence: `guard-launcher-path` is not immediately before `trunk`")
+        problems.extend(
+            f"step sequence: `{expected}` is absent"
+            for expected in EXPECTED_STEPS
+            if expected not in names
+        )
+        problems.extend(
+            "step sequence: unexpected step before `trunk`"
+            for actual in names
+            if actual not in EXPECTED_STEPS
+        )
+        if (
+            sorted(filter(None, names)) == sorted(EXPECTED_STEPS)
+            and names != EXPECTED_STEPS
+        ):
+            problems.append(
+                "step sequence: `guard-launcher-path` is not immediately before `trunk`"
+            )
 
     for step in steps:
         label = step.get("name")
-        for key in sorted({"if", "continue-on-error", "shell", "working-directory", "env", "id"} & set(step)):
-            problems.append(f"step `{label}`: unlisted key `{key}`"
-                            if key == "id" else f"step `{label}`: `{key}:` is prohibited")
+        problems.extend(
+            (
+                f"step `{label}`: unlisted key `{key}`"
+                if key == "id"
+                else f"step `{label}`: `{key}:` is prohibited"
+            )
+            for key in sorted(
+                {"if", "continue-on-error", "shell", "working-directory", "env", "id"}
+                & set(step)
+            )
+        )
         body = step.get("run", "")
         if "GITHUB_ENV" in body:
             problems.append(f"step `{label}`: writes to $GITHUB_ENV")
@@ -314,10 +420,15 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
         # Only the C6 guard may NAME a launcher path; any other body mentioning one is planting it.
         # C6's guard inspects the tree once, so a body that creates a path is the hole the guard's
         # adjacency to the action exists to close, from inside a step the sequence allows.
-        if label != "guard-launcher-path" and any(path in body for path in C6_GUARDED_PATHS):
+        if label != "guard-launcher-path" and any(
+            path in body for path in C6_GUARDED_PATHS
+        ):
             problems.append(f"step `{label}`: creates a prohibited launcher path")
         frozen = EXPECTED_RUN_BODY_DIGESTS[entry].get(label)
-        if frozen is not None and hashlib.sha256(body.encode("utf-8")).hexdigest() != frozen:
+        if (
+            frozen is not None
+            and hashlib.sha256(body.encode("utf-8")).hexdigest() != frozen
+        ):
             problems.append(f"step `{label}`: run body digest mismatch")
 
     # C5 — no `env:` at workflow, job OR step scope.
@@ -329,8 +440,10 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
     # C8 — checkout inputs are allowlisted too, with two REQUIRED-PRESENT members.
     if "checkout" in names:
         checkout = _step(workflow, "checkout").get("with", {})
-        for key in sorted(set(checkout) - {"fetch-depth", "lfs", "persist-credentials"}):
-            problems.append(f"checkout inputs: unlisted input `{key}`")
+        for key in sorted(
+            set(checkout) - {"fetch-depth", "lfs", "persist-credentials"}
+        ):
+            problems.append(f"checkout inputs: unlisted input `{key}`")  # noqa: PERF401
         if "lfs" not in checkout:
             problems.append("checkout inputs: `lfs` is absent")
         elif checkout["lfs"] is not True:
@@ -344,16 +457,23 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
     if "trunk" in names:
         trunk = _step(workflow, "trunk")
         if trunk.get("uses") != ACTION_PIN:
-            problems.append("action pin: not pinned to the expected SHA"
-                            if "@" in str(trunk.get("uses")) and len(str(trunk.get("uses")).split("@")[-1]) == 40
-                            else "action pin: `trunk-io/trunk-action` is not pinned by SHA")
+            problems.append(
+                "action pin: not pinned to the expected SHA"
+                if "@" in str(trunk.get("uses"))
+                and len(str(trunk.get("uses")).split("@")[-1]) == 40
+                else "action pin: `trunk-io/trunk-action` is not pinned by SHA"
+            )
         used = trunk.get("with", {})
-        for key in sorted(set(used) - {"arguments", "save-annotations", "cache", "cache-key"}):
-            problems.append(f"action inputs: unlisted input `{key}`")
+        for key in sorted(
+            set(used) - {"arguments", "save-annotations", "cache", "cache-key"}
+        ):
+            problems.append(f"action inputs: unlisted input `{key}`")  # noqa: PERF401
         if "arguments" not in used:
             problems.append("action inputs: `arguments` is absent")
         elif used["arguments"] != ARGUMENTS_LITERAL:
-            problems.append("action inputs: `arguments` does not equal the declared literal")
+            problems.append(
+                "action inputs: `arguments` does not equal the declared literal"
+            )
         if "save-annotations" not in used:
             problems.append("action inputs: `save-annotations` is absent")
         elif used["save-annotations"] is not True:
@@ -362,9 +482,11 @@ def contract_problems(workflow: dict, *, milestone: str = "M2", entry: str = "re
     # C6 — every guarded path is named in the guard that runs last before the action.
     if "guard-launcher-path" in names:
         guard = _step(workflow, "guard-launcher-path").get("run", "")
-        for path in C6_GUARDED_PATHS:
-            if path not in guard:
-                problems.append(f"C6 guard: does not cover {path}")
+        problems.extend(
+            f"C6 guard: does not cover {path}"
+            for path in C6_GUARDED_PATHS
+            if path not in guard
+        )
 
     return problems
 
@@ -417,9 +539,15 @@ class Cell6a_TheResolverIsPinnedBeforeItExecutes(unittest.TestCase):
 
     def test_the_digest_guard_precedes_the_step_that_executes_the_resolver(self):
         names = [step.get("name") for step in _steps(self.workflow)]
-        executor = next(step for step in _steps(self.workflow)
-                        if "resolve-trunk-range.sh" in step.get("run", "") and step["name"] != "guard-resolver-digest")
-        self.assertLess(names.index("guard-resolver-digest"), names.index(executor["name"]))
+        executor = next(
+            step
+            for step in _steps(self.workflow)
+            if "resolve-trunk-range.sh" in step.get("run", "")
+            and step["name"] != "guard-resolver-digest"
+        )
+        self.assertLess(
+            names.index("guard-resolver-digest"), names.index(executor["name"])
+        )
 
     def test_the_c6_guard_is_last_before_the_action(self):
         names = [step.get("name") for step in _steps(self.workflow)]
@@ -449,14 +577,18 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
                     raise AssertionError(f"{path}: job {job_id} has a non-string name")
                 if explicit and ("${{" in explicit):
                     # FAIL CLOSED: a static census cannot resolve an expression-valued name.
-                    raise AssertionError(f"{path}: job {job_id} has an expression-valued name")
+                    raise AssertionError(
+                        f"{path}: job {job_id} has an expression-valued name"
+                    )
                 if (explicit or job_id) == EXPECTED_CONTEXT:
                     found.append(f"{path}:{job_id}")
         return found
 
     def _tree(self) -> dict[str, dict]:
-        return {p.name: yaml.safe_load(p.read_text(encoding="utf-8"))
-                for p in sorted((REPO / ".github/workflows").glob("*.yml"))}
+        return {
+            p.name: yaml.safe_load(p.read_text(encoding="utf-8"))
+            for p in sorted((REPO / ".github/workflows").glob("*.yml"))
+        }
 
     def test_exactly_one_producer_repo_wide(self):
         self.assertEqual(["trunk-check.yml:trunk-check"], self._producers(self._tree()))
@@ -487,7 +619,9 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
         self.assertNotEqual(360, job["timeout-minutes"])
 
     def test_registry_pins_the_same_action_as_the_workflow(self):
-        self.assertEqual(ACTION_PIN.split("@")[1], self.registry["action_pin"].split("@")[1])
+        self.assertEqual(
+            ACTION_PIN.split("@")[1], self.registry["action_pin"].split("@")[1]
+        )
         self.assertEqual(ACTION_PIN, _step(self.workflow, "trunk")["uses"])
 
     def test_registry_entry_paths_match_the_shipped_workflow(self):
@@ -499,7 +633,9 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
     def test_resolve_is_entry_agnostic_and_resolved_once(self):
         """The signature IS the enforcement: with no entry id reaching resolve(), a per-entry private
         resolver cannot be written behind it. Two weaker encodings failed here."""
-        implementation = self.registry["families"]["target_set_resolution"]["implementation"]
+        implementation = self.registry["families"]["target_set_resolution"][
+            "implementation"
+        ]
         self.assertTrue(implementation["entry_agnostic"])
         self.assertTrue(implementation["resolved_once_before_entry_selection"])
         self.assertNotIn("entry", implementation["function"].split("(")[1])
@@ -509,22 +645,45 @@ class Cell15_TargetSetResolution(unittest.TestCase):
     """resolve() = include MINUS exclude, aliases expanded, patterns FAIL CLOSED."""
 
     def test_alias_and_prefix_are_expanded(self):
-        self.assertEqual({"main", "alpha"}, _resolve_ref_name(
-            {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []}, "main"))
+        self.assertEqual(
+            {"main", "alpha"},
+            _resolve_ref_name(
+                {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []},
+                "main",
+            ),
+        )
 
     def test_exclude_vetoes(self):
         """An exclude-blind resolver measures a set STRICTLY LARGER than the one in force."""
-        self.assertEqual({"main"}, _resolve_ref_name(
-            {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": ["refs/heads/alpha"]}, "main"))
+        self.assertEqual(
+            {"main"},
+            _resolve_ref_name(
+                {
+                    "include": ["~DEFAULT_BRANCH", "refs/heads/alpha"],
+                    "exclude": ["refs/heads/alpha"],
+                },
+                "main",
+            ),
+        )
 
     def test_a_same_cardinality_default_branch_retarget_is_visible(self):
         """No string in the repository changes, which is why a literal comparison cannot see it."""
-        self.assertEqual({"trunk", "alpha"}, _resolve_ref_name(
-            {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []}, "trunk"))
+        self.assertEqual(
+            {"trunk", "alpha"},
+            _resolve_ref_name(
+                {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []},
+                "trunk",
+            ),
+        )
 
     def test_patterns_and_all_fail_closed_on_both_sides(self):
         for side in ("include", "exclude"):
-            for payload in ("~ALL", "refs/heads/a*", "refs/heads/alph?", "refs/heads/alph[a-z]"):
+            for payload in (
+                "~ALL",
+                "refs/heads/a*",
+                "refs/heads/mai?",
+                "refs/heads/mai[a-z]",
+            ):
                 with self.subTest(side=side, payload=payload):
                     ref_name = {"include": ["refs/heads/main"], "exclude": []}
                     ref_name[side] = ref_name[side] + [payload]
@@ -538,7 +697,8 @@ class Cell15_TargetSetResolution(unittest.TestCase):
 
 class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
     """A membership oracle over the configuration, and NOTHING MORE — a static parse cannot show that
-    shellcheck actually diagnosed anything. Execution coverage is out of scope (COREDEV-2787)."""
+    shellcheck actually diagnosed anything. Execution coverage is out of scope (COREDEV-2787).
+    """
 
     def setUp(self):
         self.config = TRUNK_CONFIG.read_text(encoding="utf-8")
@@ -551,7 +711,9 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
     def test_no_unlisted_linter_appears(self):
         self.assertEqual(set(), self.names - EXPECTED_LINTERS - {EXCLUDED_LINTER})
 
-    def test_the_declared_exclusion_is_configured_but_filtered_from_the_required_job(self):
+    def test_the_declared_exclusion_is_configured_but_filtered_from_the_required_job(
+        self,
+    ):
         self.assertIn(EXCLUDED_LINTER, self.names)
         self.assertEqual(
             ARGUMENTS_LITERAL,
@@ -561,21 +723,72 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
 
     def test_a_reduced_configuration_is_detected(self):
         """The revision-5 wording — "the configured set minus the exclusions" — could not do this."""
-        reduced = [entry for entry in self.enabled if not entry.startswith("shellcheck")]
-        self.assertNotEqual(set(), EXPECTED_LINTERS - {e.split("@")[0] for e in reduced})
+        reduced = [
+            entry for entry in self.enabled if not entry.startswith("shellcheck")
+        ]
+        self.assertNotEqual(
+            set(), EXPECTED_LINTERS - {e.split("@")[0] for e in reduced}
+        )
 
     def test_a_version_only_bump_does_not_move_the_normalised_digest(self):
         bumped = self.config.replace("zizmor@1.29.0", "zizmor@9.99.9")
-        self.assertNotEqual(self.config, bumped, "fixture must actually change the file")
-        self.assertEqual(_normalised_lint_block(self.config), _normalised_lint_block(bumped))
+        self.assertNotEqual(
+            self.config, bumped, "fixture must actually change the file"
+        )
+        self.assertEqual(
+            _normalised_lint_block(self.config), _normalised_lint_block(bumped)
+        )
+
+    def test_the_ignore_list_is_frozen(self):
+        """Cell 4 must fail if THE EXCLUSION LIST GROWS, and nothing here did.
+
+        A `lint.ignore` entry silences real linters on real paths, so a silent widening is exactly the
+        reduced-configuration hazard this cell exists for — and the frozen NAMES do not see it,
+        because every linter is still enabled. Frozen as literals: an oracle regenerated from the
+        config under test cannot detect that config changing.
+
+        Widening this is a reviewed change: update the literal in the same commit, with the reason.
+        """
+        ignore = yaml.safe_load(self.config)["lint"]["ignore"]
+        actual = {
+            (tuple(sorted(rule["linters"])), tuple(sorted(rule["paths"])))
+            for rule in ignore
+        }
+        expected = {
+            (("trufflehog",), ("mcp/review-synthesizer/tests/**", "scripts/tests/**")),
+            (("ALL",), (".claude/**", ".trunk/**")),
+            # COREDEV-2780 M5a, maintainer-approved 2026-09-02: mypy runs with no configuration in
+            # this repo, and bandit's B603/B607 flag the partial-path subprocess calls these suites
+            # use deliberately to EXECUTE shipped scripts rather than re-implement them.
+            (
+                ("bandit", "mypy"),
+                ("mcp/review-synthesizer/tests/**", "scripts/tests/**"),
+            ),
+            # COREDEV-2780: a plan whose bytes are bound to a review verdict cannot be reflowed —
+            # a formatter would invalidate a genuine approval.
+            (("markdownlint", "prettier"), ("docs/planning/*_PLAN.md",)),
+        }
+        self.assertEqual(expected, actual)
+
+    def test_the_gated_plan_exemption_is_narrow(self):
+        """It must not silence everything, and must not reach beyond gated plans."""
+        ignore = yaml.safe_load(self.config)["lint"]["ignore"]
+        rule = next(r for r in ignore if "docs/planning/*_PLAN.md" in r["paths"])
+        self.assertNotIn(
+            "ALL", rule["linters"], "only the two linters that REFLOW prose"
+        )
+        self.assertEqual(["docs/planning/*_PLAN.md"], rule["paths"])
 
     def test_a_command_override_does_move_the_normalised_digest(self):
         """Names alone were not enough: a PR can keep all 19 and disable every linter by overriding
-        `commands[].run` to `exit 0`, widening `success_codes`, or adding a global `ignore`."""
+        `commands[].run` to `exit 0`, widening `success_codes`, or adding a global `ignore`.
+        """
         block = yaml.safe_load(self.config)
         block["lint"]["definitions"][0]["commands"][0]["run"] = "exit 0"
         overridden = yaml.safe_dump(block)
-        self.assertNotEqual(_normalised_lint_block(self.config), _normalised_lint_block(overridden))
+        self.assertNotEqual(
+            _normalised_lint_block(self.config), _normalised_lint_block(overridden)
+        )
 
 
 class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
@@ -605,12 +818,26 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         for obligation in self.registry["obligations"]:
             for case in obligation.get("cases", []):
                 seen.append(case["id"])
-                self.assertTrue(case["id"].startswith(obligation["id"] + "/"), case["id"])
+                self.assertTrue(
+                    case["id"].startswith(obligation["id"] + "/"), case["id"]
+                )
         self.assertEqual(len(seen), len(set(seen)))
 
     def test_the_registry_covers_every_clause_the_workflow_is_asserted_against(self):
         clauses = {obligation["clause"] for obligation in self.registry["obligations"]}
-        for clause in ("C0", "C1", "C2", "C3", "C4", "C5", "C6", "C6a", "C7", "C8", "C9"):
+        for clause in (
+            "C0",
+            "C1",
+            "C2",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C6a",
+            "C7",
+            "C8",
+            "C9",
+        ):
             self.assertIn(clause, clauses)
 
     # ---- the generated mutants -------------------------------------------------------------------
@@ -619,212 +846,427 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
     # silently passing.
     def _yaml_mutants(self):
         def at_root(key, value):
-            def apply(w): w[key] = value
+            def apply(w):
+                w[key] = value
+
             return apply
 
         def at_job(key, value):
-            def apply(w): _job(w)[key] = value
+            def apply(w):
+                _job(w)[key] = value
+
             return apply
 
         def drop_job(key):
-            def apply(w): _job(w).pop(key, None)
+            def apply(w):
+                _job(w).pop(key, None)
+
             return apply
 
         def at_event(key, value):
-            def apply(w): _on(w)["pull_request"][key] = value
+            def apply(w):
+                _on(w)["pull_request"][key] = value
+
             return apply
 
         def at_with(step, key, value):
-            def apply(w): _step(w, step).setdefault("with", {})[key] = value
+            def apply(w):
+                _step(w, step).setdefault("with", {})[key] = value
+
             return apply
 
         def drop_with(step, key):
-            def apply(w): _step(w, step)["with"].pop(key, None)
+            def apply(w):
+                _step(w, step)["with"].pop(key, None)
+
             return apply
 
         return [
-            ("C0.permissions-pinned-at-root/write-all", at_root("permissions", "write-all"),
-             "root permissions: expected `contents: read`, found 'write-all'"),
-            ("C0.permissions-pinned-at-root/absent", lambda w: w.pop("permissions"),
-             "root permissions: expected `contents: read`, found None"),
-            ("C0.no-concurrency/workflow", at_root("concurrency", {"group": "x"}),
-             "workflow-level `concurrency` is prohibited"),
-            ("C0.no-concurrency/job", at_job("concurrency", {"group": "x"}),
-             "job-level `concurrency` is prohibited"),
-            ("C0.root-mapping-allowlist/arbitrary-key", at_root("schedule", []),
-             "root mapping: unlisted key `schedule`"),
-            ("C1.single-event/add-workflow-dispatch",
-             lambda w: _on(w).update({"workflow_dispatch": {}}),
-             "event set: unlisted event `workflow_dispatch`"),
-            ("C1.single-event/arbitrary-event", lambda w: _on(w).update({"schedule": []}),
-             "event set: unlisted event `schedule`"),
-            ("C7.no-merge-group/present", lambda w: _on(w).update({"merge_group": {}}),
-             "event set: `merge_group` is prohibited (check_mode=none is a false success)"),
-            ("C1.event-option-allowlist/paths", at_event("paths", ["**.py"]),
-             "pull_request options: `paths` narrows reachability"),
-            ("C1.event-option-allowlist/arbitrary-option", at_event("branches-ignore", ["x"]),
-             "pull_request options: unlisted option `branches-ignore`"),
-            ("C2.branches-equal-resolved-target-set/absent",
-             lambda w: _on(w)["pull_request"].pop("branches"), "branches: key is absent"),
-            ("C2.types-required/reduced-to-default",
-             at_event("types", ["opened", "synchronize", "reopened"]),
-             "types: `edited` is missing from the activity set"),
-            ("C2.types-required/removed", lambda w: _on(w)["pull_request"].pop("types"),
-             "types: key is absent"),
-            ("C3.job-mapping-allowlist/arbitrary-key", at_job("container", "ubuntu:24.04"),
-             "job mapping: unlisted key `container`"),
-            ("C3.job-mapping-allowlist/needs", at_job("needs", ["support"]),
-             "job mapping: unlisted key `needs`"),
-            ("C3.job-mapping-allowlist/strategy-matrix", at_job("strategy", {"matrix": {"n": [1, 2]}}),
-             "job mapping: unlisted key `strategy`"),
-            ("C3.permissions-pinned-at-job/write-all", at_job("permissions", "write-all"),
-             "job permissions: expected `contents: read`, found 'write-all'"),
-            ("C3.permissions-pinned-at-job/absent", drop_job("permissions"),
-             "job permissions: expected `contents: read`, found None"),
-            ("C3.nothing-skips-or-masks/job-if", at_job("if", "false"),
-             "job: `if:` is prohibited (a skipped job reports Success)"),
-            ("C3.no-defaults-run/workflow", at_root("defaults", {"run": {"shell": "sh"}}),
-             "workflow `defaults.run` is prohibited"),
-            ("C3.no-defaults-run/job", at_job("defaults", {"run": {"shell": "sh"}}),
-             "job `defaults.run` is prohibited"),
-            ("C3.exactly-one-trunk-invocation/two",
-             lambda w: _steps(w).append(copy.deepcopy(_step(w, "trunk"))),
-             "steps: expected exactly one Trunk invocation, found 2"),
-            ("C5.no-env-any-scope/workflow", at_root("env", {"TRUNK_PATH": "/bin/true"}),
-             "workflow-level `env:` is prohibited"),
-            ("C5.no-env-any-scope/job", at_job("env", {"TRUNK_PATH": "/bin/true"}),
-             "job-level `env:` is prohibited"),
-            ("C5.no-env-any-scope/step",
-             lambda w: _step(w, "trunk").update({"env": {"TRUNK_PATH": "/bin/true"}}),
-             "step `trunk`: `env:` is prohibited"),
-            ("C4.with-inputs-allowlist/trunk-path", at_with("trunk", "trunk-path", "/bin/true"),
-             "action inputs: unlisted input `trunk-path`"),
-            ("C4.with-inputs-allowlist/post-init", at_with("trunk", "post-init", "echo hi"),
-             "action inputs: unlisted input `post-init`"),
-            ("C4.with-inputs-allowlist/arbitrary-input", at_with("trunk", "check-mode", "popular"),
-             "action inputs: unlisted input `check-mode`"),
-            ("C4.arguments-required-literal/absent", drop_with("trunk", "arguments"),
-             "action inputs: `arguments` is absent"),
-            ("C4.arguments-required-literal/appended",
-             at_with("trunk", "arguments", ARGUMENTS_LITERAL + " --fix"),
-             "action inputs: `arguments` does not equal the declared literal"),
-            ("C4.save-annotations-required/absent", drop_with("trunk", "save-annotations"),
-             "action inputs: `save-annotations` is absent"),
-            ("C4.save-annotations-required/false", at_with("trunk", "save-annotations", False),
-             "action inputs: `save-annotations` must be true"),
-            ("C8.checkout-inputs-allowlist/sparse-checkout",
-             at_with("checkout", "sparse-checkout", "scripts/"),
-             "checkout inputs: unlisted input `sparse-checkout`"),
-            ("C8.checkout-inputs-allowlist/ref", at_with("checkout", "ref", "main"),
-             "checkout inputs: unlisted input `ref`"),
-            ("C8.checkout-inputs-allowlist/filter", at_with("checkout", "filter", "blob:none"),
-             "checkout inputs: unlisted input `filter`"),
-            ("C8.checkout-inputs-allowlist/lfs-removed", drop_with("checkout", "lfs"),
-             "checkout inputs: `lfs` is absent"),
-            ("C8.checkout-inputs-allowlist/lfs-false", at_with("checkout", "lfs", False),
-             "checkout inputs: `lfs` must be true"),
-            ("C8.checkout-inputs-allowlist/persist-credentials-removed",
-             drop_with("checkout", "persist-credentials"),
-             "checkout inputs: `persist-credentials` is absent"),
-            ("C8.checkout-inputs-allowlist/persist-credentials-true",
-             at_with("checkout", "persist-credentials", True),
-             "checkout inputs: `persist-credentials` must be false"),
-            ("C9.action-pinned-by-sha/tag",
-             lambda w: _step(w, "trunk").update({"uses": "trunk-io/trunk-action@v2.0.0"}),
-             "action pin: `trunk-io/trunk-action` is not pinned by SHA"),
-            ("C9.action-pinned-by-sha/different-sha",
-             lambda w: _step(w, "trunk").update({"uses": "trunk-io/trunk-action@" + "0" * 40}),
-             "action pin: not pinned to the expected SHA"),
-            ("C8.step-sequence-allowlist/delete-guard-launcher-path",
-             lambda w: _steps(w).remove(_step(w, "guard-launcher-path")),
-             "step sequence: `guard-launcher-path` is absent"),
-            ("C8.step-sequence-allowlist/delete-guard-empty-diff",
-             lambda w: _steps(w).remove(_step(w, "guard-empty-diff")),
-             "step sequence: `guard-empty-diff` is absent"),
-            ("C8.step-sequence-allowlist/delete-guard-resolver-digest",
-             lambda w: _steps(w).remove(_step(w, "guard-resolver-digest")),
-             "step sequence: `guard-resolver-digest` is absent"),
-            ("C8.run-bodies-frozen/github-env-trunk-path",
-             lambda w: _step(w, "guard-empty-diff").update(
-                 {"run": _step(w, "guard-empty-diff")["run"] + '\necho X >> "$GITHUB_ENV"'}),
-             "step `guard-empty-diff`: writes to $GITHUB_ENV"),
-            ("C8.run-bodies-frozen/github-path",
-             lambda w: _step(w, "guard-empty-diff").update(
-                 {"run": _step(w, "guard-empty-diff")["run"] + '\necho X >> "$GITHUB_PATH"'}),
-             "step `guard-empty-diff`: writes to $GITHUB_PATH"),
-            ("C8.run-bodies-frozen/changed-shell",
-             lambda w: _step(w, "guard-empty-diff").update({"shell": "sh"}),
-             "step `guard-empty-diff`: `shell:` is prohibited"),
-            ("C8.run-bodies-frozen/changed-working-directory",
-             lambda w: _step(w, "guard-empty-diff").update({"working-directory": "/tmp"}),
-             "step `guard-empty-diff`: `working-directory:` is prohibited"),
-            ("C8.step-sequence-allowlist/arbitrary-step-key",
-             lambda w: _step(w, "guard-empty-diff").update({"id": "x"}),
-             "step `guard-empty-diff`: unlisted key `id`"),
-            ("C3.nothing-skips-or-masks/step-continue-on-error",
-             lambda w: _step(w, "trunk").update({"continue-on-error": True}),
-             "step `trunk`: `continue-on-error:` is prohibited"),
+            (
+                "C0.permissions-pinned-at-root/write-all",
+                at_root("permissions", "write-all"),
+                "root permissions: expected `contents: read`, found 'write-all'",
+            ),
+            (
+                "C0.permissions-pinned-at-root/absent",
+                lambda w: w.pop("permissions"),
+                "root permissions: expected `contents: read`, found None",
+            ),
+            (
+                "C0.no-concurrency/workflow",
+                at_root("concurrency", {"group": "x"}),
+                "workflow-level `concurrency` is prohibited",
+            ),
+            (
+                "C0.no-concurrency/job",
+                at_job("concurrency", {"group": "x"}),
+                "job-level `concurrency` is prohibited",
+            ),
+            (
+                "C0.root-mapping-allowlist/arbitrary-key",
+                at_root("schedule", []),
+                "root mapping: unlisted key `schedule`",
+            ),
+            (
+                "C1.single-event/add-workflow-dispatch",
+                lambda w: _on(w).update({"workflow_dispatch": {}}),
+                "event set: unlisted event `workflow_dispatch`",
+            ),
+            (
+                "C1.single-event/arbitrary-event",
+                lambda w: _on(w).update({"schedule": []}),
+                "event set: unlisted event `schedule`",
+            ),
+            (
+                "C7.no-merge-group/present",
+                lambda w: _on(w).update({"merge_group": {}}),
+                "event set: `merge_group` is prohibited (check_mode=none is a false success)",
+            ),
+            (
+                "C1.event-option-allowlist/paths",
+                at_event("paths", ["**.py"]),
+                "pull_request options: `paths` narrows reachability",
+            ),
+            (
+                "C1.event-option-allowlist/arbitrary-option",
+                at_event("branches-ignore", ["x"]),
+                "pull_request options: unlisted option `branches-ignore`",
+            ),
+            (
+                "C2.branches-equal-resolved-target-set/absent",
+                lambda w: _on(w)["pull_request"].pop("branches"),
+                "branches: key is absent",
+            ),
+            (
+                "C2.types-required/reduced-to-default",
+                at_event("types", ["opened", "synchronize", "reopened"]),
+                "types: `edited` is missing from the activity set",
+            ),
+            (
+                "C2.types-required/removed",
+                lambda w: _on(w)["pull_request"].pop("types"),
+                "types: key is absent",
+            ),
+            (
+                "C3.job-mapping-allowlist/arbitrary-key",
+                at_job("container", "ubuntu:24.04"),
+                "job mapping: unlisted key `container`",
+            ),
+            (
+                "C3.job-mapping-allowlist/needs",
+                at_job("needs", ["support"]),
+                "job mapping: unlisted key `needs`",
+            ),
+            (
+                "C3.job-mapping-allowlist/strategy-matrix",
+                at_job("strategy", {"matrix": {"n": [1, 2]}}),
+                "job mapping: unlisted key `strategy`",
+            ),
+            (
+                "C3.permissions-pinned-at-job/write-all",
+                at_job("permissions", "write-all"),
+                "job permissions: expected `contents: read`, found 'write-all'",
+            ),
+            (
+                "C3.permissions-pinned-at-job/absent",
+                drop_job("permissions"),
+                "job permissions: expected `contents: read`, found None",
+            ),
+            (
+                "C3.nothing-skips-or-masks/job-if",
+                at_job("if", "false"),
+                "job: `if:` is prohibited (a skipped job reports Success)",
+            ),
+            (
+                "C3.no-defaults-run/workflow",
+                at_root("defaults", {"run": {"shell": "sh"}}),
+                "workflow `defaults.run` is prohibited",
+            ),
+            (
+                "C3.no-defaults-run/job",
+                at_job("defaults", {"run": {"shell": "sh"}}),
+                "job `defaults.run` is prohibited",
+            ),
+            (
+                "C3.exactly-one-trunk-invocation/two",
+                lambda w: _steps(w).append(copy.deepcopy(_step(w, "trunk"))),
+                "steps: expected exactly one Trunk invocation, found 2",
+            ),
+            (
+                "C5.no-env-any-scope/workflow",
+                at_root("env", {"TRUNK_PATH": "/bin/true"}),
+                "workflow-level `env:` is prohibited",
+            ),
+            (
+                "C5.no-env-any-scope/job",
+                at_job("env", {"TRUNK_PATH": "/bin/true"}),
+                "job-level `env:` is prohibited",
+            ),
+            (
+                "C5.no-env-any-scope/step",
+                lambda w: _step(w, "trunk").update(
+                    {"env": {"TRUNK_PATH": "/bin/true"}}
+                ),
+                "step `trunk`: `env:` is prohibited",
+            ),
+            (
+                "C4.with-inputs-allowlist/trunk-path",
+                at_with("trunk", "trunk-path", "/bin/true"),
+                "action inputs: unlisted input `trunk-path`",
+            ),
+            (
+                "C4.with-inputs-allowlist/post-init",
+                at_with("trunk", "post-init", "echo hi"),
+                "action inputs: unlisted input `post-init`",
+            ),
+            (
+                "C4.with-inputs-allowlist/arbitrary-input",
+                at_with("trunk", "check-mode", "popular"),
+                "action inputs: unlisted input `check-mode`",
+            ),
+            (
+                "C4.arguments-required-literal/absent",
+                drop_with("trunk", "arguments"),
+                "action inputs: `arguments` is absent",
+            ),
+            (
+                "C4.arguments-required-literal/appended",
+                at_with("trunk", "arguments", ARGUMENTS_LITERAL + " --fix"),
+                "action inputs: `arguments` does not equal the declared literal",
+            ),
+            (
+                "C4.save-annotations-required/absent",
+                drop_with("trunk", "save-annotations"),
+                "action inputs: `save-annotations` is absent",
+            ),
+            (
+                "C4.save-annotations-required/false",
+                at_with("trunk", "save-annotations", False),
+                "action inputs: `save-annotations` must be true",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/sparse-checkout",
+                at_with("checkout", "sparse-checkout", "scripts/"),
+                "checkout inputs: unlisted input `sparse-checkout`",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/ref",
+                at_with("checkout", "ref", "main"),
+                "checkout inputs: unlisted input `ref`",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/filter",
+                at_with("checkout", "filter", "blob:none"),
+                "checkout inputs: unlisted input `filter`",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/lfs-removed",
+                drop_with("checkout", "lfs"),
+                "checkout inputs: `lfs` is absent",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/lfs-false",
+                at_with("checkout", "lfs", False),
+                "checkout inputs: `lfs` must be true",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/persist-credentials-removed",
+                drop_with("checkout", "persist-credentials"),
+                "checkout inputs: `persist-credentials` is absent",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/persist-credentials-true",
+                at_with("checkout", "persist-credentials", True),
+                "checkout inputs: `persist-credentials` must be false",
+            ),
+            (
+                "C9.action-pinned-by-sha/tag",
+                lambda w: _step(w, "trunk").update(
+                    {"uses": "trunk-io/trunk-action@v2.0.0"}
+                ),
+                "action pin: `trunk-io/trunk-action` is not pinned by SHA",
+            ),
+            (
+                "C9.action-pinned-by-sha/different-sha",
+                lambda w: _step(w, "trunk").update(
+                    {"uses": "trunk-io/trunk-action@" + "0" * 40}
+                ),
+                "action pin: not pinned to the expected SHA",
+            ),
+            (
+                "C8.step-sequence-allowlist/delete-guard-launcher-path",
+                lambda w: _steps(w).remove(_step(w, "guard-launcher-path")),
+                "step sequence: `guard-launcher-path` is absent",
+            ),
+            (
+                "C8.step-sequence-allowlist/delete-guard-empty-diff",
+                lambda w: _steps(w).remove(_step(w, "guard-empty-diff")),
+                "step sequence: `guard-empty-diff` is absent",
+            ),
+            (
+                "C8.step-sequence-allowlist/delete-guard-resolver-digest",
+                lambda w: _steps(w).remove(_step(w, "guard-resolver-digest")),
+                "step sequence: `guard-resolver-digest` is absent",
+            ),
+            (
+                "C8.run-bodies-frozen/github-env-trunk-path",
+                lambda w: _step(w, "guard-empty-diff").update(
+                    {
+                        "run": _step(w, "guard-empty-diff")["run"]
+                        + '\necho X >> "$GITHUB_ENV"'
+                    }
+                ),
+                "step `guard-empty-diff`: writes to $GITHUB_ENV",
+            ),
+            (
+                "C8.run-bodies-frozen/github-path",
+                lambda w: _step(w, "guard-empty-diff").update(
+                    {
+                        "run": _step(w, "guard-empty-diff")["run"]
+                        + '\necho X >> "$GITHUB_PATH"'
+                    }
+                ),
+                "step `guard-empty-diff`: writes to $GITHUB_PATH",
+            ),
+            (
+                "C8.run-bodies-frozen/changed-shell",
+                lambda w: _step(w, "guard-empty-diff").update({"shell": "sh"}),
+                "step `guard-empty-diff`: `shell:` is prohibited",
+            ),
+            (
+                "C8.run-bodies-frozen/changed-working-directory",
+                lambda w: _step(w, "guard-empty-diff").update(
+                    {"working-directory": "/tmp"}
+                ),
+                "step `guard-empty-diff`: `working-directory:` is prohibited",
+            ),
+            (
+                "C8.step-sequence-allowlist/arbitrary-step-key",
+                lambda w: _step(w, "guard-empty-diff").update({"id": "x"}),
+                "step `guard-empty-diff`: unlisted key `id`",
+            ),
+            (
+                "C3.nothing-skips-or-masks/step-continue-on-error",
+                lambda w: _step(w, "trunk").update({"continue-on-error": True}),
+                "step `trunk`: `continue-on-error:` is prohibited",
+            ),
             # ---- the sixteen this cell's own coverage check found missing -------------------------
-            ("C0.permissions-pinned-at-root/widened-scope",
-             at_root("permissions", {"contents": "read", "checks": "write"}),
-             "root permissions: expected `contents: read`, found {'contents': 'read', 'checks': 'write'}"),
-            ("C3.permissions-pinned-at-job/widened-scope",
-             at_job("permissions", {"contents": "read", "checks": "write"}),
-             "job permissions: expected `contents: read`, found {'contents': 'read', 'checks': 'write'}"),
-            ("C1.single-event/add-push",
-             lambda w: _on(w).update({"push": {"branches": ["main"]}}),
-             "event set: unlisted event `push`"),
-            ("C1.single-event/remove-pull-request", lambda w: _on(w).pop("pull_request"),
-             "event set: `pull_request` is absent"),
-            ("C1.event-option-allowlist/paths-ignore", at_event("paths-ignore", ["docs/**"]),
-             "pull_request options: `paths-ignore` narrows reachability"),
+            (
+                "C0.permissions-pinned-at-root/widened-scope",
+                at_root("permissions", {"contents": "read", "checks": "write"}),
+                "root permissions: expected `contents: read`, found {'contents': 'read', 'checks': 'write'}",
+            ),
+            (
+                "C3.permissions-pinned-at-job/widened-scope",
+                at_job("permissions", {"contents": "read", "checks": "write"}),
+                "job permissions: expected `contents: read`, found {'contents': 'read', 'checks': 'write'}",
+            ),
+            (
+                "C1.single-event/add-push",
+                lambda w: _on(w).update({"push": {"branches": ["main"]}}),
+                "event set: unlisted event `push`",
+            ),
+            (
+                "C1.single-event/remove-pull-request",
+                lambda w: _on(w).pop("pull_request"),
+                "event set: `pull_request` is absent",
+            ),
+            (
+                "C1.event-option-allowlist/paths-ignore",
+                at_event("paths-ignore", ["docs/**"]),
+                "pull_request options: `paths-ignore` narrows reachability",
+            ),
             # Only a violation once M2's advisory exemption lapses at M3 — which is the point of
             # writing the case at M2 and ENABLING it at M3.
-            ("C3.nothing-skips-or-masks/job-continue-on-error", lambda w: None,
-             "job: `continue-on-error:` is prohibited", "M3"),
-            ("C3.exactly-one-trunk-invocation/zero",
-             lambda w: _steps(w).remove(_step(w, "trunk")),
-             "steps: expected exactly one Trunk invocation, found 0"),
-            ("C8.step-sequence-allowlist/extra-step",
-             lambda w: _steps(w).insert(4, {"name": "extra", "run": "echo hi"}),
-             "step sequence: unexpected step before `trunk`"),
-            ("C8.step-sequence-allowlist/guard-moved",
-             lambda w: _steps(w).insert(2, _steps(w).pop(3)),
-             "step sequence: `guard-launcher-path` is not immediately before `trunk`"),
-            ("C8.step-sequence-allowlist/delete-checkout",
-             lambda w: _steps(w).remove(_step(w, "checkout")),
-             "step sequence: `checkout` is absent"),
-            ("C8.step-sequence-allowlist/delete-trunk",
-             lambda w: _steps(w).remove(_step(w, "trunk")),
-             "step sequence: `trunk` is absent"),
-            ("C8.run-bodies-frozen/github-env-bash-env",
-             lambda w: _step(w, "guard-empty-diff").update(
-                 {"run": _step(w, "guard-empty-diff")["run"] + '\necho BASH_ENV=/tmp/x >> "$GITHUB_ENV"'}),
-             "step `guard-empty-diff`: writes to $GITHUB_ENV"),
-            ("C8.run-bodies-frozen/creates-c6-path",
-             lambda w: _step(w, "guard-empty-diff").update(
-                 {"run": _step(w, "guard-empty-diff")["run"] + "\ninstall -D /bin/true tools/trunk"}),
-             "step `guard-empty-diff`: creates a prohibited launcher path"),
-            ("C8.checkout-inputs-allowlist/repository", at_with("checkout", "repository", "other/repo"),
-             "checkout inputs: unlisted input `repository`"),
-            ("C8.checkout-inputs-allowlist/path", at_with("checkout", "path", "sub"),
-             "checkout inputs: unlisted input `path`"),
-            ("C8.checkout-inputs-allowlist/arbitrary-input", at_with("checkout", "submodules", True),
-             "checkout inputs: unlisted input `submodules`"),
+            (
+                "C3.nothing-skips-or-masks/job-continue-on-error",
+                lambda w: None,
+                "job: `continue-on-error:` is prohibited",
+                "M3",
+            ),
+            (
+                "C3.exactly-one-trunk-invocation/zero",
+                lambda w: _steps(w).remove(_step(w, "trunk")),
+                "steps: expected exactly one Trunk invocation, found 0",
+            ),
+            (
+                "C8.step-sequence-allowlist/extra-step",
+                lambda w: _steps(w).insert(4, {"name": "extra", "run": "echo hi"}),
+                "step sequence: unexpected step before `trunk`",
+            ),
+            (
+                "C8.step-sequence-allowlist/guard-moved",
+                lambda w: _steps(w).insert(2, _steps(w).pop(3)),
+                "step sequence: `guard-launcher-path` is not immediately before `trunk`",
+            ),
+            (
+                "C8.step-sequence-allowlist/delete-checkout",
+                lambda w: _steps(w).remove(_step(w, "checkout")),
+                "step sequence: `checkout` is absent",
+            ),
+            (
+                "C8.step-sequence-allowlist/delete-trunk",
+                lambda w: _steps(w).remove(_step(w, "trunk")),
+                "step sequence: `trunk` is absent",
+            ),
+            (
+                "C8.run-bodies-frozen/github-env-bash-env",
+                lambda w: _step(w, "guard-empty-diff").update(
+                    {
+                        "run": _step(w, "guard-empty-diff")["run"]
+                        + '\necho BASH_ENV=/tmp/x >> "$GITHUB_ENV"'
+                    }
+                ),
+                "step `guard-empty-diff`: writes to $GITHUB_ENV",
+            ),
+            (
+                "C8.run-bodies-frozen/creates-c6-path",
+                lambda w: _step(w, "guard-empty-diff").update(
+                    {
+                        "run": _step(w, "guard-empty-diff")["run"]
+                        + "\ninstall -D /bin/true tools/trunk"
+                    }
+                ),
+                "step `guard-empty-diff`: creates a prohibited launcher path",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/repository",
+                at_with("checkout", "repository", "other/repo"),
+                "checkout inputs: unlisted input `repository`",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/path",
+                at_with("checkout", "path", "sub"),
+                "checkout inputs: unlisted input `path`",
+            ),
+            (
+                "C8.checkout-inputs-allowlist/arbitrary-input",
+                at_with("checkout", "submodules", True),
+                "checkout inputs: unlisted input `submodules`",
+            ),
             # Each run step gets its OWN independently identified body-digest case: a validator could
             # otherwise pin two of the three and let the newest guard become `exit 0`.
-            ("C8.run-bodies-frozen/body-digest-guard-resolver-digest",
-             lambda w: _step(w, "guard-resolver-digest").update(
-                 {"run": _step(w, "guard-resolver-digest")["run"] + "\n:"}),
-             "step `guard-resolver-digest`: run body digest mismatch"),
-            ("C8.run-bodies-frozen/body-digest-guard-empty-diff",
-             lambda w: _step(w, "guard-empty-diff").update(
-                 {"run": _step(w, "guard-empty-diff")["run"] + "\n:"}),
-             "step `guard-empty-diff`: run body digest mismatch"),
-            ("C8.run-bodies-frozen/body-digest-guard-launcher-path",
-             lambda w: _step(w, "guard-launcher-path").update(
-                 {"run": _step(w, "guard-launcher-path")["run"] + "\n:"}),
-             "step `guard-launcher-path`: run body digest mismatch"),
+            (
+                "C8.run-bodies-frozen/body-digest-guard-resolver-digest",
+                lambda w: _step(w, "guard-resolver-digest").update(
+                    {"run": _step(w, "guard-resolver-digest")["run"] + "\n:"}
+                ),
+                "step `guard-resolver-digest`: run body digest mismatch",
+            ),
+            (
+                "C8.run-bodies-frozen/body-digest-guard-empty-diff",
+                lambda w: _step(w, "guard-empty-diff").update(
+                    {"run": _step(w, "guard-empty-diff")["run"] + "\n:"}
+                ),
+                "step `guard-empty-diff`: run body digest mismatch",
+            ),
+            (
+                "C8.run-bodies-frozen/body-digest-guard-launcher-path",
+                lambda w: _step(w, "guard-launcher-path").update(
+                    {"run": _step(w, "guard-launcher-path")["run"] + "\n:"}
+                ),
+                "step `guard-launcher-path`: run body digest mismatch",
+            ),
         ]
 
     def _canary_mutants(self):
@@ -832,32 +1274,47 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         mutants those two places imply — plus the shared ones, which the required entry already runs
         against the SAME checker, so duplicating them here would add executions and no discrimination.
         """
+
         def move_to_step(w):
             _job(w).pop("continue-on-error")
             _step(w, "trunk")["continue-on-error"] = True
 
         return [
-            ("C16.canary-continue-on-error-job-scope/absent",
-             lambda w: _job(w).pop("continue-on-error"),
-             "canary: job-scoped `continue-on-error` is absent"),
-            ("C16.canary-continue-on-error-job-scope/step-scope", move_to_step,
-             "step `trunk`: `continue-on-error:` is prohibited"),
+            (
+                "C16.canary-continue-on-error-job-scope/absent",
+                lambda w: _job(w).pop("continue-on-error"),
+                "canary: job-scoped `continue-on-error` is absent",
+            ),
+            (
+                "C16.canary-continue-on-error-job-scope/step-scope",
+                move_to_step,
+                "step `trunk`: `continue-on-error:` is prohibited",
+            ),
         ]
 
     def test_every_canary_mutant_fails_with_its_own_diagnostic(self):
         canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
-        self.assertEqual([], contract_problems(copy.deepcopy(canary), entry="canary"),
-                         "the shipped canary must be a passing positive control")
+        self.assertEqual(
+            [],
+            contract_problems(copy.deepcopy(canary), entry="canary"),
+            "the shipped canary must be a passing positive control",
+        )
         for case_id, mutate, diagnostic in self._canary_mutants():
             with self.subTest(case=case_id):
                 mutant = copy.deepcopy(canary)
                 mutate(mutant)
                 problems = contract_problems(mutant, entry="canary")
-                self.assertIn(diagnostic, problems, f"{case_id} did not produce its own diagnostic")
+                self.assertIn(
+                    diagnostic,
+                    problems,
+                    f"{case_id} did not produce its own diagnostic",
+                )
 
     def test_the_shipped_workflow_is_a_passing_positive_control(self):
         """Every mutant below starts from a GREEN baseline, or it proves nothing."""
-        self.assertEqual([], contract_problems(copy.deepcopy(self.workflow), milestone="M2"))
+        self.assertEqual(
+            [], contract_problems(copy.deepcopy(self.workflow), milestone="M2")
+        )
 
     def test_every_generated_mutant_fails_with_its_own_diagnostic(self):
         for case in self._yaml_mutants():
@@ -875,26 +1332,36 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                         "the mutant must actually change the workflow",
                     )
                 problems = contract_problems(mutant, milestone=milestone)
-                self.assertIn(diagnostic, problems, f"{case_id} did not produce its own diagnostic")
+                self.assertIn(
+                    diagnostic,
+                    problems,
+                    f"{case_id} did not produce its own diagnostic",
+                )
 
     def test_every_generated_mutant_names_a_declared_registry_case(self):
-        declared = {case["id"]
-                    for obligation in self.registry["obligations"]
-                    for case in obligation.get("cases", [])}
+        declared = {
+            case["id"]
+            for obligation in self.registry["obligations"]
+            for case in obligation.get("cases", [])
+        }
         for case in self._yaml_mutants():
             with self.subTest(case=case[0]):
                 self.assertIn(case[0], declared)
 
     def test_the_named_execution_sets_reference_only_declared_cases(self):
         """A stale id in these sets would silently inflate the coverage the test above reports."""
-        declared = {case["id"]
-                    for obligation in self.registry["obligations"]
-                    for case in obligation.get("cases", [])}
+        declared = {
+            case["id"]
+            for obligation in self.registry["obligations"]
+            for case in obligation.get("cases", [])
+        }
         for case_id in sorted(FIXTURE_EXECUTED_CASES | CELL16_INJECTED_CASES):
             with self.subTest(case=case_id):
                 self.assertIn(case_id, declared)
 
-    def test_every_declared_case_is_executed_here_or_provably_needs_external_machinery(self):
+    def test_every_declared_case_is_executed_here_or_provably_needs_external_machinery(
+        self,
+    ):
         """No silent gap between what the registry declares and what this cell runs.
 
         Classification is PER CASE, not per obligation: `C8.run-bodies-frozen` is a `content_digest`
@@ -904,24 +1371,35 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         already kills — reporting LESS coverage than exists, which is the mirror of the defect this
         test exists to prevent.
         """
-        executed = ({case[0] for case in self._yaml_mutants()}
-                    | {case[0] for case in self._canary_mutants()}
-                    | CELL16_INJECTED_CASES | FIXTURE_EXECUTED_CASES)
+        executed = (
+            {case[0] for case in self._yaml_mutants()}
+            | {case[0] for case in self._canary_mutants()}
+            | CELL16_INJECTED_CASES
+            | FIXTURE_EXECUTED_CASES
+        )
         declared, deferred = set(), []
         for obligation in self.registry["obligations"]:
             for case in obligation.get("cases", []):
                 declared.add(case["id"])
                 if case["id"] in executed:
                     continue
-                deferred.append((case["id"], obligation["kind"], case["op"], case["side"],
-                                 obligation.get("entries", [])))
+                deferred.append(
+                    (
+                        case["id"],
+                        obligation["kind"],
+                        case["op"],
+                        case["side"],
+                        obligation.get("entries", []),
+                    )
+                )
         self.assertTrue(executed <= declared)
         for case_id, kind, op, side, entries in deferred:
             with self.subTest(case=case_id):
                 # A deferred case must NEED a tree, a real run, an authenticated remote read, or an
                 # ENTRY THIS MILESTONE HAS NOT SHIPPED — the canary is M2b. Anything else is a gap.
                 self.assertTrue(
-                    op in ("materialise", "edit_bytes") or side == "remote"
+                    op in ("materialise", "edit_bytes")
+                    or side == "remote"
                     or kind in ("repo_fixture", "remote_relation")
                     or "required" not in entries,
                     f"{case_id} ({kind}/{op}/{side}) is executable here and must not be deferred",
@@ -930,13 +1408,16 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         # Every declared case is now executed somewhere in this file. The deferral machinery above is
         # kept because it is what KEEPS that true: a case added to the registry that nothing runs will
         # land in `deferred` and must then justify itself, rather than quietly reducing coverage.
-        self.assertEqual([], deferred, f"{len(deferred)} declared case(s) are executed nowhere")
+        self.assertEqual(
+            [], deferred, f"{len(deferred)} declared case(s) are executed nowhere"
+        )
         self.assertEqual(declared, executed & declared)
 
 
 class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
     """A registry edit that silently drops an obligation must red something the rendering lint cannot
-    see, so the corpus is maintained independently and never resolves through a registry id."""
+    see, so the corpus is maintained independently and never resolves through a registry id.
+    """
 
     def setUp(self):
         self.survivors = yaml.safe_load(SURVIVORS_PATH.read_text(encoding="utf-8"))
@@ -944,14 +1425,23 @@ class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
     def test_every_survivor_is_self_contained(self):
         for entry in self.survivors["survivors"]:
             with self.subTest(survivor=entry["id"]):
-                for field in ("found_in_round", "survived_formulation", "mutant",
-                              "would_have_shipped", "must_fail_because"):
+                for field in (
+                    "found_in_round",
+                    "survived_formulation",
+                    "mutant",
+                    "would_have_shipped",
+                    "must_fail_because",
+                ):
                     self.assertIn(field, entry)
 
     def test_the_corpus_does_not_resolve_through_the_registry(self):
-        registry_ids = {case["id"]
-                        for obligation in yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))["obligations"]
-                        for case in obligation.get("cases", [])}
+        registry_ids = {
+            case["id"]
+            for obligation in yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))[
+                "obligations"
+            ]
+            for case in obligation.get("cases", [])
+        }
         for entry in self.survivors["survivors"]:
             self.assertNotIn(entry["id"], registry_ids)
 
@@ -990,19 +1480,27 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         self.assertNotIn("env", _job(self.canary))
         executor = _step(self.canary, "guard-empty-diff")["run"]
         self.assertIn("scripts/ci/resolve-trunk-range.sh", executor)
-        pinned = re.search(r"expected='([a-f0-9]{64})'",
-                           _step(self.canary, "guard-resolver-digest")["run"])
+        pinned = re.search(
+            r"expected='([a-f0-9]{64})'",
+            _step(self.canary, "guard-resolver-digest")["run"],
+        )
         self.assertEqual(_sha256_file(RESOLVER_PATH), pinned.group(1))
 
     def test_the_zero_before_guard_is_reached_through_the_shared_resolver(self):
         """The canary is the ONLY leg that can reach push.sh's `--all` branch, so the guard belongs
-        where the hazard is — and it is the one shared implementation, not a third independent one."""
+        where the hazard is — and it is the one shared implementation, not a third independent one.
+        """
         completed = subprocess.run(
             ["bash", str(RESOLVER_PATH)],
-            capture_output=True, text=True,
-            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "GITHUB_EVENT_NAME": "push",
-                 "GITHUB_REF_NAME": "main",
-                 "GITHUB_EVENT_BEFORE": "0" * 40},
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "GITHUB_EVENT_NAME": "push",
+                "GITHUB_REF_NAME": "main",
+                "GITHUB_EVENT_BEFORE": "0" * 40,
+            },
         )
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("--all", completed.stderr)
@@ -1016,7 +1514,8 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         """C16.canary-branches-equal-resolved-target-set/local-divergence — the resolved set moves
         while every string in the repository stays put."""
         resolved = _resolve_ref_name(
-            {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []}, "trunk")
+            {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []}, "trunk"
+        )
         self.assertNotEqual(resolved, set(_on(self.canary)["push"]["branches"]))
 
     def test_the_canary_is_not_a_required_context_at_rollout(self):
@@ -1034,11 +1533,15 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         for rule in injected["rules"]:
             if rule["type"] == "required_status_checks":
                 rule["parameters"]["required_status_checks"].append(
-                    {"context": CANARY_CONTEXT, "integration_id": 15368})
+                    {"context": CANARY_CONTEXT, "integration_id": 15368}
+                )
         contexts = _required_contexts(injected)
-        self.assertIn(CANARY_CONTEXT, contexts, "the injected observation must be constructible")
+        self.assertIn(
+            CANARY_CONTEXT, contexts, "the injected observation must be constructible"
+        )
         # And the live one is still clean — the mutation touched the copy only.
         self.assertNotIn(CANARY_CONTEXT, _required_contexts(_live_ruleset()))
+
 
 class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     """The remaining registry cases, run by EXECUTING THE SHIPPED GUARD BODIES.
@@ -1060,6 +1563,7 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
         """`sha256sum` is GNU coreutils; the runner is ubuntu-latest but developers are not. Shim it
         onto PATH from `shasum` so the SHIPPED body runs unmodified on both."""
         import shutil
+
         if shutil.which("sha256sum"):
             return os.environ["PATH"]
         shim = tmp / "_shim"
@@ -1070,8 +1574,14 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
         return f"{shim}:{os.environ['PATH']}"
 
     def _run(self, script: str, cwd: Path):
-        return subprocess.run(["bash", "-c", script], cwd=cwd, capture_output=True, text=True,
-                              env={"PATH": self._shimmed_path(cwd), "HOME": str(cwd)})
+        return subprocess.run(
+            ["bash", "-c", script],
+            check=False,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            env={"PATH": self._shimmed_path(cwd), "HOME": str(cwd)},
+        )
 
     def test_the_c6_guard_passes_on_a_clean_tree(self):
         """The positive control: every case below must start from a guard that says yes."""
@@ -1081,30 +1591,31 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     def test_each_of_the_six_launcher_paths_is_caught_separately(self):
         """A guard that catches five of six is a gate with one door open, so each is its own case."""
         for path in C6_GUARDED_PATHS:
-            with self.subTest(fixture=path):
-                with tempfile.TemporaryDirectory() as tmp:
-                    root = Path(tmp)
-                    # NOT `lstrip("./")` — that strips CHARACTERS, so `.trunk/bin/trunk` became
-                    # `trunk/bin/trunk` and the guard caught `./trunk` instead. The case still went
-                    # red, for the wrong path: reachability, not discrimination. Asserting the
-                    # specific path in stderr is what exposed it.
-                    relative = path[2:] if path.startswith("./") else path
-                    target = root / relative
-                    if path == ".trunk/setup-ci":
-                        # MUST be a VALID composite action that exits green. `uses: ./.trunk/setup-ci`
-                        # expects an action DIRECTORY, so a bare executable reds because it is
-                        # MALFORMED — and would survive deletion of C6 while appearing to be caught.
-                        target.mkdir(parents=True)
-                        (target / "action.yml").write_text(
-                            "name: setup-ci\nruns:\n  using: composite\n  steps:\n"
-                            "    - run: 'true'\n      shell: bash\n", encoding="utf-8")
-                    else:
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-                        target.chmod(0o755)
-                    completed = self._run(self.c6_guard, root)
-                    self.assertNotEqual(0, completed.returncode, f"{path} was not caught")
-                    self.assertIn(path, completed.stderr)
+            with self.subTest(fixture=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                # NOT `lstrip("./")` — that strips CHARACTERS, so `.trunk/bin/trunk` became
+                # `trunk/bin/trunk` and the guard caught `./trunk` instead. The case still went
+                # red, for the wrong path: reachability, not discrimination. Asserting the
+                # specific path in stderr is what exposed it.
+                relative = path.removeprefix("./")
+                target = root / relative
+                if path == ".trunk/setup-ci":
+                    # MUST be a VALID composite action that exits green. `uses: ./.trunk/setup-ci`
+                    # expects an action DIRECTORY, so a bare executable reds because it is
+                    # MALFORMED — and would survive deletion of C6 while appearing to be caught.
+                    target.mkdir(parents=True)
+                    (target / "action.yml").write_text(
+                        "name: setup-ci\nruns:\n  using: composite\n  steps:\n"
+                        "    - run: 'true'\n      shell: bash\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    target.chmod(0o755)
+                completed = self._run(self.c6_guard, root)
+                self.assertNotEqual(0, completed.returncode, f"{path} was not caught")
+                self.assertIn(path, completed.stderr)
 
     def test_the_c6a_guard_accepts_the_shipped_resolver_and_rejects_an_edited_one(self):
         """C6a.resolver-pinned-by-digest/edit-resolver — the invoking run bodies are left UNTOUCHED,
@@ -1114,8 +1625,11 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
             (root / "scripts/ci").mkdir(parents=True)
             target = root / "scripts/ci/resolve-trunk-range.sh"
             target.write_bytes(RESOLVER_PATH.read_bytes())
-            self.assertEqual(0, self._run(self.c6a_guard, root).returncode,
-                             "the shipped resolver must satisfy its own pinned digest")
+            self.assertEqual(
+                0,
+                self._run(self.c6a_guard, root).returncode,
+                "the shipped resolver must satisfy its own pinned digest",
+            )
 
             target.write_bytes(RESOLVER_PATH.read_bytes() + b"\necho tampered\n")
             completed = self._run(self.c6a_guard, root)
@@ -1123,10 +1637,14 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
             self.assertIn("digest mismatch", completed.stderr)
 
     def test_the_digest_guard_would_fire_before_the_resolver_ever_runs(self):
-        """"Verify, then execute" is the property C6a exists for. Under §0's threat model an edited
-        resolver still fails closed at the C6 guard, but that is the wrong step reporting it."""
+        """ "Verify, then execute" is the property C6a exists for. Under §0's threat model an edited
+        resolver still fails closed at the C6 guard, but that is the wrong step reporting it.
+        """
         names = [step.get("name") for step in _steps(_load_workflow())]
-        self.assertLess(names.index("guard-resolver-digest"), names.index("guard-empty-diff"))
+        self.assertLess(
+            names.index("guard-resolver-digest"), names.index("guard-empty-diff")
+        )
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

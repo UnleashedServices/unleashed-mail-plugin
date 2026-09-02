@@ -23,7 +23,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SETTINGS = REPO / ".claude/settings.json"
 DETECTOR = REPO / "scripts/detect-plugin-version-drift.sh"
-BUCKET_SECONDS = 604800          # seven days, asserted as an OPERAND, not merely "a constant exists"
+BUCKET_SECONDS = (
+    604800  # seven days, asserted as an OPERAND, not merely "a constant exists"
+)
 EXPECTED_TIMEOUT = 5
 EXPECTED_MATCHER = "startup|resume"
 
@@ -48,9 +50,13 @@ class TheDeclaration(unittest.TestCase):
         self.assertEqual(EXPECTED_TIMEOUT, hook["timeout"])
         self.assertNotEqual(600, hook["timeout"])
 
-    def test_the_root_is_passed_as_an_operand_and_the_script_is_resolved_from_the_project(self):
+    def test_the_root_is_passed_as_an_operand_and_the_script_is_resolved_from_the_project(
+        self,
+    ):
         command = _session_start_hook()["hooks"][0]["command"]
-        self.assertIn("${CLAUDE_PROJECT_DIR}/scripts/detect-plugin-version-drift.sh", command)
+        self.assertIn(
+            "${CLAUDE_PROJECT_DIR}/scripts/detect-plugin-version-drift.sh", command
+        )
         self.assertIn("--session-start", command)
         # The ROOT is an argument, not something the detector reads from the environment itself.
         self.assertGreaterEqual(command.count("${CLAUDE_PROJECT_DIR}"), 2)
@@ -58,8 +64,10 @@ class TheDeclaration(unittest.TestCase):
     def test_the_detector_never_reads_the_ambient_variable_itself(self):
         """The whole point of the operand: git does not set CLAUDE_PROJECT_DIR for the OTHER caller,
         and a value inherited from a different project selects a foreign repository."""
-        self.assertNotIn("CLAUDE_PROJECT_DIR",
-                         DETECTOR.read_text(encoding="utf-8").split("# Usage:")[1])
+        self.assertNotIn(
+            "CLAUDE_PROJECT_DIR",
+            DETECTOR.read_text(encoding="utf-8").split("# Usage:")[1],
+        )
 
 
 class _DetectorFixture(unittest.TestCase):
@@ -83,11 +91,14 @@ class _DetectorFixture(unittest.TestCase):
         self._tmp.cleanup()
 
     def _git(self, *args):
-        subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), *args], check=True, capture_output=True
+        )
 
     def set_expected(self, version: str):
         (self.repo / ".claude-plugin/plugin.json").write_text(
-            json.dumps({"name": "unleashed-mail", "version": version}), encoding="utf-8")
+            json.dumps({"name": "unleashed-mail", "version": version}), encoding="utf-8"
+        )
         self._git("add", "-A")
         self._git("commit", "-qm", version)
         self._git("update-ref", "refs/remotes/origin/main", "HEAD")
@@ -102,30 +113,53 @@ class _DetectorFixture(unittest.TestCase):
         fixture defining the test's correctness rather than the contract doing it.
         """
         (self.home / ".claude/plugins/installed_plugins.json").write_text(
-            json.dumps({
-                "version": 2,
-                "plugins": {f"{name}@npranson-unleashed-mail-plugin": [
-                    {"scope": scope, "version": version,
-                     "installPath": f"/tmp/{name}/{version}"},
-                ]},
-            }), encoding="utf-8")
+            json.dumps(
+                {
+                    "version": 2,
+                    "plugins": {
+                        f"{name}@npranson-unleashed-mail-plugin": [
+                            {
+                                "scope": scope,
+                                "version": version,
+                                "installPath": f"/tmp/{name}/{version}",
+                            },
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def run_detector(self, *args, payload=None, cwd=None, env_extra=None):
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.home),
-               "XDG_STATE_HOME": str(self.state)}
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(self.home),
+            "XDG_STATE_HOME": str(self.state),
+        }
         env.update(env_extra or {})
         return subprocess.run(
             ["bash", str(DETECTOR), *args],
+            check=False,
             input=payload if payload is not None else "",
-            capture_output=True, text=True, cwd=str(cwd or self.root), env=env)
+            capture_output=True,
+            text=True,
+            cwd=str(cwd or self.root),
+            env=env,
+        )
 
     def session_start(self, session_id: str, **kwargs):
-        return self.run_detector(str(self.repo), "--session-start",
-                                 payload=json.dumps({"session_id": session_id}), **kwargs)
+        return self.run_detector(
+            str(self.repo),
+            "--session-start",
+            payload=json.dumps({"session_id": session_id}),
+            **kwargs,
+        )
 
 
 class TheAnchoredLookup(_DetectorFixture):
-    def test_it_resolves_the_project_repository_from_an_unrelated_working_directory(self):
+    def test_it_resolves_the_project_repository_from_an_unrelated_working_directory(
+        self,
+    ):
         """A bare `git show origin/main:…` works from the repository root and silently takes Table A
         row 1 when SessionStart fires from somewhere else — reporting nothing, forever, on exactly the
         machines it exists to warn."""
@@ -137,8 +171,12 @@ class TheAnchoredLookup(_DetectorFixture):
         """The mutation. Without this the cell proves the script was LOCATED, not that it looked in
         the right place."""
         with tempfile.TemporaryDirectory() as elsewhere:
-            completed = self.run_detector(elsewhere, "--session-start",
-                                          payload='{"session_id":"x"}', cwd=elsewhere)
+            completed = self.run_detector(
+                elsewhere,
+                "--session-start",
+                payload='{"session_id":"x"}',
+                cwd=elsewhere,
+            )
         self.assertEqual("", completed.stdout.strip())
 
     def test_a_foreign_root_is_a_wrong_comparison_not_an_error(self):
@@ -146,19 +184,34 @@ class TheAnchoredLookup(_DetectorFixture):
         project's repository does not fail, it MISCLASSIFIES."""
         foreign = self.root / "foreign"
         (foreign / ".claude-plugin").mkdir(parents=True)
-        subprocess.run(["git", "-C", str(foreign), "init", "-q", "."], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(foreign), "init", "-q", "."],
+            check=True,
+            capture_output=True,
+        )
         for key, value in (("user.email", "t@t"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(foreign), "config", key, value], check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(foreign), "config", key, value],
+                check=True,
+                capture_output=True,
+            )
         (foreign / ".claude-plugin/plugin.json").write_text(
-            json.dumps({"name": "unleashed-mail", "version": "1.0.0"}), encoding="utf-8")
-        for args in (("add", "-A"), ("commit", "-qm", "f"),
-                     ("update-ref", "refs/remotes/origin/main", "HEAD")):
-            subprocess.run(["git", "-C", str(foreign), *args], check=True, capture_output=True)
+            json.dumps({"name": "unleashed-mail", "version": "1.0.0"}), encoding="utf-8"
+        )
+        for args in (
+            ("add", "-A"),
+            ("commit", "-qm", "f"),
+            ("update-ref", "refs/remotes/origin/main", "HEAD"),
+        ):
+            subprocess.run(
+                ["git", "-C", str(foreign), *args], check=True, capture_output=True
+            )
         # installed 2.8.5 is BEHIND the project (2.8.6) and AHEAD of the foreign repo (1.0.0), so the
         # foreign root turns a row-7 warning into a row-8 silence.
         self.assertIn("systemMessage", self.session_start("real").stdout)
-        foreign_run = self.run_detector(str(foreign), "--session-start",
-                                        payload='{"session_id":"foreign"}')
+        foreign_run = self.run_detector(
+            str(foreign), "--session-start", payload='{"session_id":"foreign"}'
+        )
         self.assertEqual("", foreign_run.stdout.strip())
 
 
@@ -194,14 +247,16 @@ class TableA(_DetectorFixture):
         self.assertEqual("", self._plain())
 
     def test_row_2_unreadable_record_is_silent(self):
-        (self.home / ".claude/plugins/installed_plugins.json").write_text("{not json",
-                                                                          encoding="utf-8")
+        (self.home / ".claude/plugins/installed_plugins.json").write_text(
+            "{not json", encoding="utf-8"
+        )
         self.assertEqual("", self._plain())
 
     def test_row_2_unrecognised_schema_is_silent(self):
         """A record without the `plugins` mapping — a future or foreign shape."""
         (self.home / ".claude/plugins/installed_plugins.json").write_text(
-            json.dumps({"version": 99, "somethingElse": {}}), encoding="utf-8")
+            json.dumps({"version": 99, "somethingElse": {}}), encoding="utf-8"
+        )
         self.assertEqual("", self._plain())
 
     def test_the_detector_parses_under_the_bash_that_actually_runs_it(self):
@@ -210,11 +265,15 @@ class TableA(_DetectorFixture):
         bash 5 and would never have noticed."""
         for shell in ("/bin/bash", "bash"):
             with self.subTest(shell=shell):
-                completed = subprocess.run([shell, "-n", str(DETECTOR)], capture_output=True)
+                completed = subprocess.run(
+                    [shell, "-n", str(DETECTOR)], check=False, capture_output=True
+                )
                 self.assertEqual(0, completed.returncode, completed.stderr.decode())
 
     def test_row_1_malformed_expected_manifest_is_silent(self):
-        (self.repo / ".claude-plugin/plugin.json").write_text('{"name":', encoding="utf-8")
+        (self.repo / ".claude-plugin/plugin.json").write_text(
+            '{"name":', encoding="utf-8"
+        )
         self._git("add", "-A")
         self._git("commit", "-qm", "bad")
         self._git("update-ref", "refs/remotes/origin/main", "HEAD")
@@ -224,8 +283,10 @@ class TableA(_DetectorFixture):
         """Not merely 'no warning' — a silent row must leave no marker behind either."""
         self.set_installed("2.8.6")
         self.session_start("quiet")
-        self.assertFalse((self.state / "unleashed-mail/drift-warned").exists()
-                         and any((self.state / "unleashed-mail/drift-warned").iterdir()))
+        self.assertFalse(
+            (self.state / "unleashed-mail/drift-warned").exists()
+            and any((self.state / "unleashed-mail/drift-warned").iterdir())
+        )
 
     def test_it_never_blocks(self):
         for version in ("2.8.5", "2.8.6", "2.9.0", "nonsense"):
@@ -265,7 +326,8 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
 
     def test_filename_hostile_session_ids_still_warn(self):
         """`session_id` is documented as OPAQUE with no filename-safety contract. Raw, these make
-        marker creation fail — and a detector that fails open warns on every single session start."""
+        marker creation fail — and a detector that fails open warns on every single session start.
+        """
         for session_id in ("a/b/c", "../../escape", "x" * 400, ""):
             with self.subTest(session_id=session_id[:16]):
                 # A fresh fixture per id, torn down properly — re-running setUp() alone leaks the
@@ -276,9 +338,8 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
 
     def test_removing_the_hash_would_break_those_ids(self):
         """The mutation, shown rather than asserted: the raw id is not a usable path component."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(OSError):
-                (Path(tmp) / "a/b/c.1").open("x").close()
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(OSError):
+            (Path(tmp) / "a/b/c.1").open("x").close()
 
     def test_a_prior_window_marker_is_swept_and_the_session_warns_again(self):
         """Aged-marker resumption: the promise is per WINDOW, not per session forever."""
@@ -288,7 +349,9 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
         current = next(p for p in directory.iterdir() if p.name.startswith(digest))
         current.rename(directory / f"{digest}.1")
         self.assertIn("systemMessage", self.session_start("aged").stdout)
-        self.assertNotIn(f"{digest}.1", self._markers(), "the prior-window marker must be swept")
+        self.assertNotIn(
+            f"{digest}.1", self._markers(), "the prior-window marker must be swept"
+        )
 
     def test_cleanup_removes_any_prior_window_not_just_seven_day_old_ones(self):
         """Not the same statement: just after a boundary, a marker SECONDS old belongs to a prior
@@ -314,8 +377,11 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
         """The O_EXCL create happens BEFORE the warning, so the loser goes silent rather than warning
         twice."""
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(lambda _: self.session_start("race").stdout, range(8)))
+            results = list(
+                pool.map(lambda _: self.session_start("race").stdout, range(8))
+            )
         self.assertEqual(1, sum("systemMessage" in r for r in results))
 
 

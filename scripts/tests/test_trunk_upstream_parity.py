@@ -46,7 +46,7 @@ def parity_problems(record: dict) -> list[str]:
         problems.append("resolver: did not emit an `upstream=` line")
         resolved = None
     else:
-        resolved = raw[len("upstream="):].strip()
+        resolved = raw[len("upstream=") :].strip()
         if not resolved:
             problems.append("resolver: emitted an empty upstream")
 
@@ -57,7 +57,9 @@ def parity_problems(record: dict) -> list[str]:
     # is selected by its argv rather than by assuming a single invocation.
     checks = [argv for argv in invocations if argv and argv[0] == "check"]
     if len(checks) != 1:
-        problems.append(f"argv: expected exactly one `check` invocation, found {len(checks)}")
+        problems.append(
+            f"argv: expected exactly one `check` invocation, found {len(checks)}"
+        )
     else:
         argv = checks[0]
         if "--all" in argv:
@@ -72,18 +74,29 @@ def parity_problems(record: dict) -> list[str]:
             if passed != resolved:
                 # THE PARITY ASSERTION. Byte-for-byte, not "both look like a SHA".
                 problems.append(
-                    f"parity: the action linted {passed!r} while the guard resolved {resolved!r}")
+                    f"parity: the action linted {passed!r} while the guard resolved {resolved!r}"
+                )
         if ARGUMENTS_LITERAL not in argv:
-            problems.append("argv: §6.4's declared exclusion did not reach the command line")
+            problems.append(
+                "argv: §6.4's declared exclusion did not reach the command line"
+            )
 
     tree = record.get("tree") or {}
-    for key in ("pre", "post", "fixturePre", "fixturePost"):
-        if not tree.get(key):
-            problems.append(f"tree: `{key}` is missing")
+    problems.extend(
+        f"tree: `{key}` is missing"
+        for key in ("pre", "post", "fixturePre", "fixturePost")
+        if not tree.get(key)
+    )
     if tree.get("pre") and tree.get("post") and tree["pre"] != tree["post"]:
         problems.append("cell 5: a tracked file's bytes changed during the run")
-    if tree.get("fixturePre") and tree.get("fixturePost") and tree["fixturePre"] != tree["fixturePost"]:
-        problems.append("cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled")
+    if (
+        tree.get("fixturePre")
+        and tree.get("fixturePost")
+        and tree["fixturePre"] != tree["fixturePost"]
+    ):
+        problems.append(
+            "cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled"
+        )
 
     inputs = record.get("actionInputs") or {}
     if not inputs.get("digest"):
@@ -104,13 +117,29 @@ def _clean_record(event: str = "pull_request") -> dict:
         "resolver": {"raw": f"upstream={upstream}"},
         "invocations": [
             ["version"],
-            ["check", "--ci", "--upstream", upstream, "--github-commit", "c" * 40,
-             "--github-annotate-file=/tmp/x", ARGUMENTS_LITERAL],
+            [
+                "check",
+                "--ci",
+                "--upstream",
+                upstream,
+                "--github-commit",
+                "c" * 40,
+                "--github-annotate-file=/tmp/x",
+                ARGUMENTS_LITERAL,
+            ],
         ],
-        "tree": {"pre": "t1", "post": "t1", "fixture": "harness-fixtures/fixable.sh",
-                 "fixturePre": "f1", "fixturePost": "f1"},
-        "actionInputs": {"canonical": "{}", "digest": "d" * 64,
-                         "uses": "trunk-io/trunk-action@" + "e" * 40},
+        "tree": {
+            "pre": "t1",
+            "post": "t1",
+            "fixture": "harness-fixtures/fixable.sh",
+            "fixturePre": "f1",
+            "fixturePost": "f1",
+        },
+        "actionInputs": {
+            "canonical": "{}",
+            "digest": "d" * 64,
+            "uses": "trunk-io/trunk-action@" + "e" * 40,
+        },
     }
 
 
@@ -140,8 +169,10 @@ class TheJudgeDiscriminates(unittest.TestCase):
         record["tree"]["post"] = "t2"
         problems = parity_problems(record)
         self.assertIn("argv: the action ran `--fix`", problems)
-        self.assertIn("cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled",
-                      problems)
+        self.assertIn(
+            "cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled",
+            problems,
+        )
         self.assertIn("cell 5: a tracked file's bytes changed during the run", problems)
 
     def test_a_recorder_that_never_delegated_is_not_mistaken_for_a_clean_tree(self):
@@ -151,30 +182,41 @@ class TheJudgeDiscriminates(unittest.TestCase):
         record = _clean_record()
         record["invocations"] = [["version"]]
         problems = parity_problems(record)
-        self.assertTrue(any("expected exactly one `check` invocation" in p for p in problems), problems)
+        self.assertTrue(
+            any("expected exactly one `check` invocation" in p for p in problems),
+            problems,
+        )
 
     def test_a_missing_upstream_is_caught(self):
         record = _clean_record()
         record["invocations"][1] = ["check", "--ci", ARGUMENTS_LITERAL]
-        self.assertIn("argv: the action passed no `--upstream`", parity_problems(record))
+        self.assertIn(
+            "argv: the action passed no `--upstream`", parity_problems(record)
+        )
 
     def test_a_dropped_exclusion_literal_is_caught(self):
         record = _clean_record()
         record["invocations"][1].remove(ARGUMENTS_LITERAL)
-        self.assertIn("argv: §6.4's declared exclusion did not reach the command line",
-                      parity_problems(record))
+        self.assertIn(
+            "argv: §6.4's declared exclusion did not reach the command line",
+            parity_problems(record),
+        )
 
     def test_an_empty_resolver_output_is_caught(self):
         record = _clean_record()
         record["resolver"]["raw"] = ""
-        self.assertIn("resolver: did not emit an `upstream=` line", parity_problems(record))
+        self.assertIn(
+            "resolver: did not emit an `upstream=` line", parity_problems(record)
+        )
 
 
 class TheHarnessEvidenceIsAcceptedAgainstTheSchema(unittest.TestCase):
     """M2c's acceptance step. SKIPS until a real run has produced evidence — never passes vacuously."""
 
     def test_every_recorded_parity_artifact_is_clean(self):
-        records = sorted(EVIDENCE_DIR.glob("parity-*.json")) if EVIDENCE_DIR.exists() else []
+        records = (
+            sorted(EVIDENCE_DIR.glob("parity-*.json")) if EVIDENCE_DIR.exists() else []
+        )
         if not records:
             self.skipTest(
                 "no parity evidence yet — M2c is not complete until the harness has run on "
@@ -188,8 +230,11 @@ class TheHarnessEvidenceIsAcceptedAgainstTheSchema(unittest.TestCase):
                 self.assertEqual([], parity_problems(record))
                 seen.add(record["event"])
         # Both event paths through the pinned action must be exercised: they take different branches.
-        self.assertEqual({"pull_request", "push"}, seen,
-                         "both event paths must be observed — they resolve their ranges differently")
+        self.assertEqual(
+            {"pull_request", "push"},
+            seen,
+            "both event paths must be observed — they resolve their ranges differently",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

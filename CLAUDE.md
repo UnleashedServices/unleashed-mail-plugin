@@ -2,7 +2,7 @@
 
 **This repo is a Claude Code _plugin_**, not the app. It ships the agents, skills, commands, hooks,
 and a bundled MCP server used to develop **UnleashedMail** (a native macOS email client, in a
-separate repo). You are working on the *plugin's own assets* here — treat them as software.
+separate repo). You are working on the _plugin's own assets_ here — treat them as software.
 
 > **App-development knowledge lives in the shipped assets, not in this file.** Swift/SwiftUI/GRDB/
 > MSAL/Gmail/Graph/Curator conventions are carried by the plugin's `agents/*.md` and `skills/*/SKILL.md`
@@ -26,6 +26,7 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 ## Authoring rules (verified against code.claude.com/docs — the audit fixed real drift here)
 
 **Sub-agent frontmatter** (`agents/*.md`) — keys are **camelCase**:
+
 - `tools:` (allowlist; **omit to inherit ALL tools incl. MCP**), `disallowedTools:` (deny-list). **There is
   no `allowed-tools` for sub-agents** — that key is silently ignored (it's a skills/commands key). The CI
   validator now rejects it.
@@ -47,7 +48,7 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
   (it silently re-grants write access; this bit swift-reviewer once).
 
 **Skills/commands** use kebab `allowed-tools:` — a **pre-approval grant, not a restriction** (`allowed-tools`
-itself never denies; to *remove* tools for a skill's active window use the separate `disallowed-tools:`
+itself never denies; to _remove_ tools for a skill's active window use the separate `disallowed-tools:`
 key, cleared on the next user message). Don't grant unscoped `Bash, Write, Edit` on a pure-knowledge skill.
 
 **Hooks** (`hooks/hooks.json` + `scripts/*.sh`): PostToolUse runs **after** the tool and cannot block —
@@ -75,7 +76,14 @@ python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code --
 because the plan-citation linter (added there in the same PR) was never part of the local gate, and
 the local suite kept passing while a shifted line pin failed the linter's own self-test.
 
-The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
+The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) also runs
+**`trunk check --index --no-fix --filter=-markdown-link-check`** — the staged diff only, never `--all`,
+bounded by a **180s** macOS-portable timeout (measured: 30.8s cold-bootstrap envelope x ~6 headroom,
+`docs/planning/evidence/COREDEV-2780-m5a-timeout-measurement.json`). It BLOCKS on a new finding and does
+**not** block on a timeout — a timeout is infrastructure, and blocking there teaches people `--no-verify`,
+which disables every other check too. It also runs the **COREDEV-2801 drift detector** (advisory, never
+blocking). The hook AGGREGATES its exit code: appending a passing command after a failing one would
+otherwise mask the failure. It runs the
 version-sync/assembly/hooks validators + an **advisory** secret/PII pattern scan over all staged text files
 (enforced by `gitleaks --staged` when installed, and by the history-aware gitleaks job in CI). It does
 **not** build/test the Swift app (this is a
@@ -114,7 +122,7 @@ Linux-friendly plugin repo — no Xcode).
 - **Commits:** `type(COREDEV-XXXX): description` — ticket is **mandatory**. Types: `feat`, `fix`, `chore`,
   `refactor`, `test`, `docs`.
 - **Versioning — BUMP ON EVERY CHANGE THAT SHIPS, not on release.** `.claude-plugin/marketplace.json`
-  carries **no version field**; it points at this repo, so `plugin.json` `version` is the *only* signal
+  carries **no version field**; it points at this repo, so `plugin.json` `version` is the _only_ signal
   a consumer install has that anything changed. **An unbumped fix is a fix nobody receives** — it sits
   on `main` and no installed plugin ever pulls it. This is why the rule differs from ordinary release
   practice, and it has already bitten: a merged harness fix stayed undelivered because the version had
@@ -128,7 +136,8 @@ Linux-friendly plugin repo — no Xcode).
   4. `README.md` bold asset counts — `**N agents · N skills · N commands · N MCP server(s)**`
 
   Plus a `CHANGELOG.md` `## [X.Y.Z] — YYYY-MM-DD` section. The plugin uses plain `MAJOR.MINOR.PATCH`
-  — **not** the UnleashedMail *app's* `MAJOR.MINOR|STATE.YYMMBB` scheme; the two repos differ.
+  — **not** the UnleashedMail _app's_ `MAJOR.MINOR|STATE.YYMMBB` scheme; the two repos differ.
+
 - **CI actions are SHA-pinned** (AGENT_CONTRACTS §6) — never `@vN` tags; Dependabot updates the pins.
 - **Trunk:** `main` is the integration trunk; the canonical remote is `UnleashedServices/unleashed-mail-plugin`.
 

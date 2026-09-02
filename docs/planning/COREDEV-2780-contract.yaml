@@ -23,7 +23,7 @@
 
 schemaVersion: 1
 ticket: COREDEV-2780
-renders: "docs/planning/COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md#§1"
+renders: docs/planning/COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md#§1
 action_pin: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa
 
 # ---------------------------------------------------------------------------------------------
@@ -63,16 +63,32 @@ families:
       function: resolve(ref_name, default_branch)
       entry_agnostic: true
       resolved_once_before_entry_selection: true
-    applies_to: [C2.branches-equal-resolved-target-set, C16.canary-branches-equal-resolved-target-set]
+    applies_to:
+      [
+        C2.branches-equal-resolved-target-set,
+        C16.canary-branches-equal-resolved-target-set,
+      ]
     # 2 sides x 6 forms = 12 cases; referenced by 2 entries = 24 executions.
     sides: [include, exclude]
     forms:
-      - {id: literal, expect: equality, payload: refs/heads/alpha}
-      - {id: default_branch, expect: equality, payload: "~DEFAULT_BRANCH"}
-      - {id: all_alias, expect: refusal, payload: "~ALL"}
-      - {id: star, expect: refusal, payload: "refs/heads/a*"}
-      - {id: question, expect: refusal, payload: "refs/heads/alph?"}
-      - {id: bracket, expect: refusal, payload: "refs/heads/alph[a-z]"}
+      - id: literal
+        expect: equality
+        payload: refs/heads/alpha
+      - id: default_branch
+        expect: equality
+        payload: ~DEFAULT_BRANCH
+      - id: all_alias
+        expect: refusal
+        payload: ~ALL
+      - id: star
+        expect: refusal
+        payload: refs/heads/a*
+      - id: question
+        expect: refusal
+        payload: refs/heads/mai?
+      - id: bracket
+        expect: refusal
+        payload: refs/heads/mai[a-z]
     validity: >-
       The mutant mutates an INJECTED ruleset observation, never the live ruleset. `equality` forms
       must produce a resolved set differing from the workflow's branches; `refusal` forms must produce
@@ -142,15 +158,14 @@ obligations:
         target: $.concurrency
         payload: "group: trunk-check"
         validity: constructible and valid YAML; reproduces the cancellation hazard
-        diagnostic: "workflow-level `concurrency` is prohibited"
+        diagnostic: workflow-level `concurrency` is prohibited
       - id: C0.no-concurrency/job
         op: add
         side: local
         target: $.jobs.<job>.concurrency
         payload: "group: trunk-check"
         validity: the level-below site revision 21 left open when it converted the job mapping
-        diagnostic: "job-level `concurrency` is prohibited"
-
+        diagnostic: job-level `concurrency` is prohibited
   # ------------------------------------------------------------------ C1: the event --------------
   - id: C1.single-event
     clause: C1
@@ -282,7 +297,7 @@ obligations:
         op: add
         side: local
         target: $.jobs.<job>.container
-        payload: "ubuntu:24.04"
+        payload: ubuntu:24.04
         validity: >-
           A valid unlisted JOB key. This was the last level still closed by a blacklist: the event
           mapping, the action inputs and the checkout inputs were converted to allowlists while the
@@ -298,7 +313,8 @@ obligations:
         declares_support_job:
           id: support
           runs-on: ubuntu-latest
-          steps: [{run: "exit 1"}]
+          steps:
+            - run: exit 1
           why: >-
             `needs:` only changes the observable outcome when the dependency FAILS; with a passing
             dependency the job still runs and the mutant would survive.
@@ -365,7 +381,7 @@ obligations:
         op: add
         side: local
         target: $.jobs.<job>.if
-        payload: "github.event_name != 'workflow_dispatch'"
+        payload: github.event_name != 'workflow_dispatch'
         validity: valid syntax, and strictly worse than the hazard it was written to fix
         diagnostic: "job: `if:` is prohibited (a skipped job reports Success)"
       - id: C3.nothing-skips-or-masks/job-continue-on-error
@@ -396,15 +412,14 @@ obligations:
         target: $.defaults.run
         payload: "shell: bash -e {0}"
         validity: reaches every step without touching any step mapping
-        diagnostic: "workflow `defaults.run` is prohibited"
+        diagnostic: workflow `defaults.run` is prohibited
       - id: C3.no-defaults-run/job
         op: add
         side: local
         target: $.jobs.<job>.defaults.run
         payload: "working-directory: /tmp"
         validity: the job-scope sibling
-        diagnostic: "job `defaults.run` is prohibited"
-
+        diagnostic: job `defaults.run` is prohibited
   - id: C3.exactly-one-trunk-invocation
     clause: C3
     kind: yaml
@@ -448,7 +463,7 @@ obligations:
         op: add
         side: local
         target: .with.post-init
-        payload: "echo hi"
+        payload: echo hi
         validity: the action's own docs call it "a caller-controlled escape hatch"
         diagnostic: "action inputs: unlisted input `post-init`"
       - id: C4.with-inputs-allowlist/arbitrary-input
@@ -472,7 +487,7 @@ obligations:
       The literal's bytes are stated only in §6.4 — a derived value written twice goes stale, and two
       stale copies agree with each other.
     target: $.jobs.<job>.steps[trunk].with.arguments
-    literal_source: "§6.4"
+    literal_source: §6.4
     cases:
       - id: C4.arguments-required-literal/absent
         op: remove
@@ -530,22 +545,21 @@ obligations:
         target: $.env
         payload: "TRUNK_PATH: /bin/true"
         validity: reaches the action untouched; revision 10's clause covered only two scopes
-        diagnostic: "workflow-level `env:` is prohibited"
+        diagnostic: workflow-level `env:` is prohibited
       - id: C5.no-env-any-scope/job
         op: add
         side: local
         target: $.jobs.<job>.env
         payload: "TRUNK_PATH: /bin/true"
         validity: redirects execution to a binary that exits 0
-        diagnostic: "job-level `env:` is prohibited"
+        diagnostic: job-level `env:` is prohibited
       - id: C5.no-env-any-scope/step
         op: add
         side: local
         target: $.jobs.<job>.steps[trunk].env
         payload: "BASH_ENV: /tmp/x"
         validity: alters every Bash process the action spawns
-        diagnostic: "step-level `env:` is prohibited"
-
+        diagnostic: step-level `env:` is prohibited
   # ------------------------------------------------------------------ C6: repo-supplied tool -----
   - id: C6.no-repository-supplied-launcher
     clause: C6
@@ -623,7 +637,7 @@ obligations:
         op: edit_bytes
         side: local
         target: scripts/ci/resolve-trunk-range.sh
-        payload: "make the resolver print an always-nonempty range"
+        payload: make the resolver print an always-nonempty range
         validity: >-
           The invoking `run:` bodies are left UNTOUCHED, so C8's digests still match — this is exactly
           the hole C8 cannot see. The guard must red on the digest mismatch AND must do so BEFORE the
@@ -663,7 +677,14 @@ obligations:
       resolver, and C6's must be the LAST thing before the action so nothing can create a launcher
       path behind its back.
     target: $.jobs.<job>.steps
-    step_ids: [checkout, guard-resolver-digest, guard-empty-diff, guard-launcher-path, trunk]
+    step_ids:
+      [
+        checkout,
+        guard-resolver-digest,
+        guard-empty-diff,
+        guard-launcher-path,
+        trunk,
+      ]
     cases:
       - id: C8.step-sequence-allowlist/extra-step
         op: insert
@@ -720,7 +741,7 @@ obligations:
         op: add
         side: local
         target: steps[guard-empty-diff].id
-        payload: "x"
+        payload: x
         validity: a valid complete-step key outside the allowlist
         diagnostic: "step `guard-empty-diff`: unlisted key `id`"
 
@@ -760,21 +781,24 @@ obligations:
         op: append
         side: local
         target: steps[guard-empty-diff].run
-        payload: "echo TRUNK_PATH=/bin/true >> \"$GITHUB_ENV\""
+        payload: >-
+          echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"
         validity: the C6 guard inspects PATHS, not inherited runner state
         diagnostic: "step `guard-empty-diff`: writes to $GITHUB_ENV"
       - id: C8.run-bodies-frozen/github-env-bash-env
         op: append
         side: local
         target: steps[guard-empty-diff].run
-        payload: "echo BASH_ENV=/tmp/x >> \"$GITHUB_ENV\""
+        payload: >-
+          echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"
         validity: alters every Bash process the action spawns
         diagnostic: "step `guard-empty-diff`: writes to $GITHUB_ENV"
       - id: C8.run-bodies-frozen/github-path
         op: append
         side: local
         target: steps[guard-empty-diff].run
-        payload: "echo /tmp/fake >> \"$GITHUB_PATH\""
+        payload: >-
+          echo /tmp/fake >> "$GITHUB_PATH"
         validity: >-
           `$GITHUB_PATH` was PROHIBITED WITHOUT EVER BEING MUTATED for two revisions. A validator that
           normalises away $GITHUB_PATH lines before hashing survives every generic byte edit; only an
@@ -784,14 +808,14 @@ obligations:
         op: append
         side: local
         target: steps[guard-empty-diff].run
-        payload: "install -D /bin/true tools/trunk"
+        payload: install -D /bin/true tools/trunk
         validity: the case revision 10's ordering made unkillable
         diagnostic: "step `guard-empty-diff`: creates a prohibited launcher path"
       - id: C8.run-bodies-frozen/changed-shell
         op: set
         side: local
         target: steps[guard-empty-diff].shell
-        payload: "sh"
+        payload: sh
         validity: >-
           `shell` is valid ONLY on `run:` steps. `actions/checkout` and the Trunk action are `uses:`
           steps, where actionlint rejects `shell` as an unexpected key — so mutating them through
@@ -803,7 +827,7 @@ obligations:
         op: set
         side: local
         target: steps[guard-empty-diff].working-directory
-        payload: "/tmp"
+        payload: /tmp
         validity: >-
           Frozen by C8 while revision 16 mutated it NOWHERE, so a validator checking body digest,
           `if`, `continue-on-error` and `shell` but forgetting `working-directory` passed every case.
@@ -823,7 +847,7 @@ obligations:
         op: add
         side: local
         target: steps[checkout].with.sparse-checkout
-        payload: "scripts/"
+        payload: scripts/
         validity: >-
           A well-meaning optimisation can leave changed files ABSENT FROM DISK while git metadata still
           yields a non-empty range — the empty-diff guard passes and Trunk lints files that are not
@@ -833,28 +857,28 @@ obligations:
         op: add
         side: local
         target: steps[checkout].with.ref
-        payload: "main"
+        payload: main
         validity: checks out other bytes than the PR's
         diagnostic: "checkout inputs: unlisted input `ref`"
       - id: C8.checkout-inputs-allowlist/repository
         op: add
         side: local
         target: steps[checkout].with.repository
-        payload: "other/repo"
+        payload: other/repo
         validity: lints a different repository
         diagnostic: "checkout inputs: unlisted input `repository`"
       - id: C8.checkout-inputs-allowlist/path
         op: add
         side: local
         target: steps[checkout].with.path
-        payload: "sub"
+        payload: sub
         validity: relocates the tree the guards inspect
         diagnostic: "checkout inputs: unlisted input `path`"
       - id: C8.checkout-inputs-allowlist/filter
         op: add
         side: local
         target: steps[checkout].with.filter
-        payload: "blob:none"
+        payload: blob:none
         validity: NAMED but unmutated for several revisions
         diagnostic: "checkout inputs: unlisted input `filter`"
       - id: C8.checkout-inputs-allowlist/arbitrary-input
@@ -915,14 +939,14 @@ obligations:
         op: set
         side: local
         target: steps[trunk].uses
-        payload: "trunk-io/trunk-action@v2.0.0"
+        payload: trunk-io/trunk-action@v2.0.0
         validity: a moving reference; constructible and valid
         diagnostic: "action pin: `trunk-io/trunk-action` is not pinned by SHA"
       - id: C9.action-pinned-by-sha/different-sha
         op: set
         side: local
         target: steps[trunk].uses
-        payload: "trunk-io/trunk-action@0000000000000000000000000000000000000000"
+        payload: trunk-io/trunk-action@0000000000000000000000000000000000000000
         validity: pinned, but not to the reviewed bytes
         diagnostic: "action pin: unexpected SHA"
 
@@ -952,7 +976,10 @@ obligations:
       merely stops it failing the workflow RUN. Step-scope would rewrite the Trunk step's conclusion to
       success and make the canary blind to the failure it exists to surface.
     target: $.jobs.trunk-check-push.continue-on-error
-    expected_tuple: {trunk_step: failure, job: failure, workflow_run: not_failed}
+    expected_tuple:
+      trunk_step: failure
+      job: failure
+      workflow_run: not_failed
     cases:
       - id: C16.canary-continue-on-error-job-scope/step-scope
         op: move
@@ -976,7 +1003,7 @@ obligations:
       `trunk-check-push` is ABSENT from ruleset `Control`'s required-status-check list at rollout. A
       committed ruleset observation is a POINT-IN-TIME read — it cannot prove "never", and claiming so
       would be a cell asserting more than its owner can see. Re-verified in M4's post-edit readback.
-    target: "ruleset Control -> required_status_checks[].context"
+    target: ruleset Control -> required_status_checks[].context
     cases:
       - id: C16.canary-not-required/present
         op: add

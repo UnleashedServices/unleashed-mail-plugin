@@ -1,29 +1,94 @@
 #!/bin/bash
-# Git pre-commit hook — runs linting, build, tests, and PII checks
+# Git pre-commit hook — runs linting, build, tests, PII checks, and the diff-scoped trunk gate.
 # Install: git config core.hooksPath .githooks
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)/scripts"
-status=0
+overall=0
 
-if [ -f "$SCRIPT_DIR/pre-commit-checks.sh" ]; then
-    bash "$SCRIPT_DIR/pre-commit-checks.sh" || status=$?
+if [[ -f "$SCRIPT_DIR/pre-commit-checks.sh" ]]; then
+	bash "$SCRIPT_DIR/pre-commit-checks.sh" || overall=$?
 else
-    echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR"
-    exit 0
+	echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR"
+	exit 0
+fi
+
+# COREDEV-2780 M5a — the local half of the trunk gate (§6.3 decided: WIRE IT, blocking).
+#
+# `--index`, NOT the worktree: the commit is made from the INDEX, so checking anything else lets a
+# finding that is clean in the worktree and dirty in the index sail through — and reports findings for
+# work that is not being committed.
+# `--no-fix`: this Trunk version applies fixes automatically otherwise, and a hook that rewrites files
+# under you during a commit is worse than one that refuses.
+# §6.4's declared exclusion: markdown-link-check is a network round trip per commit, failing on someone
+# else's outage — the same "red by default" trap §1 rejects for CI.
+# NEVER `--all`: the 9027-issue backlog would block every commit.
+TRUNK_TIMEOUT_SECONDS=180 # M5a: measured 30.8s cold-bootstrap envelope x ~6 headroom.
+# docs/planning/evidence/COREDEV-2780-m5a-timeout-measurement.json
+
+# MACOS-PORTABLE. Stock macOS ships NEITHER `timeout` NOR `gtimeout` — they arrive only with homebrew
+# coreutils, so a hook that assumes them is broken on a clean Mac, which is most of the machines this
+# runs on. Prefer them when present, and otherwise use a watchdog built from what every shell has.
+run_with_timeout() {
+	seconds="$1"
+	shift
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "${seconds}" "$@"
+		return $?
+	fi
+	if command -v gtimeout >/dev/null 2>&1; then
+		gtimeout "${seconds}" "$@"
+		return $?
+	fi
+	"$@" &
+	_rwt_cmd=$!
+	# THE WATCHDOG'S FDS ARE REDIRECTED, and that is not cosmetic. A background subshell inherits the
+	# hook's stdout and stderr, so while it sleeps it HOLDS THE CALLER'S PIPE OPEN — any parent
+	# capturing this hook's output (a wrapper script, a test harness, an editor's VCS integration)
+	# blocks for the whole timeout even after the hook itself has exited. Reproduced: the suite hung
+	# for the full 180 seconds on a run where trunk returned instantly.
+	(
+		sleep "${seconds}"
+		kill -TERM "${_rwt_cmd}" 2>/dev/null
+	) >/dev/null 2>&1 &
+	_rwt_watchdog=$!
+	wait "${_rwt_cmd}" 2>/dev/null
+	_rwt_rc=$?
+	kill -TERM "${_rwt_watchdog}" 2>/dev/null
+	wait "${_rwt_watchdog}" 2>/dev/null
+	return "${_rwt_rc}"
+}
+
+if command -v trunk >/dev/null 2>&1; then
+	echo "🧹 trunk check (staged diff only)…"
+	if run_with_timeout "${TRUNK_TIMEOUT_SECONDS}" \
+		trunk check --index --no-fix --filter=-markdown-link-check; then
+		echo "✅ trunk: no new findings in the staged diff"
+	else
+		_trunk_rc=$?
+		if [[ ${_trunk_rc} -eq 124 || ${_trunk_rc} -eq 143 ]]; then
+			# A timeout is an INFRASTRUCTURE failure, not a lint finding. Blocking the commit on
+			# someone's slow network would teach people to pass --no-verify, which disables every
+			# check above as well.
+			echo "⚠️  trunk check exceeded ${TRUNK_TIMEOUT_SECONDS}s — not blocking on a timeout"
+		else
+			echo "❌ trunk: new findings in the staged diff (fix them, or stage less)"
+			overall=1
+		fi
+	fi
 fi
 
 # COREDEV-2801 §3b — the drift detector's second surface, for the case where hooks are disabled in the
-# session but not in git. ADVISORY AND NON-BLOCKING: it never contributes to `status`, because a stale
+# session but not in git. ADVISORY AND NON-BLOCKING: it never contributes to `overall`, because a stale
 # install is a thing to know about, not a reason to refuse a commit. Silent on every Table A row but
 # one, so an equal or locally-newer install cannot train anyone to ignore it.
 #
 # THE ROOT IS PASSED EXPLICITLY, derived here rather than inherited: git runs this hook from the
 # worktree, so `--show-toplevel` is correct — while CLAUDE_PROJECT_DIR may be unset, empty, or left
 # over from a DIFFERENT project, which would compare against a foreign manifest.
-if [ -x "$SCRIPT_DIR/detect-plugin-version-drift.sh" ]; then
-    bash "$SCRIPT_DIR/detect-plugin-version-drift.sh" "$(git rev-parse --show-toplevel)" || true
+if [[ -x "${SCRIPT_DIR}/detect-plugin-version-drift.sh" ]]; then
+	bash "${SCRIPT_DIR}/detect-plugin-version-drift.sh" "$(git rev-parse --show-toplevel)" || true
 fi
 
 # THE EXIT CODE AGGREGATES. Appending any passing command after the checks above would otherwise mask
 # a nonzero result from them — a hook that swallows a prior failure is worse than no hook.
-exit "$status"
+exit "${overall}"

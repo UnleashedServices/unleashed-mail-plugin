@@ -36,12 +36,12 @@ mode="${2-}"
 
 # Table A row 1 by CLASSIFICATION rather than by accident: a missing, empty or non-repository operand
 # has no `expected` to compare against, so it is silent — the same outcome as an unreadable manifest.
-if [ -z "${root}" ] || [ ! -d "${root}" ]; then
-    exit 0
+if [[ -z ${root} ]] || [[ ! -d ${root} ]]; then
+	exit 0
 fi
 
 expected_json="$(git -C "${root}" show origin/main:.claude-plugin/plugin.json 2>/dev/null)" || exit 0
-[ -n "${expected_json}" ] || exit 0
+[[ -n ${expected_json} ]] || exit 0
 
 installed_record="${HOME}/.claude/plugins/installed_plugins.json"
 
@@ -55,8 +55,8 @@ installed_record="${HOME}/.claude/plugins/installed_plugins.json"
 tmp_out="$(mktemp "${TMPDIR:-/tmp}/unleashed-drift.XXXXXX")" || exit 0
 trap 'rm -f "${tmp_out}"' EXIT
 
-    EXPECTED_JSON="${expected_json}" INSTALLED_RECORD="${installed_record}" OUT_FILE="${tmp_out}" \
-    python3 <<'PY' 2>/dev/null
+EXPECTED_JSON="${expected_json}" INSTALLED_RECORD="${installed_record}" OUT_FILE="${tmp_out}" \
+	python3 <<'PY' 2>/dev/null
 import json, os, re, sys
 
 SEMVER = re.compile(
@@ -157,11 +157,11 @@ PY
 warning="$(cat "${tmp_out}")"
 
 # Silent rows produce no output at all, and take no other action.
-[ -n "${warning}" ] || exit 0
+[[ -n ${warning} ]] || exit 0
 
-if [ "${mode}" != "--session-start" ]; then
-    printf '%s\n' "${warning}"
-    exit 0
+if [[ ${mode} != "--session-start" ]]; then
+	printf '%s\n' "${warning}"
+	exit 0
 fi
 
 # ---- SessionStart: dedup per session per retention window, then emit the hook's own protocol -------

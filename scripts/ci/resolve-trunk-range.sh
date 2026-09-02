@@ -31,56 +31,56 @@
 set -euo pipefail
 
 die() {
-    printf 'resolve-trunk-range: %s\n' "$1" >&2
-    exit 1
+	printf 'resolve-trunk-range: %s\n' "$1" >&2
+	exit 1
 }
 
 event="${GITHUB_EVENT_NAME-}"
-[ -n "${event}" ] || die "GITHUB_EVENT_NAME is unset — refusing to guess the event"
+[[ -n ${event} ]] || die "GITHUB_EVENT_NAME is unset — refusing to guess the event"
 
 case "${event}" in
 pull_request)
-    # `pull_request.sh`: when the MERGE ref is checked out — which it always is here, because C8's
-    # checkout-input allowlist forbids `ref:` — the action fetches depth=2 and uses HEAD^1 as the
-    # upstream, deliberately in preference to `github.event.pull_request.base.sha`, "which can be
-    # incorrect sometimes". The workflow sets `fetch-depth: 2` so HEAD^1 is already present.
-    ref_name="${GITHUB_REF_NAME-}"
-    pr_number="${GITHUB_EVENT_PULL_REQUEST_NUMBER-}"
-    if [ -n "${pr_number}" ] && [ "${ref_name}" = "${pr_number}/merge" ]; then
-        upstream="$(git rev-parse HEAD^1)" || die "HEAD^1 is unavailable — fetch-depth must be >= 2"
-    else
-        # The action's fallback. Unreachable in this repository's workflows (C8 forbids `ref:`), so it
-        # is transcribed for parity and fails closed rather than silently resolving something else.
-        upstream="${GITHUB_EVENT_PULL_REQUEST_BASE_SHA-}"
-        [ -n "${upstream}" ] || die "not on the merge ref and no base SHA — cannot resolve an upstream"
-    fi
-    ;;
+	# `pull_request.sh`: when the MERGE ref is checked out — which it always is here, because C8's
+	# checkout-input allowlist forbids `ref:` — the action fetches depth=2 and uses HEAD^1 as the
+	# upstream, deliberately in preference to `github.event.pull_request.base.sha`, "which can be
+	# incorrect sometimes". The workflow sets `fetch-depth: 2` so HEAD^1 is already present.
+	ref_name="${GITHUB_REF_NAME-}"
+	pr_number="${GITHUB_EVENT_PULL_REQUEST_NUMBER-}"
+	if [[ -n ${pr_number} ]] && [[ ${ref_name} == "${pr_number}/merge" ]]; then
+		upstream="$(git rev-parse HEAD^1)" || die "HEAD^1 is unavailable — fetch-depth must be >= 2"
+	else
+		# The action's fallback. Unreachable in this repository's workflows (C8 forbids `ref:`), so it
+		# is transcribed for parity and fails closed rather than silently resolving something else.
+		upstream="${GITHUB_EVENT_PULL_REQUEST_BASE_SHA-}"
+		[[ -n ${upstream} ]] || die "not on the merge ref and no base SHA — cannot resolve an upstream"
+	fi
+	;;
 push)
-    before="${GITHUB_EVENT_BEFORE-}"
-    [ -n "${before}" ] || die "GITHUB_EVENT_BEFORE is unset on a push event"
-    # THE ZERO-`before` CASE, AND WHY IT FAILS RATHER THAN RESOLVING (cell 1, C1's canary contract).
-    # GitHub sends all zeros when a branch is CREATED or a TAG is pushed. At the pinned SHA `push.sh`
-    # branches on exactly that and runs `trunk check --ci --all` — the 9027-finding whole-tree run §1
-    # forbids, and a gate that is red by default is a gate people learn to ignore. This branch is
-    # reachable only from the push canary; the required workflow has no push event at all. Fail closed:
-    # a push whose diff cannot be resolved is not a push that gets to lint the tree.
-    if [ "${before}" = "0000000000000000000000000000000000000000" ]; then
-        die "zero \`before\` (branch creation or tag push) would send the action down its --all branch"
-    fi
-    if [[ ${GITHUB_REF_NAME-} == gh-readonly-queue/* ]]; then
-        # `push.sh`: on the merge queue `github.event.before` is inaccurate, so the action uses HEAD^1.
-        upstream="$(git rev-parse HEAD^1)" || die "HEAD^1 is unavailable on a merge-queue ref"
-    else
-        upstream="${before}"
-    fi
-    ;;
+	before="${GITHUB_EVENT_BEFORE-}"
+	[[ -n ${before} ]] || die "GITHUB_EVENT_BEFORE is unset on a push event"
+	# THE ZERO-`before` CASE, AND WHY IT FAILS RATHER THAN RESOLVING (cell 1, C1's canary contract).
+	# GitHub sends all zeros when a branch is CREATED or a TAG is pushed. At the pinned SHA `push.sh`
+	# branches on exactly that and runs `trunk check --ci --all` — the 9027-finding whole-tree run §1
+	# forbids, and a gate that is red by default is a gate people learn to ignore. This branch is
+	# reachable only from the push canary; the required workflow has no push event at all. Fail closed:
+	# a push whose diff cannot be resolved is not a push that gets to lint the tree.
+	if [[ ${before} == "0000000000000000000000000000000000000000" ]]; then
+		die "zero before-hash (branch creation or tag push) would send the action down its --all branch"
+	fi
+	if [[ ${GITHUB_REF_NAME-} == gh-readonly-queue/* ]]; then
+		# `push.sh`: on the merge queue `github.event.before` is inaccurate, so the action uses HEAD^1.
+		upstream="$(git rev-parse HEAD^1)" || die "HEAD^1 is unavailable on a merge-queue ref"
+	else
+		upstream="${before}"
+	fi
+	;;
 *)
-    # `determine_check_mode.sh` maps `workflow_dispatch` to check-mode=all and `merge_group` to no
-    # branch at all (falling through to check_mode=none — a skipped-but-SUCCESSFUL action, the exact
-    # false pass this gate exists to prevent). Neither is permitted by C1/C7, so neither is resolved.
-    die "unsupported event \`${event}\` — only pull_request and push resolve a range"
-    ;;
+	# `determine_check_mode.sh` maps `workflow_dispatch` to check-mode=all and `merge_group` to no
+	# branch at all (falling through to check_mode=none — a skipped-but-SUCCESSFUL action, the exact
+	# false pass this gate exists to prevent). Neither is permitted by C1/C7, so neither is resolved.
+	die "unsupported event \`${event}\` — only pull_request and push resolve a range"
+	;;
 esac
 
-[ -n "${upstream}" ] || die "resolved an empty upstream"
+[[ -n ${upstream} ]] || die "resolved an empty upstream"
 printf 'upstream=%s\n' "${upstream}"

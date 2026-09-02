@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.7
+# UnleashedMail — Claude Code Plugin v2.8.8
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -8,10 +8,19 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ## What's New
 
+### v2.8.8
+
+- **COREDEV-2780 (M5a) — `trunk check` now gates commits locally too.**
+  `.githooks/pre-commit` runs `trunk check --index --no-fix --filter=-markdown-link-check`: the staged
+  diff only (the commit is made from the index), never `--all` (the 9027-issue backlog would block
+  every commit), and never autofixing. Bounded by a **180-second macOS-portable timeout** — stock
+  macOS ships neither `timeout` nor `gtimeout`, so there is a watchdog fallback — with the constant
+  derived from a recorded measurement rather than asserted. A finding blocks; a **timeout does not**.
+
 ### v2.8.7
 
 - **COREDEV-2801 (M6) — the plugin-version drift detector, on both surfaces.**
-  `scripts/detect-plugin-version-drift.sh` warns when the version a session is *running* lags what
+  `scripts/detect-plugin-version-drift.sh` warns when the version a session is _running_ lags what
   `origin/main` serves — the defect as reported, where a version no source served stayed reachable.
   It lives in the checkout rather than the plugin, so a session bound to a stale install can still run
   it. `expected` is read from **`origin/main`**, never the worktree: the version-bump rule keeps the
@@ -58,7 +67,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 - **Review harness: Python bytecode is no longer mistaken for reviewer tampering (`COREDEV-2650`).**
   The isolated review wrappers fingerprint their disposable checkout afterwards and void the round if
-  it changed — the COREDEV-2607 defence against a reviewer that once *implemented* the plan it was
+  it changed — the COREDEV-2607 defence against a reviewer that once _implemented_ the plan it was
   sent to review. But a reviewer that imported a repo module to **reproduce a measured claim** made
   CPython write `__pycache__/*.pyc` beside the source, and that bytecode read as tampering. It threw
   away three valid rounds on `COREDEV-2711` — kimi at r1, then both agy and kimi at r8, leaving that
@@ -142,7 +151,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 - **Seven review passes over the 2.7.0 permission and transcript surface (`COREDEV-2642`)** — 40+ findings
   remediated, each with a proof that fails when the fix is reverted. The ones that changed observable
-  behaviour: a prompt naming a path that merely *shares the checkout's prefix* (`…/Unleashed Mail` vs
+  behaviour: a prompt naming a path that merely _shares the checkout's prefix_ (`…/Unleashed Mail` vs
   `…/Unleashed MailTests/…`) was silently rewritten to a path that does not exist, so the reviewer read
   nothing while the round still validated; a plan over 64 KiB could never be persisted, because the
   bound-snapshot digest was taken through a cap meant for small sidecars; and `pr-review` could approve
@@ -172,7 +181,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 - **Plugin state no longer splits across two directories** (`COREDEV-2617`) — `CLAUDE_PLUGIN_DATA` is
   exported to hooks and MCP subprocesses but **not** to an ordinary shell, so anything written outside a
-  hook landed in a *second* store (`~/.claude/unleashed-mail`) that the hooks' store never saw. An
+  hook landed in a _second_ store (`~/.claude/unleashed-mail`) that the hooks' store never saw. An
   unresolved base now **persists nothing**: path primitives return a poisoned, non-root sentinel
   (`/dev/null/unresolved-plugin-base` — every path beneath a character device is `ENOTDIR`, so an
   unguarded caller fails harmlessly instead of composing `/logs`), writers become no-ops, and one
@@ -181,13 +190,13 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ### v2.6.4
 
-- **Reviewer isolation** (`COREDEV-2607`) — a plan review once *implemented* the plan it was reviewing,
+- **Reviewer isolation** (`COREDEV-2607`) — a plan review once _implemented_ the plan it was reviewing,
   modifying 6 shipped scripts. [`scripts/review/isolated-agy-review.sh`](scripts/review/isolated-agy-review.sh)
   now runs the `agy` reviewer against a disposable detached checkout and **fails the round** if the real
   working tree changed. `agy` has no read-only flag — four candidates were tested and all four wrote
   files — so the fix isolates rather than constrains.
 - **Secret redaction closes the Unicode fold residual** (`COREDEV-2609`) — U+0130 / U+0131 / U+017F /
-  U+212A now ride in the secret *payload* class in both redactors. The *anchor* is deliberately left
+  U+212A now ride in the secret _payload_ class in both redactors. The _anchor_ is deliberately left
   narrow: widening an unanchored prefix is what corrupted prose before.
 
 ### v2.6.3
@@ -217,7 +226,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
   `~500ms`, `~40/60 split` and Swift's `~Copyable` all survive intact — and **five leak classes are
   closed**: Unicode whitespace in the api-key/bearer slots, newline-spanning secrets (`sed` is
   line-oriented and the fold ran after the rules), the compound form where `/Users/…` over-consumed
-  and ate the `api` anchor, a *routable* address preserved entirely by the email exemption, and a real
+  and ate the `api` anchor, a _routable_ address preserved entirely by the email exemption, and a real
   username leaked by the tilde exemption. The `sk-`/`pk_` boundary is now asymmetric so
   `OPENAI_KEY_sk-proj-…` redacts while `orders_pk_customer_id_idx` survives. Equivalence between the
   shell and Python redactors is enforced by a new CI job on **both** `ubuntu-latest` and
@@ -237,7 +246,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 - **Opus 5 alignment (COREDEV-2583).** Requires **Claude Code ≥ 2.1.219** (Opus 5's floor); CI now pins
   2.1.220.
 - **`effort: xhigh` is pinned on every agent and every skill** (42 assets) and enforced by CI. Previously
-  *nothing* set `effort`, so every asset ran at whatever the session carried — including `low`. Note the
+  _nothing_ set `effort`, so every asset ran at whatever the session carried — including `low`. Note the
   pin is an override in both directions, and `CLAUDE_CODE_EFFORT_LEVEL` still outranks it.
 - **Model tiering is now three tiers, set by consequence rather than cost.** `security-reviewer`,
   `prompt-review` and `concurrency-reviewer` move to `opus`; the orchestrator and implementation agents
@@ -287,7 +296,7 @@ regression test that fails when reverted.
 The Plan Review Gate hardening release — the gate is now usable end-to-end and cannot be talked out of
 its own guarantees.
 
-- **Plan Review Gate, usable and hardened (COREDEV-2492).** `/implement <feature|path>` resolves to *the*
+- **Plan Review Gate, usable and hardened (COREDEV-2492).** `/implement <feature|path>` resolves to _the_
   tracked plan (exact-stem match; a bare substring must be named), refuses any plan outside
   `docs/planning/` (realpath containment closes the `" "`/`.`/`..`/symlink/symlinked-root/same-basename
   bypasses that let a stray argument or an out-of-tree file satisfy the gate), and verifies a
@@ -328,15 +337,15 @@ its own guarantees.
 ### v2.4.0
 
 - **`prompt-review` — a 5th specialist reviewer (GARI prompt / call-site safety).** A read-only static reviewer of AI prompts and provider call sites (jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress of untrusted email/web content, inline prompts outside `PromptRegistry`, unscoped tools, PII-in-logs), fully wired into the `swift-reviewer` panel and the deterministic `review-synthesizer` pipeline (new **`ai-safety`** category family + `prompt-review` ownership). **Agent count: 21** (was 20). (COREDEV-2329 / COREDEV-2330)
-- **Cross-family AI-safety ↔ security consolidation** — overlapping `prompt-review` and security/correctness findings on the *same lines* now merge into one `prompt-review`-owned row (category-level `_OWNERSHIP_MERGE_PAIRS`), never dropping a fix and never hiding a co-located security blocker. (COREDEV-2332)
-- **Reviewer-capture round binding** — a `SubagentStart` producer hook freezes each reviewer's round at spawn (keyed by `agent_id`) so captures land in their *originating* cycle under interleaved timing; observe-only and fail-open. (COREDEV-2326)
+- **Cross-family AI-safety ↔ security consolidation** — overlapping `prompt-review` and security/correctness findings on the _same lines_ now merge into one `prompt-review`-owned row (category-level `_OWNERSHIP_MERGE_PAIRS`), never dropping a fix and never hiding a co-located security blocker. (COREDEV-2332)
+- **Reviewer-capture round binding** — a `SubagentStart` producer hook freezes each reviewer's round at spawn (keyed by `agent_id`) so captures land in their _originating_ cycle under interleaved timing; observe-only and fail-open. (COREDEV-2326)
 - **Reviewer Output-Contract status persisted through capture** — each reviewer's `COMPLETE | BLOCKED | PARTIAL` status is written to a sibling `<agent>.status` JSON, so a captured `BLOCKED` reviewer can't read as a clean `[]` pass. (COREDEV-2328)
 - **`ai-engineer` doc-drift fix** — removed the non-existent `HTTPBasedAIProvider` / `AIToolDefinition` symbols from the agent docs, `CLAUDE.md`, and contracts; examples now use the real `BaseAIProvider` + `AIProviderProtocol` / `AITool` + `ToolHandlerProtocol` model, with `HTTPBasedAIProvider` relabelled **PLANNED** (COREDEV-1837). (COREDEV-2331)
 
 ### v2.3.1
 
 - **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each transcript path is carried as one opaque `--reviewer "<name>=<STATUS>:<path>"` argument (**at this version the two paths were fixed; per-run allocated paths arrived in v2.6.7** — this historical entry had been rewritten to describe the later behaviour, so the file contradicted itself about when per-run paths existed); a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a.
-- **Reviewer Output-Contract status enum** — the four specialist reviewers now end with a `## Output Contract` status (`COMPLETE | BLOCKED | PARTIAL`) that is **orthogonal** to their findings, so a reviewer that *couldn't run* returns `BLOCKED` + `[]` instead of an empty `[]` that reads as a clean pass. `swift-reviewer` Step 5 reads status **first**: `BLOCKED` → NEEDS DISCUSSION (the explicit form of a did-not-run uncertainty — **not** a `verification` blocker); `PARTIAL` → keep completed-scope findings + a non-gating `verification` warning naming the un-reviewed files. No synthesizer (Python) change.
+- **Reviewer Output-Contract status enum** — the four specialist reviewers now end with a `## Output Contract` status (`COMPLETE | BLOCKED | PARTIAL`) that is **orthogonal** to their findings, so a reviewer that _couldn't run_ returns `BLOCKED` + `[]` instead of an empty `[]` that reads as a clean pass. `swift-reviewer` Step 5 reads status **first**: `BLOCKED` → NEEDS DISCUSSION (the explicit form of a did-not-run uncertainty — **not** a `verification` blocker); `PARTIAL` → keep completed-scope findings + a non-gating `verification` warning naming the un-reviewed files. No synthesizer (Python) change.
 - **Decision-support option tables in `/unleashed-mail:brainstorm`** — a new design-phase **Step 4b** presents 2–4 options for a genuine architectural fork in a comparison table (with an unleashed-specific **Parity-Impact** column, S/M/L effort, a `**(Recommended)**` row, no emoji), then calls `AskUserQuestion` to record the chosen fork before the plan document is written. `AskUserQuestion` is added to the command's `allowed-tools` (a command-interface change).
 - **Skill count: 18** (was 17) — adds `review-synthesis`.
 
@@ -357,7 +366,7 @@ its own guarantees.
 ### v2.2.3
 
 - **SwiftLint "fix-when-touched" rule disambiguated** — the rule "fix violations in files you modify" (`CLAUDE.md`, `code-simplifier` Pass 4) read as a conflict with `jira-manager`'s "ticket out-of-scope violations" guidance. "Out-of-scope" now explicitly means **files the change does not modify**; any violation in a modified file is fixed as part of the change and never deferred to a ticket — consistent with the `swiftlint --strict` merge gate.
-- **Legacy-regex migration exception** — the one carve-out from fix-when-touched: legacy `NSRegularExpression` ("old regex") is **not** migrated inline. It's owned by the dedicated Swift `Regex`/`RegexBuilder` migration (`.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If a lint rule flags a site in a touched file, it's suppressed with `// swiftlint:disable:next no_legacy_nsregex - <ticket>` (the ` - ` rationale delimiter keeps `--strict` green; a trailing `//` does not) and tracked under the migration epic. Documented in `CLAUDE.md`, `code-simplifier`, and `jira-manager`.
+- **Legacy-regex migration exception** — the one carve-out from fix-when-touched: legacy `NSRegularExpression` ("old regex") is **not** migrated inline. It's owned by the dedicated Swift `Regex`/`RegexBuilder` migration (`.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If a lint rule flags a site in a touched file, it's suppressed with `// swiftlint:disable:next no_legacy_nsregex - <ticket>` (the `-` rationale delimiter keeps `--strict` green; a trailing `//` does not) and tracked under the migration epic. Documented in `CLAUDE.md`, `code-simplifier`, and `jira-manager`.
 - **`swiftlint-config` skill gains `no_legacy_nsregex`** — a sample custom rule flagging `NSRegularExpression`, with guidance to introduce it alongside a SwiftLint **baseline** (`swiftlint lint --strict --baseline swiftlint-baseline.json`; baselines are native to SwiftLint ≥ 0.55) so the existing backlog (hundreds of sites) doesn't break the strict gate while the migration burns it down.
 
 ### v2.2.2
@@ -491,78 +500,78 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 
 ### Review Agents (run in parallel via orchestrator)
 
-| Agent | Specialization |
-|---|---|
-| `swift-reviewer` | **Orchestrator** — spawns all 5 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict |
-| `security-reviewer` | Credential exposure, OAuth/MSAL flaws, WKWebView injection (HTMLSanitizer + HTMLRenderPipeline), CI pipeline, entitlements, SQLCipher |
-| `concurrency-reviewer` | Data races, actor isolation, async/await, GRDB threading, COREDEV-1578 Sendable matrix, deprecated APIs (Swift 6 enforced) |
-| `ux-perf-reviewer` | Main-thread responsiveness, SwiftUI rendering, query perf, image budget tiers, perceived speed, error UX |
-| `accessibility-auditor` | VoiceOver, keyboard nav, Dynamic Type, color contrast, focus management, Curator design system, dual-impl a11y parity |
-| `prompt-review` | AI prompt/call-site safety (static, read-only): jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress, inline prompts outside PromptRegistry, unscoped tools, PII-in-logs |
+| Agent                   | Specialization                                                                                                                                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `swift-reviewer`        | **Orchestrator** — spawns all 5 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict            |
+| `security-reviewer`     | Credential exposure, OAuth/MSAL flaws, WKWebView injection (HTMLSanitizer + HTMLRenderPipeline), CI pipeline, entitlements, SQLCipher                                                                             |
+| `concurrency-reviewer`  | Data races, actor isolation, async/await, GRDB threading, COREDEV-1578 Sendable matrix, deprecated APIs (Swift 6 enforced)                                                                                        |
+| `ux-perf-reviewer`      | Main-thread responsiveness, SwiftUI rendering, query perf, image budget tiers, perceived speed, error UX                                                                                                          |
+| `accessibility-auditor` | VoiceOver, keyboard nav, Dynamic Type, color contrast, focus management, Curator design system, dual-impl a11y parity                                                                                             |
+| `prompt-review`         | AI prompt/call-site safety (static, read-only): jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress, inline prompts outside PromptRegistry, unscoped tools, PII-in-logs |
 
 ### Coding & Implementation Agents
 
-| Agent | Domain |
-|---|---|
-| `db-engineer` | GRDB 7+ schema (snake_case columns), SQLCipher, migrations (CRITICAL/DEFERRABLE), Record types, async observation, append-only |
-| `logic-engineer` | Service protocols, Gmail + Graph impls via `AccountScopedServiceProvider`, ViewModels, AI pipeline routing, sync, mocks |
-| `ui-engineer` | SwiftUI views (macOS 15+), AppKit bridging, WKWebView composer, Curator design tokens, `@State`-resolved services, a11y, dual-impl updates |
-| `ai-engineer` | GARI AI pipeline — cloud providers (`BaseAIProvider` + `AIProviderProtocol`) + Apple Intelligence, ToolRegistry, PromptRegistry, inline safety (PIIRedactor + LLMInputSanitizer), AIAgentPipeline (unified `HTTPBasedAIProvider` base PLANNED, COREDEV-1837) |
-| `tester` | Test strategy, MockServices.swift extension, `KeychainManager.resetInMemoryStore()` discipline, account-isolation invariants |
-| `code-simplifier` | 16-pass conservative simplification with deletion guardrails (selectors, IBActions, reflection-loaded code preserved) |
+| Agent             | Domain                                                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `db-engineer`     | GRDB 7+ schema (snake_case columns), SQLCipher, migrations (CRITICAL/DEFERRABLE), Record types, async observation, append-only                                                                                                                               |
+| `logic-engineer`  | Service protocols, Gmail + Graph impls via `AccountScopedServiceProvider`, ViewModels, AI pipeline routing, sync, mocks                                                                                                                                      |
+| `ui-engineer`     | SwiftUI views (macOS 15+), AppKit bridging, WKWebView composer, Curator design tokens, `@State`-resolved services, a11y, dual-impl updates                                                                                                                   |
+| `ai-engineer`     | GARI AI pipeline — cloud providers (`BaseAIProvider` + `AIProviderProtocol`) + Apple Intelligence, ToolRegistry, PromptRegistry, inline safety (PIIRedactor + LLMInputSanitizer), AIAgentPipeline (unified `HTTPBasedAIProvider` base PLANNED, COREDEV-1837) |
+| `tester`          | Test strategy, MockServices.swift extension, `KeychainManager.resetInMemoryStore()` discipline, account-isolation invariants                                                                                                                                 |
+| `code-simplifier` | 16-pass conservative simplification with deletion guardrails (selectors, IBActions, reflection-loaded code preserved)                                                                                                                                        |
 
 ### Stakeholder Persona Agents (used during brainstorming)
 
-| Agent | Perspective |
-|---|---|
-| `smb-entrepreneur` | SMB founder (15-person firm, 150 emails/day) — evaluates speed, workflow, cost, keyboard-first UX |
+| Agent                    | Perspective                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `smb-entrepreneur`       | SMB founder (15-person firm, 150 emails/day) — evaluates speed, workflow, cost, keyboard-first UX |
 | `enterprise-stakeholder` | IT director (500-5000 person org) — evaluates compliance, admin control, scale, SSO/MDM, security |
 
 ### Planning, Tracking & Diagnostic Agents
 
-| Agent | Purpose |
-|---|---|
-| `modern-standards-planner` | Researches current best practices via Context7 + web search; cites `.claude/rules/` as standards source; gates plans on dual review |
-| `jira-manager` | Ticket lifecycle — creation, Epic linking, milestone updates against `https://unleashedservices.atlassian.net/` (project key `COREDEV`) |
-| `docs-engineer` | README, API docs (DocC via xcodebuild), user guides, planning docs, architecture, roadmap |
-| `xcode-build-fixer` | Diagnoses and proposes fixes for Xcode build / package resolution failures (Ask-before for dependency changes) |
-| `graph-api-debugger` | Microsoft Graph / MSAL auth troubleshooting (Ask-before for auth/entitlements edits) |
-| `ci-engineer` | GitHub Actions workflows (SHA-pinned), Xcode Cloud, build automation, coordination with the `bump-build-number.sh` Run Script Build Phase + `post-archive-commit-bump.sh` Post-Action |
-| `release-manager` | `MAJOR.MINORRELEASE.YYMMBB` versioning, App Store / TestFlight submission, defers BB-byte to automation |
+| Agent                      | Purpose                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `modern-standards-planner` | Researches current best practices via Context7 + web search; cites `.claude/rules/` as standards source; gates plans on dual review                                                   |
+| `jira-manager`             | Ticket lifecycle — creation, Epic linking, milestone updates against `https://unleashedservices.atlassian.net/` (project key `COREDEV`)                                               |
+| `docs-engineer`            | README, API docs (DocC via xcodebuild), user guides, planning docs, architecture, roadmap                                                                                             |
+| `xcode-build-fixer`        | Diagnoses and proposes fixes for Xcode build / package resolution failures (Ask-before for dependency changes)                                                                        |
+| `graph-api-debugger`       | Microsoft Graph / MSAL auth troubleshooting (Ask-before for auth/entitlements edits)                                                                                                  |
+| `ci-engineer`              | GitHub Actions workflows (SHA-pinned), Xcode Cloud, build automation, coordination with the `bump-build-number.sh` Run Script Build Phase + `post-archive-commit-bump.sh` Post-Action |
+| `release-manager`          | `MAJOR.MINORRELEASE.YYMMBB` versioning, App Store / TestFlight submission, defers BB-byte to automation                                                                               |
 
 ## Skills (18) — Auto-activate based on context
 
-| Skill | Triggers When |
-|---|---|
-| `swift-tdd` | Implementing features, writing tests, refactoring (uses `xcodebuild test`) |
-| `swiftui-mvvm` | Building views, view models, navigation, state management |
-| `grdb-patterns` | Database models, migrations, queries, observation |
-| `macos-debugging` | Crashes, memory leaks, performance issues, build failures |
-| `webview-composer` | Email composition UI, contenteditable, JS bridge code |
-| `keychain-security` | OAuth tokens, credential storage, encryption |
-| `gmail-api-integration` | Gmail email fetching, sending, labels, Pub/Sub, OAuth flows |
-| `microsoft-graph-integration` | Outlook/M365 email, MSAL auth (added via Xcode UI), Graph webhooks, delta queries |
-| `provider-parity` | Any code touching provider-specific implementations or protocols |
-| `agent-orchestration` | Coordinating multi-agent workflows, determining parallel execution strategy |
-| `error-handling` | Error patterns, do-catch, Result types, error propagation |
-| `accessibility-patterns` | Accessibility implementation patterns for macOS/SwiftUI |
-| `swiftlint-config` | SwiftLint rule configuration, violation remediation |
-| `spm-management` | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit |
-| `gemini-review` | Plan/debug review via Antigravity CLI (`agy`); routes through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py) PTY wrapper for guaranteed non-TTY output capture |
-| `codex-review` | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
-| `create-feature-plan` | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template |
-| `review-synthesis` | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation |
+| Skill                         | Triggers When                                                                                                                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `swift-tdd`                   | Implementing features, writing tests, refactoring (uses `xcodebuild test`)                                                                                                                                             |
+| `swiftui-mvvm`                | Building views, view models, navigation, state management                                                                                                                                                              |
+| `grdb-patterns`               | Database models, migrations, queries, observation                                                                                                                                                                      |
+| `macos-debugging`             | Crashes, memory leaks, performance issues, build failures                                                                                                                                                              |
+| `webview-composer`            | Email composition UI, contenteditable, JS bridge code                                                                                                                                                                  |
+| `keychain-security`           | OAuth tokens, credential storage, encryption                                                                                                                                                                           |
+| `gmail-api-integration`       | Gmail email fetching, sending, labels, Pub/Sub, OAuth flows                                                                                                                                                            |
+| `microsoft-graph-integration` | Outlook/M365 email, MSAL auth (added via Xcode UI), Graph webhooks, delta queries                                                                                                                                      |
+| `provider-parity`             | Any code touching provider-specific implementations or protocols                                                                                                                                                       |
+| `agent-orchestration`         | Coordinating multi-agent workflows, determining parallel execution strategy                                                                                                                                            |
+| `error-handling`              | Error patterns, do-catch, Result types, error propagation                                                                                                                                                              |
+| `accessibility-patterns`      | Accessibility implementation patterns for macOS/SwiftUI                                                                                                                                                                |
+| `swiftlint-config`            | SwiftLint rule configuration, violation remediation                                                                                                                                                                    |
+| `spm-management`              | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit                                                                                                                                 |
+| `gemini-review`               | Plan/debug review via Antigravity CLI (`agy`); routes through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py) PTY wrapper for guaranteed non-TTY output capture                                          |
+| `codex-review`                | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
+| `create-feature-plan`         | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template                                                                                                                                   |
+| `review-synthesis`            | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation                                          |
 
 ## Workflow skills (3)
 
 These three orchestration workflows ship as **skills** (custom commands have merged into skills) — you
 invoke them exactly as before, and Claude can now also trigger them itself when the task calls for one:
 
-| Skill | Usage |
-|---|---|
-| `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket |
-| `/unleashed-mail:implement` | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates |
-| `/unleashed-mail:pr-review` | All 5 reviewers (incl. prompt-review) + parity in parallel → unified verdict → Jira logged |
+| Skill                        | Usage                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------ |
+| `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket                    |
+| `/unleashed-mail:implement`  | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates                |
+| `/unleashed-mail:pr-review`  | All 5 reviewers (incl. prompt-review) + parity in parallel → unified verdict → Jira logged |
 
 ## Parallel Execution
 
@@ -584,8 +593,8 @@ The plugin enforces these non-negotiable processes:
 5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types
 6. **Accessibility** — Every UI element gets a11y support (mandatory per CLAUDE.md); use Curator design tokens
 7. **Security invariants** — SQLCipher encryption, Keychain-only tokens, `account_email` filtering, PIIRedactor, two-layer HTML sanitization (`HTMLSanitizer` + `HTMLRenderPipeline`)
-8. **SwiftLint compliance** — Fix violations in any file you modify (functions ≤50 lines, files ≤600 lines); violations in *unmodified* files are ticketed, not fixed in-flight. Lone exception: legacy `NSRegularExpression` is left for the Swift `Regex`/`RegexBuilder` migration (suppressed + ticketed, not converted inline)
-9. **Dual implementations** — Changes applied to both variants (native + WebKit compose, docked + floating AI). *Email detail is no longer dual — `SimpleEmailWebView` is the sole renderer.*
+8. **SwiftLint compliance** — Fix violations in any file you modify (functions ≤50 lines, files ≤600 lines); violations in _unmodified_ files are ticketed, not fixed in-flight. Lone exception: legacy `NSRegularExpression` is left for the Swift `Regex`/`RegexBuilder` migration (suppressed + ticketed, not converted inline)
+9. **Dual implementations** — Changes applied to both variants (native + WebKit compose, docked + floating AI). _Email detail is no longer dual — `SimpleEmailWebView` is the sole renderer._
 10. **Ask-before checkpoints** — Don't auto-edit Xcode project structure, entitlements, Info.plist, app lifecycle, menus, toolbar, keyboard shortcuts, auth/token handling, or framework/SwiftPM dependencies. Surface for user approval first.
 
 See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) for the cross-agent boundaries that operationalize these processes.
@@ -594,28 +603,28 @@ See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) for the cross-agent boundaries th
 
 The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch — including `swift-lint-check.sh`, which emits `decision:block` and arms the Stop gate, so it is the one that most needs an escape (`UNLEASHED_LINT_CHECK=off`). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
 
-| Event | Script | Behavior | Default | Kill switch |
-|---|---|---|---|---|
-| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` (or `UNLEASHED_SENSITIVE_GUARD=off`) |
-| PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | `UNLEASHED_LINT_CHECK=off` |
-| PostToolUse (Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
-| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` (or `UNLEASHED_STOP_GATE=off`) |
-| StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
-| PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_DENY_LOG=off` |
-| PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
-| PreCompact | `precompact-snapshot.sh` | Snapshots work context before compaction | on | `UNLEASHED_COMPACT_SNAPSHOT=off` |
-| SessionStart | `sessionstart-restore.sh` | Restores the pre-compaction context as `additionalContext` | on | `UNLEASHED_COMPACT_RESTORE=off` |
-| SubagentStart | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer | on | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off` |
-| SubagentStop | `capture-reviewer-verdict.sh` | Captures each reviewer's findings for the synthesizer | on | `UNLEASHED_CAPTURE_REVIEWERS=off` |
+| Event                        | Script                            | Behavior                                                                                                                                                                                        | Default   | Kill switch                                                                                |
+| ---------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------ |
+| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh`         | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask`     | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` (or `UNLEASHED_SENSITIVE_GUARD=off`) |
+| PostToolUse (Write/Edit)     | `swift-lint-check.sh`             | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`)                    | on        | `UNLEASHED_LINT_CHECK=off`                                                                 |
+| PostToolUse (Bash)           | `swift-build-verify.sh`           | Build/test-command advisories via `additionalContext`                                                                                                                                           | on        | `UNLEASHED_FAILURE_LOG=off` (telemetry only)                                               |
+| Stop                         | `stop-quality-marker-gate.sh`     | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log                                       | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` (or `UNLEASHED_STOP_GATE=off`)         |
+| StopFailure                  | `stop-failure-log.sh`             | Observe-only failure telemetry (class only, no PII)                                                                                                                                             | on        | `UNLEASHED_FAILURE_LOG=off`                                                                |
+| PermissionDenied             | `permission-denied-log.sh`        | Observe-only denial telemetry                                                                                                                                                                   | on        | `UNLEASHED_DENY_LOG=off`                                                                   |
+| PostToolUseFailure (Bash)    | `build-failure-log.sh`            | Observe-only build-failure telemetry                                                                                                                                                            | on        | `UNLEASHED_FAILURE_LOG=off`                                                                |
+| PreCompact                   | `precompact-snapshot.sh`          | Snapshots work context before compaction                                                                                                                                                        | on        | `UNLEASHED_COMPACT_SNAPSHOT=off`                                                           |
+| SessionStart                 | `sessionstart-restore.sh`         | Restores the pre-compaction context as `additionalContext`                                                                                                                                      | on        | `UNLEASHED_COMPACT_RESTORE=off`                                                            |
+| SubagentStart                | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer                                                                                                                                                   | on        | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off`                     |
+| SubagentStop                 | `capture-reviewer-verdict.sh`     | Captures each reviewer's findings for the synthesizer                                                                                                                                           | on        | `UNLEASHED_CAPTURE_REVIEWERS=off`                                                          |
 
-> **PostToolUse hooks run *after* the tool call**, so they cannot undo a write — they feed findings back to the model (a top-level `{"decision":"block","reason":…}` or `additionalContext`). The Stop gate in `enforce` mode is the only hook that blocks a turn.
+> **PostToolUse hooks run _after_ the tool call**, so they cannot undo a write — they feed findings back to the model (a top-level `{"decision":"block","reason":…}` or `additionalContext`). The Stop gate in `enforce` mode is the only hook that blocks a turn.
 
 ## MCP Servers (1)
 
 The plugin bundles one local, zero-dependency **stdio MCP server**, declared in [`.mcp.json`](.mcp.json) and launched by Claude Code as a subprocess:
 
-| Server | Tool | Purpose |
-|---|---|---|
+| Server               | Tool                | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `review-synthesizer` | `synthesize_review` | Deterministic Step-5 synthesis for the [code-review pipeline](AGENT_CONTRACTS.md). Validates the sub-reviewers' JSON findings, filters to changed + `structural-pipeline` scope, dedups via category-family + line-overlap with cross-family ownership routing (**cluster-and-cross-link — never silently drops a fix**), and returns a provisional verdict + `blockersToVerify`. `swift-reviewer` then confirms each blocker against the code (the verify gate) and issues the final verdict. |
 
 - **Pure compute** — no repo access, no network, no secrets. The repo-reading half (the verify gate) stays in `swift-reviewer`, which is the only side that can open `file:line`.
