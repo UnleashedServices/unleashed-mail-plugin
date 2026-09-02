@@ -83,16 +83,16 @@ ignore = [
   "SLF001",  # tests reach into privates deliberately
   "ARG",     # unittest signatures carry unused args
   "N802",    # this suite CAPITALISES for emphasis on purpose
-             # (test_the_anchor_is_NOT_widened), and unittest's own setUp/tearDown
-             # are camelCase by API contract. N802 stays ON for production code.
+  # (test_the_anchor_is_NOT_widened), and unittest's own setUp/tearDown
+  # are camelCase by API contract. N802 stays ON for production code.
 
   # COREDEV-2780 M5a (maintainer-approved 2026-09-02). Same reasoning as N802 above: these are
   # test-shaped patterns, and every one of them stays ON for production code.
-  "N801",    # test classes are NAMED AFTER the cell or milestone they own --
-             # `M3_1_InventoryDrift`, `Cell15_TargetSetResolution` -- which is load-bearing
-             # documentation, not sloppiness. The convention predates this rule being reached.
-  "EXE001",  # all 45 suites carry a shebang and no exec bit: they are run as
-             # `python3 -m unittest discover` or `python3 <file>`, never as `./<file>`.
+  "N801", # test classes are NAMED AFTER the cell or milestone they own --
+  # `M3_1_InventoryDrift`, `Cell15_TargetSetResolution` -- which is load-bearing
+  # documentation, not sloppiness. The convention predates this rule being reached.
+  "EXE001", # all 45 suites carry a shebang and no exec bit: they are run as
+  # `python3 -m unittest discover` or `python3 <file>`, never as `./<file>`.
   "FBT003",  # `assertEqual(True, x)` is idiomatic unittest, not a boolean trap.
   "TRY003",  # an assertion message IS the diagnostic here; short ones would say less.
   "PLR0912", # a contract checker that enumerates clauses is inherently branchy, and
@@ -100,7 +100,7 @@ ignore = [
   "PLC0415", # a deferred import inside one test keeps its cost off every other test.
   "RUF012",  # ClassVar on unittest fixtures adds ceremony without adding safety.
   "PT008",   # pytest-specific, and this is a unittest codebase -- the same reason
-             # PT009/PT027 are ignored globally above.
+  # PT009/PT027 are ignored globally above.
 ]
 "mcp/review-synthesizer/tests/*" = ["D", "PLR2004", "SLF001", "ARG", "N802"]
 
