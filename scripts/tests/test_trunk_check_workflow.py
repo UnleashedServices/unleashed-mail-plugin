@@ -129,12 +129,12 @@ M2_ADVISORY_EXEMPTION = {"continue-on-error"}
 # resolver digest.
 EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
-        "guard-resolver-digest": "b3b88e3d7eaf12f775381833d6a8a212162d777cd9eb14d9e0f8beb4c65c52a8",
+        "guard-resolver-digest": "fc0895a653c9cb5237bbfd90454abc0b6d964e7bdcddf91b546719de7c81ae95",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
     "canary": {
-        "guard-resolver-digest": "546144aca6bd6266d24fd3aae1e91bc0d61c1623062c6803f035f3b9d5236009",
+        "guard-resolver-digest": "544a413b4f82531f7c42f9b8ace9a96dda42222e0031fac39515810d84e77aa2",
         "guard-empty-diff": "a016908553fc6e7096e02b3877eecd6c73aafc859a77da804aedeb388375ce7a",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },

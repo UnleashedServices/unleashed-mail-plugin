@@ -45,7 +45,7 @@ jobs:
       - name: guard-resolver-digest
         run: |
           set -euo pipefail
-          expected='773215093e34adaacaa8664c3553b2c32e3b84ddc8d233ef64c3d1e6ff5b1468'
+          expected='e707484e0f82dfef27f0ebaeabab11237637a6ab9aa5ca1bb20ad6f0c70d5e2e'
           actual="$(sha256sum scripts/ci/resolve-trunk-range.sh | cut -d' ' -f1)"
           if [ "${actual}" != "${expected}" ]; then
             echo "C6a: scripts/ci/resolve-trunk-range.sh digest mismatch" >&2

@@ -23,6 +23,9 @@ plan keeps repairing.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -208,6 +211,107 @@ class TheJudgeDiscriminates(unittest.TestCase):
         self.assertIn(
             "resolver: did not emit an `upstream=` line", parity_problems(record)
         )
+
+
+class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
+    """REGRESSION: the guard runs OUTSIDE the action and gets none of the action's variables.
+
+    The first real PR run failed here. `pull_request.sh` reads
+    `GITHUB_EVENT_PULL_REQUEST_NUMBER`, which is NOT a GitHub-provided variable -- `action.yaml`
+    SYNTHESISES it from `github.event.pull_request.number` for the scripts it runs. The resolver
+    transcribed the action's LOGIC faithfully and inherited an ENVIRONMENT that is not there, so it
+    fell through to the base-SHA fallback, found that unset too, and failed closed on every PR.
+
+    C5 forbids an `env:` block in the shipped workflows, so supplying the action's variables was never
+    an available fix. These cases therefore run the resolver with ONLY what GitHub gives every step.
+    """
+
+    RESOLVER = REPO / "scripts/ci/resolve-trunk-range.sh"
+
+    def _fixture(self, tmp):
+        """A repo whose HEAD is a merge commit, as `refs/pull/N/merge` is."""
+        root = Path(tmp)
+
+        def run(*args):
+            subprocess.run(
+                ["git", "-C", str(root), *args], check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main", ".")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        (root / "f").write_text("base\n", encoding="utf-8")
+        run("add", "-A")
+        run("commit", "-qm", "base")
+        run("checkout", "-qb", "topic")
+        (root / "f").write_text("base\nchange\n", encoding="utf-8")
+        run("commit", "-qam", "change")
+        run("checkout", "-q", "main")
+        (root / "g").write_text("other\n", encoding="utf-8")
+        run("add", "-A")
+        run("commit", "-qm", "other")
+        run("merge", "-q", "--no-ff", "topic", "-m", "merge")
+        return root
+
+    def _resolve(self, root, **env):
+        environment = {"PATH": os.environ["PATH"], "HOME": str(root)}
+        environment.update(env)
+        return subprocess.run(
+            ["bash", str(self.RESOLVER)],
+            check=False,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def test_a_pull_request_resolves_with_no_action_supplied_variables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            expected = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD^1"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            completed = self._resolve(
+                root, GITHUB_EVENT_NAME="pull_request", GITHUB_REF_NAME="84/merge"
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual("upstream=" + expected, completed.stdout.strip())
+
+    def test_the_merge_ref_is_detected_by_pattern_not_by_the_pr_number(self):
+        """Any `<n>/merge` works, because the number itself is never needed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            for ref in ("1/merge", "84/merge", "99999/merge"):
+                with self.subTest(ref=ref):
+                    completed = self._resolve(
+                        root, GITHUB_EVENT_NAME="pull_request", GITHUB_REF_NAME=ref
+                    )
+                    self.assertEqual(0, completed.returncode)
+                    self.assertTrue(completed.stdout.startswith("upstream="))
+
+    def test_a_zero_before_push_still_fails_closed(self):
+        """The branch that would send the action down its `--all` path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = self._resolve(
+                self._fixture(tmp),
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+                GITHUB_EVENT_BEFORE="0" * 40,
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn("--all", completed.stderr)
+
+    def test_unsupported_events_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            for event in ("workflow_dispatch", "merge_group", "schedule"):
+                with self.subTest(event=event):
+                    completed = self._resolve(root, GITHUB_EVENT_NAME=event)
+                    self.assertNotEqual(0, completed.returncode)
+                    self.assertIn("unsupported event", completed.stderr)
 
 
 class TheHarnessEvidenceIsAcceptedAgainstTheSchema(unittest.TestCase):

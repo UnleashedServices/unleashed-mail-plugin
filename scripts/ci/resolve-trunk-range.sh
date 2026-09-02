@@ -44,14 +44,31 @@ pull_request)
 	# checkout-input allowlist forbids `ref:` — the action fetches depth=2 and uses HEAD^1 as the
 	# upstream, deliberately in preference to `github.event.pull_request.base.sha`, "which can be
 	# incorrect sometimes". The workflow sets `fetch-depth: 2` so HEAD^1 is already present.
+	#
+	# DETECTED BY PATTERN, NOT BY THE ACTION'S OWN VARIABLES. The first real PR run failed right here:
+	# `GITHUB_EVENT_PULL_REQUEST_NUMBER` is NOT a GitHub-provided variable -- `action.yaml` SYNTHESISES
+	# it from `github.event.pull_request.number` for the scripts it runs. This guard runs OUTSIDE the
+	# action, so it saw an empty value, fell through to the base-SHA fallback, found
+	# `GITHUB_EVENT_PULL_REQUEST_BASE_SHA` equally unset, and failed closed. The action's LOGIC was
+	# transcribed correctly; the ENVIRONMENT it assumes was not there.
+	#
+	# `GITHUB_REF_NAME` is provided to every step, and on a `pull_request` event it is
+	# `<number>/merge` -- so the merge ref is detectable with nothing the action has to supply. That
+	# matters because C5 forbids an `env:` block in the shipped workflows, so passing the action's
+	# variables in was never available as a fix.
 	ref_name="${GITHUB_REF_NAME-}"
-	pr_number="${GITHUB_EVENT_PULL_REQUEST_NUMBER-}"
-	if [[ -n ${pr_number} ]] && [[ ${ref_name} == "${pr_number}/merge" ]]; then
+	if [[ ${ref_name} == */merge ]]; then
 		upstream="$(git rev-parse HEAD^1)" || die "HEAD^1 is unavailable — fetch-depth must be >= 2"
 	else
-		# The action's fallback. Unreachable in this repository's workflows (C8 forbids `ref:`), so it
-		# is transcribed for parity and fails closed rather than silently resolving something else.
+		# The action's fallback, reached only when the merge ref is not checked out. The action reads
+		# its own synthesised variable; that is absent here, so the value comes from the event payload
+		# GitHub writes for every run. `GITHUB_EVENT_PATH` needs no `env:` block either.
 		upstream="${GITHUB_EVENT_PULL_REQUEST_BASE_SHA-}"
+		if [[ -z ${upstream} && -r ${GITHUB_EVENT_PATH-} ]]; then
+			upstream="$(python3 -c 'import json, os
+with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+    print((json.load(handle).get("pull_request") or {}).get("base", {}).get("sha", ""))' 2>/dev/null)"
+		fi
 		[[ -n ${upstream} ]] || die "not on the merge ref and no base SHA — cannot resolve an upstream"
 	fi
 	;;
