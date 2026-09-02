@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.8
+# UnleashedMail — Claude Code Plugin v2.8.9
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,20 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.9
+
+- **COREDEV-2780 / COREDEV-2801 — five defects found by PR review, each reproduced before it was fixed.**
+  The push canary checked out at `fetch-depth: 2` while `github.event.before` can be many commits
+  back, so `git diff` failed with `bad object` and — because `set -e` is suspended inside an `if`
+  condition — the guard read the empty output as an EMPTY DIFF and reported a cause it had never
+  tested. Cell 5's autofix positive control was specified in the plan and did not exist; the only
+  thing calling itself the control hand-set the value it was supposed to observe, which left equal
+  pre/post hashes unfalsifiable. The parity harness recorded the action pin it read off the shipped
+  workflow rather than the one it ran. The drift detector's marker sweep only ever tidied sessions
+  that came back, so the retention promise in its own comment was not kept. And the pre-commit
+  timeout fallback — the branch that runs on a stock Mac — was SIGTERM-only and returned the child's
+  own status, so a process that traps TERM could exit 0 late and be reported as a clean lint check.
 
 ### v2.8.8
 

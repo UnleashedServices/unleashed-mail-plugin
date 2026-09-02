@@ -29,7 +29,7 @@ TRUNK_TIMEOUT_SECONDS=180 # M5a: measured 30.8s cold-bootstrap envelope x ~6 hea
 # coreutils, so a hook that assumes them is broken on a clean Mac, which is most of the machines this
 # runs on. Prefer them when present, and otherwise use a watchdog built from what every shell has.
 run_with_timeout() {
-	seconds="$1"
+	local seconds="$1"
 	shift
 	if command -v timeout >/dev/null 2>&1; then
 		timeout "${seconds}" "$@"
@@ -39,22 +39,54 @@ run_with_timeout() {
 		gtimeout "${seconds}" "$@"
 		return $?
 	fi
+	# THE DEADLINE IS RECORDED, NOT INFERRED. Returning the child's own status cannot distinguish
+	# "finished in time, exit 0" from "survived the watchdog and exited 0 late" — and the second one
+	# reports a CLEAN lint check on a run that never completed, which is a false pass in the one place
+	# this repo cannot afford one. The watchdog touches a file before it signals; if that file exists
+	# afterwards, this timed out, whatever the child's exit status says. That also normalises the new
+	# SIGKILL case (137) so the caller's 124/143 branch needs no widening.
+	local _rwt_marker="${TMPDIR:-/tmp}/rwt.$$.${RANDOM}.deadline"
+	rm -f "${_rwt_marker}"
+
+	# JOB CONTROL, so the child gets its OWN PROCESS GROUP and can be signalled as `-PGID`. Without it
+	# only the direct child is killed: `trunk` spawns a daemon and helper processes that INHERIT THE
+	# CALLER'S PIPE, so the hook returns while a grandchild holds stdout open and any parent capturing
+	# this hook blocks anyway. Measured: 2s with the process-group kill, 20s without.
+	local _rwt_job_control=1
+	set -m 2>/dev/null || _rwt_job_control=0
 	"$@" &
-	_rwt_cmd=$!
+	local _rwt_cmd=$!
+	[[ ${_rwt_job_control} -eq 1 ]] && set +m
+
 	# THE WATCHDOG'S FDS ARE REDIRECTED, and that is not cosmetic. A background subshell inherits the
 	# hook's stdout and stderr, so while it sleeps it HOLDS THE CALLER'S PIPE OPEN — any parent
 	# capturing this hook's output (a wrapper script, a test harness, an editor's VCS integration)
 	# blocks for the whole timeout even after the hook itself has exited. Reproduced: the suite hung
 	# for the full 180 seconds on a run where trunk returned instantly.
+	#
+	# TERM, THEN A GRACE PERIOD, THEN KILL. A TERM-only watchdog waits forever on a process that traps
+	# or ignores the signal; SIGKILL cannot be trapped. The group form is tried first and falls back to
+	# the bare pid, so this still bounds the run on a shell that refused job control above.
 	(
 		sleep "${seconds}"
-		kill -TERM "${_rwt_cmd}" 2>/dev/null
+		: >"${_rwt_marker}"
+		kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
+		sleep 5
+		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
 	) >/dev/null 2>&1 &
-	_rwt_watchdog=$!
+	local _rwt_watchdog=$!
 	wait "${_rwt_cmd}" 2>/dev/null
-	_rwt_rc=$?
+	local _rwt_rc=$?
+	# Killed BEFORE the marker is read, which narrows the sub-second race where a child finishing exactly
+	# on the deadline is recorded as a timeout. That residual errs toward the non-blocking branch the
+	# caller already chose deliberately for infrastructure failures.
 	kill -TERM "${_rwt_watchdog}" 2>/dev/null
 	wait "${_rwt_watchdog}" 2>/dev/null
+	if [[ -e ${_rwt_marker} ]]; then
+		rm -f "${_rwt_marker}"
+		return 124
+	fi
+	rm -f "${_rwt_marker}"
 	return "${_rwt_rc}"
 }
 

@@ -73,8 +73,21 @@ with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
 	fi
 	;;
 push)
+	# THE SAME DEFECT AS THE PULL_REQUEST BRANCH, AND I FIXED ONLY ONE HALF OF IT (codex, PR #84).
+	# `GITHUB_EVENT_BEFORE` is no more GitHub-provided than `GITHUB_EVENT_PULL_REQUEST_NUMBER` was --
+	# `action.yaml` synthesises BOTH for the scripts it runs. Repairing the PR path by pattern-matching
+	# the merge ref left the push path reading a variable that is never set, so the canary would have
+	# died on its first push exactly as the required workflow died on its first PR. Fix-one-site, in
+	# the repair for a fix-one-site defect.
+	#
+	# `GITHUB_EVENT_PATH` is provided to every step and needs no `env:` block, which C5 forbids here.
 	before="${GITHUB_EVENT_BEFORE-}"
-	[[ -n ${before} ]] || die "GITHUB_EVENT_BEFORE is unset on a push event"
+	if [[ -z ${before} && -r ${GITHUB_EVENT_PATH-} ]]; then
+		before="$(python3 -c 'import json, os
+with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+    print(json.load(handle).get("before") or "")' 2>/dev/null)"
+	fi
+	[[ -n ${before} ]] || die "no before-hash for this push — neither the environment nor the event payload carries one"
 	# THE ZERO-`before` CASE, AND WHY IT FAILS RATHER THAN RESOLVING (cell 1, C1's canary contract).
 	# GitHub sends all zeros when a branch is CREATED or a TAG is pushed. At the pinned SHA `push.sh`
 	# branches on exactly that and runs `trunk check --ci --all` — the 9027-finding whole-tree run §1

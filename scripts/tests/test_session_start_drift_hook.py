@@ -385,5 +385,76 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
         self.assertEqual(1, sum("systemMessage" in r for r in results))
 
 
+class TheRetentionPromiseIsKept(_DetectorFixture):
+    """COREDEV-2801, PR #84 (codex). The sweep was scoped to the CURRENT SESSION'S digest, so it only
+    ever tidied a session that came back in a later window. Every session that never resumed left an
+    inode behind forever — on precisely the machines where a persistently stale install keeps the
+    warning path hot. The promise was stated in the comment and not kept by the code.
+
+    The two hazards a wider glob introduces are guarded here as well: it must not touch a marker that
+    is still LIVE (any session's, not just this one's), and it must not unlink files it did not write.
+    """
+
+    def _dir(self):
+        directory = self.state / "unleashed-mail/drift-warned"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def _markers(self):
+        directory = self.state / "unleashed-mail/drift-warned"
+        return sorted(p.name for p in directory.iterdir()) if directory.exists() else []
+
+    @staticmethod
+    def _window():
+        return int(time.time()) // BUCKET_SECONDS
+
+    def test_it_sweeps_prior_window_markers_left_by_OTHER_sessions(self):
+        """The regression this fix exists for. Under the old digest-scoped glob these survive the
+        run, and nothing else in the suite would notice."""
+        directory, window = self._dir(), self._window()
+        abandoned = [hashlib.sha256(f"gone-{n}".encode()).hexdigest() for n in range(5)]
+        for digest in abandoned:
+            (directory / f"{digest}.{window - 1}").write_text("", encoding="utf-8")
+        self.assertIn("systemMessage", self.session_start("the-sweeper").stdout)
+        survivors = [n for n in self._markers() if n.split(".")[0] in abandoned]
+        self.assertEqual(
+            [], survivors, "another session's expired markers must be swept"
+        )
+
+    def test_it_does_not_touch_another_session_s_LIVE_marker(self):
+        """The over-sweep hazard, and the reason the window is in the NAME rather than inferred from
+        mtime: a concurrent session's current-window marker is indistinguishable from litter by age
+        alone. Removing it would let that session warn a second time in the same window.
+        """
+        directory, window = self._dir(), self._window()
+        live = hashlib.sha256(b"still-running").hexdigest()
+        (directory / f"{live}.{window}").write_text("", encoding="utf-8")
+        self.session_start("the-sweeper")
+        self.assertIn(f"{live}.{window}", self._markers())
+
+    def test_it_leaves_files_it_did_not_write(self):
+        """The shape guard. Scoped to one digest the name was its own filter; unscoped, this loop
+        runs in a directory it no longer wholly owns, and `notes.3` is not ours to delete.
+        """
+        directory, window = self._dir(), self._window()
+        foreign = ["notes.3", "README.txt", f"{'g' * 64}.{window - 1}", "short.1"]
+        for name in foreign:
+            (directory / name).write_text("keep me", encoding="utf-8")
+        self.session_start("the-sweeper")
+        for name in foreign:
+            self.assertIn(
+                name, self._markers(), f"{name} is not this script's to unlink"
+            )
+
+    def test_a_marker_shaped_DIRECTORY_does_not_cost_the_session_its_warning(self):
+        """The warning is decided and emitted BEFORE the sweep, and the sweep is best-effort. An
+        entry that cannot be unlinked is litter, not a reason to swallow the notice the hook was run
+        to produce — and the hook is declared with `timeout: 5`, so cleanup must never be on the
+        critical path to the output."""
+        directory, window = self._dir(), self._window()
+        (directory / f"{'a' * 64}.{window - 1}").mkdir()
+        self.assertIn("systemMessage", self.session_start("undeletable").stdout)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

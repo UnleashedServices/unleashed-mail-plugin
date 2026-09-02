@@ -39,7 +39,18 @@ jobs:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          # FULL HISTORY, and only on this leg. `github.event.before` is HEAD~N for a push of N
+          # commits and can be arbitrarily far back — a rebase-merge, a direct multi-commit push, or
+          # a fast-forward of `alpha` onto `main`, which is this campaign's own M0. At depth 2 that
+          # object is simply absent, `git diff` fails with `bad object`, and because `set -e` is
+          # suspended inside an `if` condition the empty stdout is read as an EMPTY DIFF — the guard
+          # then reports a cause it never tested. The pinned action is passed the same `before` as
+          # `--upstream`, so it cannot resolve the range either; the object has to be PRESENT, which
+          # is not something a better diagnostic can supply. `.git` is 13 MB.
+          #
+          # `trunk-check.yml` deliberately stays at depth 2: the required leg is `pull_request`-only,
+          # its upstream is HEAD^1 of the merge ref, and widening the REQUIRED gate buys nothing.
+          fetch-depth: 0
           lfs: true
           # The canary needs no authenticated Git after checkout, checkout defaults credential
           # persistence to TRUE, and zizmor's `artipacked` is one of the 19 linters this gate itself
@@ -49,7 +60,7 @@ jobs:
       - name: guard-resolver-digest
         run: |
           set -euo pipefail
-          expected='e707484e0f82dfef27f0ebaeabab11237637a6ab9aa5ca1bb20ad6f0c70d5e2e'
+          expected='dadd272488879e1a379424358f076917820ae5cd5c9f693293ae30c719143c7c'
           actual="$(sha256sum scripts/ci/resolve-trunk-range.sh | cut -d' ' -f1)"
           if [ "${actual}" != "${expected}" ]; then
             echo "C6a: scripts/ci/resolve-trunk-range.sh digest mismatch" >&2
@@ -69,6 +80,10 @@ jobs:
           upstream="${resolved#upstream=}"
           if [ -z "${upstream}" ] || [ "${upstream}" = "${resolved}" ]; then
             echo "cell 1: resolver produced no upstream: ${resolved}" >&2
+            exit 1
+          fi
+          if ! git cat-file -e "${upstream}^{commit}" 2>/dev/null; then
+            echo "cell 1: upstream ${upstream} is not present in this checkout — not an empty diff" >&2
             exit 1
           fi
           if [ -z "$(git diff --name-only "${upstream}" HEAD)" ]; then

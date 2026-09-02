@@ -74,7 +74,7 @@ jobs:
         # one that runs it.
         run: |
           set -euo pipefail
-          expected='e707484e0f82dfef27f0ebaeabab11237637a6ab9aa5ca1bb20ad6f0c70d5e2e'
+          expected='dadd272488879e1a379424358f076917820ae5cd5c9f693293ae30c719143c7c'
           actual="$(sha256sum scripts/ci/resolve-trunk-range.sh | cut -d' ' -f1)"
           if [ "${actual}" != "${expected}" ]; then
             echo "C6a: scripts/ci/resolve-trunk-range.sh digest mismatch" >&2

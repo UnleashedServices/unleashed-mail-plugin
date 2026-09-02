@@ -29,9 +29,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[2]
 EVIDENCE_DIR = REPO / "docs/planning/evidence"
 ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
+
+# READ FROM THE REGISTRY, NOT RESTATED HERE. The pin already appears in three workflows and the
+# contract; a fourth copy in this file is a fourth thing to forget on a bump, and two stale copies
+# agree with each other. `test_trunk_check_workflow.py` binds its own constant to this same key, so
+# the registry is the one authority and a bump that misses a file is caught rather than tolerated.
+ACTION_PIN = yaml.safe_load(
+    (REPO / "docs/planning/COREDEV-2780-contract.yaml").read_text(encoding="utf-8")
+)["action_pin"]
 
 
 def parity_problems(record: dict) -> list[str]:
@@ -101,11 +111,41 @@ def parity_problems(record: dict) -> list[str]:
             "cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled"
         )
 
+    # ---- cell 5's POSITIVE CONTROL, and the conclusion it requires recorded separately ----------
+    #
+    # Equal pre/post hashes are consistent with two different worlds: autofix is off (what cell 5
+    # claims), or the fixture was never in the linted range (a sensor watching nothing). Neither the
+    # hashes nor the argv can tell them apart, so the harness now supplies two independent
+    # discriminators and this judge requires both.
+    action = record.get("action") or {}
+    outcome = action.get("outcome")
+    if not outcome:
+        problems.append("cell 5: the action's conclusion was not recorded")
+    elif outcome != "failure":
+        problems.append(
+            f"cell 5: the deliberately-fixable fixture did not make the pinned action fail "
+            f"(outcome {outcome!r}) — it was never in the linted range, so the pre/post hashes "
+            f"are blind"
+        )
+    control_post = tree.get("controlPost")
+    if not control_post:
+        problems.append("cell 5: the autofix positive control did not run")
+    elif tree.get("fixturePre") and control_post == tree["fixturePre"]:
+        problems.append(
+            "cell 5: enabling autofix did NOT change the fixture — the pre/post comparison cannot "
+            "register what it watches for"
+        )
+
     inputs = record.get("actionInputs") or {}
     if not inputs.get("digest"):
         problems.append("inputs: the harness recorded no action-input digest")
-    if "trunk-io/trunk-action@" not in inputs.get("uses", ""):
-        problems.append("inputs: the harness did not record which action it ran")
+    # EQUALITY, NOT A SUBSTRING. `trunk-io/trunk-action@<anything>` satisfied the old check, so an
+    # artifact recorded under a bumped or unpinned ref was ACCEPTED as parity evidence for the pin
+    # this gate actually ships — the one thing the record exists to establish about itself.
+    if inputs.get("uses") != ACTION_PIN:
+        problems.append(
+            f"inputs: the harness ran {inputs.get('uses')!r}, not the pinned {ACTION_PIN!r}"
+        )
 
     return problems
 
@@ -137,11 +177,15 @@ def _clean_record(event: str = "pull_request") -> dict:
             "fixture": "harness-fixtures/fixable.sh",
             "fixturePre": "f1",
             "fixturePost": "f1",
+            # The control ran with `--fix` and DID rewrite the fixture — which is what makes the
+            # equal `fixturePre`/`fixturePost` above meaningful rather than vacuous.
+            "controlPost": "f-autofixed",
         },
+        "action": {"outcome": "failure", "controlOutcome": "success"},
         "actionInputs": {
             "canonical": "{}",
             "digest": "d" * 64,
-            "uses": "trunk-io/trunk-action@" + "e" * 40,
+            "uses": ACTION_PIN,
         },
     }
 
@@ -159,13 +203,82 @@ class TheJudgeDiscriminates(unittest.TestCase):
         problems = parity_problems(record)
         self.assertTrue(any(p.startswith("parity:") for p in problems), problems)
 
+    def test_evidence_recorded_under_a_DIFFERENT_action_ref_is_refused(self):
+        """The record's job is to attest what the pinned action did. Recorded under another ref it
+        attests something else entirely, and the substring check this replaced accepted it.
+        """
+        record = _clean_record()
+        record["actionInputs"]["uses"] = "trunk-io/trunk-action@" + "9" * 40
+        self.assertTrue(
+            any(
+                p.startswith("inputs: the harness ran") for p in parity_problems(record)
+            ),
+            parity_problems(record),
+        )
+
+    def test_an_unpinned_action_ref_is_refused(self):
+        record = _clean_record()
+        record["actionInputs"]["uses"] = "trunk-io/trunk-action@v2.0.0"
+        self.assertTrue(
+            any(
+                p.startswith("inputs: the harness ran") for p in parity_problems(record)
+            ),
+            parity_problems(record),
+        )
+
+    def test_a_control_that_changed_nothing_is_the_blind_sensor(self):
+        """The finding this control exists for: if `--fix` leaves the fixture byte-identical, then
+        equal pre/post hashes on the primary run establish nothing about autofix at all.
+        """
+        record = _clean_record()
+        record["tree"]["controlPost"] = record["tree"]["fixturePre"]
+        self.assertIn(
+            "cell 5: enabling autofix did NOT change the fixture — the pre/post comparison cannot "
+            "register what it watches for",
+            parity_problems(record),
+        )
+
+    def test_a_missing_control_is_not_silently_accepted(self):
+        record = _clean_record()
+        del record["tree"]["controlPost"]
+        self.assertIn(
+            "cell 5: the autofix positive control did not run", parity_problems(record)
+        )
+
+    def test_a_primary_run_that_SUCCEEDED_means_the_fixture_was_out_of_range(self):
+        """A staged, mis-indented shell script that Trunk actually looked at must yield a finding. A
+        green primary run says the range never contained it."""
+        record = _clean_record()
+        record["action"]["outcome"] = "success"
+        self.assertTrue(
+            any(
+                p.startswith("cell 5: the deliberately-fixable fixture did not make")
+                for p in parity_problems(record)
+            ),
+            parity_problems(record),
+        )
+
+    def test_an_unrecorded_conclusion_is_refused(self):
+        """Cell 5 requires the action's conclusion recorded SEPARATELY from the hash comparison."""
+        record = _clean_record()
+        record["action"]["outcome"] = ""
+        self.assertIn(
+            "cell 5: the action's conclusion was not recorded", parity_problems(record)
+        )
+
     def test_an_all_run_is_caught(self):
         record = _clean_record("push")
         record["invocations"][1].append("--all")
         self.assertIn("argv: the action ran `--all`", parity_problems(record))
 
     def test_an_autofix_run_is_caught_twice_over(self):
-        """Once by the argv and once by the fixture bytes — the positive control cell 5 requires."""
+        """Once by the argv and once by the fixture bytes.
+
+        NOT the positive control — this is a judge-discrimination case over a SYNTHETIC record, and
+        `fixturePost` below is hand-set. The control is the `autofix-positive-control` step in
+        `trunk-parity-harness.yml`, which runs the pinned action with `--fix` for real; this test
+        only proves the judge would notice if it reported a change.
+        """
         record = _clean_record()
         record["invocations"][1].append("--fix")
         record["tree"]["fixturePost"] = "f2"
@@ -303,6 +416,57 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
             )
             self.assertNotEqual(0, completed.returncode)
             self.assertIn("--all", completed.stderr)
+
+    def test_a_push_resolves_from_the_event_payload_alone(self):
+        """The SAME defect as the pull_request branch, and the first repair fixed only one half.
+
+        `GITHUB_EVENT_BEFORE` is no more GitHub-provided than `GITHUB_EVENT_PULL_REQUEST_NUMBER` was —
+        `action.yaml` synthesises BOTH. Pattern-matching the merge ref repaired the PR path and left
+        the canary reading a variable that is never set, so it would have died on its first push
+        exactly as the required workflow died on its first PR.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            before = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD~1"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            payload = Path(tmp) / "event.json"
+            payload.write_text(json.dumps({"before": before}), encoding="utf-8")
+            completed = self._resolve(
+                root,
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+                GITHUB_EVENT_PATH=str(payload),
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual("upstream=" + before, completed.stdout.strip())
+
+    def test_a_zero_before_in_the_payload_still_fails_closed(self):
+        """The `--all` branch must stay unreachable however the before-hash arrives."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            payload = Path(tmp) / "event.json"
+            payload.write_text(json.dumps({"before": "0" * 40}), encoding="utf-8")
+            completed = self._resolve(
+                root,
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+                GITHUB_EVENT_PATH=str(payload),
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn("--all", completed.stderr)
+
+    def test_a_push_with_no_before_anywhere_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = self._resolve(
+                self._fixture(tmp),
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+            )
+            self.assertNotEqual(0, completed.returncode)
 
     def test_unsupported_events_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

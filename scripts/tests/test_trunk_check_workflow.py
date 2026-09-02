@@ -57,6 +57,7 @@ _REMOTE_HALF_SKIP = (
 )
 CANARY_CONTEXT = "trunk-check-push"
 CANARY_PATH = REPO / ".github/workflows/trunk-check-push.yml"
+HARNESS_PATH = REPO / ".github/workflows/trunk-parity-harness.yml"
 # Executed by Cell16_TheCanaryMeetsItsWholeContract against INJECTED ruleset observations — the
 # `remote_relation` kind mutates the observation, never the live ruleset.
 # Executed by C6AndC6aGuardsExecuteAgainstFixtureTrees, which runs the SHIPPED guard bodies against a
@@ -136,13 +137,13 @@ M2_ADVISORY_EXEMPTION = {"continue-on-error"}
 # resolver digest.
 EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
-        "guard-resolver-digest": "fc0895a653c9cb5237bbfd90454abc0b6d964e7bdcddf91b546719de7c81ae95",
+        "guard-resolver-digest": "0b0c73bf1f85faf42911c9276fe6bfd0dcf15e4600fbcdc82c75e7746202f31d",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
     "canary": {
-        "guard-resolver-digest": "544a413b4f82531f7c42f9b8ace9a96dda42222e0031fac39515810d84e77aa2",
-        "guard-empty-diff": "a016908553fc6e7096e02b3877eecd6c73aafc859a77da804aedeb388375ce7a",
+        "guard-resolver-digest": "535c8ceb2cd79dff664cc43958b97aef838dca3d154ff5c27313ea56ea4fbfe5",
+        "guard-empty-diff": "9825dbd46b05c59173d8792d7aafb42cbe1e3ebb0623d6066850279a0902e5db",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
 }
@@ -637,6 +638,34 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
             ACTION_PIN.split("@")[1], self.registry["action_pin"].split("@")[1]
         )
         self.assertEqual(ACTION_PIN, _step(self.workflow, "trunk")["uses"])
+
+    def test_every_workflow_that_invokes_the_action_uses_the_ONE_pin(self):
+        """The harness was the only invocation with no static owner: it runs the action itself while
+        recording the pin it read off `trunk-check.yml`, so a bump to one file left the evidence
+        attesting a version that run never executed. The set is DERIVED by scanning every workflow
+        rather than listed, because a listed set is one a fourth file can be added outside of.
+        """
+        found = {}
+        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for job in (document.get("jobs") or {}).values():
+                for step in job.get("steps") or []:
+                    uses = str(step.get("uses", ""))
+                    if uses.startswith("trunk-io/trunk-action"):
+                        found.setdefault(path.name, []).append(uses)
+        self.assertIn(
+            HARNESS_PATH.name,
+            found,
+            "the harness must still be one of the scanned invocations",
+        )
+        self.assertGreaterEqual(
+            len(found), 3, f"expected all three legs, saw {sorted(found)}"
+        )
+        for name, pins in found.items():
+            for pin in pins:
+                self.assertEqual(
+                    ACTION_PIN, pin, f"{name} invokes an unpinned or bumped action"
+                )
 
     def test_registry_entry_paths_match_the_shipped_workflow(self):
         required = self.registry["entries"]["required"]
@@ -1409,7 +1438,13 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                         obligation.get("entries", []),
                     )
                 )
-        self.assertTrue(executed <= declared)
+        # NAMES THE OFFENDERS. `assertTrue(executed <= declared)` reports "False is not true"
+        # and leaves you diffing two case sets by hand (github-code-quality, PR #84).
+        self.assertEqual(
+            set(),
+            executed - declared,
+            "cases executed here that the registry does not declare",
+        )
         for case_id, kind, op, side, entries in deferred:
             with self.subTest(case=case_id):
                 # A deferred case must NEED a tree, a real run, an authenticated remote read, or an

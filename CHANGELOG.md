@@ -13,6 +13,69 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.9] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the push canary could not resolve its own range.**
+  `.github/workflows/trunk-check-push.yml` checked out at `fetch-depth: 2`, but
+  `github.event.before` is HEAD~N for a push of N commits: a rebase-merge, a direct multi-commit
+  push, or a fast-forward of `alpha` onto `main` all place it out of reach. `git diff` then failed
+  with `bad object`, and since `set -e` is suspended inside an `if` condition the empty substitution
+  was read as an EMPTY DIFF — so the guard aborted with a message naming a cause it had never tested.
+  The pinned action receives the same `before` as `--upstream`, so a better diagnostic could not have
+  helped; the object has to be present. Now `fetch-depth: 0` on the canary leg only — the required
+  `pull_request` leg keeps depth 2, where HEAD^1 of the merge ref is exactly right — plus a
+  `git cat-file -e` presence check that reports what actually went wrong.
+- **COREDEV-2780 — cell 5's autofix positive control did not exist.**
+  The plan requires that enabling autofix change the fixture and turn the cell red. Nothing in the
+  repository ever ran the action with autofix on, and the only thing named a positive control was a
+  judge test that hand-set the post-hash — stipulating the result it existed to observe. Equal
+  pre/post hashes were therefore unfalsifiable: equal when autofix is off, and equally equal when the
+  fixture was never in the linted range at all. The harness now runs the same pinned action a second
+  time with `--fix`, into its own argv file so cell 1's parity comparison is untouched, and records
+  the action's conclusion — which cell 5 also required separately and which was unimplemented, the
+  step having had no `id:` for `steps.<id>.outcome` to address.
+- **COREDEV-2780 — the parity harness attested a pin it had not run.**
+  It recorded `uses:` read off the shipped `trunk-check.yml` while invoking its own, so bumping one
+  file would leave the evidence naming a version that run never executed. The harness now asserts the
+  two are equal and records the observed one; the judge compares by equality against the contract
+  registry's single `action_pin` rather than by substring, which had accepted any ref; and a new test
+  derives the set of workflows invoking the action by scanning rather than listing them.
+- **COREDEV-2801 — the drift detector's retention promise was not kept.**
+  The marker sweep globbed only the current session's digest, so it tidied a session only if that
+  session came back in a later window. Sessions that never resume left one inode each, indefinitely,
+  on exactly the machines where a persistently stale install keeps the warning path hot. It now
+  sweeps every session's strictly-older buckets, behind a filename shape guard — the loop unlinks in
+  a directory it no longer wholly owns — and the decision and the warning are made ahead of the
+  sweep, so a `timeout: 5` kill during cleanup cannot cost a session the notice it was run to emit.
+- **COREDEV-2780 (M5a) — the pre-commit timeout could report a clean check that never finished.**
+  `run_with_timeout`'s fallback is the branch that runs on a stock Mac, which ships neither `timeout`
+  nor `gtimeout`. It sent SIGTERM only and returned the child's own exit status, so a process that
+  traps the signal was waited on forever — and if it later exited 0, the hook printed
+  `trunk: no new findings in the staged diff` for a check that never completed. Three measured
+  pieces: a recorded deadline marker forcing `return 124`, since exit status alone cannot distinguish
+  a fast success from a late one; SIGKILL after a five-second grace, which bounds the wait from 60s
+  to 7s; and job control with a process-group kill, so a grandchild inheriting the captured pipe
+  cannot hold the caller open — 60s to 2s. The function previously had no tests.
+
+### Added
+
+- Tests for all five, against the shipped bytes rather than copies — the timeout-fallback cases slice
+  the function out of `.githooks/pre-commit` and source it, and sanitise `PATH` so the no-coreutils
+  branch is the one under test rather than whichever branch the developer's machine happens to take.
+
+  What was verified how, stated exactly, because "mutation-tested" is not true of all of it in the
+  same sense. Three timeout-fallback tests and four marker-sweep tests were checked by mutating the
+  PRODUCTION code — reverting the digest-scoped glob, deleting the shape guard, weakening `<` to
+  `<=`, dropping the deadline marker, dropping the SIGKILL, dropping the process-group kill — and
+  each mutation kills its own assertion and no other. The harness's pin-equality assertion was
+  checked by executing the extraction step with the harness bumped to a different ref. The four
+  autofix-control and conclusion cases are judge DISCRIMINATION cases over synthetic records: a
+  Python unittest cannot run a composite action, so the judge is what is testable here, and the
+  control itself is only genuinely observed on the first real harness run — which is M2c, and is not
+  claimed as done.
+
 ## [2.8.8] — 2026-09-01
 
 ### Added

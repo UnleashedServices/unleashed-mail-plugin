@@ -150,7 +150,7 @@ if behind:
         handle.write(
             "unleashed-mail: " + ", ".join(sorted(behind))
             + f" is behind origin/main {expected_raw} — "
-            + "run `claude plugin update` to pick up fixes already released"
+            + "run `claude plugin update unleashed-mail` to pick up fixes already released"
         )
 PY
 
@@ -187,7 +187,7 @@ marker_dir="${state_base}/unleashed-mail/drift-warned"
 hook_payload="$(cat)"
 
 WARNING="${warning}" MARKER_DIR="${marker_dir}" HOOK_PAYLOAD="${hook_payload}" python3 <<'PY' 2>/dev/null
-import hashlib, json, os, pathlib, sys, time
+import hashlib, json, os, pathlib, re, sys, time
 
 try:
     payload = json.loads(os.environ.get("HOOK_PAYLOAD") or "{}")
@@ -207,14 +207,6 @@ marker = marker_dir / f"{digest}.{window}"
 
 try:
     marker_dir.mkdir(parents=True, exist_ok=True)
-    # Cleanup removes markers from any PRIOR window — which is not the same statement as "older than
-    # seven days": just after a boundary a marker seconds old belongs to a prior bucket and goes.
-    for stale in marker_dir.glob(f"{digest}.*"):
-        try:
-            if int(stale.name.rsplit(".", 1)[1]) < window:
-                stale.unlink()
-        except (ValueError, IndexError, OSError):
-            pass
     # O_EXCL BEFORE the warning: two concurrent invocations of one session race here, and the loser
     # goes silent rather than warning twice.
     os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
@@ -226,6 +218,42 @@ except OSError:
 
 # A SessionStart hook's PLAIN STDOUT is injected into the agent's CONTEXT; only `systemMessage` is
 # shown to the human as a notice.
-print(json.dumps({"systemMessage": os.environ["WARNING"]}))
+#
+# EMITTED BEFORE THE SWEEP, AND FLUSHED. The hook is declared with `timeout: 5`; the sweep below is
+# O(directory) and on a machine that has accumulated a backlog it is the slowest thing here. Ordering
+# the decision and the warning ahead of it means a timeout kill during cleanup costs that session
+# nothing but the cleanup — the warning it was run to produce has already been written.
+print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
+
+# Cleanup removes markers from any PRIOR window — which is not the same statement as "older than
+# seven days": just after a boundary a marker seconds old belongs to a prior bucket and goes.
+#
+# SWEEP EVERY SESSION'S MARKERS, not just this one's (codex, PR #84). Each session has a distinct
+# digest, so a per-digest glob only ever tidied a session that RESUMED in a later window — markers for
+# sessions that never resume accumulated forever, one inode per session, on exactly the machines a
+# persistently stale install keeps warning. The retention promise was stated and not kept.
+#
+# Safe against the O_EXCL protocol precisely because the window is in the NAME: only buckets STRICTLY
+# OLDER than the current one are removed, so no live marker of any session is touched, and there is
+# nothing to race with a concurrent create.
+#
+# THE SHAPE GUARD IS LOAD-BEARING NOW THAT THE GLOB IS WIDE. Scoped to one digest, the name was its
+# own filter; unscoped, this loop unlinks in a directory it no longer wholly owns. Only names this
+# script could itself have written are candidates — anything else is left alone rather than left to
+# the accident of whether its suffix happens to parse as an integer.
+#
+# Bounds growth only WHILE THE INSTALL IS STALE: the silent path exits before this block by contract
+# (SILENT MEANS SILENT), so markers left by an install that is then updated are swept by nothing and
+# remain. That residue is bounded by one window's sessions, and is stated rather than fixed here.
+marker_name = re.compile(r"\A[0-9a-f]{64}\.([0-9]+)\Z")
+for stale in marker_dir.glob("*.*"):
+    matched = marker_name.match(stale.name)
+    if matched is None:
+        continue
+    try:
+        if int(matched.group(1)) < window:
+            stale.unlink()
+    except (ValueError, OSError):
+        pass
 PY
 exit 0
