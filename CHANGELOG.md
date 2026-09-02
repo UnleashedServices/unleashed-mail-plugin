@@ -13,6 +13,70 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.10] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the bounded run was only bounded on the branch that does not run.**
+  `run_with_timeout` prefers `timeout`, then `gtimeout`, and only falls back to its own watchdog when
+  neither exists. v2.8.9 fixed the watchdog and returned early from the other two, so the escalation
+  and the timeout bookkeeping were proven for the branch taken when coreutils is absent — not this
+  repo's CI (`ubuntu-latest`), and not a Mac with Homebrew coreutils. Measured on the live branch: a
+  SIGTERM-ignoring child ran to its full natural lifetime, 60s against a 2s deadline. All three
+  branches now share one shape and one contract, so a guarantee proven for one holds for all.
+
+  Worth stating plainly, because it bounds the claim: against the command this hook actually runs
+  this is defence in depth, not a live hang closed. trunk 1.25.0 honours SIGTERM in 18ms, and
+  `timeout 3` and `timeout -k 5 3` are indistinguishable on it. The defect is real in the primitive;
+  its reachability through today's `trunk` is unproven, and the fix is worth having for the day that
+  changes or the cold-bootstrap window nobody has measured.
+
+  Three details, each measured rather than reasoned about. `-k 5` and not `--kill-after=5`: the
+  short form is accepted by GNU, FreeBSD, busybox and toybox, while the long form is rejected by
+  busybox (exit 1) and toybox (exit 125) — a rejected flag would fail every commit for those users,
+  trading a rare hang for universal breakage. The 137 that `-k` produces is normalised to 124 only
+  when the deadline actually elapsed, because a command that is OOM-killed reports 137 too, and
+  normalising unconditionally would turn a crashed linter into "not blocking" — a fail-open. And the
+  teardown kill moved after the wait: killing the watchdog as soon as the direct child exits cancels
+  its pending SIGKILL, so a grandchild ignoring SIGTERM outlived the deadline still holding the
+  caller's stdout, measured at 45s against a 2s deadline on **both** branches.
+
+- **COREDEV-2780 — `trunk` exit 2 was reported as findings in the developer's diff.**
+  The real binary exits 2 when the invocation itself is unusable — reproduced on trunk 1.25.0 with a
+  `--filter` naming a linter this config does not enable, which is the one literal this gate passes.
+  The hook said "new findings in the staged diff (fix them, or stage less)", which is a false
+  statement about a diff that no edit will clear. It still blocks, because a gate that did not run
+  must not report a pass, but it now says why. A signal death (128+N) gets the same treatment for the
+  same reason. Meanwhile `143` — one of the two statuses the gate did test for — is nearly
+  unreachable: it was checking for something that never arrives while missing something that does.
+- **COREDEV-2780 — the remote reads crashed on a machine with no `gh`.**
+  `check=False` covers `gh` refusing; it does not cover `gh` being absent, which raises
+  FileNotFoundError out of the exec. On any machine without the GitHub CLI the whole contract module
+  errored at discovery instead of skipping — defeating the design that had those halves return
+  `None` on purpose. Both call sites fixed, not the one reported.
+- **COREDEV-2801 — the detector hung when run by hand.**
+  `hook_payload="$(cat)"` blocks forever when stdin is a terminal, so a manual `--session-start` run
+  never returned. Reproduced under a real pty. It now degrades to the plain-text path rather than
+  substituting an empty payload — the obvious repair, and wrong: the session id would be the empty
+  string, every marker would be named for `sha256("")`, and the per-session dedup this file exists to
+  provide would silently become global.
+- **COREDEV-2780 — the zero-oid guard was SHA-1 only.**
+  It compared `before` against a 40-character literal. A repository created with
+  `--object-format=sha256` has a 64-character null oid, verified against git, and would have slipped
+  past into the `--all` branch this guard exists to block. Now matched as a class.
+
+### Added
+
+- Tests for all of it, and the branch is now a PARAMETER rather than a fixed sanitised `PATH`. The
+  previous suite pinned `PATH` so only the fallback could ever be reached and said so in its
+  docstring as though that were the point — which is exactly how the coreutils branches went
+  untested. Five mutations against the hook and two against the detector each kill their own
+  assertion, including one that reproduces the wrong repair for the TTY hang so it cannot be
+  reintroduced.
+- The pty harness enforces its deadline on every read. Its first draft used a bare `os.read` on a
+  blocking pty fd, so against the very regression it watches for it hung indefinitely instead of
+  failing — a test that can hang CI is worse than the bug it looks for.
+
 ## [2.8.9] — 2026-09-02
 
 ### Fixed

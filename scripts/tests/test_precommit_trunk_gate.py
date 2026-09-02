@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import time
@@ -334,20 +335,38 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
         self.assertEqual(3, completed.returncode)
 
 
-class TheWatchdogFallback(unittest.TestCase):
-    """COREDEV-2780 M5a / PR #84 (codex). `run_with_timeout`'s no-coreutils fallback is the branch that
-    RUNS on a stock Mac, and it had no test at all.
+class TheBoundedRun(unittest.TestCase):
+    """COREDEV-2780 M5a / PR #84. `run_with_timeout` has three branches — `timeout`, `gtimeout`, and a
+    hand-rolled watchdog — and EVERY case here runs against ALL OF THEM.
 
-    It is exercised as the SHIPPED BYTES — sliced out of `.githooks/pre-commit` and sourced — rather
-    than as a copy pasted into the test, so a change to the hook that breaks these properties cannot
-    leave the suite green. `PATH` is sanitised down to a directory that deliberately contains no
-    `timeout` and no `gtimeout`, which is what forces the fallback deterministically instead of
-    testing whichever branch the developer's machine happens to take.
+    The first version of this class did not. It sanitised `PATH` so only the no-coreutils fallback
+    could ever be reached, and said so in its docstring as though that were the point. But the
+    fallback is the branch that runs when neither tool is installed: not this repo's CI, which is
+    `ubuntu-latest`, and not a Mac with homebrew coreutils. Every guarantee below was therefore
+    proven for the branch that does not run, while the branch that does had no escalation at all and
+    overran its deadline thirtyfold — measured at 60s against a 2s deadline. A reviewer found it.
+    That is the same defect as the code it was testing: closing the member, not the family.
+
+    So the branch is a PARAMETER. `bare` builds a PATH with no coreutils; `coreutils` puts the real
+    tools on it and skips when the machine genuinely has none. The function is sliced out of
+    `.githooks/pre-commit` and sourced, so these are the shipped bytes, not a copy.
     """
 
     NEEDED = ("sleep", "rm", "echo", "sh", "bash", "date", "cat")
+    IGNORES_TERM = "trap '' TERM\nsleep 60\nexit 0\n"
+    LEAKS_A_TERM_IGNORING_GRANDCHILD = (
+        "bash -c 'trap \"\" TERM; sleep 40' &\necho started\nsleep 40\n"
+    )
 
-    def _harness(self, script: str, seconds: int, target: str):
+    @staticmethod
+    def _coreutils_timeout():
+        for name in ("timeout", "gtimeout"):
+            found = shutil.which(name)
+            if found:
+                return found
+        return None
+
+    def _harness(self, script: str, seconds: int, *, branch: str):
         hook = HOOK.read_text(encoding="utf-8")
         head = hook.index("run_with_timeout() {")
         body = hook[head : hook.index("\n}\n", head) + 3]
@@ -361,14 +380,24 @@ class TheWatchdogFallback(unittest.TestCase):
                 if (pathlib.Path(prefix) / tool).exists():
                     (root / "bin" / tool).symlink_to(pathlib.Path(prefix) / tool)
                     break
-        self.assertFalse(
-            (root / "bin/timeout").exists() or (root / "bin/gtimeout").exists(),
-            "the sanitised PATH must not offer coreutils, or this tests the wrong branch",
-        )
+
+        if branch == "coreutils":
+            real = self._coreutils_timeout()
+            if real is None:
+                self.skipTest(
+                    "no coreutils timeout on this machine to exercise that branch"
+                )
+            (root / "bin/timeout").symlink_to(real)
+        else:
+            self.assertIsNone(
+                shutil.which("timeout", path=str(root / "bin")),
+                "the bare branch must not offer coreutils, or it tests the wrong branch",
+            )
+
         (root / "target.sh").write_text(script, encoding="utf-8")
         (root / "probe.sh").write_text(
             f"PATH={root / 'bin'}\nexport TMPDIR={root}\n{body}\n"
-            f'run_with_timeout {seconds} bash "{root / target}"\n'
+            f'run_with_timeout {seconds} bash "{root / "target.sh"}"\n'
             'echo "RC=$?"\n',
             encoding="utf-8",
         )
@@ -378,59 +407,194 @@ class TheWatchdogFallback(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
         )
         elapsed = time.monotonic() - started
         rc = int(completed.stdout.rsplit("RC=", 1)[1].strip())
-        litter = list(root.glob("rwt.*.deadline"))
-        return rc, elapsed, litter, completed
+        return rc, elapsed, list(root.glob("rwt.*.deadline")), completed
+
+    def _both_branches(self):
+        return ("bare", "coreutils")
 
     def test_a_command_that_finishes_in_time_keeps_its_own_exit_status(self):
-        for expected in (0, 7):
-            with self.subTest(exit=expected):
-                rc, elapsed, litter, _ = self._harness(
-                    f"exit {expected}\n", seconds=10, target="target.sh"
-                )
-                self.assertEqual(expected, rc)
-                self.assertLess(
-                    elapsed, 8, "a fast command must not wait for the deadline"
-                )
-                self.assertEqual([], litter, "no deadline marker may be left behind")
+        """Pass-through must be EXACT on every branch: a lint finding is 1, and trunk's own
+        could-not-run 2 must arrive at the caller as 2 so the caller can tell them apart.
+        """
+        for branch in self._both_branches():
+            for expected in (0, 1, 2, 7):
+                with self.subTest(branch=branch, exit=expected):
+                    rc, elapsed, litter, _ = self._harness(
+                        f"exit {expected}\n", seconds=10, branch=branch
+                    )
+                    self.assertEqual(expected, rc)
+                    self.assertLess(
+                        elapsed, 8, "a fast command must not wait for the deadline"
+                    )
+                    self.assertEqual(
+                        [], litter, "no deadline marker may be left behind"
+                    )
 
     def test_a_command_that_IGNORES_SIGTERM_and_then_exits_zero_is_reported_as_a_timeout(
         self,
     ):
-        """The false CLEAN. A TERM-only watchdog waits forever on a process that traps the signal, and
-        if that process later exits 0 the hook reports `trunk: no new findings` for a check that never
-        finished — a green lint gate on an unlinted diff.
+        """The false CLEAN, on every branch. A TERM-only bound waits indefinitely on a process that
+        traps the signal, and if that process later exits 0 the hook reports `no new findings` for a
+        check that never finished — a green lint gate on an unlinted diff.
 
-        Two independent defects are covered: the status must be 124 and not the child's own 0 (which
-        no amount of signalling can fix, because a killed-and-late process and a fast success are
-        indistinguishable by exit status alone), and the wait must be BOUNDED, which needs SIGKILL.
+        Two separate properties: the status must be 124 and not the child's 0 (no amount of
+        signalling fixes that, because a fast success and a killed-then-late process are
+        indistinguishable by exit status), and the wait must be BOUNDED, which needs the escalation.
+        On the coreutils branch this measured 60s before `-k 5` was passed.
         """
-        rc, elapsed, litter, _ = self._harness(
-            "trap '' TERM\nsleep 60\nexit 0\n", seconds=2, target="target.sh"
-        )
-        self.assertEqual(
-            124, rc, "a run that blew the deadline must never report the child's 0"
-        )
-        self.assertLess(
-            elapsed, 30, "SIGTERM alone never lands; the escalation must bound this"
-        )
-        self.assertEqual([], litter)
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, elapsed, litter, _ = self._harness(
+                    self.IGNORES_TERM, seconds=2, branch=branch
+                )
+                self.assertEqual(
+                    124,
+                    rc,
+                    "a run that blew the deadline must not report the child's 0",
+                )
+                self.assertLess(
+                    elapsed,
+                    30,
+                    "SIGTERM alone never lands; the escalation must bound it",
+                )
+                self.assertEqual([], litter)
 
-    def test_a_grandchild_holding_the_captured_pipe_does_not_block_the_caller(self):
-        """`trunk` spawns a daemon and helpers that inherit the hook's stdout. Signalling only the
-        direct child leaves them holding the pipe, so anything capturing this hook — a wrapper, this
-        very suite, an editor's VCS integration — blocks for the full timeout even though the hook has
-        exited. Measured at 60s before the process-group kill and 2s after.
+    def test_a_TERM_IGNORING_grandchild_does_not_hold_the_caller_open(self):
+        """The direct child dies on TERM, so the wait returns and the pending SIGKILL is cancelled —
+        and a grandchild that ignores TERM then outlives the deadline still holding the caller's
+        stdout. Measured at 45s against a 2s deadline, on BOTH branches: `timeout -k` does not help,
+        because its own child exited normally and the escalation never fired.
+
+        This is why the teardown kill happens after the wait rather than being left to the watchdog.
         """
-        rc, elapsed, litter, _ = self._harness(
-            "sleep 60 &\necho started\nsleep 60\n", seconds=2, target="target.sh"
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, elapsed, _, _ = self._harness(
+                    self.LEAKS_A_TERM_IGNORING_GRANDCHILD, seconds=2, branch=branch
+                )
+                self.assertEqual(124, rc)
+                self.assertLess(
+                    elapsed, 25, "a TERM-ignoring grandchild must not hold the caller"
+                )
+
+    def test_a_SIGKILL_that_beat_the_deadline_is_NOT_reported_as_a_timeout(self):
+        """The discriminator that makes the 137 normalisation safe. `timeout -k` reports 137 when its
+        own SIGKILL lands — but an OOM-killed linter reports 137 too, with no deadline passed.
+        Normalising unconditionally would turn a crashed tool into `not blocking`: a fail-open.
+
+        Measured counterexample, so this is a real case and not a hypothetical one.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, elapsed, _, _ = self._harness(
+                    "kill -9 $$\n", seconds=30, branch=branch
+                )
+                self.assertNotEqual(
+                    124, rc, "a crash before the deadline is not a timeout"
+                )
+                self.assertLess(
+                    elapsed, 10, "it died immediately; nothing should have waited"
+                )
+
+    def test_the_escalation_is_asserted_as_BEHAVIOUR_not_as_a_spelling(self):
+        """`test_the_timeout_is_macos_portable` used to assert that the strings `command -v timeout`
+        and `kill -TERM` appear in the hook — a check keyed on a spelling, which stays green when the
+        escalation is deleted. The behavioural cases above are the real check; this one only pins the
+        portability claim that stock macOS ships neither tool, which is why a fallback must exist.
+        """
+        hook = HOOK.read_text(encoding="utf-8")
+        self.assertIn("command -v timeout", hook)
+        self.assertIn("command -v gtimeout", hook)
+
+        # SCOPED TO THE CODE, NOT THE FILE. The first draft asserted `--kill-after` was absent from
+        # the whole text and failed on the comment that explains why the long form is avoided —
+        # keying on a spelling, in the very test that exists to stop keying on spellings. Comments
+        # are free to name the thing they are warning about; the executable lines are not.
+        code = "\n".join(
+            line for line in hook.split("\n") if not line.lstrip().startswith("#")
         )
-        self.assertEqual(124, rc)
-        self.assertLess(elapsed, 30, "a grandchild must not hold the caller open")
-        self.assertEqual([], litter)
+        self.assertIn(
+            "-k 5", code, "the coreutils branches must pass a bounded kill-after"
+        )
+        self.assertNotIn(
+            "--kill-after",
+            code,
+            "the long form is rejected by busybox (exit 1) and toybox (exit 125); use `-k 5`",
+        )
+
+
+class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
+    """The gate's exit-code arms, driven with the SHIPPED block. Every arm must name a cause it
+    actually tested — `trunk could not run` and `trunk was killed` are not `new findings in the
+    staged diff`, and reporting them that way sends a developer to fix a diff that is fine.
+
+    `exit 2` is not hypothetical: reproduced on trunk 1.25.0 with a `--filter` naming a linter this
+    config does not enable, which is exactly the one literal this gate passes.
+    """
+
+    def _classify(self, rc: int):
+        hook = HOOK.read_text(encoding="utf-8")
+        block = hook[hook.index("if command -v trunk") :]
+        block = block[: block.index("\nfi\n") + 4]
+        harness = (
+            "TRUNK_TIMEOUT_SECONDS=180\noverall=0\n"
+            'command() { [ "$1" = "-v" ] && [ "$2" = "trunk" ] && return 0; return 1; }\n'
+            'run_with_timeout() { shift; return "${FAKE_RC}"; }\n'
+            + block
+            + '\necho "overall=${overall}"\n'
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = pathlib.Path(tmp.name) / "caller.sh"
+        path.write_text(harness, encoding="utf-8")
+        completed = subprocess.run(
+            ["bash", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "FAKE_RC": str(rc)},
+            timeout=60,
+        )
+        blocks = "overall=1" in completed.stdout
+        return blocks, completed.stdout
+
+    def test_a_clean_run_allows_and_a_finding_blocks(self):
+        self.assertFalse(self._classify(0)[0], "a clean run must not block")
+        blocks, out = self._classify(1)
+        self.assertTrue(blocks)
+        self.assertIn("new findings in the staged diff", out)
+
+    def test_a_timeout_allows_on_every_status_the_bounded_run_can_report(self):
+        for rc in (124, 143):
+            with self.subTest(rc=rc):
+                blocks, out = self._classify(rc)
+                self.assertFalse(
+                    blocks, "an infrastructure timeout must not block the commit"
+                )
+                self.assertIn("not blocking on a timeout", out)
+
+    def test_trunk_exit_2_blocks_but_is_NOT_called_a_lint_finding(self):
+        """The live misclassification. `trunk check` exits 2 when the invocation itself is unusable —
+        measured on the real binary for a `--filter` naming an unsupported linter. Reported as
+        findings, it sends the developer to fix a diff that no edit will clear."""
+        blocks, out = self._classify(2)
+        self.assertTrue(blocks, "a gate that could not run must not report a pass")
+        self.assertIn("could not run", out)
+        self.assertNotIn("new findings in the staged diff", out)
+
+    def test_a_signal_death_blocks_but_is_NOT_blamed_on_the_diff(self):
+        """128+N reaching the caller means the run died for a reason this hook did not cause — the
+        deadline cases were already normalised to 124 upstream."""
+        for rc, signal in ((137, 9), (139, 11)):
+            with self.subTest(rc=rc):
+                blocks, out = self._classify(rc)
+                self.assertTrue(blocks)
+                self.assertIn(f"killed (signal {signal})", out)
+                self.assertNotIn("new findings in the staged diff", out)
 
 
 if __name__ == "__main__":  # pragma: no cover

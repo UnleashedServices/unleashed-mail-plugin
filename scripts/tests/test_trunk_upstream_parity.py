@@ -406,16 +406,24 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
                     self.assertTrue(completed.stdout.startswith("upstream="))
 
     def test_a_zero_before_push_still_fails_closed(self):
-        """The branch that would send the action down its `--all` path."""
-        with tempfile.TemporaryDirectory() as tmp:
-            completed = self._resolve(
-                self._fixture(tmp),
-                GITHUB_EVENT_NAME="push",
-                GITHUB_REF_NAME="main",
-                GITHUB_EVENT_BEFORE="0" * 40,
-            )
-            self.assertNotEqual(0, completed.returncode)
-            self.assertIn("--all", completed.stderr)
+        """The branch that would send the action down its `--all` path.
+
+        BOTH HASH WIDTHS. The guard compared against a 40-character literal, i.e. SHA-1 only; a
+        repository created with `--object-format=sha256` has a 64-character null oid — verified
+        against git, which reports 65 bytes including the newline — and slipped straight past into
+        the branch this guard exists to block (gemini, PR #84). The width is the operand here, so a
+        test that only ever passes 40 zeros cannot see the defect.
+        """
+        for width in (40, 64):
+            with self.subTest(oid_width=width), tempfile.TemporaryDirectory() as tmp:
+                completed = self._resolve(
+                    self._fixture(tmp),
+                    GITHUB_EVENT_NAME="push",
+                    GITHUB_REF_NAME="main",
+                    GITHUB_EVENT_BEFORE="0" * width,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("--all", completed.stderr)
 
     def test_a_push_resolves_from_the_event_payload_alone(self):
         """The SAME defect as the pull_request branch, and the first repair fixed only one half.

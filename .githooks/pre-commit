@@ -31,62 +31,80 @@ TRUNK_TIMEOUT_SECONDS=180 # M5a: measured 30.8s cold-bootstrap envelope x ~6 hea
 run_with_timeout() {
 	local seconds="$1"
 	shift
-	if command -v timeout >/dev/null 2>&1; then
-		timeout "${seconds}" "$@"
-		return $?
-	fi
-	if command -v gtimeout >/dev/null 2>&1; then
-		gtimeout "${seconds}" "$@"
-		return $?
-	fi
-	# THE DEADLINE IS RECORDED, NOT INFERRED. Returning the child's own status cannot distinguish
-	# "finished in time, exit 0" from "survived the watchdog and exited 0 late" — and the second one
-	# reports a CLEAN lint check on a run that never completed, which is a false pass in the one place
-	# this repo cannot afford one. The watchdog touches a file before it signals; if that file exists
-	# afterwards, this timed out, whatever the child's exit status says. That also normalises the new
-	# SIGKILL case (137) so the caller's 124/143 branch needs no widening.
+
+	# ONE SHAPE FOR ALL THREE BRANCHES. Previously the coreutils branches returned early, so the
+	# escalation, the process-group teardown and the timeout bookkeeping existed ONLY in the
+	# hand-rolled fallback — the branch that runs when neither tool is installed, which is neither
+	# this repo's CI (ubuntu-latest) nor any Mac with homebrew coreutils. The guarantees were proven
+	# for the branch that does not run (codex, PR #84). Everything below is now branch-independent;
+	# only the bounding MECHANISM differs.
+	local _rwt_bounded
+	_rwt_bounded="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+
+	local _rwt_t0=${SECONDS}
 	local _rwt_marker="${TMPDIR:-/tmp}/rwt.$$.${RANDOM}.deadline"
 	rm -f "${_rwt_marker}"
 
-	# JOB CONTROL, so the child gets its OWN PROCESS GROUP and can be signalled as `-PGID`. Without it
-	# only the direct child is killed: `trunk` spawns a daemon and helper processes that INHERIT THE
-	# CALLER'S PIPE, so the hook returns while a grandchild holds stdout open and any parent capturing
-	# this hook blocks anyway. Measured: 2s with the process-group kill, 20s without.
+	# JOB CONTROL, so the child leads its OWN process group and can be signalled as `-PGID`. Without
+	# it only the direct child is reached: a lint tool spawns helpers that INHERIT THE CALLER'S PIPE,
+	# so anything capturing this hook stays blocked after the hook itself has returned.
 	local _rwt_job_control=1
 	set -m 2>/dev/null || _rwt_job_control=0
-	"$@" &
-	local _rwt_cmd=$!
+
+	local _rwt_cmd _rwt_watchdog="" _rwt_rc _rwt_timed_out=0
+	if [[ -n ${_rwt_bounded} ]]; then
+		# `-k 5`, NOT `--kill-after=5`. Measured across implementations: the short form is accepted by
+		# GNU, FreeBSD, busybox and toybox, while the long form is rejected by busybox (exit 1) and
+		# toybox (exit 125) — and a rejected flag would fail EVERY commit for those users, trading a
+		# rare hang for universal breakage.
+		"${_rwt_bounded}" -k 5 "${seconds}" "$@" &
+		_rwt_cmd=$!
+	else
+		"$@" &
+		_rwt_cmd=$!
+		# TERM, A GRACE PERIOD, THEN KILL, with the deadline RECORDED before any signal. The
+		# watchdog's fds are redirected because a background subshell inherits this hook's stdout and
+		# would hold a capturing parent open for the whole timeout even after the hook exited.
+		(
+			sleep "${seconds}"
+			: >"${_rwt_marker}"
+			kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
+			sleep 5
+			kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
+		) >/dev/null 2>&1 &
+		_rwt_watchdog=$!
+	fi
 	[[ ${_rwt_job_control} -eq 1 ]] && set +m
 
-	# THE WATCHDOG'S FDS ARE REDIRECTED, and that is not cosmetic. A background subshell inherits the
-	# hook's stdout and stderr, so while it sleeps it HOLDS THE CALLER'S PIPE OPEN — any parent
-	# capturing this hook's output (a wrapper script, a test harness, an editor's VCS integration)
-	# blocks for the whole timeout even after the hook itself has exited. Reproduced: the suite hung
-	# for the full 180 seconds on a run where trunk returned instantly.
-	#
-	# TERM, THEN A GRACE PERIOD, THEN KILL. A TERM-only watchdog waits forever on a process that traps
-	# or ignores the signal; SIGKILL cannot be trapped. The group form is tried first and falls back to
-	# the bare pid, so this still bounds the run on a shell that refused job control above.
-	(
-		sleep "${seconds}"
-		: >"${_rwt_marker}"
-		kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
-		sleep 5
-		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
-	) >/dev/null 2>&1 &
-	local _rwt_watchdog=$!
 	wait "${_rwt_cmd}" 2>/dev/null
-	local _rwt_rc=$?
-	# Killed BEFORE the marker is read, which narrows the sub-second race where a child finishing exactly
-	# on the deadline is recorded as a timeout. That residual errs toward the non-blocking branch the
-	# caller already chose deliberately for infrastructure failures.
-	kill -TERM "${_rwt_watchdog}" 2>/dev/null
-	wait "${_rwt_watchdog}" 2>/dev/null
-	if [[ -e ${_rwt_marker} ]]; then
+	_rwt_rc=$?
+
+	if [[ -n ${_rwt_watchdog} ]]; then
+		kill -TERM "${_rwt_watchdog}" 2>/dev/null
+		wait "${_rwt_watchdog}" 2>/dev/null
+		[[ -e ${_rwt_marker} ]] && _rwt_timed_out=1
 		rm -f "${_rwt_marker}"
+	elif [[ ${_rwt_rc} -eq 124 ]]; then
+		_rwt_timed_out=1
+	elif [[ ${_rwt_rc} -eq 137 && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
+		# 137 IS AMBIGUOUS AND THE ELAPSED GUARD IS WHAT RESOLVES IT. `timeout -k` reports 137 when
+		# its SIGKILL lands, but a command that is OOM-killed — or that exits 137 itself — reports
+		# the same status without any deadline having passed. Normalising unconditionally would turn
+		# a crashed linter into "not blocking", a fail-open in the one place this file cannot afford
+		# one. Both counterexamples were measured, not reasoned about.
+		_rwt_timed_out=1
+	fi
+
+	if [[ ${_rwt_timed_out} -eq 1 ]]; then
+		# THE PENDING ESCALATION DIED WITH THE WATCHDOG, so do it here. `wait` returns as soon as the
+		# DIRECT child does, and killing the watchdog then cancels its `sleep 5; kill -KILL` — so a
+		# grandchild that ignores TERM outlives the deadline and keeps holding the caller's stdout.
+		# Measured at 45s against a 2s deadline before this line existed, on BOTH branches.
+		kill -KILL "-${_rwt_cmd}" 2>/dev/null
+		# ONE STATUS FOR ONE FACT: every branch reports a timeout as 124, so the caller classifies a
+		# recorded fact rather than a per-branch exit code.
 		return 124
 	fi
-	rm -f "${_rwt_marker}"
 	return "${_rwt_rc}"
 }
 
@@ -100,8 +118,28 @@ if command -v trunk >/dev/null 2>&1; then
 		if [[ ${_trunk_rc} -eq 124 || ${_trunk_rc} -eq 143 ]]; then
 			# A timeout is an INFRASTRUCTURE failure, not a lint finding. Blocking the commit on
 			# someone's slow network would teach people to pass --no-verify, which disables every
-			# check above as well.
+			# check above as well. `run_with_timeout` normalises every branch's timeout to 124; 143
+			# is kept only because a TERM delivered from outside this hook still means the same
+			# thing.
 			echo "⚠️  trunk check exceeded ${TRUNK_TIMEOUT_SECONDS}s — not blocking on a timeout"
+		elif [[ ${_trunk_rc} -eq 2 ]]; then
+			# TRUNK COULD NOT RUN, WHICH IS NOT THE SAME AS FINDING SOMETHING. Exit 2 is what the
+			# real binary returns when the invocation itself is unusable — measured on trunk 1.25.0
+			# with a `--filter` naming a linter this config does not enable, and reported for a
+			# branch with no detectable upstream. Both reach this gate through the one `--filter`
+			# literal it passes. Reported as "new findings in the staged diff" it is a false
+			# statement about the developer's diff that no amount of fixing the diff will clear, so
+			# it still blocks — a gate that did not run must not report a pass — but it says why.
+			echo "❌ trunk could not run (exit 2) — see its message above; this is NOT a lint finding"
+			overall=1
+		elif [[ ${_trunk_rc} -ge 128 ]]; then
+			# KILLED BY A SIGNAL, which is not a finding either. 128+N is the shell's encoding for a
+			# signal death: the OOM killer, an external `kill`, a crash. `run_with_timeout` has
+			# already converted the deadline cases to 124, so anything still carrying a signal status
+			# here died for a reason this hook did not cause and cannot describe. It blocks — the
+			# gate did not complete — but it does not blame the diff.
+			echo "❌ trunk was killed (signal $((_trunk_rc - 128))) before it finished — not a lint finding"
+			overall=1
 		else
 			echo "❌ trunk: new findings in the staged diff (fix them, or stage less)"
 			overall=1

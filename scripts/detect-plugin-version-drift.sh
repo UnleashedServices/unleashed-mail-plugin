@@ -184,6 +184,18 @@ marker_dir="${state_base}/unleashed-mail/drift-warned"
 # for sha256(""). Dedup silently becomes GLOBAL instead of per-session: the first session to start in
 # a seven-day window warns, and every other session on the machine stays quiet. Caught by inspecting
 # the marker NAMES; "it warned once" looked correct and was correct for the wrong reason.
+# A TTY ON STDIN MEANS NOBODY PIPED A PAYLOAD, so there is nothing to read and `cat` would block
+# forever — reproduced: a manual `--session-start` run hangs until interrupted (gemini, PR #84).
+#
+# The obvious repair is to substitute an empty payload, and it is WRONG: `session_id` would then be
+# the empty string, every marker would be named for sha256("") and the per-session dedup this file
+# exists to provide would silently become global — the exact defect the comment above describes. A
+# TTY means a human is running this by hand, so it degrades to the plain-text path instead: same
+# warning, no marker, no protocol output that no hook is there to consume.
+if [[ -t 0 ]]; then
+	printf '%s\n' "${warning}"
+	exit 0
+fi
 hook_payload="$(cat)"
 
 WARNING="${warning}" MARKER_DIR="${marker_dir}" HOOK_PAYLOAD="${hook_payload}" python3 <<'PY' 2>/dev/null

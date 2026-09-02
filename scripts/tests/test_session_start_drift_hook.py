@@ -11,9 +11,13 @@ would be a cell that cannot pass.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import pty
+import select
+import signal
 import subprocess
 import tempfile
 import time
@@ -454,6 +458,82 @@ class TheRetentionPromiseIsKept(_DetectorFixture):
         directory, window = self._dir(), self._window()
         (directory / f"{'a' * 64}.{window - 1}").mkdir()
         self.assertIn("systemMessage", self.session_start("undeletable").stdout)
+
+
+class AManualRunDoesNotHangAndDoesNotBurnAMarker(_DetectorFixture):
+    """`hook_payload="$(cat)"` blocks forever when stdin is a terminal, so running the detector by
+    hand with `--session-start` — to debug it, or to see what it would say — hangs until interrupted
+    (gemini, PR #84). Reproduced under a real pty before the fix: it never exited.
+
+    The obvious repair is to substitute an empty payload, and it is WRONG in a way this file already
+    documents: `session_id` would be the empty string, every marker would be named for sha256("")
+    and the per-session dedup would silently become global — one session per machine per week warns
+    and the rest stay quiet. So the TTY case degrades to the plain-text path, and the assertion below
+    is two-sided: it must emit the warning AND leave the marker directory untouched.
+    """
+
+    def _under_a_pty(self, timeout=15):
+        pid, fd = pty.fork()
+        if pid == 0:  # pragma: no cover - child process
+            os.environ["HOME"] = str(self.home)
+            os.environ["XDG_STATE_HOME"] = str(self.state)
+            os.chdir(str(self.root))
+            os.execv(
+                "/bin/bash",
+                ["/bin/bash", str(DETECTOR), str(self.repo), "--session-start"],
+            )
+        # EVERY READ IS GUARDED BY `select`. A pty fd is blocking, so a bare `os.read` on a child
+        # that produces no output and never exits waits forever — which is precisely the regression
+        # this class exists to catch, so the FIRST draft of this harness hung indefinitely instead of
+        # failing at its own deadline. A test that can hang is worse than the bug it looks for: it
+        # takes CI down rather than reporting. The deadline is now enforced on every iteration.
+        output, deadline, status = b"", time.monotonic() + timeout, None
+        while time.monotonic() < deadline:
+            done, raw = os.waitpid(pid, os.WNOHANG)
+            if done:
+                status = raw
+                while select.select([fd], [], [], 0.2)[0]:
+                    try:
+                        chunk = os.read(fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output += chunk
+                break
+            if select.select([fd], [], [], 0.1)[0]:
+                with contextlib.suppress(OSError):
+                    output += os.read(fd, 4096)
+        else:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            os.close(fd)
+            self.fail("the detector hung on a TTY stdin instead of returning")
+        os.close(fd)
+        return status, output.decode("utf-8", "replace")
+
+    def test_it_returns_instead_of_blocking_on_cat(self):
+        status, output = self._under_a_pty()
+        self.assertEqual(0, status, "a manual run must exit cleanly")
+        self.assertIn(
+            "is behind origin/main", output, "it must still say what it found"
+        )
+
+    def test_it_does_not_consume_a_real_session_s_warning(self):
+        """The two-sided half. A TTY run that wrote a marker would silence the next genuine
+        SessionStart for the rest of the window — the detector eating its own notice."""
+        self._under_a_pty()
+        directory = self.state / "unleashed-mail/drift-warned"
+        written = (
+            sorted(p.name for p in directory.iterdir()) if directory.exists() else []
+        )
+        self.assertEqual([], written, "a manual run must not write a dedup marker")
+
+    def test_it_emits_PLAIN_TEXT_not_the_hook_protocol(self):
+        """`{"systemMessage": …}` is for a hook harness that is not there. A human at a terminal
+        should see the sentence, not the envelope."""
+        _, output = self._under_a_pty()
+        self.assertNotIn("systemMessage", output)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -94,7 +94,11 @@ with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
 	# forbids, and a gate that is red by default is a gate people learn to ignore. This branch is
 	# reachable only from the push canary; the required workflow has no push event at all. Fail closed:
 	# a push whose diff cannot be resolved is not a push that gets to lint the tree.
-	if [[ ${before} == "0000000000000000000000000000000000000000" ]]; then
+	# ANY LENGTH OF ZEROS. The literal was 40 characters, i.e. SHA-1 only; a repository using
+	# `--object-format=sha256` has a 64-character null oid (verified against git) and would slip
+	# past a fixed-width compare straight into the branch this guard exists to block
+	# (gemini, PR #84). No real object id is all zeros, so the class is safe to match.
+	if [[ ${before} =~ ^0+$ ]]; then
 		die "zero before-hash (branch creation or tag push) would send the action down its --all branch"
 	fi
 	if [[ ${GITHUB_REF_NAME-} == gh-readonly-queue/* ]]; then

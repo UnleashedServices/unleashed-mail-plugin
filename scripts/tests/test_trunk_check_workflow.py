@@ -24,7 +24,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,6 +57,7 @@ _REMOTE_HALF_SKIP = (
     "the live ruleset is unreadable here (no authenticated `gh`); §7 assigns this half to "
     "evidence/COREDEV-2780-rollout.json, which is where it is actually owned"
 )
+MODULE_PATH = Path(__file__).resolve()
 CANARY_CONTEXT = "trunk-check-push"
 CANARY_PATH = REPO / ".github/workflows/trunk-check-push.yml"
 HARNESS_PATH = REPO / ".github/workflows/trunk-parity-harness.yml"
@@ -137,12 +140,12 @@ M2_ADVISORY_EXEMPTION = {"continue-on-error"}
 # resolver digest.
 EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
-        "guard-resolver-digest": "0b0c73bf1f85faf42911c9276fe6bfd0dcf15e4600fbcdc82c75e7746202f31d",
+        "guard-resolver-digest": "4bec1e760e705bdb5427a9327cecb8c55d03d4f512fef15a568144c1638ab0cc",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
     "canary": {
-        "guard-resolver-digest": "535c8ceb2cd79dff664cc43958b97aef838dca3d154ff5c27313ea56ea4fbfe5",
+        "guard-resolver-digest": "011054c609a1f896f8fb73b3584f7048b666acc84bba82a65824563b106b7bd9",
         "guard-empty-diff": "9825dbd46b05c59173d8792d7aafb42cbe1e3ebb0623d6066850279a0902e5db",
         "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
     },
@@ -207,16 +210,23 @@ def _live_ruleset():
     Returning None rather than raising lets the LOCAL assertions run everywhere and the REMOTE ones
     skip with a reason, instead of erroring in an owner that was never meant to observe this.
     """
-    completed = subprocess.run(
-        [
-            "gh",
-            "api",
-            "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # `check=False` covers `gh` REFUSING; it does not cover `gh` being ABSENT. A missing binary
+    # raises FileNotFoundError from the exec itself, which would ERROR this module at import-time
+    # discovery on any machine without the GitHub CLI — turning a designed skip into a broken suite
+    # (gemini, PR #84). OSError is the parent class, so it also catches a non-executable gh.
+    try:
+        completed = subprocess.run(
+            [
+                "gh",
+                "api",
+                "repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if completed.returncode != 0:
         return None
     try:
@@ -240,12 +250,17 @@ def _resolve_target_set() -> set[str]:
     ruleset = _live_ruleset()
     if ruleset is None:
         return None
-    repo = subprocess.run(
-        ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # The SECOND call site, fixed with the first. Repairing only the reported one would leave the
+    # identical crash one function away — the defect this campaign keeps re-learning.
+    try:
+        repo = subprocess.run(
+            ["gh", "api", "repos/UnleashedServices/unleashed-mail-plugin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if repo.returncode != 0:
         return None
     default_branch = json.loads(repo.stdout)["default_branch"]
@@ -1708,6 +1723,72 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
         self.assertLess(
             names.index("guard-resolver-digest"), names.index("guard-empty-diff")
         )
+
+
+class TheRemoteReadsSurviveAMachineWithoutGh(unittest.TestCase):
+    """`check=False` covers `gh` refusing. It does not cover `gh` being ABSENT.
+
+    A missing binary raises FileNotFoundError out of the exec itself, so on any machine without the
+    GitHub CLI this module would ERROR — not skip — and take the other 50-odd contract tests down
+    with it at discovery time (gemini, PR #84). The remote halves were deliberately designed to
+    return None and let their tests skip; an uncaught exec failure defeats that design entirely.
+
+    Asserted by actually removing `gh` from PATH rather than by reading the source for a `try`.
+    """
+
+    @staticmethod
+    def _sandbox_path(tmp: str) -> str:
+        """A PATH with the interpreters these functions need and definitively no `gh`."""
+        binaries = Path(tmp) / "bin"
+        binaries.mkdir()
+        for tool in ("python3", "sh", "bash", "env", "git"):
+            for prefix in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"):
+                candidate = Path(prefix) / tool
+                if candidate.exists():
+                    (binaries / tool).symlink_to(candidate)
+                    break
+        return str(binaries)
+
+    def _call_in_sandbox(self, function_name: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._sandbox_path(tmp)
+            self.assertIsNone(
+                shutil.which("gh", path=path), "the sandbox must not offer gh"
+            )
+            program = (
+                "import runpy, sys, json\n"
+                f"module = runpy.run_path({str(MODULE_PATH)!r})\n"
+                f"print(json.dumps(module[{function_name!r}]() is None))\n"
+            )
+            # ONLY `PATH` is replaced. Blanking the whole environment also strips the interpreter's
+            # user site-packages, so the child failed on `import yaml` and the test would have
+            # "passed" for a reason that had nothing to do with `gh`.
+            return subprocess.run(
+                [sys.executable, "-c", program],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PATH": path},
+                timeout=120,
+            )
+
+    def test_a_missing_gh_returns_None_rather_than_raising(self):
+        for function_name in ("_live_ruleset", "_resolve_target_set"):
+            with self.subTest(function=function_name):
+                completed = self._call_in_sandbox(function_name)
+                self.assertNotIn(
+                    "FileNotFoundError",
+                    completed.stderr,
+                    "a machine without gh must not raise out of the remote read",
+                )
+                self.assertEqual(
+                    0, completed.returncode, f"exec failed: {completed.stderr[-400:]}"
+                )
+                self.assertEqual(
+                    "true",
+                    completed.stdout.strip(),
+                    "the remote read must report None so its assertions skip",
+                )
 
 
 if __name__ == "__main__":  # pragma: no cover
