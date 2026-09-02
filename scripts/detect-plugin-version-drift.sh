@@ -59,9 +59,17 @@ EXPECTED_JSON="${expected_json}" INSTALLED_RECORD="${installed_record}" OUT_FILE
 	python3 <<'PY' 2>/dev/null
 import json, os, re, sys
 
+# THE OFFICIAL GRAMMAR, not a permissive character class. `[0-9A-Za-z.-]+` accepts strings SemVer
+# forbids -- `2.8.0-01` (a numeric identifier with a leading zero) and `2.8.0-alpha..1` (an empty
+# identifier) both matched. That is not pedantry here: `precedence()` calls `int()` on any all-digit
+# identifier, so `-01` compared as 1 and the row-4 SILENT path for a non-comparable version became a
+# WARNING about malformed registry data instead (codex, PR #84). An identifier is either a numeric
+# one with no leading zero, or one containing at least one non-digit.
+_IDENTIFIER = r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
 SEMVER = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+(?P<build>[0-9A-Za-z.-]+))?$"
+    rf"(?:-(?P<pre>{_IDENTIFIER}(?:\.{_IDENTIFIER})*))?"
+    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 
 

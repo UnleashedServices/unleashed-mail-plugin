@@ -13,6 +13,57 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.11] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the C6 launcher guard was an enumeration, and trunk reads a name it did not
+  enumerate.** `.trunk/user_trunk.yaml` is merged exactly as `.trunk/user.yaml` is; trunk's own
+  `.trunk/.gitignore` lists them one line apart. Reproduced end to end in a scratch repository: a
+  tracked `user_trunk.yaml` disabling two linters takes `trunk check --ci --upstream=HEAD~1` from
+  `exit 1 / "2 failures"` to `exit 0 / "Found no applicable linters"`, byte-identical tree
+  otherwise, while the shipped guard body run verbatim prints PASSED. Cell 4's frozen literal never
+  moves because it reads only `.trunk/trunk.yaml`; the empty-diff guard passes because the git diff
+  is genuinely non-empty. That is this ticket's founding hazard — a required context reporting green
+  having linted nothing — reached through the one name the list missed.
+
+  The guard is now an ALLOWLIST over the `.trunk/` tree, read from the filesystem rather than the
+  index, so an untracked override created by an earlier step is caught too — the first draft asked
+  `git ls-files` and the existing per-path cases immediately caught that regression. The contract
+  check that asserted each guarded path appears as a literal in the guard body has been replaced:
+  asserting an enumeration is complete cannot be the check when the enumeration was the defect.
+
+- **COREDEV-2780 — the all-linter ignore silenced secret scanning on the gate's own configuration.**
+  `.claude/**` and `.trunk/**` were excluded as "local-only trees", but between them they hold twelve
+  TRACKED files. Trunk names the damage itself: `.trunk/trunk.yaml` — the file that defines this
+  gate — was ignored for gitleaks, trufflehog, checkov, codespell, git-diff-check, prettier and
+  yamllint, and all nine tracked linter configs plus `.claude/settings.json` likewise. Narrowed to
+  the genuinely generated subdirectories. The twelve files lint clean, so this cost nothing but the
+  looking.
+- **COREDEV-2780 — a blanket mypy exemption resting on a false claim.** Its justification read
+  "there is NO mypy configuration in this repository at all — no mypy.ini … and `.trunk/configs`
+  holds only ruff.toml". `.trunk/configs/.mypy.ini` is 74 tracked lines, and the commit that added it
+  (`3b18ea3 fix(COREDEV-2771): the mypy test exemption was inert`) exists precisely because its test
+  sections were not matching. Turning the linter off wholesale reversed that fix and took the
+  correctness checks with it. The exemption now lives in `.mypy.ini` per ERROR CODE — `attr-defined`
+  and `type-arg`, the annotation noise — which took the four contract suites from 68 findings to 11
+  real ones, all now fixed: three functions annotated `-> set[str]` that return `None` (an annotation
+  my own `gh`-missing fix had made untrue), four `Any` returns through `yaml.safe_load`, an
+  incompatible dict key, a missing annotation, and **two `re.match()` results used without a `None`
+  check** — one of them entirely unguarded, so a canary guard that lost its digest literal would have
+  raised `AttributeError` instead of failing with a message naming the missing pin.
+- **COREDEV-2780 — the teardown kill had no pid retry.** Three sibling signal sites pair
+  `kill -- -PGID` with a bare-pid fallback and the fourth did not, so when `set -m` cannot grant the
+  child a process group the group kill fails with ESRCH and reaches nothing — measured, the child
+  survives. A derived structural check now finds every group-signal site by pattern and requires the
+  pairing, and names the offending site when one is missing.
+- **COREDEV-2801 — the version grammar was a character class, not SemVer.** `[0-9A-Za-z.-]+` accepts
+  what the specification forbids: `2.8.0-01` (a numeric identifier with a leading zero) and
+  `2.8.0-alpha..1` (an empty identifier). Both parsed, and because `precedence()` calls `int()` on
+  any all-digit identifier, `-01` compared as `-1` and produced a stale-install WARNING about
+  malformed registry data where Table A row 4 calls for silence. Replaced with the official grammar;
+  the table test drives every row through the real detector, both directions.
+
 ## [2.8.10] — 2026-09-02
 
 ### Fixed

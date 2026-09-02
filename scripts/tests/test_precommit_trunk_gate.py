@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -499,6 +500,42 @@ class TheBoundedRun(unittest.TestCase):
                 self.assertLess(
                     elapsed, 10, "it died immediately; nothing should have waited"
                 )
+
+    def test_every_process_group_signal_is_paired_with_a_pid_retry(self):
+        """STRUCTURAL, and it says so — because the runtime path cannot be forced.
+
+        `kill -- -PID` reaches a process GROUP, which only exists if `set -m` gave the child one. When
+        job control is unavailable the child stays in the parent's group, `kill -- -PID` fails with
+        ESRCH and kills NOTHING — measured: the child survives. Every group signal therefore needs a
+        pid retry, and three of the four had one; the teardown kill did not, so it was silently inert
+        on exactly the shells that could not grant a group (gemini, PR #84).
+
+        A behavioural test would need `set -m` to fail, and in bash it does not — `set` is a special
+        builtin and cannot be shadowed. So this asserts the property over a DERIVED site set: every
+        `kill -SIG "-$var"` in the file is found by pattern and each must be followed by its retry.
+        Deriving the sites rather than listing them is the point; a listed set is one a fifth signal
+        can be added outside of.
+        """
+        hook = HOOK.read_text(encoding="utf-8")
+        group_signals = re.findall(
+            r'kill -(\w+) "-\$\{(\w+)\}" 2>/dev/null( \|\| kill -\w+ "\$\{\w+\}" 2>/dev/null)?',
+            hook,
+        )
+        self.assertGreaterEqual(
+            len(group_signals),
+            3,
+            f"expected the known group signals, found {group_signals}",
+        )
+        unpaired = [
+            f"kill -{signal} on ${{{variable}}}"
+            for signal, variable, retry in group_signals
+            if not retry
+        ]
+        self.assertEqual(
+            [],
+            unpaired,
+            "a group signal with no pid retry kills nothing when job control is unavailable",
+        )
 
     def test_the_escalation_is_asserted_as_BEHAVIOUR_not_as_a_spelling(self):
         """`test_the_timeout_is_macos_portable` used to assert that the strings `command -v timeout`

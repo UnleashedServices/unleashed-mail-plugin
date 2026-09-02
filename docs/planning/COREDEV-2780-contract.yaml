@@ -618,6 +618,17 @@ obligations:
         fixture: .trunk/env.yaml
         validity: the sibling override path
         diagnostic: "repository overrides trunk configuration: .trunk/env.yaml"
+      - id: C6.no-repository-supplied-launcher/user-trunk-yaml
+        op: materialise
+        side: local
+        target: .trunk/user_trunk.yaml
+        fixture: .trunk/user_trunk.yaml
+        validity: >-
+          trunk merges user_trunk.yaml exactly as it merges user.yaml -- .trunk/.gitignore lists
+          both, one line apart -- and the guard's enumeration named only the second. Measured: a
+          tracked user_trunk.yaml disabling two linters takes `trunk check --ci --upstream` from
+          exit 1 / "2 failures" to exit 0 / "Found no applicable linters", with the guard passing.
+        diagnostic: "repository overrides trunk configuration: .trunk/user_trunk.yaml"
 
   # ------------------------------------------------------------------ C6a: shared resolver -------
   - id: C6a.resolver-pinned-by-digest

@@ -72,6 +72,8 @@ FIXTURE_EXECUTED_CASES = {
     "C6.no-repository-supplied-launcher/setup-ci",
     "C6.no-repository-supplied-launcher/user-yaml",
     "C6.no-repository-supplied-launcher/env-yaml",
+    # Executed by the same fixture loop as its six siblings, via C6_GUARDED_PATHS.
+    "C6.no-repository-supplied-launcher/user-trunk-yaml",
     "C6a.resolver-pinned-by-digest/edit-resolver",
 }
 CELL16_INJECTED_CASES = {
@@ -93,6 +95,13 @@ C6_GUARDED_PATHS = (
     ".trunk/setup-ci",
     ".trunk/user.yaml",
     ".trunk/env.yaml",
+    # THE ONE THE ENUMERATION MISSED. trunk merges `user_trunk.yaml` exactly as it merges
+    # `user.yaml` — `.trunk/.gitignore` lists them one line apart — and the guard named only the
+    # second. Reproduced: a tracked `user_trunk.yaml` disabling two linters took
+    # `trunk check --ci --upstream` from `exit 1 / 2 failures` to `exit 0 / Found no applicable
+    # linters` while the guard printed PASSED. That is a required context reporting green having
+    # linted nothing. The guard is now an allowlist, so this list is the CASE SET, not the rule.
+    ".trunk/user_trunk.yaml",
 )
 # 20 enabled minus §6.4's declared exclusion. Held as literals: a membership oracle regenerated from
 # the config under test cannot detect that config being reduced.
@@ -142,18 +151,20 @@ EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
         "guard-resolver-digest": "4bec1e760e705bdb5427a9327cecb8c55d03d4f512fef15a568144c1638ab0cc",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
-        "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
+        "guard-launcher-path": "f43b2c94d6685bc1d04a71d82821dab00f76d7b5bfabad40ffc04833bef8eae8",
     },
     "canary": {
         "guard-resolver-digest": "011054c609a1f896f8fb73b3584f7048b666acc84bba82a65824563b106b7bd9",
         "guard-empty-diff": "9825dbd46b05c59173d8792d7aafb42cbe1e3ebb0623d6066850279a0902e5db",
-        "guard-launcher-path": "971597164a44982fef23f3080f8f0be6f43048671f3914d6ecde5ca1b6a2b237",
+        "guard-launcher-path": "f43b2c94d6685bc1d04a71d82821dab00f76d7b5bfabad40ffc04833bef8eae8",
     },
 }
 
 
 def _load_workflow() -> dict:
-    return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    assert isinstance(document, dict), "the workflow must parse to a mapping"
+    return document
 
 
 def _on(workflow: dict):
@@ -171,11 +182,13 @@ def _job(workflow: dict) -> dict:
 
 
 def _job_id(workflow: dict) -> str:
-    return next(iter(workflow["jobs"]))
+    return str(next(iter(workflow["jobs"])))
 
 
 def _steps(workflow: dict) -> list[dict]:
-    return _job(workflow)["steps"]
+    steps = _job(workflow)["steps"]
+    assert isinstance(steps, list), "a job's `steps` must be a sequence"
+    return steps
 
 
 def _step(workflow: dict, name: str) -> dict:
@@ -235,7 +248,7 @@ def _live_ruleset():
         return None
 
 
-def _resolve_target_set() -> set[str]:
+def _resolve_target_set() -> set[str] | None:
     """resolve(ref_name, default_branch) — ENTRY-AGNOSTIC, and the only implementation.
 
     include MINUS exclude; `~DEFAULT_BRANCH` expands to the repository's current default branch;
@@ -454,7 +467,7 @@ def contract_problems(
             path in body for path in C6_GUARDED_PATHS
         ):
             problems.append(f"step `{label}`: creates a prohibited launcher path")
-        frozen = EXPECTED_RUN_BODY_DIGESTS[entry].get(label)
+        frozen = EXPECTED_RUN_BODY_DIGESTS[entry].get(str(label))
         if (
             frozen is not None
             and hashlib.sha256(body.encode("utf-8")).hexdigest() != frozen
@@ -509,14 +522,24 @@ def contract_problems(
         elif used["save-annotations"] is not True:
             problems.append("action inputs: `save-annotations` must be true")
 
-    # C6 — every guarded path is named in the guard that runs last before the action.
+    # C6 — the guard that runs last before the action must REFUSE by default rather than enumerate.
+    #
+    # This used to assert that every guarded path appeared as a LITERAL in the guard body, which is a
+    # check on a spelling: it stayed green while `.trunk/user_trunk.yaml` — a path trunk merges and
+    # the guard did not name — walked through. The enumeration was the defect, so asserting the
+    # enumeration is complete cannot be the check. The property is now "anything under .trunk/ that
+    # is not explicitly allowed is refused", and it is proved by executing the guard against a
+    # fixture per path in `C6AndC6aGuardsExecuteAgainstFixtureTrees`, not by reading it.
     if "guard-launcher-path" in names:
         guard = _step(workflow, "guard-launcher-path").get("run", "")
-        problems.extend(
-            f"C6 guard: does not cover {path}"
-            for path in C6_GUARDED_PATHS
-            if path not in guard
-        )
+        if "find .trunk" not in guard:
+            problems.append(
+                "C6 guard: does not enumerate the .trunk tree from the filesystem"
+            )
+        if ".trunk/configs/*" not in guard:
+            problems.append(
+                "C6 guard: has no allowlist for the configuration it legitimately ships"
+            )
 
     return problems
 
@@ -564,7 +587,8 @@ class Cell6a_TheResolverIsPinnedBeforeItExecutes(unittest.TestCase):
     def test_the_pinned_digest_matches_the_shipped_resolver(self):
         guard = _step(self.workflow, "guard-resolver-digest")["run"]
         pinned = re.search(r"expected='([a-f0-9]{64})'", guard)
-        self.assertIsNotNone(pinned, "the C6a guard must pin a sha256 literal")
+        if pinned is None:
+            self.fail("the C6a guard must pin a sha256 literal")
         self.assertEqual(_sha256_file(RESOLVER_PATH), pinned.group(1))
 
     def test_the_digest_guard_precedes_the_step_that_executes_the_resolver(self):
@@ -660,7 +684,7 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
         attesting a version that run never executed. The set is DERIVED by scanning every workflow
         rather than listed, because a listed set is one a fourth file can be added outside of.
         """
-        found = {}
+        found: dict[str, list[str]] = {}
         for path in sorted((REPO / ".github/workflows").glob("*.yml")):
             document = yaml.safe_load(path.read_text(encoding="utf-8"))
             for job in (document.get("jobs") or {}).values():
@@ -817,14 +841,29 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         }
         expected = {
             (("trufflehog",), ("mcp/review-synthesizer/tests/**", "scripts/tests/**")),
-            (("ALL",), (".claude/**", ".trunk/**")),
-            # COREDEV-2780 M5a, maintainer-approved 2026-09-02: mypy runs with no configuration in
-            # this repo, and bandit's B603/B607 flag the partial-path subprocess calls these suites
-            # use deliberately to EXECUTE shipped scripts rather than re-implement them.
+            # NARROWED. `.claude/**` and `.trunk/**` silenced ALL linters on twelve TRACKED files
+            # — gitleaks and trufflehog included, on `.trunk/trunk.yaml` itself, the file that
+            # defines this gate. Only genuinely generated trees are excluded now.
             (
-                ("bandit", "mypy"),
-                ("mcp/review-synthesizer/tests/**", "scripts/tests/**"),
+                ("ALL",),
+                (
+                    ".claude/worktrees/**",
+                    ".trunk/actions/**",
+                    ".trunk/logs/**",
+                    ".trunk/notifications/**",
+                    ".trunk/out/**",
+                    ".trunk/plugins/**",
+                    ".trunk/tmp/**",
+                    ".trunk/tools/**",
+                ),
             ),
+            # COREDEV-2780 M5a, maintainer-approved 2026-09-02: bandit's B603/B607 flag the
+            # partial-path subprocess calls these suites use deliberately to EXECUTE shipped scripts
+            # rather than re-implement them. MYPY IS NO LONGER HERE — its justification ("no mypy
+            # configuration in this repo") was false, `.trunk/configs/.mypy.ini` is 74 tracked lines,
+            # and turning the linter off wholesale hid a real `union-attr` defect. The narrow
+            # exemption now lives in `.mypy.ini`, per error code.
+            (("bandit",), ("mcp/review-synthesizer/tests/**", "scripts/tests/**")),
             # COREDEV-2780: a plan whose bytes are bound to a review verdict cannot be reflowed —
             # a formatter would invalidate a genuine approval.
             (("markdownlint", "prettier"), ("docs/planning/*_PLAN.md",)),
@@ -1541,8 +1580,12 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         """Revision 22's "deliberately smaller" list omitted C5/C6, so the milestone and the cell
         disagreed about what the canary must satisfy."""
         guard = _step(self.canary, "guard-launcher-path")["run"]
-        for path in C6_GUARDED_PATHS:
-            self.assertIn(path, guard)
+        # THE SAME PROPERTY AS THE REQUIRED ENTRY, AND THE SAME CORRECTION. This asserted that every
+        # guarded path is spelled in the guard body — a check the enumeration passed while missing
+        # `.trunk/user_trunk.yaml` entirely. The guard is an allowlist now; the paths are proved
+        # caught by executing it, in `C6AndC6aGuardsExecuteAgainstFixtureTrees`.
+        self.assertIn("find .trunk", guard)
+        self.assertIn(".trunk/configs/*", guard)
         self.assertNotIn("env", self.canary)
         self.assertNotIn("env", _job(self.canary))
         executor = _step(self.canary, "guard-empty-diff")["run"]
@@ -1551,6 +1594,11 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
             r"expected='([a-f0-9]{64})'",
             _step(self.canary, "guard-resolver-digest")["run"],
         )
+        # NO None CHECK AT ALL here previously: if the canary's guard ever lost its digest literal
+        # this raised AttributeError instead of failing, so the suite would report an ERROR whose
+        # message named `NoneType` rather than the missing pin.
+        if pinned is None:
+            self.fail("the canary's C6a guard must pin a sha256 literal")
         self.assertEqual(_sha256_file(RESOLVER_PATH), pinned.group(1))
 
     def test_the_zero_before_guard_is_reached_through_the_shared_resolver(self):
@@ -1667,8 +1715,13 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(0, self._run(self.c6_guard, Path(tmp)).returncode)
 
-    def test_each_of_the_six_launcher_paths_is_caught_separately(self):
-        """A guard that catches five of six is a gate with one door open, so each is its own case."""
+    def test_each_guarded_path_is_caught_separately(self):
+        """A guard that catches six of seven is a gate with one door open, so each is its own case.
+
+        That is not hypothetical here: the seventh, `.trunk/user_trunk.yaml`, was the door left open,
+        and it was open because the guard was an enumeration. Each path is executed against the real
+        guard rather than grepped for.
+        """
         for path in C6_GUARDED_PATHS:
             with self.subTest(fixture=path), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)

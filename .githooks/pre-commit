@@ -100,7 +100,11 @@ run_with_timeout() {
 		# DIRECT child does, and killing the watchdog then cancels its `sleep 5; kill -KILL` — so a
 		# grandchild that ignores TERM outlives the deadline and keeps holding the caller's stdout.
 		# Measured at 45s against a 2s deadline before this line existed, on BOTH branches.
-		kill -KILL "-${_rwt_cmd}" 2>/dev/null
+		# THE PID FALLBACK IS NOT DECORATION. `set -m` can fail, and then the child is never a group
+		# leader, so `kill -- -PID` fails with ESRCH and kills NOTHING — measured. Lines above pair
+		# every group signal with a pid retry; this one did not, which left the teardown silently
+		# inert on exactly the shells that could not give the child its own group (gemini, PR #84).
+		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
 		# ONE STATUS FOR ONE FACT: every branch reports a timeout as 124, so the caller classifies a
 		# recorded fact rather than a per-branch exit code.
 		return 124

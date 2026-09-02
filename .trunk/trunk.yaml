@@ -107,30 +107,47 @@ lint:
       paths:
         - scripts/tests/**
         - mcp/review-synthesizer/tests/**
-    # COREDEV-2780 M5a — mypy and bandit on TEST code, by the same mechanism and the same paths this
+    # COREDEV-2780 M5a — bandit on TEST code, by the same mechanism and the same paths this
     # repository already uses for trufflehog above (maintainer-approved 2026-09-02).
-    #
-    # mypy: there is NO mypy configuration in this repository at all -- no mypy.ini, setup.cfg or
-    # pyproject.toml, and .trunk/configs holds only ruff.toml -- so it runs with DEFAULTS over test
-    # code that legitimately sets attributes in `setUpClass`. That produced ~104 findings of two kinds
-    # (attr-defined, type-arg) saying nothing about correctness. Every pre-existing test file in the
-    # tree carries the identical patterns; they were simply never linted.
     #
     # bandit: B603/B607 flag `subprocess` with a partial path, which is what every harness here does
     # deliberately -- these suites EXECUTE the shipped scripts rather than re-implementing them, and
     # that is the property several cells depend on.
     #
-    # DELIBERATELY NARROW: two linters, test paths only. Production code under scripts/ still gets
-    # both. Widening this again is a reviewed change -- cell 4 freezes this list as a literal.
-    - linters: [mypy, bandit]
+    # MYPY WAS HERE AND HAS BEEN REMOVED, because the reason given for it was false. It read "there
+    # is NO mypy configuration in this repository at all -- no mypy.ini ... and .trunk/configs holds
+    # only ruff.toml". `.trunk/configs/.mypy.ini` is 74 tracked lines, and the commit that added it
+    # (`3b18ea3 fix(COREDEV-2771): the mypy test exemption was inert`) exists precisely because its
+    # test sections were not matching. Turning the linter off wholesale here reversed that fix and
+    # took the CORRECTNESS checks with it -- it was hiding a real `union-attr` defect in the contract
+    # checker. The narrow exemption now lives in `.mypy.ini`, per error code, where it can exempt the
+    # annotation noise without exempting correctness.
+    #
+    # DELIBERATELY NARROW: one linter, test paths only. Production code under scripts/ still gets it.
+    # Widening this again is a reviewed change -- cell 4 freezes this list as a literal.
+    - linters: [bandit]
       paths:
         - scripts/tests/**
         - mcp/review-synthesizer/tests/**
-    # Local-only trees: git worktrees (excluded in .git/info/exclude) and Trunk's own state.
+    # LOCAL-ONLY TREES, NAMED EXACTLY. `.claude/**` and `.trunk/**` were far too wide: between them
+    # they hold TWELVE TRACKED files, and trunk reported the damage itself -- `.trunk/trunk.yaml`,
+    # the file that DEFINES this gate, was ignored for gitleaks, trufflehog, checkov, codespell,
+    # git-diff-check, prettier and yamllint, and all nine tracked linter configs plus
+    # `.claude/settings.json` likewise. Turning off SECRET SCANNING on a repository's own config
+    # surface is not what "local-only state" was meant to say.
+    #
+    # The subdirectories below are the genuinely generated ones -- trunk's own `.trunk/.gitignore`
+    # enumerates them -- plus the git worktrees under `.claude/`. Anything tracked is linted again.
     - linters: [ALL]
       paths:
-        - .claude/**
-        - .trunk/**
+        - .claude/worktrees/**
+        - .trunk/out/**
+        - .trunk/logs/**
+        - .trunk/actions/**
+        - .trunk/notifications/**
+        - .trunk/tools/**
+        - .trunk/plugins/**
+        - .trunk/tmp/**
 actions:
   disabled:
     - trunk-announce

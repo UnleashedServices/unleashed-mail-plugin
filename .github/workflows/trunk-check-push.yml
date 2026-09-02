@@ -94,7 +94,40 @@ jobs:
       - name: guard-launcher-path
         run: |
           set -euo pipefail
-          for path in .trunk/bin/trunk tools/trunk ./trunk .trunk/setup-ci .trunk/user.yaml .trunk/env.yaml; do
+          # AN ALLOWLIST, BECAUSE THE BLACKLIST RE-OPENED. This guard used to name six paths. It did
+          # not name `.trunk/user_trunk.yaml`, which trunk merges exactly as it merges `user.yaml` —
+          # `.trunk/.gitignore` lists both, one line apart. Reproduced end to end: a tracked
+          # `user_trunk.yaml` disabling two linters takes `trunk check --ci --upstream` from
+          # `exit 1 / 2 failures` to `exit 0 / Found no applicable linters`, while this guard printed
+          # PASSED. That is the founding hazard of this ticket — a required context reporting green
+          # having linted nothing — reached through the one name the enumeration missed.
+          #
+          # So the question is inverted. Instead of listing what the repository may not supply, we
+          # list what it MAY, and refuse everything else under `.trunk/`. A seventh override file, or
+          # a rename in a future trunk release, then fails closed by default instead of walking
+          # straight through.
+          #
+          # KNOWN AND DELIBERATELY OUT OF SCOPE: `.trunk/configs/**` is allowed, and its contents are
+          # a real lever on this gate — a permissive `ruff.toml` weakens linting without tripping
+          # anything here, because cell 4 freezes `.trunk/trunk.yaml`'s lint block and nothing else.
+          # Closing that needs a frozen digest per config file; it is a separate change and is
+          # tracked, not silently tolerated.
+          # THE FILESYSTEM IS THE ORACLE, NOT THE INDEX. A first draft asked `git ls-files`, which
+          # sees only TRACKED paths — and the existing per-path cases immediately caught that an
+          # untracked `.trunk/user.yaml` then walked straight through. Checkout materialises only
+          # tracked files, so anything else present here was put there by a step, which is precisely
+          # the case this guard is positioned LAST to catch.
+          while IFS= read -r path; do
+            case "${path}" in
+              .trunk/.gitignore | .trunk/trunk.yaml | .trunk/configs/*) continue ;;
+            esac
+            echo "C6: the repository supplies ${path}; trunk merges files under .trunk/ into the configuration this gate freezes" >&2
+            exit 1
+          done < <(find .trunk -type f 2>/dev/null | sed 's|^\./||' | sort)
+          # The launcher paths proper, which live outside `.trunk/` and so are not covered above.
+          # `-e` rather than `git ls-files`: an untracked one created by an earlier step would be
+          # preferred by the action just the same.
+          for path in tools/trunk ./trunk; do
             if [ -e "${path}" ]; then
               echo "C6: the repository supplies ${path}, which the action would prefer over a verified download" >&2
               exit 1

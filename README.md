@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.10
+# UnleashedMail — Claude Code Plugin v2.8.11
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,18 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.11
+
+- **A required-check bypass, found by reviewing locally instead of waiting for the bots.**
+  The C6 guard that stops the repository supplying its own linter was an enumeration of six paths,
+  and `trunk` merges a seventh it did not name. Measured: a tracked `.trunk/user_trunk.yaml`
+  disabling two linters takes `trunk check --ci --upstream` from `exit 1 / 2 failures` to
+  `exit 0 / Found no applicable linters` — a required context reporting green having linted nothing
+  — while the guard printed PASSED. It is an allowlist now, so an eighth override file fails closed
+  by default. Alongside it: the all-linter ignore was silencing gitleaks and trufflehog on twelve
+  tracked files including `.trunk/trunk.yaml` itself, and a blanket mypy exemption justified by a
+  claim that was simply false was hiding real type defects.
 
 ### v2.8.10
 

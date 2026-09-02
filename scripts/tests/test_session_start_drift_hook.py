@@ -38,7 +38,9 @@ def _session_start_hook() -> dict:
     settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
     entries = settings["hooks"]["SessionStart"]
     assert len(entries) == 1, "exactly one SessionStart entry"
-    return entries[0]
+    entry = entries[0]
+    assert isinstance(entry, dict), "the SessionStart entry must be a mapping"
+    return entry
 
 
 class TheDeclaration(unittest.TestCase):
@@ -534,6 +536,50 @@ class AManualRunDoesNotHangAndDoesNotBurnAMarker(_DetectorFixture):
         should see the sentence, not the envelope."""
         _, output = self._under_a_pty()
         self.assertNotIn("systemMessage", output)
+
+
+class TheVersionGrammarIsSemVerNotACharacterClass(_DetectorFixture):
+    """Row 4 says a version that is not comparable produces SILENCE. "Comparable" means valid SemVer,
+    and the first grammar was a permissive character class — `[0-9A-Za-z.-]+` for the prerelease —
+    which accepts strings the specification forbids (codex, PR #84).
+
+    It matters because `precedence()` calls `int()` on any all-digit identifier: `2.8.0-01` compared
+    as `2.8.0-1` and produced a stale-install WARNING about malformed registry data, where the
+    contract calls for silence. Driven end to end through the real detector, not against the regex.
+    """
+
+    VALID = ("2.8.0", "2.8.0-alpha.1", "2.8.0-1", "2.8.0-0alpha", "2.8.0+build.1")
+    INVALID = ("2.8.0-01", "2.8.0-alpha..1", "2.8.0-", "2.8.0-+x", "2.8..0", "v2.8.0")
+
+    def test_an_invalid_prerelease_takes_the_row_4_SILENT_path(self):
+        for version in self.INVALID:
+            with self.subTest(installed=version):
+                self.tearDown()
+                self.setUp()
+                self.set_installed(version)
+                completed = self.run_detector(str(self.repo))
+                self.assertEqual(0, completed.returncode)
+                self.assertEqual(
+                    "",
+                    completed.stdout.strip(),
+                    f"{version} is not valid SemVer, so it is not comparable and must be silent",
+                )
+
+    def test_a_VALID_prerelease_is_still_compared(self):
+        """The two-sided half. A grammar tightened until it rejects everything would pass the test
+        above and make the detector silent forever — the failure this file has already had once.
+        """
+        for version in self.VALID:
+            with self.subTest(installed=version):
+                self.tearDown()
+                self.setUp()
+                self.set_installed(version)
+                completed = self.run_detector(str(self.repo))
+                self.assertIn(
+                    "is behind origin/main",
+                    completed.stdout,
+                    f"{version} is valid SemVer below the expected version and must warn",
+                )
 
 
 if __name__ == "__main__":  # pragma: no cover
