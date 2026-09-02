@@ -309,6 +309,21 @@ def _normalised_lint_block(config_text: str) -> str:
     return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(block, sort_keys=True))
 
 
+# THE ORACLE THE NORMALISED DIGEST NEVER HAD. Both users of `_normalised_lint_block` compared the
+# shipped config against a MUTATED COPY OF ITSELF, which cannot see a weakening that is already
+# committed: the "before" is the weakened file too. Measured — adding `success_codes: [0, 1, 2]` to
+# zizmor's lint command, so security findings count as SUCCESS, passed all eight cell 4 tests.
+#
+# §1 and cell 4 both require the block FROZEN, and a freeze needs a constant to compare against.
+# Version specifiers are normalised out first so a routine `trunk upgrade` does not red the cell;
+# every other edit — a changed `commands[].run`, a widened `success_codes`, a dropped linter, a new
+# `ignore` — moves it, and moving it is a reviewed change: update this literal in the same commit,
+# with the reason, exactly as the ignore-list literal above is maintained.
+EXPECTED_NORMALISED_LINT_DIGEST = (
+    "bb0335a3c202c68e728c70d3511cfdc9232f907f71ff777f357acf637bc5c1bf"
+)
+
+
 def contract_problems(
     workflow: dict, *, milestone: str = "M2", entry: str = "required"
 ) -> list[str]:
@@ -878,6 +893,22 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
             "ALL", rule["linters"], "only the two linters that REFLOW prose"
         )
         self.assertEqual(["docs/planning/*_PLAN.md"], rule["paths"])
+
+    def test_the_normalised_lint_block_matches_its_frozen_oracle(self):
+        """The comparison that was missing. The two tests beside this one mutate the config and check
+        the digest moves — which proves the FUNCTION discriminates, not that the SHIPPED config is the
+        reviewed one. A weakening committed to `.trunk/trunk.yaml` is invisible to a self-comparison.
+        """
+        import hashlib as _hashlib
+
+        self.assertEqual(
+            EXPECTED_NORMALISED_LINT_DIGEST,
+            _hashlib.sha256(
+                _normalised_lint_block(self.config).encode("utf-8")
+            ).hexdigest(),
+            "the lint block moved: re-pin EXPECTED_NORMALISED_LINT_DIGEST in the same commit, "
+            "with the reason, or revert the change to .trunk/trunk.yaml",
+        )
 
     def test_a_command_override_does_move_the_normalised_digest(self):
         """Names alone were not enough: a PR can keep all 19 and disable every linter by overriding

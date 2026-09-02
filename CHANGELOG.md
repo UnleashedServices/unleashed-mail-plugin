@@ -13,6 +13,29 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **COREDEV-2780 — cell 4's normalised lint digest was computed and never compared to anything.**
+  Both users of `_normalised_lint_block` compared the shipped config against a MUTATED COPY OF
+  ITSELF, which proves the function discriminates but says nothing about the config that shipped: a
+  weakening already committed is invisible, because the "before" is the weakened file too. Measured
+  with a mutation first verified to change the parsed block — widening zizmor's `success_codes` from
+  `[0]` to `[0, 1, 2]`, so security findings count as success — the whole of cell 4 passed. The
+  normalised digest is now frozen as a literal oracle and moving it is a reviewed change, exactly as
+  the ignore-list literal beside it already is.
+
+  (Recorded because it nearly went the other way: the first attempt at this demonstration inserted a
+  duplicate `success_codes` key, PyYAML kept the original, and the parsed document was unchanged. The
+  finding was real, but that proof of it was not. A mutation is not a mutation until the parse
+  differs, and the fixture now asserts so before drawing any conclusion.)
+
+- **COREDEV-2780 — CI's shellcheck gate never covered `scripts/ci/*.sh`.** `CLAUDE.md` publishes the
+  gate a developer is told to run and lists that path; `plugin-ci.yml` runs the one that actually
+  blocks and did not. So the shared range resolver — the file the required check's guard pins by
+  digest and then executes — had never been shellchecked in CI. It passes cleanly, so the omission
+  cost nothing except the guarantee. Both lists are now DERIVED and compared in both directions, so
+  the documented gate and the enforced gate cannot drift apart again silently.
+
 ## [2.8.11] — 2026-09-02
 
 ### Fixed

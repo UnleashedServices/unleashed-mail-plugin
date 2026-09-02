@@ -273,7 +273,11 @@ jobs:
 
       - name: ShellCheck plugin scripts
         id: shellcheck_gate
-        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
+        # `scripts/ci/*.sh` WAS MISSING and CLAUDE.md's gate list already claimed it was here.
+        # Those two files are the shared range resolver — the one the required check's guard
+        # pins by digest and executes — and the parity recorder. The documented gate and the
+        # enforced gate disagreed, and the enforced one is the only one that runs.
+        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
 
       - name: Install actionlint (pinned + checksum-verified)
         env:
