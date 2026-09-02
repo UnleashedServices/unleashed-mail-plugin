@@ -90,7 +90,13 @@ jobs:
       # VERSION-PINNED, matching AGENT_CONTRACTS §6's posture on SHA-pinned actions — an unpinned
       # `pip install` is a supply-chain surface this repo otherwise refuses.
       - name: Install PyYAML (COREDEV-2780 contract cells parse YAML)
-        run: python3 -m pip install --disable-pip-version-check pyyaml==6.0.2
+        # `--break-system-packages` is the fallback, not the default: the macOS runner's system
+        # python is PEP 668 externally-managed and refuses the plain form, while the
+        # setup-python interpreters accept it. Try the clean install first so the flag is only
+        # used where it is actually required.
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
 
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
@@ -604,7 +610,13 @@ jobs:
       # VERSION-PINNED, matching AGENT_CONTRACTS §6's posture on SHA-pinned actions — an unpinned
       # `pip install` is a supply-chain surface this repo otherwise refuses.
       - name: Install PyYAML (COREDEV-2780 contract cells parse YAML)
-        run: python3 -m pip install --disable-pip-version-check pyyaml==6.0.2
+        # `--break-system-packages` is the fallback, not the default: the macOS runner's system
+        # python is PEP 668 externally-managed and refuses the plain form, while the
+        # setup-python interpreters accept it. Try the clean install first so the flag is only
+        # used where it is actually required.
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
 
       - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
         run: python3 -m unittest discover -s scripts/tests -v
