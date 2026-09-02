@@ -30,6 +30,10 @@ permissions:
 
 jobs:
   trunk-check:
+    # zizmor/anonymous-definition. IDENTICAL to the job id on purpose: cell 14 takes
+    # `name:` as the EFFECTIVE CHECK NAME when present, so any other value would
+    # silently rename the context a ruleset refers to.
+    name: trunk-check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # C3: pinned at BOTH scopes. GitHub calculates the token workflow-level THEN job-level, so a

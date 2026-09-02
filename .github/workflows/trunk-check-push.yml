@@ -23,6 +23,10 @@ permissions:
 
 jobs:
   trunk-check-push:
+    # zizmor/anonymous-definition. IDENTICAL to the job id on purpose: cell 14 takes
+    # `name:` as the EFFECTIVE CHECK NAME when present, so any other value would
+    # silently rename the context a ruleset refers to.
+    name: trunk-check-push
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

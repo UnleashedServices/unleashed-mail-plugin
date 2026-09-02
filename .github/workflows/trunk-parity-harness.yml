@@ -30,6 +30,10 @@ permissions:
 
 jobs:
   parity:
+    # zizmor/anonymous-definition. IDENTICAL to the job id on purpose: cell 14 takes
+    # `name:` as the EFFECTIVE CHECK NAME when present, so any other value would
+    # silently rename the context a ruleset refers to.
+    name: parity
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
