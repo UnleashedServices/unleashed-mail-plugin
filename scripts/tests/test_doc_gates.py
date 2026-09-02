@@ -788,12 +788,16 @@ class COREDEV2603_WorktreeOrdering(unittest.TestCase):
     These assertions exist because a docs-only fix is exactly the kind that gets silently reverted.
     """
 
-    FILES = {
-        "CLAUDE.md": None,
-        "AGENT_CONTRACTS.md": None,
-        "skills/create-feature-plan/SKILL.md": None,
-        "skills/implement/SKILL.md": None,
-        "skills/review-synthesis/SKILL.md": None,
+    # TYPED, and seeded with "" rather than None. mypy infers `dict[str, None]` from a None-valued
+    # literal, which makes every `"..." in src` below an operator error against None. The values are
+    # replaced wholesale in setUpClass either way; an unread file now fails the content assertions
+    # instead of the membership test, which is the clearer failure.
+    FILES: dict[str, str] = {
+        "CLAUDE.md": "",
+        "AGENT_CONTRACTS.md": "",
+        "skills/create-feature-plan/SKILL.md": "",
+        "skills/implement/SKILL.md": "",
+        "skills/review-synthesis/SKILL.md": "",
     }
 
     @classmethod
@@ -1436,21 +1440,21 @@ class COREDEV2780_TheEnforcedShellcheckGateMatchesTheDocumentedOne(unittest.Test
         return set(re.findall(r"\S+\*\.sh|\.githooks/pre-commit", command))
 
     def _documented(self) -> set:
-        line = next(
-            l
-            for l in _read("CLAUDE.md").splitlines()
-            if l.strip().startswith("shellcheck ")
+        documented = next(
+            candidate
+            for candidate in _read("CLAUDE.md").splitlines()
+            if candidate.strip().startswith("shellcheck ")
         )
-        return self._globs(line)
+        return self._globs(documented)
 
     def _enforced(self) -> set:
         workflow = _read(".github/workflows/plugin-ci.yml")
-        line = next(
-            l
-            for l in workflow.splitlines()
-            if "run:" in l and "shellcheck -s bash" in l
+        enforced = next(
+            candidate
+            for candidate in workflow.splitlines()
+            if "run:" in candidate and "shellcheck -s bash" in candidate
         )
-        return self._globs(line)
+        return self._globs(enforced)
 
     def test_the_enforced_gate_covers_everything_the_documentation_promises(self):
         missing = self._documented() - self._enforced()
