@@ -13,6 +13,40 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.16] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — a child's own exit 124 was read as the wrapper's timeout.** `timeout`
+  returns 124 for a real timeout and the command's own status otherwise, and `trunk` can exit 124 by
+  propagating an internal tool's timeout — reproduced: `timeout -k 5 10 sh -c 'exit 124'` returns
+  124 immediately. The gate logged "exceeded 180s" and left `overall` unchanged, allowing a commit
+  after an incomplete lint.
+
+  This is the THIRD member of one family and the third to be found only after the previous was
+  closed: 137 first, then 143, now 124. The repair is therefore structural rather than a third
+  patch — `run_with_timeout` publishes `RWT_TIMED_OUT`, and the caller reads that fact instead of
+  inferring it from a status that the child can also produce. All three statuses additionally share
+  one elapsed guard, so a fourth cannot be added without one.
+
+- **COREDEV-2801 — the detector ignored `CLAUDE_CONFIG_DIR`.** Claude Code roots its plugin state
+  there when set, and the relocation is supported — this repository exercises it itself, exporting
+  `CLAUDE_CONFIG_DIR` before `claude plugin install` in `scripts/ci-load-check.sh`. Reading only
+  `$HOME/.claude` under that setup either found nothing and took row 2 silently, or compared an
+  unrelated default-profile record. Resolved through `${CLAUDE_CONFIG_DIR:-${HOME-}/.claude}` now.
+- **COREDEV-2780 — the committed rollout evidence was named as an owner and read by nothing.**
+  `evidence/COREDEV-2780-rollout.json` was cited in comments as carrying the remote halves CI cannot
+  perform, and a repo-wide search found references only in prose. So on a runner without an
+  authenticated `gh`, the only comparison between a workflow's `branches:` and the ruleset's
+  resolved target set SKIPPED, and a divergent branch set went unchallenged — which at M4 is a
+  protected branch with no producer, or the gate running on the wrong branches.
+
+  The offline path now parses the artifact AND binds its recorded branch list to the shipped
+  workflow, so evidence recorded for a different branch set cannot certify the current one. Verified
+  in all three states with `gh` absent: unchanged passes without skipping, a divergent
+  `branches: [main, alpha, rogue]` fails naming the mismatch, and a missing artifact still skips
+  rather than inventing a pass.
+
 ## [2.8.15] — 2026-09-03
 
 ### Fixed

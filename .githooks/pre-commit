@@ -52,6 +52,11 @@ run_with_timeout() {
 	set -m 2>/dev/null || _rwt_job_control=0
 
 	local _rwt_cmd _rwt_watchdog="" _rwt_rc _rwt_timed_out=0
+	# DELIBERATELY NOT `local`. The caller has to distinguish "we stopped it" from "it exited with a
+	# status that happens to look like ours", and no exit status can carry that: 124, 137 and 143 are
+	# each producible BY THE CHILD. Three separate fail-opens came from inferring the fact from the
+	# code. The fact is published here instead, and the caller reads the fact.
+	RWT_TIMED_OUT=0
 	if [[ -n ${_rwt_bounded} ]]; then
 		# `-k 5`, NOT `--kill-after=5`. Measured across implementations: the short form is accepted by
 		# GNU, FreeBSD, busybox and toybox, while the long form is rejected by busybox (exit 1) and
@@ -89,17 +94,21 @@ run_with_timeout() {
 		wait "${_rwt_watchdog}" 2>/dev/null
 		[[ -e ${_rwt_marker} ]] && _rwt_timed_out=1
 		rm -f "${_rwt_marker}"
-	elif [[ ${_rwt_rc} -eq 124 ]]; then
-		_rwt_timed_out=1
-	elif [[ (${_rwt_rc} -eq 137 || ${_rwt_rc} -eq 143) && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
-		# 137 IS AMBIGUOUS AND THE ELAPSED GUARD IS WHAT RESOLVES IT. `timeout -k` reports 137 when
-		# its SIGKILL lands, but a command that is OOM-killed — or that exits 137 itself — reports
-		# the same status without any deadline having passed. Normalising unconditionally would turn
-		# a crashed linter into "not blocking", a fail-open in the one place this file cannot afford
-		# one. Both counterexamples were measured, not reasoned about.
+	elif [[ (${_rwt_rc} -eq 124 || ${_rwt_rc} -eq 137 || ${_rwt_rc} -eq 143) && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
+		# EVERY ONE OF THESE THREE IS AMBIGUOUS, and the elapsed guard is the only thing that
+		# resolves any of them. `timeout -k` reports 137 when its SIGKILL lands — but so does an
+		# OOM-killed command. It reports 143 for its TERM — but so does an external `kill`. And it
+		# reports 124 for a real timeout — but ALSO passes through a child that exited 124 itself,
+		# which `trunk` can do by propagating an internal tool's timeout.
+		#
+		# THEY WERE FIXED ONE AT A TIME AND THAT WAS THE MISTAKE: 137 first, then 143 when a
+		# reviewer pointed at it, then 124 when the same reviewer pointed again (codex, PR #84).
+		# Three members of one family, each found only after the previous was closed. They share a
+		# guard now, so a fourth ambiguous status cannot be added without one.
 		_rwt_timed_out=1
 	fi
 
+	RWT_TIMED_OUT=${_rwt_timed_out}
 	if [[ ${_rwt_timed_out} -eq 1 ]]; then
 		# THE PENDING ESCALATION DIED WITH THE WATCHDOG, so do it here. `wait` returns as soon as the
 		# DIRECT child does, and killing the watchdog then cancels its `sleep 5; kill -KILL` — so a
@@ -124,19 +133,20 @@ if command -v trunk >/dev/null 2>&1; then
 		echo "✅ trunk: no new findings in the staged diff"
 	else
 		_trunk_rc=$?
-		if [[ ${_trunk_rc} -eq 124 ]]; then
+		if [[ ${RWT_TIMED_OUT:-0} -eq 1 ]]; then
 			# A timeout is an INFRASTRUCTURE failure, not a lint finding. Blocking the commit on
 			# someone's slow network would teach people to pass --no-verify, which disables every
 			# check above as well.
 			#
-			# 124 AND NOTHING ELSE. This arm used to accept 143 too, on the reasoning that "a TERM
-			# delivered from outside this hook still means the same thing" — which is false: an
-			# external TERM says nothing about whether the deadline was reached. `timeout` passes a
-			# pre-deadline 143 straight through, so a lint killed after two seconds reported
-			# "exceeded 180s" and let the commit through, while the signal arm below would have
-			# blocked the identical death by SIGKILL (codex, PR #84). `run_with_timeout` now proves
-			# the deadline elapsed before calling 143 a timeout, exactly as it already did for 137,
-			# and returns 124 when it did — so anything still carrying 143 here did NOT time out.
+			# THE FACT, NOT A STATUS. This arm keyed on 124, then on `124 || 143`, and each time a
+			# reviewer found another status the CHILD can produce that is indistinguishable from the
+			# wrapper's own: 143 from an external kill, 137 from the OOM killer, and 124 from `trunk`
+			# propagating an internal tool timeout. Every one of those reported "exceeded 180s" and
+			# let the commit through after an incomplete lint.
+			#
+			# `run_with_timeout` knows whether it stopped the command and now says so directly, so
+			# there is no status left to misread. A child's own 124 falls through to the arms below
+			# and blocks, which is what an unexplained non-zero from a lint gate should do.
 			echo "⚠️  trunk check exceeded ${TRUNK_TIMEOUT_SECONDS}s — not blocking on a timeout"
 		elif [[ ${_trunk_rc} -eq 2 ]]; then
 			# TRUNK COULD NOT RUN, WHICH IS NOT THE SAME AS FINDING SOMETHING. Exit 2 is what the

@@ -185,6 +185,53 @@ def _workflow_files() -> list[Path]:
     )
 
 
+ROLLOUT_EVIDENCE = REPO / "docs/planning/evidence/COREDEV-2780-rollout.json"
+
+
+def _recorded_remote_halves():
+    """The committed stand-in for the reads CI cannot make, ACTUALLY READ.
+
+    `evidence/COREDEV-2780-rollout.json` was named in comments as the owner of every remote half and
+    then parsed by nothing — a repo-wide search found references only in prose. So on a runner with
+    no authenticated `gh` the only comparison between a workflow's `branches:` and the ruleset's
+    resolved target set simply SKIPPED, and the artifact was accepted without being looked at
+    (codex, PR #84). Changing either shipped workflow to a divergent branch set left the assertion
+    skipped and the stale evidence unchallenged — and once the context is required, that is a
+    protected branch with no producer, or the gate running on the wrong branches.
+
+    Returns None only when the artifact is genuinely unusable, so a missing file still skips rather
+    than inventing a pass.
+    """
+    try:
+        return json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))[
+            "c2AndCell16RemoteHalves"
+        ]
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set:
+    """The live resolved set, or the committed evidence BOUND TO THIS WORKFLOW.
+
+    The offline path is not a weaker version of the online one: it additionally requires the
+    artifact's own record of this workflow's branches to match what the workflow now says, so
+    evidence recorded for a different branch set cannot certify the current one.
+    """
+    resolved = _resolve_target_set()
+    if resolved is not None:
+        return resolved
+    recorded = _recorded_remote_halves()
+    if recorded is None:
+        test.skipTest(_REMOTE_HALF_SKIP)
+    test.assertEqual(
+        set(recorded[recorded_key]),
+        shipped_branches,
+        f"{ROLLOUT_EVIDENCE.name} records {recorded[recorded_key]} for this workflow, which no "
+        "longer matches its `branches:` — the evidence predates the change and must be re-recorded",
+    )
+    return set(recorded["resolvedTargetSet"])
+
+
 def _load_workflow() -> dict:
     document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     assert isinstance(document, dict), "the workflow must parse to a mapping"
@@ -813,9 +860,9 @@ class Cell15_TargetSetResolution(unittest.TestCase):
 
     def test_the_shipped_workflow_matches_the_live_resolved_set(self):
         on = _on(_load_workflow())["pull_request"]
-        resolved = _resolve_target_set()
-        if resolved is None:
-            self.skipTest(_REMOTE_HALF_SKIP)
+        resolved = _resolved_or_recorded(
+            self, set(on["branches"]), "requiredWorkflowBranches"
+        )
         self.assertEqual(resolved, set(on["branches"]))
 
 
@@ -1678,9 +1725,9 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
     # ---- the remote halves, against INJECTED observations -------------------------------------
     def test_canary_branches_equal_the_resolved_target_set(self):
         on = _on(self.canary)["push"]
-        resolved = _resolve_target_set()
-        if resolved is None:
-            self.skipTest(_REMOTE_HALF_SKIP)
+        resolved = _resolved_or_recorded(
+            self, set(on["branches"]), "canaryWorkflowBranches"
+        )
         self.assertEqual(resolved, set(on["branches"]))
 
     def test_an_injected_divergent_target_set_is_detected(self):

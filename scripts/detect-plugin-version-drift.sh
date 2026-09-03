@@ -48,7 +48,13 @@ expected_json="$(git -C "${root}" show origin/main:.claude-plugin/plugin.json 2>
 # header promises "Exit: ALWAYS 0. This is a diagnostic, not a gate." Reproduced with `env -u
 # HOME`. The empty fallback lets the read fail and take Table A row 2's silent path instead
 # (gemini, PR #84).
-installed_record="${HOME-}/.claude/plugins/installed_plugins.json"
+# `CLAUDE_CONFIG_DIR` FIRST. Claude Code roots its plugin state in that directory when it is
+# set, and the relocation is supported — this repository exercises it itself, exporting
+# CLAUDE_CONFIG_DIR before `claude plugin install` in `scripts/ci-load-check.sh`. Reading only
+# `$HOME/.claude` under that setup either finds nothing and takes row 2 silently, or compares
+# against an unrelated default-profile record — missing or misreporting drift for the
+# installation actually running (codex, PR #84).
+installed_record="${CLAUDE_CONFIG_DIR:-${HOME-}/.claude}/plugins/installed_plugins.json"
 
 # THE COMPARISON WRITES TO A FILE RATHER THAN INTO `$( ... )`.
 # bash 3.2 -- which is what macOS still ships, and therefore what BOTH of this detector's callers

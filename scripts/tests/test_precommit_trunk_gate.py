@@ -629,14 +629,17 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
     config does not enable, which is exactly the one literal this gate passes.
     """
 
-    def _classify(self, rc: int):
+    def _classify(self, rc: int, *, timed_out: int = 0):
         hook = HOOK.read_text(encoding="utf-8")
         block = hook[hook.index("if command -v trunk") :]
         block = block[: block.index("\nfi\n") + 4]
         harness = (
             "TRUNK_TIMEOUT_SECONDS=180\noverall=0\n"
             'command() { [ "$1" = "-v" ] && [ "$2" = "trunk" ] && return 0; return 1; }\n'
-            'run_with_timeout() { shift; return "${FAKE_RC}"; }\n'
+            # THE STUB PUBLISHES THE FACT, because the real one does. The caller no longer
+            # infers "we timed out" from an exit status — 124, 137 and 143 are each producible by
+            # the child — so a stub returning only a status tests a contract the hook has dropped.
+            'run_with_timeout() { shift; RWT_TIMED_OUT="${FAKE_TO}"; return "${FAKE_RC}"; }\n'
             + block
             + '\necho "overall=${overall}"\n'
         )
@@ -649,7 +652,7 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "FAKE_RC": str(rc)},
+            env={**os.environ, "FAKE_RC": str(rc), "FAKE_TO": str(timed_out)},
             timeout=60,
         )
         blocks = "overall=1" in completed.stdout
@@ -661,24 +664,29 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
         self.assertTrue(blocks)
         self.assertIn("new findings in the staged diff", out)
 
-    def test_only_124_is_treated_as_a_timeout(self):
-        """`run_with_timeout` owns the question "did the deadline elapse" and answers it with 124 on
-        every branch, so anything else arriving here did NOT time out.
+    def test_the_timeout_arm_reads_the_FACT_not_the_exit_status(self):
+        """Three separate fail-opens came from inferring "we timed out" from an exit status, and each
+        was found only after the previous was fixed: 143 from an external kill, 137 from the OOM
+        killer, and 124 from `trunk` propagating an internal tool's timeout. Every one of them
+        announced "exceeded 180s" and let the commit through after an incomplete lint.
 
-        This used to accept 143 as well. `timeout` passes a pre-deadline TERM straight through, so a
-        lint killed after two seconds reported "exceeded 180s" and let the commit through — while the
-        identical death by SIGKILL blocked it. An external TERM says nothing about whether the
-        deadline was reached (codex, PR #84).
+        No status can carry the answer, because the CHILD can produce all three. `run_with_timeout`
+        publishes whether it stopped the command; this asserts the caller reads that and nothing
+        else — including the case that matters most, an identical 124 meaning opposite things.
         """
-        blocks, out = self._classify(124)
-        self.assertFalse(blocks, "an infrastructure timeout must not block the commit")
+        blocks, out = self._classify(124, timed_out=1)
+        self.assertFalse(blocks, "a real timeout must not block the commit")
         self.assertIn("not blocking on a timeout", out)
 
-        blocks_143, out_143 = self._classify(143)
-        self.assertTrue(
-            blocks_143, "a pre-deadline TERM is not a timeout and must block"
-        )
-        self.assertNotIn("not blocking on a timeout", out_143)
+        for rc, label in (
+            (124, "the child's own 124"),
+            (143, "an external TERM"),
+            (137, "an OOM kill"),
+        ):
+            with self.subTest(rc=rc, case=label):
+                blocked, output = self._classify(rc, timed_out=0)
+                self.assertTrue(blocked, f"{label} is not a timeout and must block")
+                self.assertNotIn("not blocking on a timeout", output)
 
     def test_trunk_exit_2_blocks_but_is_NOT_called_a_lint_finding(self):
         """The live misclassification. `trunk check` exits 2 when the invocation itself is unusable —
