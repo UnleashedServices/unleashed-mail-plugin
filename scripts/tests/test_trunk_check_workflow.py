@@ -366,8 +366,11 @@ def _resolve_ref_name(ref_name: dict, default_branch: str) -> set[str]:
     return include - exclude
 
 
-def _normalised_lint_block(config_text: str) -> str:
-    """The `lint:` block with VERSION SPECIFIERS normalised out, then hashed.
+_CANONICAL_VERSION = re.compile(r"\Av?[0-9]+(?:\.[0-9]+)*\Z", re.ASCII)
+
+
+def _normalised_trunk_config(config_text: str) -> str:
+    """The WHOLE of `.trunk/trunk.yaml` with VERSION SPECIFIERS normalised out, then hashed.
 
     A whole-block byte digest and the version-bump carve-out cannot both hold: `.trunk/trunk.yaml`
     carries versions inline (`zizmor@1.29.0`), so a routine `trunk upgrade` would red the cell with no
@@ -375,9 +378,33 @@ def _normalised_lint_block(config_text: str) -> str:
     exactly the coupling the freeze exists to remove. Normalising versions before hashing still catches
     a changed `commands[].run`, a widened `success_codes`, an added `ignore` or a dropped linter, and
     ignores the one edit that is routine.
+
+    COREDEV-2804: this covered ONLY `lint:`, and so froze none of the keys that decide WHOSE
+    linters run. Measured — repointing `plugins.sources[0].uri` at `github.com/attacker/plugins`
+    left the digest byte-identical and the whole 1384-test suite green. That is this ticket's
+    founding hazard (a required context reporting green having linted nothing) reached through the
+    config rather than the workflow. The digest now covers every key, and the upgrade carve-out is
+    NAMED rather than structural:
+
+      * `cli.version` and `plugins.sources[].ref` are what a routine `trunk upgrade` moves, so they
+        normalise — but ONLY when they hold a canonical version. A `ref` of `main`, of a PR branch
+        or of a SHA is not a version bump, and stays in the digest.
+      * `plugins.sources[].uri` never normalises. It is the identity of the definition supply chain.
+      * `actions.disabled` never normalises: `trunk-fmt-pre-commit` is disabled deliberately, and
+        re-enabling it rewrites 191 files and breaks 211 mutation tests (COREDEV-2771).
     """
-    block = yaml.safe_load(config_text)["lint"]
-    return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(block, sort_keys=True))
+    doc = yaml.safe_load(config_text)
+    cli = doc.get("cli")
+    if isinstance(cli, dict) and _CANONICAL_VERSION.match(str(cli.get("version", ""))):
+        cli["version"] = "<version>"
+    plugins = doc.get("plugins")
+    if isinstance(plugins, dict):
+        for source in plugins.get("sources") or []:
+            if isinstance(source, dict) and _CANONICAL_VERSION.match(
+                str(source.get("ref", ""))
+            ):
+                source["ref"] = "<version>"
+    return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(doc, sort_keys=True))
 
 
 # THE ORACLE THE NORMALISED DIGEST NEVER HAD. Both users of `_normalised_lint_block` compared the
@@ -385,13 +412,13 @@ def _normalised_lint_block(config_text: str) -> str:
 # committed: the "before" is the weakened file too. Measured — adding `success_codes: [0, 1, 2]` to
 # zizmor's lint command, so security findings count as SUCCESS, passed all eight cell 4 tests.
 #
-# §1 and cell 4 both require the block FROZEN, and a freeze needs a constant to compare against.
+# §1 and cell 4 both require the config FROZEN, and a freeze needs a constant to compare against.
 # Version specifiers are normalised out first so a routine `trunk upgrade` does not red the cell;
 # every other edit — a changed `commands[].run`, a widened `success_codes`, a dropped linter, a new
 # `ignore` — moves it, and moving it is a reviewed change: update this literal in the same commit,
 # with the reason, exactly as the ignore-list literal above is maintained.
-EXPECTED_NORMALISED_LINT_DIGEST = (
-    "bb0335a3c202c68e728c70d3511cfdc9232f907f71ff777f357acf637bc5c1bf"
+EXPECTED_NORMALISED_CONFIG_DIGEST = (
+    "a1e9eee614fb73a5580f12d51f5f13b27c1276b711e6731024ecfccb6539f5c8"
 )
 
 
@@ -907,7 +934,7 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
             self.config, bumped, "fixture must actually change the file"
         )
         self.assertEqual(
-            _normalised_lint_block(self.config), _normalised_lint_block(bumped)
+            _normalised_trunk_config(self.config), _normalised_trunk_config(bumped)
         )
 
     def test_the_ignore_list_is_frozen(self):
@@ -973,11 +1000,11 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         import hashlib as _hashlib
 
         self.assertEqual(
-            EXPECTED_NORMALISED_LINT_DIGEST,
+            EXPECTED_NORMALISED_CONFIG_DIGEST,
             _hashlib.sha256(
-                _normalised_lint_block(self.config).encode("utf-8")
+                _normalised_trunk_config(self.config).encode("utf-8")
             ).hexdigest(),
-            "the lint block moved: re-pin EXPECTED_NORMALISED_LINT_DIGEST in the same commit, "
+            "`.trunk/trunk.yaml` moved: re-pin EXPECTED_NORMALISED_CONFIG_DIGEST in the same commit, "
             "with the reason, or revert the change to .trunk/trunk.yaml",
         )
 
@@ -989,7 +1016,60 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         block["lint"]["definitions"][0]["commands"][0]["run"] = "exit 0"
         overridden = yaml.safe_dump(block)
         self.assertNotEqual(
-            _normalised_lint_block(self.config), _normalised_lint_block(overridden)
+            _normalised_trunk_config(self.config), _normalised_trunk_config(overridden)
+        )
+
+    def test_repointing_the_plugin_source_moves_the_digest(self):
+        """COREDEV-2804. `plugins.sources[].uri` decides WHOSE linter definitions run at all, and
+        with the freeze scoped to `lint:` this edit was invisible: measured on the shipped tree,
+        repointing it left the digest byte-identical and all 1384 tests green.
+        """
+        doc = yaml.safe_load(self.config)
+        doc["plugins"]["sources"][0]["uri"] = "https://github.com/attacker/plugins"
+        self.assertNotEqual(
+            _normalised_trunk_config(self.config),
+            _normalised_trunk_config(yaml.safe_dump(doc)),
+        )
+
+    def test_a_non_version_ref_is_not_laundered_as_a_bump(self):
+        """A `ref` may name a branch or a SHA as readily as a tag. `main` is not a version, and a
+        MUTABLE ref on the definition source is the supply-chain move the carve-out must not launder.
+        """
+        doc = yaml.safe_load(self.config)
+        doc["plugins"]["sources"][0]["ref"] = "main"
+        self.assertNotEqual(
+            _normalised_trunk_config(self.config),
+            _normalised_trunk_config(yaml.safe_dump(doc)),
+        )
+
+    def test_reenabling_the_formatter_action_moves_the_digest(self):
+        """`trunk-fmt-pre-commit` is disabled deliberately — COREDEV-2771 measured `trunk fmt`
+        rewriting 191 files and taking this suite from OK to 211 failures, because the mutation
+        tests match exact shell bytes that shfmt retabs. Re-enabling it is a reviewed change.
+        """
+        doc = yaml.safe_load(self.config)
+        doc["actions"]["disabled"].remove("trunk-fmt-pre-commit")
+        self.assertNotEqual(
+            _normalised_trunk_config(self.config),
+            _normalised_trunk_config(yaml.safe_dump(doc)),
+        )
+
+    def test_the_upgrade_carve_out_still_covers_the_newly_frozen_keys(self):
+        """Widening the freeze must not red the cell on maintenance. The pre-existing carve-out test
+        bumps a linter inside `lint:`; these are the three keys the widening newly brought in.
+        """
+        doc = yaml.safe_load(self.config)
+        doc["cli"]["version"] = "9.99.9"
+        doc["plugins"]["sources"][0]["ref"] = "v9.99.9"
+        doc["runtimes"]["enabled"] = [
+            f"{entry.split('@')[0]}@9.9.9" for entry in doc["runtimes"]["enabled"]
+        ]
+        self.assertNotEqual(
+            yaml.safe_load(self.config), doc, "fixture must actually change the config"
+        )
+        self.assertEqual(
+            _normalised_trunk_config(self.config),
+            _normalised_trunk_config(yaml.safe_dump(doc)),
         )
 
 
