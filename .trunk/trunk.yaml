@@ -84,6 +84,22 @@ lint:
             run: python3 ${plugin}/linters/markdown-link-check/parse.py --target="${target}"
 
   ignore:
+    # COREDEV-2780 — DOCUMENTS WHOSE BYTES ARE BOUND TO A REVIEW VERDICT ARE NOT FORMATTED.
+    #
+    # `scripts/review-verdict.py` binds an approving plan-review verdict to the plan's exact SHA-256
+    # and refuses to verify if one byte moves ("approve-then-edit is blocked"). A formatter reflowing
+    # the document INVALIDATES A GENUINE APPROVAL — the plan must then be re-reviewed, two arms and
+    # about an hour a round, to buy back nothing but line wrapping.
+    #
+    # Found the hard way while wiring M5a's own gate: `trunk fmt` rewrote a plan that was GATED at the
+    # time. The local gate and the plan-review gate were, for that moment, demanding incompatible
+    # things. Deliberately narrow — only `*_PLAN.md` under docs/planning/, the shape review-verdict.py
+    # binds — and only the two linters that reflow prose. Everything else still lints these files.
+    - linters:
+        - markdownlint
+        - prettier
+      paths:
+        - docs/planning/*_PLAN.md
     # trufflehog on the test corpora: all 26 findings were synthetic secret-shaped strings that
     # tests need in order to assert redaction/parsing. Scoped by PATH and by LINTER, so every
     # detector -- Lob included -- stays live everywhere else in the repo.
@@ -91,11 +107,47 @@ lint:
       paths:
         - scripts/tests/**
         - mcp/review-synthesizer/tests/**
-    # Local-only trees: git worktrees (excluded in .git/info/exclude) and Trunk's own state.
+    # COREDEV-2780 M5a — bandit on TEST code, by the same mechanism and the same paths this
+    # repository already uses for trufflehog above (maintainer-approved 2026-09-02).
+    #
+    # bandit: B603/B607 flag `subprocess` with a partial path, which is what every harness here does
+    # deliberately -- these suites EXECUTE the shipped scripts rather than re-implementing them, and
+    # that is the property several cells depend on.
+    #
+    # MYPY WAS HERE AND HAS BEEN REMOVED, because the reason given for it was false. It read "there
+    # is NO mypy configuration in this repository at all -- no mypy.ini ... and .trunk/configs holds
+    # only ruff.toml". `.trunk/configs/.mypy.ini` is 74 tracked lines, and the commit that added it
+    # (`3b18ea3 fix(COREDEV-2771): the mypy test exemption was inert`) exists precisely because its
+    # test sections were not matching. Turning the linter off wholesale here reversed that fix and
+    # took the CORRECTNESS checks with it -- it was hiding a real `union-attr` defect in the contract
+    # checker. The narrow exemption now lives in `.mypy.ini`, per error code, where it can exempt the
+    # annotation noise without exempting correctness.
+    #
+    # DELIBERATELY NARROW: one linter, test paths only. Production code under scripts/ still gets it.
+    # Widening this again is a reviewed change -- cell 4 freezes this list as a literal.
+    - linters: [bandit]
+      paths:
+        - scripts/tests/**
+        - mcp/review-synthesizer/tests/**
+    # LOCAL-ONLY TREES, NAMED EXACTLY. `.claude/**` and `.trunk/**` were far too wide: between them
+    # they hold TWELVE TRACKED files, and trunk reported the damage itself -- `.trunk/trunk.yaml`,
+    # the file that DEFINES this gate, was ignored for gitleaks, trufflehog, checkov, codespell,
+    # git-diff-check, prettier and yamllint, and all nine tracked linter configs plus
+    # `.claude/settings.json` likewise. Turning off SECRET SCANNING on a repository's own config
+    # surface is not what "local-only state" was meant to say.
+    #
+    # The subdirectories below are the genuinely generated ones -- trunk's own `.trunk/.gitignore`
+    # enumerates them -- plus the git worktrees under `.claude/`. Anything tracked is linted again.
     - linters: [ALL]
       paths:
-        - .claude/**
-        - .trunk/**
+        - .claude/worktrees/**
+        - .trunk/out/**
+        - .trunk/logs/**
+        - .trunk/actions/**
+        - .trunk/notifications/**
+        - .trunk/tools/**
+        - .trunk/plugins/**
+        - .trunk/tmp/**
 actions:
   disabled:
     - trunk-announce

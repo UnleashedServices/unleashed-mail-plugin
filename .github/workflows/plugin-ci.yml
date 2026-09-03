@@ -42,7 +42,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install zsh (the shell the agent fence runs)
         # WITHOUT THIS NO CI JOB CAN EXECUTE ANY ZSH TEST. ubuntu-latest ships no zsh, so
@@ -80,6 +80,23 @@ jobs:
       - name: Run the review-synthesizer test suite (discovery — count not hardcoded)
         id: mcp_tests
         run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
+
+      # COREDEV-2780: the ONLY third-party Python dependency this repository has. Cells 4, 9, 11, 14,
+      # 15 and 16 parse `.github/workflows/*.yml`, `.trunk/trunk.yaml` and the contract registry, and
+      # there is no YAML parser in the standard library. A hand-rolled one was rejected: the contract
+      # checker is the thing that decides whether the gate is sound, and a parser that quietly
+      # mis-reads a mapping would weaken every cell that depends on it while still reporting green.
+      #
+      # VERSION-PINNED, matching AGENT_CONTRACTS §6's posture on SHA-pinned actions — an unpinned
+      # `pip install` is a supply-chain surface this repo otherwise refuses.
+      - name: Install PyYAML (COREDEV-2780 contract cells parse YAML)
+        # `--break-system-packages` is the fallback, not the default: the macOS runner's system
+        # python is PEP 668 externally-managed and refuses the plain form, while the
+        # setup-python interpreters accept it. Try the clean install first so the flag is only
+        # used where it is actually required.
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
 
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
@@ -175,7 +192,7 @@ jobs:
       - name: Set up Node (for the Claude Code CLI)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'   # @anthropic-ai/claude-code requires Node >=22
+          node-version: "22" # @anthropic-ai/claude-code requires Node >=22
 
       - name: Validate plugin with the Claude Code CLI (authoritative schema)
         id: claude_validate
@@ -256,7 +273,11 @@ jobs:
 
       - name: ShellCheck plugin scripts
         id: shellcheck_gate
-        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
+        # `scripts/ci/*.sh` WAS MISSING and CLAUDE.md's gate list already claimed it was here.
+        # Those two files are the shared range resolver — the one the required check's guard
+        # pins by digest and executes — and the parity recorder. The documented gate and the
+        # enforced gate disagreed, and the enforced one is the only one that runs.
+        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
 
       - name: Install actionlint (pinned + checksum-verified)
         env:
@@ -332,7 +353,7 @@ jobs:
       - name: Set up Python 3.9 (the macOS stock runtime)
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.9'
+          python-version: "3.9"
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
         run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
       - name: bind-prompt.py real invocation on 3.9
@@ -457,7 +478,7 @@ jobs:
       - name: Set up Node (for the pinned Claude Code CLI)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
+          node-version: "22"
       - name: Install the PINNED Claude Code CLI
         env:
           # MUST match the `validate` job's pin — a load check on a different CLI than the one that
@@ -584,6 +605,23 @@ jobs:
 
       # THE WHOLE SUITE, not a subset: on Darwin the @skipUnless(DARWIN) classes are exactly what
       # this job exists to run, and they are 165 cells the required ubuntu leg skips.
+      # COREDEV-2780: the ONLY third-party Python dependency this repository has. Cells 4, 9, 11, 14,
+      # 15 and 16 parse `.github/workflows/*.yml`, `.trunk/trunk.yaml` and the contract registry, and
+      # there is no YAML parser in the standard library. A hand-rolled one was rejected: the contract
+      # checker is the thing that decides whether the gate is sound, and a parser that quietly
+      # mis-reads a mapping would weaken every cell that depends on it while still reporting green.
+      #
+      # VERSION-PINNED, matching AGENT_CONTRACTS §6's posture on SHA-pinned actions — an unpinned
+      # `pip install` is a supply-chain surface this repo otherwise refuses.
+      - name: Install PyYAML (COREDEV-2780 contract cells parse YAML)
+        # `--break-system-packages` is the fallback, not the default: the macOS runner's system
+        # python is PEP 668 externally-managed and refuses the plain form, while the
+        # setup-python interpreters accept it. Try the clean install first so the flag is only
+        # used where it is actually required.
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
+
       - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
         run: python3 -m unittest discover -s scripts/tests -v
 

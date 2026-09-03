@@ -1,0 +1,196 @@
+# COREDEV-2780 — THE SURVIVOR CORPUS.
+#
+# Every mutant that has ever SURVIVED a formulation of this gate. Each one must keep failing.
+#
+# WHY THIS EXISTS, AND WHY IT IS SEPARATE. Cell 15 compares §1's rendered prose against
+# COREDEV-2780-contract.yaml, and both derive from the same authority — so that comparison cannot
+# prove the registry is semantically COMPLETE. It cannot know an obligation nobody wrote down. The
+# plan's earlier claim that "nothing mechanical can catch a wrong registry" is overbroad: a SPECIFIC
+# wrong registry is catchable, and this corpus is one of the two things that catch one. If a registry
+# edit silently drops an obligation, the rendering lint stays happy while the corpus REDS.
+#
+# It is therefore maintained INDEPENDENTLY of the registry and describes each survivor
+# self-containedly. Entries deliberately do NOT resolve through a registry id: an entry that pointed
+# at `contract.yaml` would vanish along with the obligation it was meant to outlive, which is exactly
+# the failure it exists to detect.
+#
+# THE OTHER THING THAT CATCHES A WRONG REGISTRY is the end-to-end behaviour cells (1, 2, 3, 5, 12 and
+# 17), which observe real runs and consult no registry at all — cell 17 most of all, since it observes
+# the ruleset's BEHAVIOUR rather than any file's contents. What remains genuinely unmechanisable is
+# ARBITRARY completeness, and what guards that is this file and the registry being small, diffable and
+# reviewed.
+#
+# ADDING TO THIS FILE. A mutant enters the corpus the moment a round finds it survived — with the
+# round that found it, the formulation that let it through, and what it would have shipped. Nothing is
+# ever removed: a survivor whose obligation is later deleted is precisely the case this file exists
+# for. Retiring one is a reviewed change with a stated reason, not tidying.
+
+schemaVersion: 1
+ticket: COREDEV-2780
+independent_of: docs/planning/COREDEV-2780-contract.yaml
+rule: every entry must FAIL; a passing entry means an obligation has been lost
+
+survivors:
+  - id: survivor/workflow-dispatch-if-guard
+    found_in_round: r5
+    survived_formulation: >-
+      Revision 4 replaced the job-level `on:` with `if: github.event_name != 'workflow_dispatch'`, and
+      cell 11 asserted the literal `if:`.
+    mutant: a job carrying that exact `if:` guard
+    would_have_shipped: >-
+      A BYPASS the cell would have CERTIFIED. GitHub's own troubleshooting documentation states that
+      when a job is skipped by a conditional, the job reports "Success" — and a required context is
+      satisfied by that success. Dispatching at an internal PR's head branch would attach a
+      successful, skipped `trunk-check` to that SHA with Trunk never running.
+    must_fail_because: C1 permits no `workflow_dispatch` trigger and C3 permits no job-level `if:`.
+
+  - id: survivor/repository-supplied-launcher
+    found_in_round: r8
+    survived_formulation: >-
+      The r7 allowlist constrained what the CALLER passes, and stopped there.
+    mutant: a checked-out `.trunk/bin/trunk`, `tools/trunk`, `./trunk` or `.trunk/setup-ci`
+    would_have_shipped: >-
+      A pull request supplying the tool that tests it — for a required merge gate, the gate handing
+      its own authority to the thing under test. Verified at the pinned SHA: `setup/locate_trunk.sh`
+      prefers those paths before downloading, and `action.yaml:289` EXECUTES `.trunk/setup-ci`.
+    must_fail_because: C6's guard step, last before the action, fails on any of the six paths.
+
+  - id: survivor/setup-ci-as-bare-executable
+    found_in_round: r9
+    survived_formulation: >-
+      The C6 fixture was specified as a no-op executable at `.trunk/setup-ci`.
+    mutant: a bare executable file at that path
+    would_have_shipped: >-
+      Nothing — and that is the defect. `uses: ./.trunk/setup-ci` expects an ACTION DIRECTORY, so the
+      bare file reds because it is MALFORMED. The mutant would have survived DELETION OF C6 while
+      still appearing to be caught: reachability mistaken for discrimination.
+    must_fail_because: the fixture is a VALID composite action that exits green, so only C6 can red it.
+
+  - id: survivor/env-trunk-path-workflow-scope
+    found_in_round: r10
+    survived_formulation: Revision 10's C5 named only JOB and STEP scope.
+    mutant: "workflow-level `env: {TRUNK_PATH: /bin/true}`"
+    would_have_shipped: >-
+      Workflow-level `env:` is inherited by every step in every job, so it reached the action
+      untouched and redirected execution to a binary that exits 0 while every input rule passed.
+    must_fail_because: C5 forbids `env:` at ALL THREE scopes.
+
+  - id: survivor/c6-guard-after-empty-diff-step
+    found_in_round: r10
+    survived_formulation: >-
+      C6 required its guard IMMEDIATELY before the action while C8 placed the empty-diff guard between
+      the two — the two clauses contradicted each other.
+    mutant: a permitted step that creates `tools/trunk` AFTER the C6 guard has run
+    would_have_shipped: >-
+      The repository-launcher hole, reopened from inside an ALLOWLISTED step. Neither the "extra step"
+      nor the "moved guard" mutant killed it, because the mutation lives inside a step the sequence
+      allows.
+    must_fail_because: >-
+      C6's guard is LAST before the action, and C8 freezes each permitted run body by its own digest.
+
+  - id: survivor/github-path-write
+    found_in_round: r11
+    survived_formulation: >-
+      C8 PROHIBITED writing to `$GITHUB_PATH` and mutated it NOWHERE for two revisions.
+    mutant: a permitted `run:` body appending a directory to `$GITHUB_PATH`
+    would_have_shipped: >-
+      The action resolving a no-op launcher while every clause passed — the guard checks PATHS, not
+      inherited runner state. A validator that NORMALISES AWAY `$GITHUB_PATH` lines before hashing
+      survives every generic byte edit; only an independently encoded case kills it.
+    must_fail_because: C8 carries a dedicated `$GITHUB_PATH` case per run step, not a generic byte edit.
+
+  - id: survivor/if-false-on-a-guard-step
+    found_in_round: r12
+    survived_formulation: >-
+      Revision 12's C3 named only the JOB and the TRUNK STEP.
+    mutant: "`if: false` on a GUARD step"
+    would_have_shipped: >-
+      The guard removed entirely while both the frozen SEQUENCE and the frozen BODY DIGEST were
+      preserved — the step is still there and still hashes correctly; it simply never runs.
+    must_fail_because: C3 forbids `if:` on the job and on ANY of the five steps.
+
+  - id: survivor/checkout-filter-input
+    found_in_round: r12
+    survived_formulation: >-
+      `filter` was NAMED in the checkout-input prose and never mutated.
+    mutant: "`filter: blob:none` on `actions/checkout`"
+    would_have_shipped: >-
+      A partial checkout: changed files can be absent from disk while git metadata still yields a
+      non-empty range, so the empty-diff guard passes and Trunk lints files that are not there.
+    must_fail_because: C8's checkout-input allowlist admits only fetch-depth, lfs and persist-credentials.
+
+  - id: survivor/post-annotations-false
+    found_in_round: r19
+    survived_formulation: >-
+      The blacklist wording said `post-annotations` must be "absent or false", while cell 11 treated
+      any unlisted key as a violation — the two cells disagreed.
+    mutant: "`post-annotations: false` present in `with:`"
+    would_have_shipped: >-
+      Inherited defect 4. Under an ALLOWLIST it is an unlisted key PRESENT in `with:`, so "or false"
+      is superseded; under the blacklist it passed.
+    must_fail_because: C4 is an allowlist and admits no unlisted key, valued or not.
+
+  - id: survivor/timeout-minutes-360
+    found_in_round: r21
+    survived_formulation: >-
+      Cell 15 required only that `timeout-minutes` EXIST.
+    mutant: "`timeout-minutes: 360`"
+    would_have_shipped: >-
+      GitHub's own default six-hour ceiling — a timeout that changes nothing, while the required
+      context sits pending for up to six hours. Covering the line without covering its OPERAND.
+    must_fail_because: C3 pins the concrete value 15, asserted and mutated as an operand.
+
+  - id: survivor/job-level-permissions-write-all
+    found_in_round: r25
+    survived_formulation: >-
+      Revision 24 pinned `permissions` BY VALUE at the root and left the key unconstrained at job scope.
+    mutant: "`permissions: write-all` on the job"
+    would_have_shipped: >-
+      A widened effective token satisfying BOTH allowlists. GitHub calculates the token workflow-level
+      then job-level, and cell 10's runtime evidence is byte-identical either way — only a static
+      value check discriminates it.
+    must_fail_because: C3 pins the value at job scope as C0 does at the root.
+
+  - id: survivor/cross-event-range-substitution
+    found_in_round: r20
+    survived_formulation: >-
+      One workflow emitted the SAME `trunk-check` context for `pull_request` and `push`.
+    mutant: a `push` run satisfying a PR's required context on the same head SHA
+    would_have_shipped: >-
+      A green required check computed over a STRICTLY SMALLER diff — `before..head` rather than the
+      PR's `base..head`. Required checks match on SHA and expected app, NOT on the triggering event,
+      so cell 1 could prove each range correct and never prove WHICH RUN satisfied the rule.
+    must_fail_because: >-
+      C1 gives the required workflow a single `pull_request` event; the push leg is a separate,
+      deliberately unrequired context named `trunk-check-push`.
+
+  - id: survivor/exclude-blind-target-resolver
+    found_in_round: r35
+    survived_formulation: >-
+      Revision 32's resolution rule expanded `conditions.ref_name.include` and ignored `exclude`.
+    mutant: "a ruleset observation carrying `exclude: [refs/heads/a*]`"
+    would_have_shipped: >-
+      A comparator measuring a set STRICTLY LARGER than the one in force: GitHub treats an excluded
+      pattern as a VETO, so a base removed from the gate by an exclusion still reads as gated. The
+      single alias case revision 33 added REACHED it — the resolver was only ever exercised on the
+      include side.
+    must_fail_because: >-
+      resolve() is include MINUS exclude, and the (side, form) family runs every form on BOTH sides.
+
+  - id: survivor/two-currently-correct-private-resolvers
+    found_in_round: r38
+    survived_formulation: >-
+      Cell 15 asserted that a spy on `resolve()` was REACHED from both entry points, then that an
+      entry-distinct sentinel GOVERNED each result.
+    mutant: >-
+      one public `resolve()` wrapper dispatching to two private per-entry resolvers, both currently
+      correct
+    would_have_shipped: >-
+      Two resolution paths free to DRIFT on the next edit. It passes the sentinel test — substituting
+      the wrapper's return bypasses both private paths — and passes every family case, because both
+      privates agree today. Each earlier encoding asserted a property ABOUT the implementation, and
+      any such property is satisfiable by an implementation that is currently correct.
+    must_fail_because: >-
+      `resolve(ref_name, default_branch)` is ENTRY-AGNOSTIC — it takes no entry id and no
+      entry-derived argument, so there is nothing to dispatch on and the per-entry private resolver
+      CANNOT BE WRITTEN. The shape is removed rather than asserted about.

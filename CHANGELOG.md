@@ -7,19 +7,533 @@ releases use the `MAJOR.MINOR.PATCH` version in `.claude-plugin/plugin.json` (di
 from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 > **Maintenance:** add every change under `[Unreleased]` as you make it, grouped by
-> *Added / Changed / Fixed / Removed*. When you bump `plugin.json`, move the
+> _Added / Changed / Fixed / Removed_. When you bump `plugin.json`, move the
 > `[Unreleased]` items under a new dated `[x.y.z]` heading and start a fresh
 > `[Unreleased]`.
 
 ## [Unreleased]
 
+## [2.8.16] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — a child's own exit 124 was read as the wrapper's timeout.** `timeout`
+  returns 124 for a real timeout and the command's own status otherwise, and `trunk` can exit 124 by
+  propagating an internal tool's timeout — reproduced: `timeout -k 5 10 sh -c 'exit 124'` returns
+  124 immediately. The gate logged "exceeded 180s" and left `overall` unchanged, allowing a commit
+  after an incomplete lint.
+
+  This is the THIRD member of one family and the third to be found only after the previous was
+  closed: 137 first, then 143, now 124. The repair is therefore structural rather than a third
+  patch — `run_with_timeout` publishes `RWT_TIMED_OUT`, and the caller reads that fact instead of
+  inferring it from a status that the child can also produce. All three statuses additionally share
+  one elapsed guard, so a fourth cannot be added without one.
+
+- **COREDEV-2801 — the detector ignored `CLAUDE_CONFIG_DIR`.** Claude Code roots its plugin state
+  there when set, and the relocation is supported — this repository exercises it itself, exporting
+  `CLAUDE_CONFIG_DIR` before `claude plugin install` in `scripts/ci-load-check.sh`. Reading only
+  `$HOME/.claude` under that setup either found nothing and took row 2 silently, or compared an
+  unrelated default-profile record. Resolved through `${CLAUDE_CONFIG_DIR:-${HOME-}/.claude}` now.
+- **COREDEV-2780 — the committed rollout evidence was named as an owner and read by nothing.**
+  `evidence/COREDEV-2780-rollout.json` was cited in comments as carrying the remote halves CI cannot
+  perform, and a repo-wide search found references only in prose. So on a runner without an
+  authenticated `gh`, the only comparison between a workflow's `branches:` and the ruleset's
+  resolved target set SKIPPED, and a divergent branch set went unchallenged — which at M4 is a
+  protected branch with no producer, or the gate running on the wrong branches.
+
+  The offline path now parses the artifact AND binds its recorded branch list to the shipped
+  workflow, so evidence recorded for a different branch set cannot certify the current one. Verified
+  in all three states with `gh` absent: unchanged passes without skipping, a divergent
+  `branches: [main, alpha, rogue]` fails naming the mismatch, and a missing artifact still skips
+  rather than inventing a pass.
+
+## [2.8.15] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — a pre-deadline SIGTERM was classified as a timeout, and allowed the commit.**
+  GNU `timeout` documents 124 for an actual timeout and the command's own status otherwise, so a 143
+  passes straight through when no deadline was reached. The hook's timeout arm accepted 124 _or_ 143
+  on the reasoning that "a TERM delivered from outside this hook still means the same thing" — which
+  is false: an external TERM says nothing about whether the deadline elapsed. A lint killed two
+  seconds in therefore reported "exceeded 180s" and left `overall` unchanged, while the adjacent arm
+  blocked the identical death by SIGKILL.
+
+  `run_with_timeout` now applies the same elapsed guard to 143 that it already applied to 137, so a
+  genuine deadline still normalises to 124 — including the degraded case where an unwritable TMPDIR
+  stops the fallback's marker being written and the hook's own watchdog TERM is what arrives. The
+  caller keys on 124 alone; anything still carrying 143 did not time out and blocks as a signal
+  death.
+
+- **COREDEV-2801 — the detector aborted when `HOME` was unset.** It runs under `set -u`, where a
+  bare `${HOME}` raises "unbound variable" — exit 1 and a message on stderr, from the one file whose
+  header states "Exit: ALWAYS 0. This is a diagnostic, not a gate." Reproduced with `env -u HOME`.
+  Both expansions use `${HOME-}` now, so an unreadable record takes Table A row 2's silent path
+  instead.
+
+  The second site is fixed for CONSISTENCY and is documented as not separately tested, rather than
+  implying coverage it does not have: with `HOME` unset the record read fails first and the script
+  exits silently before reaching it, so a mutation reverting that line stays green — verified, 0
+  evaluations under `bash -x`.
+
+### Notes
+
+- The regression test for the `HOME` fix did not exist when its mutation was first run — an earlier
+  edit script aborted before writing it and the failure was not noticed. The mutation surfaced a
+  MISSING test rather than a weak one, which is the same signal for a different reason.
+
+## [2.8.14] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — the watchdog orphaned its own sleeper on every fast commit.** The watchdog
+  is a subshell BLOCKED IN `sleep`; signalling the subshell alone left that `sleep` reparented to
+  PPID 1, where it ran out the full 180-second deadline. Measured: a fast run left a live sleeper
+  behind, and they accumulate across commits. It is signalled as a process GROUP now, with the same
+  bare-pid retry the other signals carry.
+
+  The regression test needed two attempts, and the first could not fail: it planted a marker in a
+  `sleep` SHIM, but the shim `exec`s, so the marker never reached the running process's argv and
+  `pgrep` matched nothing whether the fix was present or not. Reverting the fix left it green. It
+  now keys on an unusual deadline value, which appears verbatim in the sleeper's own command line.
+
+- **COREDEV-2801 — `.strip()` trimmed malformed versions into validity.** `" 2.8.5 "` is not a
+  SemVer string, but stripping made it comparable, so malformed registry data produced a
+  stale-install warning where Table A row 4 requires silence. Removing the strip was only half the
+  fix: Python's `$` also matches JUST BEFORE a trailing newline, so `"2.8.5\n"` was still accepted.
+  The grammar is anchored with `\Z` now, and every whitespace form is covered by the table test.
+- **COREDEV-2798 — the duplicate-destination key contradicted the resolution.** `_tree_problems`
+  resolves a prepend-only destination by PAYLOAD and treats `destination.line` as a stale hint,
+  because a prepend shifts every line below it — while the uniqueness key still carried that line.
+  Two rewrites naming the same README payload with different hints therefore produced two distinct
+  identities and both passed, one destination silently satisfying two obligations while the second
+  rewrite's real destination went unchecked. Prepend-only destinations are keyed by path plus
+  payload hash now, the same way they are resolved.
+
+### Notes
+
+- Nine older review threads were verified STALE against this head rather than assumed: each reported
+  defect was checked in the shipped bytes and is already fixed. Two of those checks initially read
+  "still present" and were wrong — one grep expanded `${var}` inside a double-quoted command
+  substitution, the other matched the phrase inside an explanatory comment rather than the emitted
+  message. Both were re-checked against the parsed source before being called stale.
+
+## [2.8.13] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 — the C6 guard enumerated regular files while the action follows symlinks.**
+  `find .trunk -type f` emits neither a symlinked file nor a symlinked directory, and never descends
+  into one. The pinned action's `locate_trunk.sh` tests `[[ -f .trunk/bin/trunk && -x … ]]`, and
+  bash's file tests follow symlinks. The enumerator did not follow; the consumer did, and a committed
+  symlink at that path passed the guard and was then selected as TRUNK_PATH — green having linted
+  nothing, on a ruleset with no bypass actors. Verified end to end against the action's real source
+  at the pinned SHA, and through commit + clone + checkout.
+
+  The allowlist rewrite one commit earlier fixed the NAME axis and left the TYPE axis exactly as it
+  was — the sweep narrowed on a second axis nobody varied. Now `! -type d`, inverting the type
+  question the same way the path question was inverted. NOT `find -L`, which resolves symlinks and
+  would emit the target path, missing the allowlist entirely. The launcher loop outside `.trunk/`
+  had the same gap in its other half — `-e` is false for a DANGLING symlink — and now tests `-L` too.
+  Both are covered by fixtures that go red when either is reverted; the previous seven were all
+  regular files, so the fix would otherwise have been unfalsifiable.
+
+- **COREDEV-2780 — the producer census could not see a `.yaml` workflow.** GitHub honours both
+  extensions; two separate censuses globbed `*.yml`. A `decoy.yaml` declaring a job named
+  `trunk-check` was invisible to both, and at M4 a second producer can report success for a required
+  context while the guarded workflow fails. One shared enumerator now, because two independently
+  patched call sites is how they diverged. It uses `not is_dir()` rather than `is_file()`: the
+  reviewed suggestion used the latter, which FOLLOWS symlinks and returns False for a dangling one,
+  silently dropping a workflow the old glob returned — the same type-axis defect as the C6 bypass, in
+  the opposite polarity, proposed in the same review batch.
+- **COREDEV-2780 — only the first of the harness's two action invocations was pin-bound.** The
+  extraction used `next(...)`, so a pin bump that updated the shipped workflow and the primary step
+  but missed the autofix control would record the new pin while the control's sensitivity was
+  established with an older action — contradicting the control's premise that only `--fix` differs.
+  Every invocation is bound now.
+- **COREDEV-2780 — the parity judge checked that the recorded digest was non-empty.** It neither
+  recomputed it from the recorded canonical form nor compared it to what the gate currently passes,
+  so an artifact recorded before `arguments` changed would keep certifying a different invocation.
+  Both are checked, with distinct diagnostics: self-consistency is not currency. The frozen digest
+  now lives once in the contract registry beside `action_pin`, read by the harness and the judge —
+  this module already refuses a second copy of the pin for the same reason. The check immediately
+  caught that the judge's own positive-control fixture was internally impossible (`canonical: "{}"`
+  with an unrelated digest).
+- **COREDEV-2801 — the SemVer grammar accepted non-ASCII digits.** Python's `\d` is Unicode-aware, so
+  `1٢.0.0` and `1.0.0-1٢` matched the "official" grammar added a day earlier, and `str.isdigit()`
+  and `int()` accept them too — so they compared as numbers and produced a stale-install warning
+  where Table A row 4 requires silence. `re.ASCII` narrows exactly the five numeric classes; the
+  pattern uses no `\w`, `\b` or `\s`, so nothing valid is rejected.
+- **COREDEV-2801 — the reversion note asserted a history it had not observed.** It said the record
+  "was reverted rather than never updated — expect it to revert again" on the strength of a directory
+  existing. A newer cache directory also exists when an update downloaded a version and then failed
+  before writing the registry, or when several scopes coexist. It now reports only what is observed —
+  the newer version is already downloaded, so the repair is a local re-select. This is the exact
+  defect class this campaign spent a day removing from guards and hook messages, reintroduced within
+  hours of fixing it elsewhere; the three tests that asserted the old phrasing were checking a
+  spelling and would have kept passing after the reword, so they were rewritten too.
+
+### Changed
+
+- The parity harness declares PyYAML rather than inheriting it from the runner image. Not a live
+  failure — the image ships it — but the harness has never run, so "it works" was untested. NOT via
+  `actions/setup-python`, which prepends a clean interpreter without PyYAML and would break a job
+  that currently works.
+
+## [2.8.12] — 2026-09-02
+
+### Added
+
+- **COREDEV-2801 — the detector distinguishes a REVERTED record from a never-updated one.**
+  Both look identical: installed is behind `origin/main`. They are not the same problem. On
+  2026-09-02 the user-scope entry read 2.7.0 while `.../unleashed-mail/2.8.3/` sat complete in the
+  install cache — written in the same second as the record — after an update on 2026-09-01 had
+  advanced it to 2.8.3 and something wrote it back. "You never updated" and "your update was undone,
+  and it will be undone again" call for different responses, so the warning now says which.
+
+  The evidence is the install cache, reached through the sibling directories of the entry's own
+  `installPath`. `${CLAUDE_PLUGIN_ROOT}` would be the obvious ground truth for what a session
+  actually LOADED — and it is unavailable here by design: it resolves against a plugin context and
+  this hook is project-scoped, confirmed against the plugins reference rather than assumed.
+
+  POST-GATE AND ADDITIVE, stated plainly. The plan's Table A is bound to a review verdict and this is
+  not in it. It changes no row's verdict: it runs only inside an existing row-7 warning and only
+  appends a sentence, so every silent row stays silent. The plan also explains why the detector could
+  not simply ship in the plugin — "a 2.7.0-pinned session runs 2.7.0's copy; it IS the defect" —
+  which is exactly why this lives in the checkout.
+
+  Three mutations verify it, and the third exposed a test of mine that could not fail: my first
+  contract test used an install EQUAL to `origin/main`, which `continue`s out of the loop before the
+  new code is reached, so a mutant that leaked the note into every row passed it. Row 8 — a locally
+  newer install, silent because every development clone looks like that — is the row that actually
+  reaches the new code, and is now the contract test.
+
+### Fixed
+
+- **COREDEV-2780 — cell 4's normalised lint digest was computed and never compared to anything.**
+  Both users of `_normalised_lint_block` compared the shipped config against a MUTATED COPY OF
+  ITSELF, which proves the function discriminates but says nothing about the config that shipped: a
+  weakening already committed is invisible, because the "before" is the weakened file too. Measured
+  with a mutation first verified to change the parsed block — widening zizmor's `success_codes` from
+  `[0]` to `[0, 1, 2]`, so security findings count as success — the whole of cell 4 passed. The
+  normalised digest is now frozen as a literal oracle and moving it is a reviewed change, exactly as
+  the ignore-list literal beside it already is.
+
+  (Recorded because it nearly went the other way: the first attempt at this demonstration inserted a
+  duplicate `success_codes` key, PyYAML kept the original, and the parsed document was unchanged. The
+  finding was real, but that proof of it was not. A mutation is not a mutation until the parse
+  differs, and the fixture now asserts so before drawing any conclusion.)
+
+- **COREDEV-2780 — CI's shellcheck gate never covered `scripts/ci/*.sh`.** `CLAUDE.md` publishes the
+  gate a developer is told to run and lists that path; `plugin-ci.yml` runs the one that actually
+  blocks and did not. So the shared range resolver — the file the required check's guard pins by
+  digest and then executes — had never been shellchecked in CI. It passes cleanly, so the omission
+  cost nothing except the guarantee. Both lists are now DERIVED and compared in both directions, so
+  the documented gate and the enforced gate cannot drift apart again silently.
+
+## [2.8.11] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the C6 launcher guard was an enumeration, and trunk reads a name it did not
+  enumerate.** `.trunk/user_trunk.yaml` is merged exactly as `.trunk/user.yaml` is; trunk's own
+  `.trunk/.gitignore` lists them one line apart. Reproduced end to end in a scratch repository: a
+  tracked `user_trunk.yaml` disabling two linters takes `trunk check --ci --upstream=HEAD~1` from
+  `exit 1 / "2 failures"` to `exit 0 / "Found no applicable linters"`, byte-identical tree
+  otherwise, while the shipped guard body run verbatim prints PASSED. Cell 4's frozen literal never
+  moves because it reads only `.trunk/trunk.yaml`; the empty-diff guard passes because the git diff
+  is genuinely non-empty. That is this ticket's founding hazard — a required context reporting green
+  having linted nothing — reached through the one name the list missed.
+
+  The guard is now an ALLOWLIST over the `.trunk/` tree, read from the filesystem rather than the
+  index, so an untracked override created by an earlier step is caught too — the first draft asked
+  `git ls-files` and the existing per-path cases immediately caught that regression. The contract
+  check that asserted each guarded path appears as a literal in the guard body has been replaced:
+  asserting an enumeration is complete cannot be the check when the enumeration was the defect.
+
+- **COREDEV-2780 — the all-linter ignore silenced secret scanning on the gate's own configuration.**
+  `.claude/**` and `.trunk/**` were excluded as "local-only trees", but between them they hold twelve
+  TRACKED files. Trunk names the damage itself: `.trunk/trunk.yaml` — the file that defines this
+  gate — was ignored for gitleaks, trufflehog, checkov, codespell, git-diff-check, prettier and
+  yamllint, and all nine tracked linter configs plus `.claude/settings.json` likewise. Narrowed to
+  the genuinely generated subdirectories. The twelve files lint clean, so this cost nothing but the
+  looking.
+- **COREDEV-2780 — a blanket mypy exemption resting on a false claim.** Its justification read
+  "there is NO mypy configuration in this repository at all — no mypy.ini … and `.trunk/configs`
+  holds only ruff.toml". `.trunk/configs/.mypy.ini` is 74 tracked lines, and the commit that added it
+  (`3b18ea3 fix(COREDEV-2771): the mypy test exemption was inert`) exists precisely because its test
+  sections were not matching. Turning the linter off wholesale reversed that fix and took the
+  correctness checks with it. The exemption now lives in `.mypy.ini` per ERROR CODE — `attr-defined`
+  and `type-arg`, the annotation noise — which took the four contract suites from 68 findings to 11
+  real ones, all now fixed: three functions annotated `-> set[str]` that return `None` (an annotation
+  my own `gh`-missing fix had made untrue), four `Any` returns through `yaml.safe_load`, an
+  incompatible dict key, a missing annotation, and **two `re.match()` results used without a `None`
+  check** — one of them entirely unguarded, so a canary guard that lost its digest literal would have
+  raised `AttributeError` instead of failing with a message naming the missing pin.
+- **COREDEV-2780 — the teardown kill had no pid retry.** Three sibling signal sites pair
+  `kill -- -PGID` with a bare-pid fallback and the fourth did not, so when `set -m` cannot grant the
+  child a process group the group kill fails with ESRCH and reaches nothing — measured, the child
+  survives. A derived structural check now finds every group-signal site by pattern and requires the
+  pairing, and names the offending site when one is missing.
+- **COREDEV-2801 — the version grammar was a character class, not SemVer.** `[0-9A-Za-z.-]+` accepts
+  what the specification forbids: `2.8.0-01` (a numeric identifier with a leading zero) and
+  `2.8.0-alpha..1` (an empty identifier). Both parsed, and because `precedence()` calls `int()` on
+  any all-digit identifier, `-01` compared as `-1` and produced a stale-install WARNING about
+  malformed registry data where Table A row 4 calls for silence. Replaced with the official grammar;
+  the table test drives every row through the real detector, both directions.
+
+## [2.8.10] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the bounded run was only bounded on the branch that does not run.**
+  `run_with_timeout` prefers `timeout`, then `gtimeout`, and only falls back to its own watchdog when
+  neither exists. v2.8.9 fixed the watchdog and returned early from the other two, so the escalation
+  and the timeout bookkeeping were proven for the branch taken when coreutils is absent — not this
+  repo's CI (`ubuntu-latest`), and not a Mac with Homebrew coreutils. Measured on the live branch: a
+  SIGTERM-ignoring child ran to its full natural lifetime, 60s against a 2s deadline. All three
+  branches now share one shape and one contract, so a guarantee proven for one holds for all.
+
+  Worth stating plainly, because it bounds the claim: against the command this hook actually runs
+  this is defence in depth, not a live hang closed. trunk 1.25.0 honours SIGTERM in 18ms, and
+  `timeout 3` and `timeout -k 5 3` are indistinguishable on it. The defect is real in the primitive;
+  its reachability through today's `trunk` is unproven, and the fix is worth having for the day that
+  changes or the cold-bootstrap window nobody has measured.
+
+  Three details, each measured rather than reasoned about. `-k 5` and not `--kill-after=5`: the
+  short form is accepted by GNU, FreeBSD, busybox and toybox, while the long form is rejected by
+  busybox (exit 1) and toybox (exit 125) — a rejected flag would fail every commit for those users,
+  trading a rare hang for universal breakage. The 137 that `-k` produces is normalised to 124 only
+  when the deadline actually elapsed, because a command that is OOM-killed reports 137 too, and
+  normalising unconditionally would turn a crashed linter into "not blocking" — a fail-open. And the
+  teardown kill moved after the wait: killing the watchdog as soon as the direct child exits cancels
+  its pending SIGKILL, so a grandchild ignoring SIGTERM outlived the deadline still holding the
+  caller's stdout, measured at 45s against a 2s deadline on **both** branches.
+
+- **COREDEV-2780 — `trunk` exit 2 was reported as findings in the developer's diff.**
+  The real binary exits 2 when the invocation itself is unusable — reproduced on trunk 1.25.0 with a
+  `--filter` naming a linter this config does not enable, which is the one literal this gate passes.
+  The hook said "new findings in the staged diff (fix them, or stage less)", which is a false
+  statement about a diff that no edit will clear. It still blocks, because a gate that did not run
+  must not report a pass, but it now says why. A signal death (128+N) gets the same treatment for the
+  same reason. Meanwhile `143` — one of the two statuses the gate did test for — is nearly
+  unreachable: it was checking for something that never arrives while missing something that does.
+- **COREDEV-2780 — the remote reads crashed on a machine with no `gh`.**
+  `check=False` covers `gh` refusing; it does not cover `gh` being absent, which raises
+  FileNotFoundError out of the exec. On any machine without the GitHub CLI the whole contract module
+  errored at discovery instead of skipping — defeating the design that had those halves return
+  `None` on purpose. Both call sites fixed, not the one reported.
+- **COREDEV-2801 — the detector hung when run by hand.**
+  `hook_payload="$(cat)"` blocks forever when stdin is a terminal, so a manual `--session-start` run
+  never returned. Reproduced under a real pty. It now degrades to the plain-text path rather than
+  substituting an empty payload — the obvious repair, and wrong: the session id would be the empty
+  string, every marker would be named for `sha256("")`, and the per-session dedup this file exists to
+  provide would silently become global.
+- **COREDEV-2780 — the zero-oid guard was SHA-1 only.**
+  It compared `before` against a 40-character literal. A repository created with
+  `--object-format=sha256` has a 64-character null oid, verified against git, and would have slipped
+  past into the `--all` branch this guard exists to block. Now matched as a class.
+
+### Added
+
+- Tests for all of it, and the branch is now a PARAMETER rather than a fixed sanitised `PATH`. The
+  previous suite pinned `PATH` so only the fallback could ever be reached and said so in its
+  docstring as though that were the point — which is exactly how the coreutils branches went
+  untested. Five mutations against the hook and two against the detector each kill their own
+  assertion, including one that reproduces the wrong repair for the TTY hang so it cannot be
+  reintroduced.
+- The pty harness enforces its deadline on every read. Its first draft used a bare `os.read` on a
+  blocking pty fd, so against the very regression it watches for it hung indefinitely instead of
+  failing — a test that can hang CI is worse than the bug it looks for.
+
+## [2.8.9] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the push canary could not resolve its own range.**
+  `.github/workflows/trunk-check-push.yml` checked out at `fetch-depth: 2`, but
+  `github.event.before` is HEAD~N for a push of N commits: a rebase-merge, a direct multi-commit
+  push, or a fast-forward of `alpha` onto `main` all place it out of reach. `git diff` then failed
+  with `bad object`, and since `set -e` is suspended inside an `if` condition the empty substitution
+  was read as an EMPTY DIFF — so the guard aborted with a message naming a cause it had never tested.
+  The pinned action receives the same `before` as `--upstream`, so a better diagnostic could not have
+  helped; the object has to be present. Now `fetch-depth: 0` on the canary leg only — the required
+  `pull_request` leg keeps depth 2, where HEAD^1 of the merge ref is exactly right — plus a
+  `git cat-file -e` presence check that reports what actually went wrong.
+- **COREDEV-2780 — cell 5's autofix positive control did not exist.**
+  The plan requires that enabling autofix change the fixture and turn the cell red. Nothing in the
+  repository ever ran the action with autofix on, and the only thing named a positive control was a
+  judge test that hand-set the post-hash — stipulating the result it existed to observe. Equal
+  pre/post hashes were therefore unfalsifiable: equal when autofix is off, and equally equal when the
+  fixture was never in the linted range at all. The harness now runs the same pinned action a second
+  time with `--fix`, into its own argv file so cell 1's parity comparison is untouched, and records
+  the action's conclusion — which cell 5 also required separately and which was unimplemented, the
+  step having had no `id:` for `steps.<id>.outcome` to address.
+- **COREDEV-2780 — the parity harness attested a pin it had not run.**
+  It recorded `uses:` read off the shipped `trunk-check.yml` while invoking its own, so bumping one
+  file would leave the evidence naming a version that run never executed. The harness now asserts the
+  two are equal and records the observed one; the judge compares by equality against the contract
+  registry's single `action_pin` rather than by substring, which had accepted any ref; and a new test
+  derives the set of workflows invoking the action by scanning rather than listing them.
+- **COREDEV-2801 — the drift detector's retention promise was not kept.**
+  The marker sweep globbed only the current session's digest, so it tidied a session only if that
+  session came back in a later window. Sessions that never resume left one inode each, indefinitely,
+  on exactly the machines where a persistently stale install keeps the warning path hot. It now
+  sweeps every session's strictly-older buckets, behind a filename shape guard — the loop unlinks in
+  a directory it no longer wholly owns — and the decision and the warning are made ahead of the
+  sweep, so a `timeout: 5` kill during cleanup cannot cost a session the notice it was run to emit.
+- **COREDEV-2780 (M5a) — the pre-commit timeout could report a clean check that never finished.**
+  `run_with_timeout`'s fallback is the branch that runs on a stock Mac, which ships neither `timeout`
+  nor `gtimeout`. It sent SIGTERM only and returned the child's own exit status, so a process that
+  traps the signal was waited on forever — and if it later exited 0, the hook printed
+  `trunk: no new findings in the staged diff` for a check that never completed. Three measured
+  pieces: a recorded deadline marker forcing `return 124`, since exit status alone cannot distinguish
+  a fast success from a late one; SIGKILL after a five-second grace, which bounds the wait from 60s
+  to 7s; and job control with a process-group kill, so a grandchild inheriting the captured pipe
+  cannot hold the caller open — 60s to 2s. The function previously had no tests.
+
+### Added
+
+- Tests for all five, against the shipped bytes rather than copies — the timeout-fallback cases slice
+  the function out of `.githooks/pre-commit` and source it, and sanitise `PATH` so the no-coreutils
+  branch is the one under test rather than whichever branch the developer's machine happens to take.
+
+  What was verified how, stated exactly, because "mutation-tested" is not true of all of it in the
+  same sense. Three timeout-fallback tests and four marker-sweep tests were checked by mutating the
+  PRODUCTION code — reverting the digest-scoped glob, deleting the shape guard, weakening `<` to
+  `<=`, dropping the deadline marker, dropping the SIGKILL, dropping the process-group kill — and
+  each mutation kills its own assertion and no other. The harness's pin-equality assertion was
+  checked by executing the extraction step with the harness bumped to a different ref. The four
+  autofix-control and conclusion cases are judge DISCRIMINATION cases over synthetic records: a
+  Python unittest cannot run a composite action, so the judge is what is testable here, and the
+  control itself is only genuinely observed on the first real harness run — which is M2c, and is not
+  claimed as done.
+
+## [2.8.8] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M5a)** — the local half of the trunk gate in `.githooks/pre-commit`:
+  `trunk check --index --no-fix --filter=-markdown-link-check`. `--index` because the commit is made
+  from the index, so checking the worktree both misses findings that are staged and reports findings
+  that are not being committed. Never `--all`. Bounded by **180 seconds**, a constant derived from
+  measurement — 1.9s warm single-file, 7.3s warm 60-file, **30.8s cold bootstrap** — plus ~6x headroom,
+  because the envelope is measured on one developer Mac while the constant is asserted across other
+  hardware. Recorded in `docs/planning/evidence/COREDEV-2780-m5a-timeout-measurement.json`.
+  The timeout is **macOS-portable**: stock macOS ships neither `timeout` nor `gtimeout`, so there is a
+  watchdog fallback needing neither. A lint finding **blocks**; a timeout **does not** — a timeout is
+  infrastructure, and blocking there teaches people to pass `--no-verify`, which disables every other
+  check as well.
+- **COREDEV-2801 (M5)** — `docs/planning/evidence/COREDEV-2801-m5-containment-experiment.json`: the
+  §3a experiment, classified as **Table B row 10** (containment for user scope only). Root cause stays
+  open; row 4's persistence interval has not elapsed.
+
+### Fixed
+
+- The pre-commit timeout watchdog no longer holds the caller's stdout pipe open for the whole timeout.
+  A background subshell inherits the hook's file descriptors, so any parent capturing the hook's
+  output blocked for the full duration even after the hook had exited.
+
+## [2.8.7] — 2026-09-01
+
+### Added
+
+- **COREDEV-2801 (M6)** — `scripts/detect-plugin-version-drift.sh`, the drift detector, plus its two
+  callers: the project `SessionStart` hook in `.claude/settings.json` (matchers `startup|resume` only,
+  `timeout: 5` as a literal) and `.githooks/pre-commit`. It takes the **repository root as an explicit
+  positional operand** and never reads `CLAUDE_PROJECT_DIR` itself — git does not set that variable for
+  hooks, and a value inherited from another project would compare against a foreign manifest, which
+  fails as a _wrong answer_ rather than an error. `expected` comes from `origin/main`. Table A's eight
+  rows are implemented exactly: only `installed < expected` warns, and silent means silent — no output
+  and no marker. The `SessionStart` surface dedups per session per seven-day epoch bucket with an
+  `O_EXCL` create whose window is encoded in the marker NAME, so a live marker is never unlinked and
+  two concurrent invocations cannot both warn. `session_id` is hashed because it is documented as
+  opaque with no filename-safety contract.
+- **COREDEV-2801 (M6)** — `scripts/tests/test_session_start_drift_hook.py` (27 tests: the declaration,
+  the anchored lookup, all eight Table A rows, the output protocol, dedup, bucket boundary and
+  concurrency) and `scripts/tests/test_precommit_trunk_gate.py` (the second caller and the hook's
+  exit-code aggregation; cell 13's trunk-check controls arrive with M5a).
+
+### Changed
+
+- `.githooks/pre-commit` now **aggregates its exit code**. Appending any passing command after the
+  checks would otherwise mask a nonzero result from them.
+
+## [2.8.6] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M2)** — `.github/workflows/trunk-check.yml`, the diff-scoped trunk gate, in its own
+  workflow file because `plugin-ci.yml` carries `workflow_dispatch` and the pinned action autodetects
+  that event as `check-mode=all`. The job is unreachable on dispatch **by construction** rather than
+  behind an `if:` guard: a job skipped by a conditional reports _Success_, and a required context is
+  satisfied by it. Five steps in C8's order — checkout, the C6a resolver-digest guard, the empty-diff
+  guard, the C6 launcher-path guard, the action. Ships `continue-on-error: true` at **job scope only**,
+  the declared M2 exemption, removed at M3.
+- **COREDEV-2780 (M2)** — `scripts/ci/resolve-trunk-range.sh`, the single shared range resolver. Its
+  logic is transcribed from the pinned action's `pull_request.sh` and `push.sh` rather than assumed,
+  and it **fails closed** on an all-zero `github.event.before` — the branch-creation/tag-push shape
+  where the action runs `trunk check --ci --all`.
+- **COREDEV-2780 (M2b)** — `.github/workflows/trunk-check-push.yml`, the non-required push canary. It
+  emits a **different context name** on purpose: required checks match on SHA and expected app, not on
+  the triggering event, so a shared context let a `main`→`alpha` PR be satisfied by the push run on its
+  head SHA — a green required check over a strictly smaller diff.
+- **COREDEV-2780 (M2c)** — `.github/workflows/trunk-parity-harness.yml` and
+  `scripts/ci/parity-recorder.sh`, the non-required sensor for cells 1 and 5, plus
+  `scripts/tests/test_trunk_upstream_parity.py`, its judge. The harness fires on **real** events on the
+  permanent `harness-base` / `harness/**` refs, because the action maps `workflow_dispatch` to
+  `check-mode=all` and `GITHUB_EVENT_NAME` cannot be overridden. Its action inputs are **extracted from
+  the shipped workflow and digest-bound to it** — a harness that invokes its own non-fixing form proves
+  only that _that_ form does not mutate.
+- **COREDEV-2780** — `scripts/tests/test_trunk_check_workflow.py`: cells 4, 9, 14, 15, cell 10's static
+  half and cell 11's generator, which executes **all 81 declared registry cases**, including the C6
+  fixtures and C6a's resolver case by running the **shipped guard bodies** against a temporary tree.
+
+### Changed
+
+- `CLAUDE.md` — the local gate's `shellcheck` line now covers `scripts/ci/*.sh`, and `harness-base` /
+  `harness/**` are documented as permanent repository refs that a Dependabot pin bump needs.
+
+## [2.8.5] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M0a)** — `docs/planning/COREDEV-2780-contract.yaml`, the structured contract registry
+  §1's C0–C9 and C6a prose is rendered from and cell 11's mutants are generated from: 26 obligations,
+  each with a stable id, a typed target kind and one or more mutation **cases** declaring operator,
+  side, target, payload-or-fixture, a validity check and its own expected diagnostic. 81 direct cases
+  plus a `(side, form)` resolver family (2 sides × 6 forms) referenced by both workflow entries = **105
+  generated mutants**. The kinds exist because a flat `(id, path, value)` schema could not express C6's
+  repository fixtures, C2's live-remote relation or C8's digest semantics — under-coverage by
+  construction. Cases are first-class because one mutant per _entry_ still under-covers any obligation
+  needing several.
+- **COREDEV-2780 (M0a)** — `docs/planning/COREDEV-2780-survivors.yaml`, the survivor corpus: the **14
+  mutants that have survived** a formulation of this gate across rounds 5–38, each recorded with the
+  formulation that let it through, what it would have shipped, and why it must now fail. Maintained
+  **independently of the registry** and self-contained by design — an entry that resolved through a
+  registry id would vanish with the obligation it exists to outlive, which is the failure it detects.
+
+## [2.8.4] — 2026-09-01
+
+### Fixed
+
+- **COREDEV-2798** — the COREDEV-2619 transcript-path inventory pinned line numbers in files that are
+  _prepended to_, so every release shifted them and reddened `test_transcript_path_inventory.py` for a
+  release rather than for a defect. Sites in `CHANGELOG.md` and `README.md` are now content-addressed:
+  a `quote-keep` payload must hash to its frozen `sourceSha256` **exactly once**, and a `rewrite`
+  destination block must occur **exactly once**; `line`, `destination.line`, `precedingAnchorLine` and
+  `followingAnchorLine` are re-derived hints there. The demotion is **scoped** — every other file keeps
+  its line assertion, and a test proves it. Regenerating the manifest each release was rejected as the
+  repair: it would make the tree authoritative over the assertion meant to detect the tree changing.
+
 ## [2.8.3] — 2026-08-28
 
 ### Fixed
+
 - **Review harness: Python bytecode is no longer mistaken for reviewer tampering** (COREDEV-2650).
   The isolated review wrappers fingerprint their disposable checkout afterwards and void the round
-  if it changed — the COREDEV-2607 defence. A reviewer that imported a repo module to *reproduce a
-  measured claim* made CPython write `__pycache__/*.pyc` beside the source, and that bytecode read
+  if it changed — the COREDEV-2607 defence. A reviewer that imported a repo module to _reproduce a
+  measured claim_ made CPython write `__pycache__/*.pyc` beside the source, and that bytecode read
   as tampering. It voided three rounds on COREDEV-2711 (kimi at r1; agy and kimi at r8, leaving that
   round resting on a single arm). `PYTHONDONTWRITEBYTECODE=1` is now exported in the reviewed
   process, and — after the PR #81 review — at the top of each wrapper so the harness's own Python
@@ -28,11 +542,13 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   would hide in.
 
 ### Added
+
 - **Trunk lint configuration — 20 linters across security, correctness, docs and formatting** (COREDEV-2771).
   Config only; wiring it into CI and deciding required-vs-advisory is tracked separately
   (COREDEV-2780), as is remediating the findings it exposes (COREDEV-2787).
 
 ### Documentation
+
 - **COREDEV-2711 §2 plan gated** — the agent-spawn-guard design, with its §3a measurement and
   fixture evidence committed under `docs/planning/evidence/`. `review-verdict.py verify` returns
   GATE OK (codex + gemini APPROVE) bound to the plan's digest. The guard itself is **not**
@@ -137,7 +653,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     checks a scoped `Agent(...)` grant against the writer roster on disk and fails if the grant
     admits one, so the PR #63 P1 (a prompt-injected finding steering the reviewer into a file-writing
     agent while it reads untrusted PR content) stays closed. **[CORRECTED — it does not; see Unreleased / COREDEV-2711.]**
-  - **What is measured and what is not.** The probes covered a *single-type* specifier; the shipped
+  - **What is measured and what is not.** The probes covered a _single-type_ specifier; the shipped
     grant names twelve types inside one set of parentheses, and that form has not yet been observed on
     a real install — a plugin cannot be reinstalled from within the session that would test it, and
     v2.8.0's own file was never replaced because the fix carried no version bump. Cutting this release
@@ -253,7 +769,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   `scripts/review/linux-primitive-probe.sh` has been run on a Linux host and its output transcribed.
   - `scripts/lib/plugin-state-store.sh` — the Invariant P key encoder (a single byte walk under
     `LC_ALL=C`, four disjoint markers, zero forks), the nearest-existing-ancestor walk, the
-    `NAME_MAX` budget, and store creation in the order that validates the existing prefix *before*
+    `NAME_MAX` budget, and store creation in the order that validates the existing prefix _before_
     creating anything.
   - `scripts/lib/plugin-state-auth.sh` — the one authentication predicate both the reader and the
     publisher call, the chain walk with its trust-anchor ownership rule, and the Darwin ACL arm.
@@ -307,7 +823,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   refused deliberately: it is a UTF-8 locale, and under it the two shells produced DIFFERENT keys for
   the same base (`_scaf_xc3` vs `_scaf_xe9`, against the correct `_scaf_xc3_xa9`).
   A regression inside that third fix is worth recording because tests caught it and re-reading did
-  not: bash's only fork-free readonly probe is `unset -v`, and a *successful* unset destroys the
+  not: bash's only fork-free readonly probe is `unset -v`, and a _successful_ unset destroys the
   variable's EXPORT attribute, so a caller that had exported `LC_ALL` got it back unexported and
   child processes silently ran in a different locale. The restore now re-exports (row 188b asserts the
   ENVIRONMENT, not the value). STATED DEVIATION: a caller whose `LC_ALL` was set but deliberately NOT
@@ -328,7 +844,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   and one entry on disk, then `ok=0 state=stale` for every later reader — permanently, and with
   nothing said. The publisher now uses the READER'S OWN predicate rather than a second copy of the
   rule, so the two cannot disagree. A fresh install is unaffected (the store is created `mkdir -m
-  700`); the state this fixes arises when a store's mode is changed by something else — a `chmod -R`,
+700`); the state this fixes arises when a store's mode is changed by something else — a `chmod -R`,
   an unarchiver applying umask, a sync tool that drops modes.
 - **The hook cost: 783 ms to ~250 ms per hook, in two verified steps.** `swift-lint-check.sh`
   (PostToolUse Write|Edit|MultiEdit) and `swift-build-verify.sh` (PostToolUse Bash) both source the
@@ -410,7 +926,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   `set -e` as fatal even behind `|| :`, so the bridge's legitimate re-resolution exited the sourcing
   shell; and zsh's `readonly` inside a function was function-local, so the zsh arm never held the
   attribute (row 173). The live fingerprint records the checkout root's own lstat (`chmod 777
-  <checkout>` was invisible), every record's identity (`dev:inode:nlink` — a hard-link swap with
+<checkout>` was invisible), every record's identity (`dev:inode:nlink` — a hard-link swap with
   identical bytes was invisible), and `.git/config` / `.git/info/exclude` by lstat before content (a
   symlink to an identical external copy hashed the same). The kimi harness normalises the reconstructed
   transcript path lexically before the refusals (`/x/missing/../repo/tracked` passed the prefix check
@@ -529,7 +1045,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   it is E6; `SIGXFSZ` is ignored inside the subshell so a size limit is `EFBIG` and not a signal
   death bash reports on the caller's stderr; zsh's `CLOBBER_EMPTY` is pinned off. Mutant rows
   153–155 execute the three outcomes. (PR #67 review pass 6.)
-- `scripts/lib/context.sh` derived its own directory *inside a function*, where `$0` is the function
+- `scripts/lib/context.sh` derived its own directory _inside a function_, where `$0` is the function
   name in zsh rather than the sourced file. The returned path lost `scripts/lib` — wrong by two
   levels — on the very path the plugin documents for a zsh Bash tool. It is now captured at source
   time.
@@ -582,7 +1098,7 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   makes matched nothing and a model-invocable `allowed-tools` deny-list was disarmed by two characters.
   Thirteen spellings of one list are now asserted to reach one verdict.
 - **The COREDEV-2607 reviewer-mutation detector is content-aware in both harnesses.** `git status
-  --porcelain` emits one line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the
+--porcelain` emits one line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the
   line byte-identical and the gate-bearing before/after comparison saw nothing. The fix existed in
   `preflight-agy.sh` and had not reached either harness; the rule now lives in `tree-fingerprint.sh`
   and all three source it.
@@ -775,11 +1291,11 @@ three supports that, and for 2619 it contradicted **this PR's own banner**, whic
 it shipped under an explicit maintainer exception with no Combined-verdict artifact. This is
 merge-decision evidence, so it is restated per ticket:
 
-| ticket | actual gate status on the shipped bytes |
-|---|---|
-| `COREDEV-2619` | **maintainer exception, not a passing gate.** Its plan's status line reads `NOT GATED`; the approving rounds never landed simultaneously and there is no artifact under `docs/planning/.verdicts/`. |
+| ticket         | actual gate status on the shipped bytes                                                                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COREDEV-2619` | **maintainer exception, not a passing gate.** Its plan's status line reads `NOT GATED`; the approving rounds never landed simultaneously and there is no artifact under `docs/planning/.verdicts/`.                                                           |
 | `COREDEV-2639` | **no plan-gate evidence exists.** There is no `COREDEV-2639` plan in `docs/planning/`, so there was nothing to gate. The "full gate green" recorded in Jira was a validator/test sweep, later relabelled a Plan Review Gate pass without supporting evidence. |
-| `COREDEV-2497` | **re-gate required**, by its own plan's status line. Earlier rounds gated earlier bytes; the current ones have not been re-gated, and its implementation has not landed. |
+| `COREDEV-2497` | **re-gate required**, by its own plan's status line. Earlier rounds gated earlier bytes; the current ones have not been re-gated, and its implementation has not landed.                                                                                      |
 
 See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full per-ticket table.
 
@@ -816,7 +1332,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 - **`validate-plugin-assembly.py` now enforces the entrypoint-only policy** rather than merely
   modeling it: hard failure for bare `Write`/`Edit`/`Agent`/`Bash`, VCS and reviewer-CLI wildcards, and
-  a wildcard in the *script path* of a `bash`/`python3` grant; advisory warning for toolchain
+  a wildcard in the _script path_ of a `bash`/`python3` grant; advisory warning for toolchain
   trampolines (`xcrun`, `swift`, `xcodebuild`), which are the real build tools the knowledge skills
   describe rather than a reviewer-CLI escape hatch. The reviewer that opened this work named three
   skills; the validator found **17 further instances across 8 knowledge skills** — this repo's own
@@ -830,7 +1346,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   this project. **Every live one sits inside a compound block** (`set -o pipefail` … `| tail`), which
   Claude Code decomposes per subcommand, so `set -o pipefail`, `tee` and `tail` being ungranted meant
   the block prompted regardless: the grant never pre-approved the thing it existed for. The skills
-  keep working and cost nothing measurable; the advisory tier stays as a tripwire for *new* grants
+  keep working and cost nothing measurable; the advisory tier stays as a tripwire for _new_ grants
   rather than a standing exception list, and a test now asserts the shipped tree carries zero
   advisories — counting the skills it walked, so an empty walk cannot pass for a clean one.
 
@@ -838,10 +1354,10 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `rm -rf ~/Library/Developer/Xcode/DerivedData/*` deletes the build state of every Xcode project on
   the machine, unrecoverably, as the remedy for one project's packages failing to resolve. Scoped to
   `DerivedData/Unleashed_Mail-*`, with Xcode's own Clean Build Folder named as the route that needs no
-  shell at all. The command was never granted — this is about what a model-reachable skill *teaches*.
+  shell at all. The command was never granted — this is about what a model-reachable skill _teaches_.
 
 - **The prompt/plan binding now binds the bytes the reviewer actually consumed.** The first version
-  hashed the prompt and the plan *independently*, which is two correct digests of the wrong pairing: a
+  hashed the prompt and the plan _independently_, which is two correct digests of the wrong pairing: a
   prompt reading `REVIEW TARGET: PLAN_B.md` bound cleanly against `--plan PLAN_A.md`, and
   `review-verdict.py write` produced an `APPROVE` artifact for Plan A off a review of Plan B. Three
   mechanisms, closed together because each one's failure is the others' silent success:
@@ -849,10 +1365,10 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
     `*_PLAN.md`. The rule is symmetric on purpose — requiring only "does it name the right plan"
     accepts a prompt that names both and asks about the other.
   - **A per-run snapshot.** `bind-prompt.py` copies the validated bytes to `<transcript>.prompt` under
-    `O_EXCL`, and both capture arms feed *that* to the reviewer. Previously the wrapper re-`cat`ed the
+    `O_EXCL`, and both capture arms feed _that_ to the reviewer. Previously the wrapper re-`cat`ed the
     caller's path **after** the binder had blessed it, so a swap in between changed what the reviewer
     read while both sidecars still described the old bytes.
-  - **Per-run, not per-round.** The prompt *filename* derives from ticket and round only, so two
+  - **Per-run, not per-round.** The prompt _filename_ derives from ticket and round only, so two
     invocations sharing both shared one file — which the existing concurrency test could not see,
     because it compares round 7 against round 8. The snapshot is keyed by the transcript's unique run
     identity instead.
@@ -861,8 +1377,8 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
 - **A NUL byte in the prompt made the validated bytes differ from the delivered ones.** The capture
-  helpers hand the snapshot to the reviewer through `$(cat …)`, and Bash command substitution *silently
-  deletes* NULs — so a prompt naming `A_PLAN.md` normally while spelling its instruction as
+  helpers hand the snapshot to the reviewer through `$(cat …)`, and Bash command substitution _silently
+  deletes_ NULs — so a prompt naming `A_PLAN.md` normally while spelling its instruction as
   `B_PL\0AN.md` bound cleanly against A (the agreement check saw a token that is not a plan name) and
   Codex then received the joined `B_PLAN.md`. A review of B could support A's approval. Refused at the
   source: a review prompt containing a NUL is never legitimate, and escaping it per call site would
@@ -877,7 +1393,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 - **One review arm could satisfy the mandatory two-arm gate.** Two separately allocated **Gemini**
   runs supplied as `gemini=` and `codex=` passed everything — freshness, the plan binding, and the
   distinct path/digest/captureId rules — because every one of those asks whether the two entries
-  *differ*, and two real Gemini runs do. Nothing asked what either transcript **was**. The allocator
+  _differ_, and two real Gemini runs do. Nothing asked what either transcript **was**. The allocator
   encodes the reviewer in the filename it reserves, so the evidence already carried the answer; it was
   never read. Now compared, for approving verdicts only — a non-approving record blocks `implement`
   whatever its labels say, so refusing one would discard a legitimate `REQUEST_CHANGES`.
@@ -888,7 +1404,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
     helper returned 0 — leaving the caller unable to distinguish a completed review from an auth,
     model or timeout failure.
   - **The mutation detector cried wolf on the harness's own input.** Staging the bound plan
-    deliberately dirties the disposable checkout — that *is* the detached-HEAD fix — but the check
+    deliberately dirties the disposable checkout — that _is_ the detached-HEAD fix — but the check
     still compared against `HEAD`, so a reviewer that wrote nothing was reported as having written,
     with the plan listed. It now baselines the tree after staging. This is the `COREDEV-2607` detector;
     one that fires on its own inputs is one nobody reads.
@@ -899,7 +1415,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
     stages those, falling back to the path with a warning rather than silently accepting less.
 
 - **Containment resolved the working directory, not the repository.** `repository_root()` was
-  `realpath(getcwd())`, so a wrapper launched from `scripts/` treated *that* as the repository and
+  `realpath(getcwd())`, so a wrapper launched from `scripts/` treated _that_ as the repository and
   refused every plan in the tree — breaking the capture, audit, snapshot and persistence entrypoints at
   once, since all four share the helper. It resolves `git rev-parse --show-toplevel` now, and **fails
   closed outside a worktree**: with no repository there is no boundary to enforce, and falling back to
@@ -910,7 +1426,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   treated as the whole answer, so `&& rm *`, `; rm -rf *`, `$(rm *)`, a redirection and a pipe all
   passed while strict CI reported the tree clean — the policy promises one exact reviewed entrypoint,
   and that promise only holds if nothing can be appended to it. **Stated residual:** a compound grant
-  with *no* wildcard is still exempt, because the analysis is scoped to wildcards by an explicit
+  with _no_ wildcard is still exempt, because the analysis is scoped to wildcards by an explicit
   decision recorded in the module; a test now pins that boundary so it cannot be mistaken for covered.
 
 - **An allocation base owned by another user was accepted.** `os.access` answers "may I write here",
@@ -926,16 +1442,16 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   Narrowed to the whole allocator shape, `<ticket>r<round>-<reviewer>-<32 hex>.txt`. This keeps the
   property that docstring refuses to give up — the basename travels with the file, so an allocated
   transcript that was copied or moved still classifies as per-run, which conditioning on the
-  *directory* would have lost.
+  _directory_ would have lost.
 
 - **Four hardening gaps in the allocated-capture path.** All reproduced:
-  - **A hard link at the reserved leaf rewrote whatever shared the inode.** A hard link *is* a regular
+  - **A hard link at the reserved leaf rewrote whatever shared the inode.** A hard link _is_ a regular
     file, so `O_NOFOLLOW` and the `S_ISREG` check both accepted one; the `fchmod`/write/`ftruncate`
     then operated on the linked target. Reproduced by linking an 18-byte file at the reserved path and
     watching it become the capture at mode 0600. The allocator creates its leaf with exactly one link,
     so a second is never legitimate — now refused, with the victim's bytes asserted intact.
   - **A missing or empty launch record wasted a whole review.** `review-verdict.py` already rejected
-    such a transcript, but only at *write* time — so a 20–30 minute review ran to completion, exited 0,
+    such a transcript, but only at _write_ time — so a 20–30 minute review ran to completion, exited 0,
     and was then discarded. The same precondition is now checked before the reviewer launches, asserted
     on the child never running.
   - **A case-mangled protected root slipped past containment.** `commonpath` is case-sensitive and APFS
@@ -945,24 +1461,24 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   - **The allocated leaf was `realpath`'d after its symlink check.** `islink()` then `realpath()` is a
     lookup-then-lookup pair, so a symlink planted between them was followed and every check ran against
     the attacker's target. The leaf name is now kept and opened `O_NOFOLLOW` — the same discipline the
-    freshness TOCTOU fix established. The *ancestry* is still resolved; that is a different question.
+    freshness TOCTOU fix established. The _ancestry_ is still resolved; that is a different question.
 
 - **The plan binding compared digests only, and hashed a truncated snapshot.** Two more defects in
   the write path:
   - **Byte-identical plans crossed.** Two distinct plans with the same contents share a digest, so a
-    transcript captured for plan A satisfied an approval for plan B while the binding *recorded* — and
+    transcript captured for plan A satisfied an approval for plan B while the binding _recorded_ — and
     ignored — the repo-relative identity that tells them apart. The identity is now compared **when it
     carries a directory**, which is what `bind-prompt.py` always writes; a bare basename cannot
     discriminate either way and is left alone, preserving the documented reason the check was
     digest-only (it must not depend on the directory each step ran from).
   - **A prompt over 64 KiB could never be approved.** The snapshot was hashed through the capped
     trusted-read helper, so an oversized-but-valid prompt hashed only its prefix and the write reported
-    the snapshot as modified. The cap bounds untrusted *parsing*; a digest reads every byte and keeps
+    the snapshot as modified. The cap bounds untrusted _parsing_; a digest reads every byte and keeps
     none, so it is not what the cap protects. Now streamed. A guard that refuses correct work is a
     guard someone switches off.
 
 - **Three narrowing side-effects of this release's own grant tightening.** Scoping the review skills'
-  permissions made two documented flows *less* usable, and a base-resolution fallback hid a narrowed
+  permissions made two documented flows _less_ usable, and a base-resolution fallback hid a narrowed
   review:
   - **`changeset.sh` invented a base.** When neither `origin/main` nor a local `main` resolved, it
     returned the literal string `main` as though resolution had succeeded; `files`/`stat` then fell
@@ -976,7 +1492,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
     prompt the narrowed grants removed. The model is now operand 6.
   - **Neither review skill could write the prompt file it requires.** Both bodies mandate creating
     `.codex-prompt-*` / `.agy-prompt-*` before invoking the capture helper, and neither granted a
-    `Write`. The mandatory first step therefore prompted or was denied *before* the pre-approved
+    `Write`. The mandatory first step therefore prompted or was denied _before_ the pre-approved
     capture command could run. Added narrowly, as the exact per-round filename shape.
 
 - **Absolute paths defeated two fixes from earlier the same day, and broke a third flow.** All three
@@ -1019,7 +1535,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   in the checkout and the preflight still printed `healthy`. Two fixes, because they fail separately:
   the ping now runs in a fresh empty scratch directory (it needs no repository at all), **and** the
   checkout is fingerprinted with `git status --porcelain` around the capture, so a build that writes by
-  absolute path is *detected* rather than merely made unlikely — isolation alone would have left that
+  absolute path is _detected_ rather than merely made unlikely — isolation alone would have left that
   case silent. The failure report names only what changed, since the whole status buries one new entry
   in whatever was already dirty.
 
@@ -1032,22 +1548,22 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   occupant scan runs **through those held descriptors**, immediately before the first unlink, inside
   one session that also spans the directory removal.
 
-  **Stated ceiling, because narrowing is not closing.** An occupant arriving *after* the final check
+  **Stated ceiling, because narrowing is not closing.** An occupant arriving _after_ the final check
   is unobservable at that check, by construction: the run still refuses, but the 39 files are already
   gone, so the refusal reports rather than prevents. Eliminating that would require the whole
   sequence to be atomic, which it cannot be. What is guaranteed — and proved — is that an occupant
-  present *before* the run costs nothing: 39 of 39 files survive the refusal. The ceiling is recorded
+  present _before_ the run costs nothing: 39 of 39 files survive the refusal. The ceiling is recorded
   as an executable test so a reader cannot mistake it for covered.
 
   The occupant refusal deliberately lives in the orchestrator, **not** in `delete_leak_files`, whose
   contract is narrower on purpose: it deletes exactly the literal manifest and nothing of the same
-  filename family, and that is only provable on a tree that *has* such a neighbour.
+  filename family, and that is only provable on a tree that _has_ such a neighbour.
 
 - **The prompt/plan agreement check compared basenames, and short sidecar writes went unnoticed.**
   Two defects in the binding shipped earlier the same day:
   - **Basename collision.** A prompt explicitly targeting `docs/planning/b/SAME_PLAN.md` was accepted
     while `--plan` named `docs/planning/a/SAME_PLAN.md`, because both acceptance and conflict detection
-    reduced references to the basename — the same shortcut the *artifact's* plan identity was fixed for
+    reduced references to the basename — the same shortcut the _artifact's_ plan identity was fixed for
     in PR #41, repeated one layer up. References are now compared as full normalized repo-relative
     paths, and a basename-only reference is refused as ambiguous when more than one plan answers to it
     rather than guessed.
@@ -1071,18 +1587,18 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 - **The Gemini arm reviewed the committed plan while its binding named the working-tree one.**
   `isolated-agy-review.sh` builds its review tree with `git worktree add --detach … $(git rev-parse
-  HEAD)`, so `agy` read the **committed** plan; `bind-prompt.py` hashed the **working-tree** plan into
+HEAD)`, so `agy` read the **committed** plan; `bind-prompt.py` hashed the **working-tree** plan into
   `<transcript>.plan`. With uncommitted edits — the normal state during the documented review
   iteration — the transcript approved one version while the artifact recorded it as evidence for
   another. Two correct digests describing different bytes, the same pairing failure as the prompt/plan
   binding one layer down. The bound plan is now copied into the review checkout and verified with
   `cmp`, so the reviewer reads exactly what the sidecar attests to. Copying rather than refusing keeps
-  the iterate-then-review loop working, and makes the binding *true* rather than merely checkable.
+  the iterate-then-review loop working, and makes the binding _true_ rather than merely checkable.
 
 - **The `implement` recipe substituted the user's argument into shell syntax.** It bound the argument
   through a quoted heredoc, which correctly kept metacharacters (`"`, `$( )`, backticks) as literal
-  data. What that could not defend was the **delimiter**: the placeholder is substituted *textually
-  across the whole fence before the shell runs*, so an argument containing a line equal to the heredoc
+  data. What that could not defend was the **delimiter**: the placeholder is substituted _textually
+  across the whole fence before the shell runs_, so an argument containing a line equal to the heredoc
   delimiter closed the body early and every following line was parsed as a shell command — and with the
   skill model-invocable, that needed no user gesture. No quoting fixes it, because the fault sits one
   level above the quoting. The recipe no longer substitutes the argument at all: the model resolves the
@@ -1104,7 +1620,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   five read-only reviewers this agent actually spawns stay reachable.
 
 - **The gate's plan-state entrypoints wrote wherever they were pointed.** `brainstorm` is
-  model-invocable and pre-approves both the snapshot and the persistence command, so the *model* picks
+  model-invocable and pre-approves both the snapshot and the persistence command, so the _model_ picks
   `--plan`. Neither enforced containment: any existing file on disk was accepted, the snapshot sidecar
   landed beside it, and even a **non-approving** persist created and chmod'd a `.verdicts` directory
   there — reproduced against `/tmp`, walking past the skill's apparent `Write(docs/planning/**)`
@@ -1141,17 +1657,17 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   which is prompt injection rather than a filename. `-s read-only` prevents writes; it is not a
   repository-read boundary and does nothing about disclosure to a third-party service. Operands must
   now be non-symlink regular files beneath the physical repository root, and the prompt is built from
-  the *validated* output one path per line, so boundaries survive.
+  the _validated_ output one path per line, so boundaries survive.
 
   The containment rule moved into `scripts/review/containment.py`, shared with `bind-prompt.py`. That
   sharing **is** the fix: the identical hole was closed on the prompt operand a day earlier and this
   sibling — written in the same batch — did not inherit it, because the rule lived inside one script.
 
 - **The entrypoint-only grant policy was fail-open, and is now default-deny.** It deny-listed a fixed
-  set of command names and passed everything else. Measured probes producing zero problems *and* zero
+  set of command names and passed everything else. Measured probes producing zero problems _and_ zero
   warnings: `Bash(python3 -c *)`, `Bash(sh -c *)`, `Bash(cp *)`, `Bash(mv *)`, `Bash(tee *)`,
   `Bash(find *)`, `Bash(curl *)`, `Bash(chmod *)`. `python3 -c *` is arbitrary code execution; the
-  interpreter branch only looked for a wildcard in the *script path*, and `-c` is not a path. A
+  interpreter branch only looked for a wildcard in the _script path_, and `-c` is not a path. A
   wildcard `Bash` grant on a model-reachable skill is now refused unless it invokes an **exact** script
   beneath `${CLAUDE_PLUGIN_ROOT}` — those wrappers ship in this repo, are reviewed with it, and bound
   their own operands, which is the property that makes a trailing wildcard acceptable there and
@@ -1164,7 +1680,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 - **The review prompt operand is contained to the repository.** The capture helpers are the exact
   entrypoints the bullets above introduced — and both are reached from model-invocable skills that
-  pre-approve `capture-*-review.sh *`, so the *model* picks the operand. The helpers checked only
+  pre-approve `capture-*-review.sh *`, so the _model_ picks the operand. The helpers checked only
   that the file was readable, then fed `$(cat "$PROMPT")` to the reviewer CLI verbatim: `../secret`,
   or a symlink to one, was exfiltrated to a third-party service by a skill the model can enter on its
   own. `scripts/review/bind-prompt.py` now refuses any operand that is a symlink, is not a regular
@@ -1174,11 +1690,11 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 - **The reviewer sub-agents no longer inherit `Bash`.** `security-reviewer`, `concurrency-reviewer`,
   `ux-perf-reviewer` and `accessibility-auditor` are read-only by contract and by prose, and all four
   only ever ran `grep -rn` — but `tools:` listed `Bash`, which is unscoped by construction: a sub-agent
-  tool list takes bare names, so `Bash` there is *every* command. Since `swift-reviewer` spawns all
+  tool list takes bare names, so `Bash` there is _every_ command. Since `swift-reviewer` spawns all
   four, a prompt-injected finding in a reviewed file reached arbitrary execution through an agent whose
   own description says it audits for exactly that. The four now list `Read, Grep, Glob`;
   `swift-reviewer` keeps `Bash` (it genuinely needs it) and gained `disallowedTools: Write, Edit,
-  NotebookEdit`.
+NotebookEdit`.
 
 - **The binding sidecars are written with `O_NOFOLLOW | O_EXCL`.** The shell wrote
   `<transcript>.promptsha256` with a plain `>` redirect, in a file whose neighbours use `O_NOFOLLOW`
@@ -1205,7 +1721,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   in the instruction before `exec`. **Scope stated rather than overclaimed:** that narrows the window to
   microseconds, it does not eliminate it, and a same-UID writer who wins the race is not defended
   against here — the same attacker can rewrite the wrapper. Inlining the bytes to remove the pathname
-  entirely *was* implemented and then reverted: Linux caps a single argv string at 128 KiB
+  entirely _was_ implemented and then reverted: Linux caps a single argv string at 128 KiB
   (`MAX_ARG_STRLEN`) regardless of the much larger `ARG_MAX`, and macOS does not — so the local suite
   passed while CI failed with exit 126 on an ordinary two-file audit (`README.md` + `CHANGELOG.md` =
   175 KB). Embedding would have capped audits at roughly one medium file, a worse regression than the
@@ -1283,7 +1799,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 - **The model-reachable grant validator closed three fail-open spellings.** (PR #63 recheck, P2, all
   measured passing.) (1) A shell operator glued to the entrypoint with no space —
   `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /)` — rode inside a single word that the post-target
-  operand scan never inspected; the scan now runs over *every* Bash specifier, wildcard or not,
+  operand scan never inspected; the scan now runs over _every_ Bash specifier, wildcard or not,
   rejecting `;`, `|`, backtick, redirection, `&`, and `$(` (which never appear in a legitimate
   one-command grant, while `${CLAUDE_PLUGIN_ROOT}` and a trailing `*` still do). (2) `_bash_specifiers`
   extracted with `Bash\(([^)]*)\)`, stopping at the first `)`, so `Bash(… $(rm) *)` dropped its
@@ -1291,12 +1807,12 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   bare-name refusal was exact-string, so `Write(**)`, `Write(/**)`, `Edit(**)`, `NotebookEdit(**)` and
   `Agent(*)` slipped past it despite pre-approving the same surface as the bare grant — a full-breadth
   scope is now refused explicitly. The previously-documented "no-wildcard compound is exempt" boundary
-  was itself the first fail-open and is now closed; a genuinely bounded *single* command
+  was itself the first fail-open and is now closed; a genuinely bounded _single_ command
   (`Bash(command -v codex)`) stays exempt.
 - **Gemini plan staging can no longer be tricked into writing outside its disposable checkout.**
   `git worktree add --detach` materializes committed tree entries, so a plan path recorded in HEAD as a
   **symlink** (or under a symlinked parent) was recreated in the throwaway checkout, and the staging
-  `open(destination, "wb")` wrote *through* it — a same-account attacker whose HEAD carried
+  `open(destination, "wb")` wrote _through_ it — a same-account attacker whose HEAD carried
   `docs/planning/X_PLAN.md -> /outside/victim` had the victim overwritten with the staged bytes
   (PR #63 recheck, P1, reproduced). Staging is now a descriptor walk: every directory component is
   opened `O_DIRECTORY|O_NOFOLLOW` (a symlinked parent fails `ELOOP`), and the leaf is
@@ -1313,13 +1829,13 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   legitimate stale-file overwrite behaviour that `O_EXCL` would have broken.
 - **A reviewer that mutates its disposable checkout VOIDS the round — including the invisible case.**
   `isolated-agy-review.sh` printed an informational note when the reviewer wrote inside the disposable
-  copy and returned success; worse, the note's baseline diff is *status-line* based, so a reviewer that
+  copy and returned success; worse, the note's baseline diff is _status-line_ based, so a reviewer that
   rewrote the already-`M` **staged plan** and then emitted `VERDICT: APPROVE` produced a valid-looking
   capture with **no note at all** — a review of substituted bytes approving the original plan, which
   synthesis cannot catch because it validates the `.plan` record against the untouched live plan
   (PR #63 recheck, P1; both shapes reproduced). Now the round's **basis is content-verified**: the
   staged plan must still hash to the digest its `.plan` record attests to, the assembled prompt must
-  still hash to what the harness wrote (the old diff *excluded* the prompt's basename, hiding prompt
+  still hash to what the harness wrote (the old diff _excluded_ the prompt's basename, hiding prompt
   tampering by construction), and **any** other post-baseline write voids the round with exit 3 —
   writing files is the COREDEV-2607 agent-mode signature, and a review produced that way is
   untrustworthy whether or not the copy is discarded. The harness's own staged inputs stay exempt via
@@ -1328,7 +1844,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 - **Plan references survive a space in the repository's own path.** `bind-prompt.py`'s token regex
   matched a character allowlist without the space, so an absolute reference under
   `/Users/me/My Projects/repo/…` was captured from AFTER the space and the disagreement check refused
-  the documented capture flow — the gemini skill *requires* absolute plan paths in generated prompts —
+  the documented capture flow — the gemini skill _requires_ absolute plan paths in generated prompts —
   before either reviewer launched. Absolute references under the repository are now matched WHOLE,
   anchored on the known root (the one string that makes an embedded space unambiguous), and masked
   before the conservative token sweep handles relative and prose references. The refusal for a
@@ -1351,7 +1867,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `Write`/`Edit` — by substring, so a `NotebookEdit` deny satisfied an `Edit` probe — and its spawner
   detection skipped omitted-`tools:` agents entirely. Three shapes escaped: `jira-manager` (denies the
   file editors, inherits unrestricted `Bash`), any `memory:` agent (auto-enabled Write never appears
-  in `tools:`), and `modern-standards-planner` as an undetected inherit-all *spawner*. The predicate
+  in `tools:`), and `modern-standards-planner` as an undetected inherit-all _spawner_. The predicate
   is now token-exact over live tools (grants-or-everything minus denies) against
   `{Write, Edit, NotebookEdit, Bash}`; `memory:` counts as Write; inherit-all agents count as holding
   `Agent`. Agent changes to match the honest policy: `jira-manager` **denies `Bash`** (the caller now
@@ -1387,10 +1903,10 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   granted `capture-gemini-review.sh`. A new sweep asserts the property for **every** skill: the previous
   check enumerated specific recipes, and an enumeration cannot fail on the entry nobody added.
 - **Transcript-freshness gate no longer depends on how a path is spelled.** The layout comparison was
-  lexical, so `…/HASH/./f.txt`, `…/HASH/../HASH/f.txt`, and a symlinked *ancestor* directory each
+  lexical, so `…/HASH/./f.txt`, `…/HASH/../HASH/f.txt`, and a symlinked _ancestor_ directory each
   opened the identical file while comparing unequal — the same bytes accepted or refused by
   punctuation. Closed by `dirname`-only `realpath` resolution: the ancestry is resolved, the leaf
-  never is, so a symlinked *leaf* is still refused.
+  never is, so a symlinked _leaf_ is still refused.
 - **A case-mangled path bypassed the same check.** The layout comparison was case-SENSITIVE while
   this gate runs on default-case-insensitive APFS, so `…/Unleashed-Mail/…` opened the identical file
   and classified as legacy. Closed separately, by comparing casefolded — not by the resolution change
@@ -1401,7 +1917,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   never passed the check. The digest is now read from the SAME `O_NOFOLLOW` descriptor the check
   `fstat`'d, and freshness hands the caller back that path and digest rather than letting it re-resolve
   the name.
-- **A symlinked allocator *parent* let a reserved leaf resolve outside its layout.** Separate fix,
+- **A symlinked allocator _parent_ let a reserved leaf resolve outside its layout.** Separate fix,
   separate mechanism: the allocator now checks the parent with `lstat`, not `stat`.
 - **`cleanup --check` reported green for a state `--apply` refuses only after deleting 39 files.**
   `--check` never ran the emptiness scan that `--apply` used to decide whether to proceed, so a file
@@ -1414,7 +1930,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   invariant `O_TRUNC` would have broken), plus a wrapper-level refusal of any non-empty reserved leaf.
 - **Two concurrent review rounds could cross-wire prompt and transcript.** Both recipes wrote to a
   fixed `.agy-prompt.md` / `.codex-prompt.md`; a second round overwriting the shared prompt before the
-  first wrapper read it made the first round's transcript describe the *other* plan under its own
+  first wrapper read it made the first round's transcript describe the _other_ plan under its own
   ticket and round. Both recipes now derive the prompt filename from the round identity (see Changed,
   below) and bind the run to its plan before capture starts: `<transcript>.plan` records the plan's
   digest, and `review-verdict.py write` **refuses** an approving verdict whose per-run transcript is
@@ -1423,7 +1939,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   is only true if something looks; the plan sidecar is the half that looks.
 - **The cleanup tool removed files by name after validating them by descriptor.** `_preflight_files`
   resolves each of the 39 targets, proves each is a regular file and proves each is beneath the state
-  root — and the removal loop then re-walked the resolved *string*, so every component was looked up
+  root — and the removal loop then re-walked the resolved _string_, so every component was looked up
   again. Renaming one parent directory between the two walks retargets all 39 unlinks, and the state
   root lives under `~/.local/state`, which needs no privilege to write. Both phases now open the
   parent chain once with `O_DIRECTORY | O_NOFOLLOW`, hold those descriptors for the whole phase, and
@@ -1447,7 +1963,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 ### Changed
 
 - **Breaking: `pty-capture.py` requires an out-path.** The `/tmp/pty-out.txt` default is removed — a
-  run that died before writing left the *previous* run's bytes at that shared path for the next reader
+  run that died before writing left the _previous_ run's bytes at that shared path for the next reader
   to trust, and two concurrent captures overwrote each other. Every caller in the tree already passed
   an explicit path; callers outside the tree must now do the same.
 - **Breaking: both review recipes require a per-round prompt file**, `.codex-prompt-${TICKET}r${ROUND}.md`
@@ -1464,7 +1980,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 - **Five inline skill recipes extracted to granted helper scripts** — `capture-codex-review.sh`,
   `capture-gemini-review.sh`, `resolve-plan-gate.sh` (`implement`'s Design Gate), and
   `persist-verdict.sh` (shared by `review-synthesis` and `brainstorm`). Each inline recipe was a
-  *compound* shell command (functions, branches, loops), which Claude Code decomposes and wants a
+  _compound_ shell command (functions, branches, loops), which Claude Code decomposes and wants a
   grant per subcommand — so none of them matched a scoped `allowed-tools` shape and every gate round
   re-prompted. As a side effect, `capture-codex-review.sh`'s new prompt-readable check caught a real
   bug: `$(cat .codex-prompt.md)` expands empty on a missing file, so every codex capture proof had
@@ -1487,6 +2003,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   **reverted** for exactly those reasons. The defect is pinned by
   `test_the_gate_still_accepts_altered_evidence_COREDEV_2497`, which asserts the current, defective
   behaviour and fails — deliberately — the day `COREDEV-2497` lands.
+
 - **The callers-scan exemption manifest now ships, and CI runs the scan that needs it.**
   `scripts/review/callers-scan-exemptions.tsv` was previously unshipped, so
   `callers_scan.py --root .` exited 2 before scanning a single line — and CI only ever invoked
@@ -1512,12 +2029,11 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Changed
 
-- **Effort is inherited, not pinned; three workflow skills became model-invocable** (`COREDEV-2639`): every agent and skill now **omits `effort:`** and follows the session level, and CI accepts exactly `absent | xhigh | max` — a blanket `effort: xhigh` had been silently *capping* `max` sessions, because frontmatter effort overrides the session in both directions. Separately, `disable-model-invocation` was removed from `brainstorm`, `implement` and `pr-review`, so those three workflows can now be opened by the model rather than only by an explicit human invocation.
+- **Effort is inherited, not pinned; three workflow skills became model-invocable** (`COREDEV-2639`): every agent and skill now **omits `effort:`** and follows the session level, and CI accepts exactly `absent | xhigh | max` — a blanket `effort: xhigh` had been silently _capping_ `max` sessions, because frontmatter effort overrides the session in both directions. Separately, `disable-model-invocation` was removed from `brainstorm`, `implement` and `pr-review`, so those three workflows can now be opened by the model rather than only by an explicit human invocation.
 
   **Permission consequence, and what was done about it.** Making those three skills model-invocable means their pre-approval grants can activate with no user gesture — a window the model can open by deciding a task "is an implementation". The grants were therefore SCOPED in the same release (`COREDEV-2642`): `implement` now holds `Read, Grep, Glob, Agent, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)` and `pr-review` holds `Read, Grep, Glob, Agent, Bash(git *)`. Blanket `Write`/`Edit`/`Bash` are gone; `implement` never used them itself, because it delegates every file write to `db-engineer`/`logic-engineer`/`ui-engineer` via `Agent`. `allowed-tools` is a pre-approval grant rather than a restriction, so narrowing it disables nothing — those calls simply need the normal user gesture. Note also what the effort "floor" is **not**: it constrains what may be written into an asset, not runtime effort — no in-plugin mechanism raises a `low` session, and `CLAUDE_CODE_EFFORT_LEVEL` outranks frontmatter regardless (AGENT_CONTRACTS §11).
 
 - **Plan-review verification hardening plan** (`COREDEV-2497`): documentation only — the plan and its review record. No shipped behaviour change; recorded here because the 2.6.7 entry previously omitted it entirely.
-
 
 ## [2.6.6] — 2026-07-31
 
@@ -1525,7 +2041,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 - **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan reviewed over 19 rounds — but **it shipped without an approving round**: round 19's verdict on these bytes was codex `REQUEST_CHANGES` (3 High + 1 Medium), with the gemini arm emitting no parseable verdict line. The earlier wording, "plan gated over 19 review rounds", claimed a pass the plan's own status line does not record). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers' machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
 
-  §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as *"out of scope"* and the five reviewers as *"in scope"* would have passed every gate while asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id | scope | anchor` — that is the only scope statement:
+  §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as _"out of scope"_ and the five reviewers as _"in scope"_ would have passed every gate while asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id | scope | anchor` — that is the only scope statement:
   exclusive and normative, with exactly nine approved triples, every field from a finite allowlist, and any unknown key or catch-all row a hard failure.
 
   Each row carries a repository **anchor** (`path:line`), because binding a token to a token still left every `surface_id` free to be defined elsewhere: `verdict-report` could be redefined as the JSON passed to the synthesizer while every check passed.
@@ -1545,7 +2061,7 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `in`-set/`VALID_AGENTS` **disjointness** gate read from `capture.py` rather than restated, and the
   anchor-resolution gate.
 - `mcp/review-synthesizer/tests/test_capture.py`: **isolated** payload-region regressions, one per
-  independent rejection cause plus a positive control. `extract_status` stops on *either* prose or
+  independent rejection cause plus a positive control. `extract_status` stops on _either_ prose or
   fenced content, so a single combined fixture passes against a parser that handles only one.
 
 ### Verification
@@ -1570,14 +2086,14 @@ an unrelated captured specialist to `VALID_AGENTS`.
 - **Plugin state split across two base directories** (`COREDEV-2617`, plan reviewed over **18** rounds, not the 19 previously claimed here — and **it shipped without a reproducing approval**: round 18's double approval failed re-run at the byte-identical digest, and the re-run found a real fail-open→fail-closed regression in the agent fence).
   `CLAUDE_PLUGIN_DATA` is exported to hook and MCP subprocesses but **not** to an ordinary shell. Every
   library fell back to `${HOME}/.claude/unleashed-mail`, so a marker, log or snapshot written outside a
-  hook went to a *different* directory than the one the hooks read — and neither could see the other.
+  hook went to a _different_ directory than the one the hooks read — and neither could see the other.
   Quality markers set by a hook were invisible to a manual run, and vice versa.
 
-  **The fix is D′: an unresolved base persists nothing.** The base resolves *only* from
+  **The fix is D′: an unresolved base persists nothing.** The base resolves _only_ from
   `CLAUDE_PLUGIN_DATA`; when that is unset or empty the libraries return a **poisoned sentinel**,
   `/dev/null/unresolved-plugin-base`. `/dev/null` is a character device, so every path beneath it is
   `ENOTDIR` — `mkdir`, `mktemp`, redirects and opens all fail harmlessly at a fixed, greppable location,
-  and an *unguarded* caller can never compose a root path such as `/logs`. Returning the empty string
+  and an _unguarded_ caller can never compose a root path such as `/logs`. Returning the empty string
   would have done exactly that. Writers (`marker_write`, `log_append`, the round-binding mutators)
   become no-ops and return success, so no consumer's primary behaviour changes.
 
@@ -1613,7 +2129,7 @@ an unrelated captured specialist to `VALID_AGENTS`.
 - `scripts/tests/test_shell_primitive_drift.py` — the base-path matrix now expects the sentinel for
   unset and set-but-empty. The legacy `${HOME}`-based expansion is asserted **present in `paths.sh`**
   (where its `:-` and `${HOME:-}` guarantees stay locked) and **absent from the three libraries**, since
-  that fallback *was* the second store.
+  that fallback _was_ the second store.
 
 ### Known limitation
 
@@ -1629,11 +2145,11 @@ the plan-review gate on itself rather than by a planned audit.
 ### Fixed
 
 - **The gemini reviewer could write to the tree it was reviewing, and did** (`COREDEV-2607`). On
-  2026-07-29 a plan review *implemented* the plan instead of reviewing it: 6 shipped scripts modified,
+  2026-07-29 a plan review _implemented_ the plan instead of reviewing it: 6 shipped scripts modified,
   5 files created, including a stray `marketplace.json` at the repo root. It emitted no `VERDICT:` line
   so the gate failed closed — the fortunate failure mode — but the edits persisted and were reverted by
   hand. The concurrent `codex` review recorded that it had re-anchored its citations against committed
-  HEAD; nothing in the gate design *required* that.
+  HEAD; nothing in the gate design _required_ that.
   New `scripts/review/isolated-agy-review.sh` points the reviewer at a **disposable detached checkout**
   of the reviewed commit and asserts the real working tree is unchanged afterwards — a tree mutation
   **fails the round** rather than being cleaned up silently, which is `AGENT_CONTRACTS.md` §2 step 0b
@@ -1643,9 +2159,9 @@ the plan-review gate on itself rather than by a planned audit.
   has no read-only mode — the asymmetry with `codex`, which the gate already runs `-s read-only`.
 - **Secret redaction let four Unicode fold codepoints into an ASCII value class** (`COREDEV-2609`),
   the residual the 2.6.2 entry recorded as still open. U+0130, U+0131, U+017F and U+212A now ride in the
-  secret **payload** class in both the shell and Python redactors. The **anchor** is deliberately *not*
+  secret **payload** class in both the shell and Python redactors. The **anchor** is deliberately _not_
   widened: widening an unanchored prefix is what corrupted ordinary prose in the first place, whereas
-  widening an *anchored* rule's payload cannot. Held by the `redactor_model.py` equivalence gate on both
+  widening an _anchored_ rule's payload cannot. Held by the `redactor_model.py` equivalence gate on both
   `sed` engines.
 
 ### Changed
@@ -1693,7 +2209,7 @@ passed gate.
 - **`load-check` CI job** + `scripts/ci-load-check.sh` (COREDEV-2598). Installs the checkout's own
   bytes via a scratch marketplace, proves byte identity with a per-run sentinel, drives the MCP server
   from its **own installed declaration**, and asserts the hook-manifest shape. Four mutants, each
-  mapped to the assertion it fails; the mapping records one assertion that is *not* provable and is
+  mapped to the assertion it fails; the mapping records one assertion that is _not_ provable and is
   labelled defence-in-depth rather than claimed.
 - Drift guards (`scripts/tests/test_shell_primitive_drift.py`): no `uname == Darwin` mtime branch
   anywhere under `scripts/`, the base expansion identical across all three libs with its `${HOME:-}`
@@ -1716,7 +2232,7 @@ recorded as a workflow exception, not a passed gate.
   `~40/60 split`) plus Swift's `~Copyable`/`~Escapable`.
 - **Five leak classes**, each reproduced before being fixed: `api<U+00A0>key: <secret>` and
   `bearer<U+00A0><token>` (Python's `\s` accepts 23 codepoints POSIX `[[:space:]]` under `LC_ALL=C`
-  does not); `api key:\n<value>` (`sed` is line-oriented and the newline fold ran *after* the rules);
+  does not); `api key:\n<value>` (`sed` is line-oriented and the newline fold ran _after_ the rules);
   the compound `/Users/nick<U+00A0>api key: <secret>` (the shell over-consumed and ate the `api`
   anchor, so the rule never fired); `user@2x.png.example.com` — a **routable address** preserved
   entirely because the retina-exemption lookahead's `\b` was satisfied by the following dot; and
@@ -1731,22 +2247,22 @@ recorded as a workflow exception, not a passed gate.
   cannot contain `-`, so `OPENAI_KEY_sk-proj-…` redacts) and is not before `pk_` (the SQL/GRDB
   primary-key convention, so `orders_pk_customer_id_idx` survives). Keeps both properties rather than
   trading one for the other.
-- The `~` rule requires a home-*path* shape (`[A-Za-z_]` + `/`), matching the definition
+- The `~` rule requires a home-_path_ shape (`[A-Za-z_]` + `/`), matching the definition
   `schema.py` already shipped. **Accepted residual:** a bare `~alice` with no path is no longer
   redacted — it is regex-indistinguishable from `~ten`/`~Copyable`, and both are pinned by tests so a
   future widening trips a gate.
-- Whitespace is canonicalised on **both** sides *before* any rule runs. Not a widening: no pattern
+- Whitespace is canonicalised on **both** sides _before_ any rule runs. Not a widening: no pattern
   changes, only the input domain.
-- `re.IGNORECASE` removed from Python's `_APIKEY`/`_BEARER` — it did *Unicode* case-folding, matching
+- `re.IGNORECASE` removed from Python's `_APIKEY`/`_BEARER` — it did _Unicode_ case-folding, matching
   U+0130/U+0131/U+212A in the literals and admitting four codepoints into an ASCII value class, which
-  emitted `[redacted-key]` immediately *before* live secret material. Residual shared miss: COREDEV-2609.
+  emitted `[redacted-key]` immediately _before_ live secret material. Residual shared miss: COREDEV-2609.
 - Python's secret rule uses two sequential passes, not one combined alternation, which matched
   greedily from the leading prefix and disagreed with the shell.
 
 ### Added
 
 - `mcp/review-synthesizer/redactor_fixture.py` — the single canonical parity vector list, with
-  *generators* for the unbounded classes, since three root causes cannot be closed by any list.
+  _generators_ for the unbounded classes, since three root causes cannot be closed by any list.
 - `mcp/review-synthesizer/redactor_model.py` — the mechanical closure: over a seeded corpus the only
   divergence must be the one documented exemption, `UNEXPLAINED == 0`. 40,000 inputs clean.
 - `redactor-equivalence` CI job on **`ubuntu-latest` and `macos-latest`**. Both, deliberately: the
@@ -1761,6 +2277,7 @@ Agent output style (COREDEV-2602) — plan `docs/planning/AGENT_OUTPUT_STYLE_PLA
 the dual gate (gemini APPROVE + codex APPROVE_WITH_NOTES) after eleven rounds.
 
 ### Added
+
 - `AGENT_CONTRACTS.md` **§13 Agent Output Style** — ten rules adapted from `ayghri/i-have-adhd` (MIT,
   pinned at `07684c4a`). Two adopted, seven adapted, one restated positively. Adapted rather than
   migrated: four upstream rules would have damaged machine-consumed output.
@@ -1772,6 +2289,7 @@ the dual gate (gemini APPROVE + codex APPROVE_WITH_NOTES) after eleven rounds.
   tests (per-rule **row-scoped**, per-contract **section-scoped**), each mutation-proved.
 
 ### Notes
+
 - Enforcement is documentary. `COREDEV-2604` covers the mechanical guard (report the cause, route it,
   feed it to the retry); `COREDEV-2599` covers measuring whether agents actually comply.
 
@@ -1781,6 +2299,7 @@ Opus 5 alignment (COREDEV-2583) — plan `docs/planning/OPUS5_ALIGNMENT_PLAN.md`
 dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five rounds.
 
 ### Added
+
 - `effort: xhigh` on all 21 agents and all 21 skills, with a hard CI assertion on both axes and on the
   §11 policy sentence. Nothing set `effort` before, so every asset ran at the session's level.
 - A `warnings` channel in `validate-plugin-assembly.py`: prints, never affects the exit code. Used to
@@ -1791,6 +2310,7 @@ dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five 
 - AGENT_CONTRACTS §5 now declares the subagent spawn-depth dependency and the ≥ 2.1.219 floor.
 
 ### Changed
+
 - **Model tiering is three tiers**, set by consequence of being wrong rather than cost:
   `security-reviewer`, `prompt-review`, `concurrency-reviewer` → `opus` (3); orchestrator and
   implementation/diagnostic engineers → `inherit` (11); first-pass reviewers, personas and fixed-scope
@@ -1803,6 +2323,7 @@ dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five 
 - CI pins Claude Code 2.1.220 (was 2.1.209, eleven releases below the Opus 5 floor).
 
 ### Fixed
+
 - `TaskOutput` and `EnterPlanMode` were **false-rejected** as typos of `BashOutput`/`ExitPlanMode`.
 - `MultiEdit` is removed from `KNOWN_TOOLS` **and** hard-rejected — dropping it alone is a no-op because
   unknown tools are accepted, which had left `agents/jira-manager.md`'s deny-list entry a silent no-op.
@@ -1819,6 +2340,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 (10 major, 29 minor, 10 info), none caught by the shipped validators. No agents/skills added (21/21/0/1).
 
 ### Fixed
+
 - **Review-synthesizer gate fail-opens** (MAJ-4/5): `is_abs_or_traversal` now rejects tilde/home paths
   (`~/…`, `~user/…`), and the `synthesize.py` CLI refuses to scope explicit findings against the bundled
   demo changeset (and exits 2 on unknown flags) instead of silently printing APPROVE.
@@ -1840,6 +2362,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
   fixes (MIN-1/3/4/5/6/7/8/9/10/11/13/15/17/25/26/29; INF-1/3/4/5/6/7/10).
 
 ### Added
+
 - Validator coverage for what previously drifted silently: §11 model-tier alignment, the six-copy
   reviewer roster, hook `matcher`-key typos, agent `skills:` and `.mcp.json` path resolution, and
   manifest-description + CHANGELOG-entry counts. 15 new regression tests across the MCP and scripts suites.
@@ -1847,6 +2370,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 ## [2.5.2] — 2026-07-17
 
 ### Fixed
+
 - **Plugin scripts unreachable in consumer installs** (COREDEV-2504): the plan-gate script references in
   agent/skill bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does
   **not** substitute (only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in agent/skill
@@ -1862,6 +2386,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 ## [2.5.1] — 2026-07-16
 
 ### Fixed
+
 - **Quality/review-gate fail-open remediation** (COREDEV-2503): a v2.5.0 audit surfaced fail-opens in the
   gates this plugin ships (the repo's own validators don't cover gate logic). All 14 confirmed findings are
   closed, each with a regression test that fails when the fix is reverted; two audit items were excluded
@@ -1890,8 +2415,9 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 ## [2.5.0] — 2026-07-16
 
 ### Added
+
 - **Plan Review Gate made usable end-to-end and hardened** (COREDEV-2492): `/implement` now resolves a
-  feature name or path to *the* tracked plan (exact-stem match; a pure substring must be named
+  feature name or path to _the_ tracked plan (exact-stem match; a pure substring must be named
   explicitly), refuses anything outside `docs/planning/` (realpath containment — closes the
   `..`/symlink/symlinked-root and same-basename bypasses), and deterministically verifies a
   plan-digest-bound Combined-verdict artifact via [`scripts/review-verdict.py`](scripts/review-verdict.py)
@@ -1906,6 +2432,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
   gitleaks secret-scanning (checksum-pinned) + `SECURITY.md`, and the org rename to UnleashedServices.
 
 ### Changed
+
 - **Dropped the unimplementable scripted `WAIVED` path** (COREDEV-2493): `AGENT_CONTRACTS.md` §2 had
   promised a user-authorized `WAIVED:` marker that nothing implemented and nothing could — "only the
   user may waive" is unenforceable when the agent is the process running the script. Removed rather than
@@ -1932,7 +2459,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 - **The 3 orchestration commands are now skills** (COREDEV-2489 / P2-16): `brainstorm`, `implement`,
   and `pr-review` moved from `commands/*.md` to `skills/<name>/SKILL.md` as `disable-model-invocation`
   skills (custom commands have merged into skills). The `/unleashed-mail:brainstorm | implement |
-  pr-review` invocations are unchanged. Asset counts are now **21 agents · 21 skills · 0 commands · 1 MCP**.
+pr-review` invocations are unchanged. Asset counts are now **21 agents · 21 skills · 0 commands · 1 MCP**.
 - **Enforcement hooks now default to their active modes** (COREDEV-2489 / audit hooks-scripts.5).
   `sensitive-file-guard.sh` defaults to `ask` (was `warn`) — editing a sensitive file
   (Keychain/OAuth/entitlements/DB/WebView) now surfaces a permission prompt; in non-interactive /
@@ -1943,6 +2470,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
   `UNLEASHED_STOP_GATE_MODE=warn|off`.
 
 ### Fixed
+
 - **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
   only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
   reported "no checks". `claude plugin validate` (added in #36) and actionlint (#31) had therefore never
@@ -1962,12 +2490,13 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 
 Hook-manifest integrity gate (COREDEV-2338). Surfaced while auditing whether the plugin's hooks
 actually "hold": the behavioral harness (`scripts/test-hooks.sh`) and `validate-plugin-assembly.py`
-gate hook *scripts* and JSON-parse the manifest, but nothing checked that `hooks/hooks.json` can
+gate hook _scripts_ and JSON-parse the manifest, but nothing checked that `hooks/hooks.json` can
 actually fire — a renamed/missing hook script, an invalid event name, or a typo'd tool matcher all
 passed CI. Reviewed with Codex (converged REQUEST_CHANGES → APPROVE over three rounds). No
 agents/skills/commands added (counts stay 21 · 18 · 3 · 1).
 
 ### Added
+
 - **`scripts/validate-hooks.py`** (stdlib-only) — static integrity check of `hooks/hooks.json`:
   every event key must be in a `KNOWN_EVENTS` allowlist (hard-fail on unknown/typo'd events, which
   would never fire); tool matchers of the simple `Tool|Tool` form must reference known tools
@@ -1976,11 +2505,12 @@ agents/skills/commands added (counts stay 21 · 18 · 3 · 1).
   `bash -n` parses each referenced script; `--require-manifest` fails when a hooks-shipping plugin's
   manifest is missing.
 - **CI gate** in `.github/workflows/plugin-ci.yml` — runs `validate-hooks.py --root . --strict
-  --require-manifest` before the existing `test-hooks.sh` harness.
+--require-manifest` before the existing `test-hooks.sh` harness.
 - **Pre-commit wiring** in `scripts/pre-commit-checks.sh` — runs the validator in warn mode
   alongside the other plugin validators.
 
 ### Changed
+
 - **`scripts/test-hooks.sh`** — documented its coverage boundary: it hardcodes hook-script paths, so
   the manifest↔script linkage, event names, and matcher tokens are gated by `validate-hooks.py`; the
   PostToolUse `swift-lint-check.sh` hook is not behaviorally simulated on the Linux CI runner.
@@ -1996,6 +2526,7 @@ finding — the reviewer Output-Contract capture claim — was already resolved 
 and needed no change.)
 
 ### Changed
+
 - **Review-command invocation model** — bare workspace names (`/gemini-review`, `/codex-review`,
   `/create-feature-plan`) are documented as **canonical** across the plugin's docs, agents, and
   skills; the plugin's `/unleashed-mail:*` forms remain as the bundled alias (`review-synthesis`
@@ -2007,9 +2538,10 @@ and needed no change.)
 - **Plugin bumped to 2.4.1.** `README.md` H1 + What's-New updated; asset counts unchanged.
 
 ### Fixed
+
 - **SwiftLint merge gate** — replaced bare `swiftlint --strict` with the app's two-pronged gate
   (changed-file `swiftlint --strict <files>` + whole-repo `swiftlint lint --strict --baseline
-  swiftlint-baseline.json`; the committed baseline suppresses the pre-existing `NSRegularExpression`
+swiftlint-baseline.json`; the committed baseline suppresses the pre-existing `NSRegularExpression`
   backlog — COREDEV-2290) across 11 references; running the bare whole-repo form would have failed
   every gate.
 - **Stale build number** `1.02.260501` → `1.02.260601`; `Config/Base.xcconfig` flagged authoritative
@@ -2032,6 +2564,7 @@ and needed no change.)
 ## [2.4.0] — 2026-06-27
 
 ### Added
+
 - **`prompt-review` — static AI-prompt / call-site reviewer, fully wired into the review pipeline**
   (COREDEV-2330 agent + COREDEV-2329 wiring; under Epic COREDEV-2126 GARI safety). A read-only 5th
   specialist reviewer that statically audits AI prompts and provider call sites (jailbreak/injection
@@ -2049,11 +2582,11 @@ and needed no change.)
   category↔schema **exact-equality** invariant (guards the silent-drop trap), and `ai-safety`
   routing/render. Plan-review gate: codex `APPROVE_WITH_NOTES` + gemini `APPROVE_WITH_NITS`.
 - **Reviewer-capture round binding — a stable per-cycle signal from `SubagentStart`** (COREDEV-2326,
-  closes Epic COREDEV-2321). The SubagentStop reviewer capture's round was previously only *inferred*
+  closes Epic COREDEV-2321). The SubagentStop reviewer capture's round was previously only _inferred_
   (`capture.py:select_round`), which cannot perfectly group cycles under interleaved timing — a late
   reviewer from an earlier cycle could mis-bucket into a later round. A new **`SubagentStart` producer
   hook** (`scripts/capture-reviewer-round-start.sh` + a `SubagentStart` entry in `hooks/hooks.json`)
-  now *freezes* the round for each of the four specialist reviewers **at spawn**, keyed by its unique
+  now _freezes_ the round for each of the four specialist reviewers **at spawn**, keyed by its unique
   `agent_id`, in a per-checkout binding file under `.state/`; the SubagentStop capture
   (`scripts/capture-reviewer-verdict.sh`) looks it up by the **same** `agent_id` and exports
   `UNLEASHED_REVIEW_ROUND`, so each capture lands in its **originating** round regardless of
@@ -2074,6 +2607,7 @@ and needed no change.)
   are not counted by the version-sync validator).
 
 ### Changed
+
 - **review-synthesizer now consolidates overlapping AI-safety ↔ security findings into one
   `prompt-review`-owned row** (`mcp/review-synthesizer/synthesize.py`, COREDEV-2332; follow-up to
   COREDEV-2329, parent COREDEV-2126). When `prompt-review` and another reviewer flag the **same
@@ -2087,7 +2621,7 @@ and needed no change.)
   blocker still leads the row text and still gates the verdict**. Tests: `test_synthesize.py`
   151 → **159** (per-pair positive, `network`/unrelated negatives, non-overlap, mixed-severity
   blocker-survives). No version or asset-count change (synthesizer-internal). Plan-review gate: codex
-  + gemini both `APPROVE`.
+  - gemini both `APPROVE`.
 - **Reviewer Output-Contract status is now persisted through the SubagentStop capture path**
   (`mcp/review-synthesizer/capture.py`, COREDEV-2328). Each captured reviewer's `Status:`
   (`COMPLETE | BLOCKED | PARTIAL` + BLOCKED/PARTIAL detail fields) is written to a self-describing
@@ -2104,6 +2638,7 @@ and needed no change.)
   SubagentStop hook contract are untouched).
 
 ### Fixed
+
 - **`ai-engineer` doc drift — removed two non-existent Swift symbols from the agent docs**
   (COREDEV-2331, parent COREDEV-1834; surfaced during the `prompt-review` plan-review). `agents/ai-engineer.md`
   documented the GARI provider/tool API using `HTTPBasedAIProvider` and `AIToolDefinition`, **neither of
@@ -2135,11 +2670,12 @@ and needed no change.)
 ## [2.3.1] — 2026-06-26
 
 ### Added
+
 - **Plan-review synthesis skill** (`/unleashed-mail:review-synthesis`,
   `skills/review-synthesis/SKILL.md`) — a read-only skill that combines the two captured
   plan-review transcripts (gemini → `/tmp/agy-out.txt`, codex → `/tmp/codex-out.txt`) into one
   auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES |
-  DISAGREEMENT`; normalizes the CLI's `NITS → NOTES`; references findings by location/topic, never
+DISAGREEMENT`; normalizes the CLI's `NITS → NOTES`; references findings by location/topic, never
   echoing PII; surfaces a one-approve / one-reject split as `DISAGREEMENT` rather than averaging; a
   missing/empty transcript can never claim `APPROVE`). Kept **distinct** from the code-review
   `synthesize_review` MCP enum (`APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`). Wired into
@@ -2148,7 +2684,7 @@ and needed no change.)
 - **Reviewer Output-Contract status enum** — the four specialist reviewers (`security`,
   `concurrency`, `ux-perf`, `accessibility`) now emit a `Status: COMPLETE | BLOCKED | PARTIAL` line
   (immediately before their JSON findings array, which stays the final block) that is **orthogonal**
-  to the findings, so a reviewer that *couldn't run* returns `BLOCKED` + `[]` instead of an empty
+  to the findings, so a reviewer that _couldn't run_ returns `BLOCKED` + `[]` instead of an empty
   `[]` that reads as a clean pass.
 - **Decision-support option tables** in `/unleashed-mail:brainstorm` — a design-phase **Step 4b**
   that, only on a genuine architectural fork, presents 2–4 options in a comparison table (with a
@@ -2157,6 +2693,7 @@ and needed no change.)
   command's `allowed-tools`.
 
 ### Changed
+
 - **`swift-reviewer` Step 5 consumes the reviewer status.** `BLOCKED` routes to NEEDS DISCUSSION as a
   Needs-Confirmation uncertainty — **not** a `category: verification` blocker (which is
   confirmed-by-construction → REQUEST CHANGES); `PARTIAL` keeps the completed-scope findings and
@@ -2164,12 +2701,13 @@ and needed no change.)
   structural). No synthesizer (Python) change. `skills/agent-orchestration/SKILL.md` handoff and
   `AGENT_CONTRACTS.md §5` updated to match.
 - **Plugin bumped to 2.3.1.** `README.md` (H1, the `20 agents · 18 skills · 3 commands · 1 MCP
-  server` counts, What's-New, architecture skill list, and Skills table) and
+server` counts, What's-New, architecture skill list, and Skills table) and
   `.claude-plugin/marketplace.json` reflect the new `review-synthesis` skill (skills 17 → 18).
 
 ## [2.3.0] — 2026-06-25
 
 ### Added
+
 - **Deterministic review synthesizer (MCP).** A local, zero-dependency stdio MCP
   server at `mcp/review-synthesizer/` that performs the orchestrator's Step-5
   synthesis in code instead of LLM prose: schema validation/quarantine, scope filter
@@ -2190,6 +2728,7 @@ and needed no change.)
   server↔agent division of labour, and the authoritative dedup rules.
 
 ### Changed
+
 - **`swift-reviewer` Step 5 now delegates synthesis to the MCP tool.** The agent
   passes the reviewers' JSON findings to the synthesizer (which dedups/merges in
   code), then owns the **verify gate** (open each `blockersToVerify` `file:line`,
@@ -2199,7 +2738,7 @@ and needed no change.)
 - **Review-agent system overhaul.** Reviewers (`security`, `concurrency`, `ux-perf`,
   `accessibility`) now end with a structured JSON findings array
   (`severity · confidence · sourceAgent · category · file · line · lineEnd · scope ·
-  finding · evidence · fix`) instead of a prose/markdown table; `swift-reviewer`
+finding · evidence · fix`) instead of a prose/markdown table; `swift-reviewer`
   cross-references and deduplicates across them. `concurrency-reviewer` broadened to
   the **correctness owner** (logic/error-handling). Provider-parity, test-coverage,
   and build/lint/test now emit gating `verification` rows. Added a **verify gate**
@@ -2213,6 +2752,7 @@ and needed no change.)
   bundled stdlib MCP server.
 
 ### Fixed (PR review — Codex / Gemini / Copilot)
+
 - **`synthesize_review` validates its inputs and fails closed.** `findings` and
   `changed_files` are required and type-checked; a missing, non-array `findings` or a
   missing/non-`list[str]` `changed_files` is rejected with JSON-RPC `-32602` instead of
@@ -2282,6 +2822,7 @@ and needed no change.)
 > and are summarized only in the README's What's-New section (2026-08-17 audit, AF-17).
 
 ### Added
+
 - Shared PTY capture wrapper (`scripts/pty-capture.py`) so the `codex-review` and
   `gemini-review` CLIs render reliably from non-TTY contexts; surfaced in the README
   skills table.
