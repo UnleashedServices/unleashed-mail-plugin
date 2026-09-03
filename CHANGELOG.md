@@ -13,6 +13,25 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.18] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2807 — the local trunk gate could silently not run.** Four fall-through paths finished
+  with exit 0 having linted nothing, and a gate that is absent is worse than one that is broken:
+  `git commit` prints the same green ticks either way. `$(cd … && pwd)` is EMPTY when the cd fails,
+  so `SCRIPT_DIR` became `/scripts` and the hook took its `exit 0` branch; the missing-helper branch
+  ended the HOOK rather than the helper, taking the trunk gate and drift detector with it; an absent
+  `trunk` printed nothing; and — measured — in a checkout with no `.trunk/` the gate's own invocation
+  exits 1 with "Please run 'trunk init'", which it reported as "new findings in the staged diff", a
+  false statement about the diff that no edit to the diff can clear.
+- **COREDEV-2808 — the drift detector reported "no drift" when it could not check.** Every
+  comparison runs inside `python3 <<'PY' 2>/dev/null`; with no interpreter the heredoc fails, its
+  diagnostic is discarded and the empty-warning guard exits 0 exactly as a healthy install does. It
+  now says the check did not run, still without blocking. The real SessionStart observation that
+  `test_session_start_drift_hook.py` explicitly defers to is committed as evidence, bound by a test
+  to the command `.claude/settings.json` actually wires so it cannot decay into a souvenir.
+
 ## [2.8.17] — 2026-09-03
 
 ### Fixed
