@@ -13,6 +13,30 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.17] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2804 — the linter-config freeze could not see the linter SOURCE.** Cell 4 hashed only
+  the `lint:` block, leaving `plugins.sources[].uri`/`ref`, `cli.version`, `runtimes` and `actions`
+  unfrozen. Measured on the shipped tree: repointing `plugins.sources[0].uri` at
+  `github.com/attacker/plugins` left the digest byte-identical and the full suite green. The digest
+  now covers the whole document; `cli.version` and a semver `ref` still normalise so `trunk upgrade`
+  does not red the cell, while a `ref` naming a branch or SHA does — a mutable ref on the definition
+  source is the move the carve-out must not launder.
+- **COREDEV-2805 — the fourth member of the 124/137/143 family, and a live fail-open.** `timeout`
+  cannot report whether it fired, so that branch inferred it from `${SECONDS}` sampled before the
+  fork; the integer clock read up to a second high and laundered a command's own exit 124 into "we
+  timed out", passing the commit after an incomplete lint. Measured 10/10 on the shipped code, 0/10
+  after. The deadline now belongs to the watchdog that records it before it acts — the only ordering
+  where the record cannot lose the race — on both branches, with `timeout` kept as a backstop.
+- **COREDEV-2806 — the marker channel was assumed rather than probed.** `${TMPDIR:-/tmp}` may name a
+  directory that is missing or unwritable, and the write lives in a subshell whose stderr goes to
+  `/dev/null`, so a genuine timeout produced no marker and was reported as an external signal.
+  Measured: `rc=143`, fact 0. The channel is now probed by WRITING (`-w` passes on a full filesystem,
+  a read-only mount and a restrictive ACL, then fails the open), and when no directory can be
+  written `run_with_timeout` publishes that so the caller stops naming a cause it cannot evidence.
+
 ## [2.8.16] — 2026-09-03
 
 ### Fixed

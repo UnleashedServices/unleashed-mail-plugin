@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.16
+# UnleashedMail — Claude Code Plugin v2.8.17
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,20 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.17
+
+- **The `.trunk/trunk.yaml` freeze covered the linters but not where they come from.** Repointing
+  `plugins.sources[].uri` at another repository left the frozen digest byte-identical and all 1384
+  tests green — the required check would have reported success having run somebody else's linter
+  definitions, or none. The digest now covers the whole document, with the `trunk upgrade` carve-out
+  named explicitly rather than implied by scope.
+- **The timeout deadline is no longer inferred from an integer clock.** The `timeout` branch resolved
+  its ambiguous statuses by comparing `${SECONDS}` sampled before the fork, which read up to a second
+  high: a command exiting 124 on its own inside that second was published as our timeout, and a
+  timeout does not block the commit. Measured 10 runs out of 10. The deadline now belongs to a
+  watchdog that records it before acting, on both branches, and the marker directory is probed by
+  writing instead of assumed — an unwritable `TMPDIR` used to turn a real timeout into "signal 15".
 
 ### v2.8.16
 
