@@ -73,6 +73,107 @@ class TheHookAggregatesItsExitCode(unittest.TestCase):
         self.assertNotIn("detect-plugin-version-drift", completed.stderr)
 
 
+class TheGateCannotSilentlyNotRun(unittest.TestCase):
+    """COREDEV-2807. Four paths let this hook finish with exit 0 having run no lint gate at all, and
+    a gate that is silently absent is worse than one that is loudly broken: `git commit` prints a
+    wall of green ticks either way, so nobody looks. Each path below is now either fatal (the hook
+    cannot locate itself) or stated out loud (the gate could not run, and why).
+    """
+
+    def _run(self, *, helper=True, trunk_rc=None, trunk_config=False, argv0=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "scripts").mkdir()
+        (root / ".githooks").mkdir()
+        (root / "bin").mkdir()
+        (root / ".githooks/pre-commit").write_bytes(HOOK.read_bytes())
+        if helper:
+            (root / "scripts/pre-commit-checks.sh").write_text(
+                "#!/bin/bash\nexit 0\n", encoding="utf-8"
+            )
+        if trunk_config:
+            (root / ".trunk").mkdir()
+            (root / ".trunk/trunk.yaml").write_text("version: 0.1\n", encoding="utf-8")
+        if trunk_rc is not None:
+            # A STAND-IN, because the real binary's behaviour here is already MEASURED: in a
+            # checkout with no `.trunk/`, `trunk check --index` exits 1 with "Please run
+            # 'trunk init'". The stub reproduces that status without needing the network.
+            (root / "bin/trunk").write_text(
+                f"#!/bin/bash\necho \"Please run 'trunk init' to setup trunk\" >&2\n"
+                f"exit {trunk_rc}\n",
+                encoding="utf-8",
+            )
+            (root / "bin/trunk").chmod(0o755)
+        subprocess.run(
+            ["git", "-C", str(root), "init", "-q", "."], check=True, capture_output=True
+        )
+        env = {"PATH": f"{root / 'bin'}:/usr/bin:/bin", "HOME": str(root)}
+        if argv0 is None:
+            argv = ["bash", str(root / ".githooks/pre-commit")]
+        else:
+            # `$0` NAMING A PATH THAT IS NOT THERE — a hook invoked through a directory that has
+            # since been removed. `bash -c script name` sets `$0` to name, which is the only way to
+            # drive the resolution failure without also making the hook itself unreadable.
+            argv = ["bash", "-c", HOOK.read_text(encoding="utf-8"), argv0]
+        return subprocess.run(
+            argv,
+            check=False,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+
+    def test_an_unresolvable_root_refuses_instead_of_reporting_success(self):
+        """`$(cd … && pwd)` is EMPTY when the cd fails, so SCRIPT_DIR became `/scripts`, the helper
+        test failed, and the hook took the `exit 0` branch — a clean commit having run nothing.
+        """
+        completed = self._run(argv0="/nonexistent/gone/pre-commit")
+        self.assertNotEqual(
+            0,
+            completed.returncode,
+            "a hook that cannot locate itself has checked nothing",
+        )
+        self.assertIn("NO check ran", completed.stdout + completed.stderr)
+
+    def test_a_missing_helper_disables_the_helper_and_nothing_else(self):
+        """It used to `exit 0`, taking the trunk gate and the drift detector down with it — so
+        renaming one script silently removed a gate that has nothing to do with it.
+        """
+        completed = self._run(helper=False)
+        combined = completed.stdout + completed.stderr
+        self.assertIn("not found", combined)
+        self.assertIn(
+            "did NOT run",
+            combined,
+            "the LATER gate must still have been reached and reported",
+        )
+
+    def test_a_checkout_with_no_trunk_config_is_stated_not_blamed_on_the_diff(self):
+        """MEASURED: `trunk check --index` exits 1 with "Please run 'trunk init'" when there is no
+        `.trunk/`. Exit 1 is this gate's "new findings in the staged diff" — a false statement about
+        the developer's diff that no amount of fixing the diff can clear. Branches that predate the
+        config reach it simply by being checked out and committed to.
+        """
+        completed = self._run(trunk_rc=1, trunk_config=False)
+        combined = completed.stdout + completed.stderr
+        self.assertEqual(
+            0, completed.returncode, "an absent config must not block a commit"
+        )
+        self.assertIn("no .trunk/trunk.yaml", combined)
+        self.assertNotIn("new findings in the staged diff", combined)
+
+    def test_an_absent_trunk_binary_says_the_gate_did_not_run(self):
+        """Not blocking — contributors without trunk must still commit, and CI is the enforcing
+        copy. But the hook printed NOTHING, so "no output" read as "checked, and clean".
+        """
+        completed = self._run(trunk_rc=None)
+        self.assertEqual(0, completed.returncode)
+        self.assertIn("trunk is not installed", completed.stdout + completed.stderr)
+
+
 class TheDetectorsSecondCaller(unittest.TestCase):
     def setUp(self):
         self.hook = HOOK.read_text(encoding="utf-8")
@@ -188,6 +289,11 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
             DETECTOR.read_bytes()
         )
         (root / "scripts/detect-plugin-version-drift.sh").chmod(0o755)
+        # COREDEV-2807 MADE THE CONFIG A PRECONDITION, so a fixture without it now exercises
+        # the "gate did not run" arm instead of the gate. These cases are about what the hook
+        # DOES with trunk, so the precondition has to hold for them to be about anything.
+        (root / ".trunk").mkdir()
+        (root / ".trunk/trunk.yaml").write_text("version: 0.1\n", encoding="utf-8")
         argv_log = root / "argv.log"
         argv_log.write_text("", encoding="utf-8")
         if with_trunk:
@@ -281,6 +387,10 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
         root = pathlib.Path(tmp.name)
         for sub in ("scripts", ".githooks", "bin"):
             (root / sub).mkdir()
+        # The gate now requires its config as a PRECONDITION (COREDEV-2807); without it these
+        # cases exercise the "did not run" arm instead of the bound they exist to measure.
+        (root / ".trunk").mkdir()
+        (root / ".trunk/trunk.yaml").write_text("version: 0.1\n", encoding="utf-8")
         (root / ".githooks/pre-commit").write_text(hook, encoding="utf-8")
         (root / ".githooks/pre-commit").chmod(0o755)
         (root / "scripts/pre-commit-checks.sh").write_text(
@@ -694,7 +804,17 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
 
     def _classify(self, rc: int, *, timed_out: int = 0, no_channel: int = 0):
         hook = HOOK.read_text(encoding="utf-8")
-        block = hook[hook.index("if command -v trunk") :]
+        # ANCHOR ON THE PROPERTY, NOT THE SPELLING. This keyed on the literal
+        # `if command -v trunk`, so when COREDEV-2807 turned that into a three-arm guard the
+        # slice raised ValueError and every test in this class ERRORED — reporting a broken
+        # harness as if the hook were broken. The gate is "the block whose opening line tests
+        # for the binary", however that line is spelled.
+        opening = re.search(r"^if .*command -v trunk.*$", hook, re.MULTILINE)
+        if opening is None:
+            # `self.fail` is typed NoReturn, which narrows the Optional for mypy;
+            # `assertIsNotNone` does not, and mypy/union-attr rejected the attribute access.
+            self.fail("the trunk gate must still open on a test for the binary")
+        block = hook[opening.start() :]
         block = block[: block.index("\nfi\n") + 4]
         harness = (
             "TRUNK_TIMEOUT_SECONDS=180\noverall=0\n"

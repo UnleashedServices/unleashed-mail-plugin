@@ -2,14 +2,26 @@
 # Git pre-commit hook — runs linting, build, tests, PII checks, and the diff-scoped trunk gate.
 # Install: git config core.hooksPath .githooks
 
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)/scripts"
 overall=0
+
+# RESOLVE OR REFUSE. `$(cd … && pwd)` yields an EMPTY string when the cd fails, which made
+# SCRIPT_DIR "/scripts", the helper test below fail, and the hook `exit 0` — reporting a clean
+# commit having run nothing at all. A hook that cannot locate itself has checked nothing, and
+# must not say otherwise (COREDEV-2807).
+if ! _hook_root="$(cd "$(dirname "$0")/.." && pwd)" || [[ -z ${_hook_root} ]]; then
+	echo "❌ pre-commit: could not resolve the repository root from '$0' — NO check ran" >&2
+	exit 1
+fi
+SCRIPT_DIR="${_hook_root}/scripts"
 
 if [[ -f "$SCRIPT_DIR/pre-commit-checks.sh" ]]; then
 	bash "$SCRIPT_DIR/pre-commit-checks.sh" || overall=$?
 else
-	echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR"
-	exit 0
+	# NOT `exit 0`. This branch used to END THE HOOK, so a helper that was renamed, deleted or
+	# simply absent on an older branch silently disabled every LATER gate as well — including
+	# the trunk check this ticket exists to run, and the drift detector at the end. A missing
+	# helper disables the helper, and nothing else (COREDEV-2807).
+	echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR — skipping it; later gates still run"
 fi
 
 # COREDEV-2780 M5a — the local half of the trunk gate (§6.3 decided: WIRE IT, blocking).
@@ -148,7 +160,19 @@ run_with_timeout() {
 	return "${_rwt_rc}"
 }
 
-if command -v trunk >/dev/null 2>&1; then
+if ! command -v trunk >/dev/null 2>&1; then
+	# ADVISORY, NOT BLOCKING: contributors without trunk installed must still be able to commit,
+	# and CI's required context is the enforcing copy. But SILENCE was wrong — this printed
+	# nothing at all, so "no output" was indistinguishable from "checked, and clean".
+	echo "ℹ️  trunk is not installed — the staged-diff lint gate did NOT run (CI still enforces it)"
+elif [[ ! -f .trunk/trunk.yaml ]]; then
+	# MEASURED in a checkout with no `.trunk/`: the exact invocation below exits 1 with "Please
+	# run 'trunk init' to setup trunk in this repository." Exit 1 is this gate's "new findings
+	# in the staged diff" — a false statement about the developer's diff that no amount of
+	# fixing the diff can clear. Branches predating the config reach this by being checked out
+	# and committed to, which is why the guard is a PRECONDITION and not a status arm.
+	echo "ℹ️  no .trunk/trunk.yaml in this checkout — the staged-diff lint gate did NOT run"
+else
 	echo "🧹 trunk check (staged diff only)…"
 	if run_with_timeout "${TRUNK_TIMEOUT_SECONDS}" \
 		trunk check --index --no-fix --filter=-markdown-link-check; then
