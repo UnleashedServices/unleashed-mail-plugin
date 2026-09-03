@@ -294,6 +294,27 @@ class TableA(_DetectorFixture):
             and any((self.state / "unleashed-mail/drift-warned").iterdir())
         )
 
+    def test_an_unset_HOME_keeps_the_ALWAYS_ZERO_contract(self):
+        """The file's header promises "Exit: ALWAYS 0. This is a diagnostic, not a gate." It runs
+        under `set -u`, where a bare `${HOME}` ABORTS with "unbound variable" — exit 1 plus a message
+        on stderr, from the one script that must never produce either (gemini, PR #84).
+
+        The environment is built explicitly rather than copied-and-unset, so HOME cannot leak in.
+        """
+        completed = subprocess.run(
+            ["bash", str(DETECTOR), str(self.repo)],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(self.root),
+            env={"PATH": os.environ["PATH"]},  # deliberately NO HOME
+        )
+        self.assertNotIn("unbound variable", completed.stderr)
+        self.assertEqual(0, completed.returncode, completed.stderr[-300:])
+        self.assertEqual(
+            "", completed.stdout.strip(), "a silent row emits nothing at all"
+        )
+
     def test_it_never_blocks(self):
         for version in ("2.8.5", "2.8.6", "2.9.0", "nonsense"):
             with self.subTest(installed=version):

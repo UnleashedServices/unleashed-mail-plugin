@@ -91,7 +91,7 @@ run_with_timeout() {
 		rm -f "${_rwt_marker}"
 	elif [[ ${_rwt_rc} -eq 124 ]]; then
 		_rwt_timed_out=1
-	elif [[ ${_rwt_rc} -eq 137 && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
+	elif [[ (${_rwt_rc} -eq 137 || ${_rwt_rc} -eq 143) && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
 		# 137 IS AMBIGUOUS AND THE ELAPSED GUARD IS WHAT RESOLVES IT. `timeout -k` reports 137 when
 		# its SIGKILL lands, but a command that is OOM-killed — or that exits 137 itself — reports
 		# the same status without any deadline having passed. Normalising unconditionally would turn
@@ -124,12 +124,19 @@ if command -v trunk >/dev/null 2>&1; then
 		echo "✅ trunk: no new findings in the staged diff"
 	else
 		_trunk_rc=$?
-		if [[ ${_trunk_rc} -eq 124 || ${_trunk_rc} -eq 143 ]]; then
+		if [[ ${_trunk_rc} -eq 124 ]]; then
 			# A timeout is an INFRASTRUCTURE failure, not a lint finding. Blocking the commit on
 			# someone's slow network would teach people to pass --no-verify, which disables every
-			# check above as well. `run_with_timeout` normalises every branch's timeout to 124; 143
-			# is kept only because a TERM delivered from outside this hook still means the same
-			# thing.
+			# check above as well.
+			#
+			# 124 AND NOTHING ELSE. This arm used to accept 143 too, on the reasoning that "a TERM
+			# delivered from outside this hook still means the same thing" — which is false: an
+			# external TERM says nothing about whether the deadline was reached. `timeout` passes a
+			# pre-deadline 143 straight through, so a lint killed after two seconds reported
+			# "exceeded 180s" and let the commit through, while the signal arm below would have
+			# blocked the identical death by SIGKILL (codex, PR #84). `run_with_timeout` now proves
+			# the deadline elapsed before calling 143 a timeout, exactly as it already did for 137,
+			# and returns 124 when it did — so anything still carrying 143 here did NOT time out.
 			echo "⚠️  trunk check exceeded ${TRUNK_TIMEOUT_SECONDS}s — not blocking on a timeout"
 		elif [[ ${_trunk_rc} -eq 2 ]]; then
 			# TRUNK COULD NOT RUN, WHICH IS NOT THE SAME AS FINDING SOMETHING. Exit 2 is what the

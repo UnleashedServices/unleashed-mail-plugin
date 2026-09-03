@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.14
+# UnleashedMail — Claude Code Plugin v2.8.15
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,15 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.15
+
+- **A pre-deadline SIGTERM was reported as a timeout and let the commit through.** `timeout` passes
+  a 143 straight through when no timeout occurred, and the hook's timeout arm accepted it — so a
+  lint killed after two seconds announced "exceeded 180s" and allowed the commit, while the
+  identical death by SIGKILL blocked it. 143 must now prove the deadline elapsed, exactly as 137
+  already did. Also: the drift detector aborted with "unbound variable" when `HOME` was unset,
+  from the one file whose header promises it always exits 0.
 
 ### v2.8.14
 

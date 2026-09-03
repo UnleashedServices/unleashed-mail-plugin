@@ -43,7 +43,12 @@ fi
 expected_json="$(git -C "${root}" show origin/main:.claude-plugin/plugin.json 2>/dev/null)" || exit 0
 [[ -n ${expected_json} ]] || exit 0
 
-installed_record="${HOME}/.claude/plugins/installed_plugins.json"
+# `${HOME-}`, NOT `${HOME}`. This script runs under `set -u`, so a bare reference ABORTS with
+# "unbound variable" when HOME is unset — exit 1 and a message on stderr, from a file whose
+# header promises "Exit: ALWAYS 0. This is a diagnostic, not a gate." Reproduced with `env -u
+# HOME`. The empty fallback lets the read fail and take Table A row 2's silent path instead
+# (gemini, PR #84).
+installed_record="${HOME-}/.claude/plugins/installed_plugins.json"
 
 # THE COMPARISON WRITES TO A FILE RATHER THAN INTO `$( ... )`.
 # bash 3.2 -- which is what macOS still ships, and therefore what BOTH of this detector's callers
@@ -256,7 +261,14 @@ fi
 # `session_id` is documented as OPAQUE with no filename-safety contract, so it is HASHED: raw, a `/`
 # or an over-long component makes marker creation fail, and a detector that fails open warns on every
 # single session start.
-state_base="${XDG_STATE_HOME:-${HOME}/.local/state}"
+# Same hazard inside the fallback, which is evaluated only when XDG_STATE_HOME is unset.
+#
+# DEFENSIVE, AND NOT SEPARATELY TESTED — said plainly rather than implied. With HOME unset the
+# record read above resolves to `/.claude/...`, fails, and takes row 2's silent path, so this
+# line is unreachable through either shipped caller; a mutation reverting it stays green and no
+# test here would be honest. It is fixed for CONSISTENCY: the same expansion, the same hazard,
+# and a future caller that sets XDG_STATE_HOME while HOME is unset would reach it.
+state_base="${XDG_STATE_HOME:-${HOME-}/.local/state}"
 marker_dir="${state_base}/unleashed-mail/drift-warned"
 
 # THE PAYLOAD IS READ HERE, NOT INSIDE PYTHON. `python3 <<'PY'` redirects python's stdin to the

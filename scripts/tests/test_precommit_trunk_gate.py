@@ -522,6 +522,22 @@ class TheBoundedRun(unittest.TestCase):
                     elapsed, 25, "a TERM-ignoring grandchild must not hold the caller"
                 )
 
+    def test_a_SIGTERM_that_beat_the_deadline_is_NOT_reported_as_a_timeout(self):
+        """The same discriminator as 137, for the status `timeout` passes through untouched. A child
+        that TERMs itself long before the deadline keeps its own 143 — calling that a timeout is the
+        fail-open the caller's arm used to carry."""
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, elapsed, _, _ = self._harness(
+                    "kill -TERM $$\nsleep 30\n", seconds=45, branch=branch
+                )
+                self.assertNotEqual(
+                    124, rc, "a TERM before the deadline is not a timeout"
+                )
+                self.assertLess(
+                    elapsed, 15, "it died immediately; nothing should have waited"
+                )
+
     def test_a_SIGKILL_that_beat_the_deadline_is_NOT_reported_as_a_timeout(self):
         """The discriminator that makes the 137 normalisation safe. `timeout -k` reports 137 when its
         own SIGKILL lands — but an OOM-killed linter reports 137 too, with no deadline passed.
@@ -645,14 +661,24 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
         self.assertTrue(blocks)
         self.assertIn("new findings in the staged diff", out)
 
-    def test_a_timeout_allows_on_every_status_the_bounded_run_can_report(self):
-        for rc in (124, 143):
-            with self.subTest(rc=rc):
-                blocks, out = self._classify(rc)
-                self.assertFalse(
-                    blocks, "an infrastructure timeout must not block the commit"
-                )
-                self.assertIn("not blocking on a timeout", out)
+    def test_only_124_is_treated_as_a_timeout(self):
+        """`run_with_timeout` owns the question "did the deadline elapse" and answers it with 124 on
+        every branch, so anything else arriving here did NOT time out.
+
+        This used to accept 143 as well. `timeout` passes a pre-deadline TERM straight through, so a
+        lint killed after two seconds reported "exceeded 180s" and let the commit through — while the
+        identical death by SIGKILL blocked it. An external TERM says nothing about whether the
+        deadline was reached (codex, PR #84).
+        """
+        blocks, out = self._classify(124)
+        self.assertFalse(blocks, "an infrastructure timeout must not block the commit")
+        self.assertIn("not blocking on a timeout", out)
+
+        blocks_143, out_143 = self._classify(143)
+        self.assertTrue(
+            blocks_143, "a pre-deadline TERM is not a timeout and must block"
+        )
+        self.assertNotIn("not blocking on a timeout", out_143)
 
     def test_trunk_exit_2_blocks_but_is_NOT_called_a_lint_finding(self):
         """The live misclassification. `trunk check` exits 2 when the invocation itself is unusable —
@@ -666,7 +692,7 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
     def test_a_signal_death_blocks_but_is_NOT_blamed_on_the_diff(self):
         """128+N reaching the caller means the run died for a reason this hook did not cause — the
         deadline cases were already normalised to 124 upstream."""
-        for rc, signal in ((137, 9), (139, 11)):
+        for rc, signal in ((137, 9), (139, 11), (143, 15)):
             with self.subTest(rc=rc):
                 blocks, out = self._classify(rc)
                 self.assertTrue(blocks)

@@ -13,6 +13,41 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.15] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — a pre-deadline SIGTERM was classified as a timeout, and allowed the commit.**
+  GNU `timeout` documents 124 for an actual timeout and the command's own status otherwise, so a 143
+  passes straight through when no deadline was reached. The hook's timeout arm accepted 124 _or_ 143
+  on the reasoning that "a TERM delivered from outside this hook still means the same thing" — which
+  is false: an external TERM says nothing about whether the deadline elapsed. A lint killed two
+  seconds in therefore reported "exceeded 180s" and left `overall` unchanged, while the adjacent arm
+  blocked the identical death by SIGKILL.
+
+  `run_with_timeout` now applies the same elapsed guard to 143 that it already applied to 137, so a
+  genuine deadline still normalises to 124 — including the degraded case where an unwritable TMPDIR
+  stops the fallback's marker being written and the hook's own watchdog TERM is what arrives. The
+  caller keys on 124 alone; anything still carrying 143 did not time out and blocks as a signal
+  death.
+
+- **COREDEV-2801 — the detector aborted when `HOME` was unset.** It runs under `set -u`, where a
+  bare `${HOME}` raises "unbound variable" — exit 1 and a message on stderr, from the one file whose
+  header states "Exit: ALWAYS 0. This is a diagnostic, not a gate." Reproduced with `env -u HOME`.
+  Both expansions use `${HOME-}` now, so an unreadable record takes Table A row 2's silent path
+  instead.
+
+  The second site is fixed for CONSISTENCY and is documented as not separately tested, rather than
+  implying coverage it does not have: with `HOME` unset the record read fails first and the script
+  exits silently before reaching it, so a mutation reverting that line stays green — verified, 0
+  evaluations under `bash -x`.
+
+### Notes
+
+- The regression test for the `HOME` fix did not exist when its mutation was first run — an earlier
+  edit script aborted before writing it and the failure was not noticed. The mutation surfaced a
+  MISSING test rather than a weak one, which is the same signal for a different reason.
+
 ## [2.8.14] — 2026-09-03
 
 ### Fixed
