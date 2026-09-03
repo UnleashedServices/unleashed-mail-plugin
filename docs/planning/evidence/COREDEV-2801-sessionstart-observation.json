@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2801",
+  "milestone": "M6",
+  "experiment": "sessionstart-entry-point-observation",
+  "ranAt": "2026-09-03T23:30:16+00:00",
+  "why": "COREDEV-2808. The detector's SessionStart behaviour was asserted from its source and from unit harnesses, and the promised observation THROUGH THE REAL ENTRY POINT was never committed. A harness that calls the script directly cannot show that the wiring in .claude/settings.json reaches it, that the hook protocol it emits is well formed, or that the per-session dedup actually suppresses the second call.",
+  "entryPoint": {
+    "source": ".claude/settings.json",
+    "event": "SessionStart",
+    "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/detect-plugin-version-drift.sh\" \"${CLAUDE_PROJECT_DIR}\" --session-start"
+  },
+  "command": "printf '%s' \"$PAYLOAD\" | XDG_STATE_HOME=<isolated> bash scripts/detect-plugin-version-drift.sh \"$PWD\" --session-start",
+  "note": "XDG_STATE_HOME was pointed at an isolated directory so the dedup marker is observable and the run does not consume a live session's warning window. Nothing else was substituted: the script, the payload shape and the argument vector are the shipped ones.",
+  "stdinPayload": {
+    "session_id": "obs-COREDEV-2801",
+    "transcript_path": "/dev/null",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+  },
+  "observed": {
+    "run1": {
+      "commandExitCode": 0,
+      "stdout": {
+        "systemMessage": "unleashed-mail: project:unleashed-mail@npranson-unleashed-mail-plugin 2.8.3, user:unleashed-mail@npranson-unleashed-mail-plugin 2.8.3 is behind origin/main 2.8.16 — run `claude plugin update unleashed-mail` to pick up fixes already released"
+      },
+      "markerWritten": true
+    },
+    "run2": {
+      "commandExitCode": 0,
+      "stdoutBytes": 0,
+      "meaning": "same session, warm marker — the dedup suppressed the repeat"
+    }
+  },
+  "liveDriftAtObservation": {
+    "installedProjectScope": "2.8.3",
+    "installedUserScope": "2.8.3",
+    "originMain": "2.8.16",
+    "verdict": "BEHIND",
+    "note": "This is the recurring reversion the maintainer reported. The detector reports it correctly; the drift itself is tracked separately and is NOT fixed by this evidence."
+  },
+  "outcome": "PASS — the wired entry point runs, emits a well-formed hook protocol, and dedups."
+}

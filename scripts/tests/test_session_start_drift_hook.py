@@ -26,6 +26,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SETTINGS = REPO / ".claude/settings.json"
+OBSERVATION = REPO / "docs/planning/evidence/COREDEV-2801-sessionstart-observation.json"
 DETECTOR = REPO / "scripts/detect-plugin-version-drift.sh"
 BUCKET_SECONDS = (
     604800  # seven days, asserted as an OPERAND, not merely "a constant exists"
@@ -734,6 +735,103 @@ class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
         out = self.run_detector(str(self.repo)).stdout
         self.assertIn("is behind origin/main", out)
         self.assertNotIn("present in the install cache", out)
+
+
+class TheRealEntryPointObservationIsCommitted(unittest.TestCase):
+    """COREDEV-2808. This module's own docstring defers to "one real session-start invocation
+    recorded separately as committed evidence" — and that file did not exist. An observation nobody
+    committed is indistinguishable from one nobody made, and the promise was worse than silence:
+    it made the absence read as a deliberate split of the claim rather than as a gap in it.
+    """
+
+    def setUp(self):
+        self.assertTrue(
+            OBSERVATION.is_file(),
+            f"{OBSERVATION.name} is the evidence this module explicitly defers to",
+        )
+        self.observation = json.loads(OBSERVATION.read_text(encoding="utf-8"))
+
+    def test_the_observation_is_bound_to_the_LIVE_wiring(self):
+        """A recorded command that no longer matches settings.json is evidence about a hook that is
+        no longer wired. Binding the two here is what stops the file decaying into a souvenir —
+        the failure mode this repo has already hit three times with digests written and never read.
+        """
+        settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        live = [
+            hook["command"]
+            for group in settings["hooks"]["SessionStart"]
+            for hook in group["hooks"]
+            if "detect-plugin-version-drift" in hook["command"]
+        ]
+        self.assertEqual(
+            1, len(live), "exactly one SessionStart drift invocation is wired"
+        )
+        self.assertEqual(
+            live[0],
+            self.observation["entryPoint"]["command"],
+            "the observation records a command the repository no longer wires",
+        )
+
+    def test_it_records_the_warning_AND_the_dedup(self):
+        """One run only proves the hook fires. The dedup is a claim about the SECOND call, and no
+        reading of the source establishes it — that is precisely why an observation was owed.
+        """
+        observed = self.observation["observed"]
+        self.assertEqual(0, observed["run1"]["commandExitCode"])
+        self.assertIn(
+            "systemMessage",
+            observed["run1"]["stdout"],
+            "SessionStart's protocol is the systemMessage envelope, not a bare line",
+        )
+        self.assertEqual(
+            0,
+            observed["run2"]["stdoutBytes"],
+            "the repeat in one session must be suppressed",
+        )
+
+
+class TheDetectorSaysWhenItCouldNotRun(unittest.TestCase):
+    """COREDEV-2808's second half. Every comparison in the detector happens inside
+    `python3 <<'PY' 2>/dev/null`, so with no interpreter the heredoc fails, its diagnostic is
+    discarded, and the empty-warning guard takes the same silent exit 0 a healthy up-to-date
+    install takes. "Could not check" must never look like "checked, and found nothing".
+    """
+
+    def test_an_absent_python3_is_stated_rather_than_read_as_no_drift(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fake = Path(tmp.name) / "bin"
+        fake.mkdir()
+        # EVERY OTHER TOOL STAYS. Dropping whole PATH directories also drops `git` and `mktemp`,
+        # and the detector then exits early for an unrelated reason — a probe that reproduces
+        # silence without reproducing its cause proves nothing.
+        for directory in ("/usr/bin", "/bin"):
+            source = Path(directory)
+            if not source.is_dir():
+                continue
+            for entry in source.iterdir():
+                if entry.name.startswith("python"):
+                    continue
+                target = fake / entry.name
+                if not target.exists():
+                    with contextlib.suppress(OSError):
+                        target.symlink_to(entry)
+        if (fake / "git").exists() is False:
+            self.skipTest("no git available to build a python3-free PATH")
+        completed = subprocess.run(
+            ["bash", str(REPO / "scripts/detect-plugin-version-drift.sh"), str(REPO)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": str(fake), "HOME": tmp.name},
+            timeout=120,
+        )
+        self.assertEqual(0, completed.returncode, "advisory: it must never block")
+        self.assertIn(
+            "did NOT run",
+            completed.stdout + completed.stderr,
+            "silence here is indistinguishable from a clean, up-to-date install",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
