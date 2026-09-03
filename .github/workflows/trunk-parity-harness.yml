@@ -50,6 +50,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # DECLARED, NOT INHERITED. The step below parses YAML, and PyYAML is not in the stdlib. It
+      # happens to be present on the current ubuntu image, which is why this has never failed — but
+      # this harness has never actually run (no `parity-*.json` exists yet), so "it works" is
+      # untested rather than established, and a runner image change would take M2c's evidence with
+      # it. Two lines, copied verbatim from plugin-ci.yml, remove the question.
+      #
+      # NOT `actions/setup-python`: that prepends a CLEAN toolcache interpreter with no PyYAML and
+      # would BREAK a harness that currently works — the obvious fix being the dangerous one.
+      - name: Install PyYAML (the extract step parses the shipped workflow)
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
+
       - name: extract-and-bind-action-inputs
         id: inputs
         # THE HARNESS MUST RUN WHAT SHIPS. A harness that invokes its own non-fixing form proves only
@@ -68,7 +81,11 @@ jobs:
           used = trunk["with"]
           canonical = json.dumps(used, sort_keys=True, separators=(",", ":"))
           digest = hashlib.sha256(canonical.encode()).hexdigest()
-          expected = "cc125ae649d85ba092aa5a92fe187df6d4d235e896a8b17a267b7f1e6a77cd36"
+          # READ, NOT RESTATED. The contract registry is the one authority for this digest; the
+          # judge reads the same key, so the two cannot drift apart the way a second literal would.
+          expected = yaml.safe_load(
+              open("docs/planning/COREDEV-2780-contract.yaml", encoding="utf-8")
+          )["action_inputs_digest"]
           if digest != expected:
               raise SystemExit(
                   f"the shipped action inputs changed: expected {expected}, got {digest} ({canonical}).\n"
@@ -92,15 +109,25 @@ jobs:
               open(".github/workflows/trunk-parity-harness.yml", encoding="utf-8")
           )
           hjob = next(iter(harness["jobs"].values()))
-          hused = next(
-              s for s in hjob["steps"] if "trunk-io/trunk-action" in str(s.get("uses", ""))
-          )["uses"]
-          if hused != trunk["uses"]:
+          # EVERY invocation, not `next(...)`. The harness now runs the action TWICE — the primary
+          # run and the autofix positive control — and validating only the first meant a pin bump
+          # that updated the shipped workflow and the primary step but missed the control would
+          # record the new pin while the control's sensitivity was established with an older action.
+          # The control's whole premise is that ONLY `--fix` differs (codex, PR #84).
+          hused = {
+              str(s["uses"])
+              for s in hjob["steps"]
+              if "trunk-io/trunk-action" in str(s.get("uses", ""))
+          }
+          if hused != {trunk["uses"]}:
               raise SystemExit(
-                  f"the harness runs {hused} while the shipped workflow pins {trunk['uses']} — "
-                  "bump both, or this evidence names an action the run did not execute."
+                  f"the harness runs {sorted(hused)} while the shipped workflow pins "
+                  f"{trunk['uses']} — every harness invocation must be the shipped pin, or this "
+                  "evidence names an action some step did not execute."
               )
-          print("uses=" + hused)
+          # A SCALAR, deliberately: the judge compares `actionInputs.uses` for EQUALITY against the
+          # registry's one pin, and a set repr in $GITHUB_OUTPUT would never match it.
+          print("uses=" + trunk["uses"])
           PY
 
       - name: stage-the-deliberately-fixable-fixture

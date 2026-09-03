@@ -13,6 +13,68 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.13] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 — the C6 guard enumerated regular files while the action follows symlinks.**
+  `find .trunk -type f` emits neither a symlinked file nor a symlinked directory, and never descends
+  into one. The pinned action's `locate_trunk.sh` tests `[[ -f .trunk/bin/trunk && -x … ]]`, and
+  bash's file tests follow symlinks. The enumerator did not follow; the consumer did, and a committed
+  symlink at that path passed the guard and was then selected as TRUNK_PATH — green having linted
+  nothing, on a ruleset with no bypass actors. Verified end to end against the action's real source
+  at the pinned SHA, and through commit + clone + checkout.
+
+  The allowlist rewrite one commit earlier fixed the NAME axis and left the TYPE axis exactly as it
+  was — the sweep narrowed on a second axis nobody varied. Now `! -type d`, inverting the type
+  question the same way the path question was inverted. NOT `find -L`, which resolves symlinks and
+  would emit the target path, missing the allowlist entirely. The launcher loop outside `.trunk/`
+  had the same gap in its other half — `-e` is false for a DANGLING symlink — and now tests `-L` too.
+  Both are covered by fixtures that go red when either is reverted; the previous seven were all
+  regular files, so the fix would otherwise have been unfalsifiable.
+
+- **COREDEV-2780 — the producer census could not see a `.yaml` workflow.** GitHub honours both
+  extensions; two separate censuses globbed `*.yml`. A `decoy.yaml` declaring a job named
+  `trunk-check` was invisible to both, and at M4 a second producer can report success for a required
+  context while the guarded workflow fails. One shared enumerator now, because two independently
+  patched call sites is how they diverged. It uses `not is_dir()` rather than `is_file()`: the
+  reviewed suggestion used the latter, which FOLLOWS symlinks and returns False for a dangling one,
+  silently dropping a workflow the old glob returned — the same type-axis defect as the C6 bypass, in
+  the opposite polarity, proposed in the same review batch.
+- **COREDEV-2780 — only the first of the harness's two action invocations was pin-bound.** The
+  extraction used `next(...)`, so a pin bump that updated the shipped workflow and the primary step
+  but missed the autofix control would record the new pin while the control's sensitivity was
+  established with an older action — contradicting the control's premise that only `--fix` differs.
+  Every invocation is bound now.
+- **COREDEV-2780 — the parity judge checked that the recorded digest was non-empty.** It neither
+  recomputed it from the recorded canonical form nor compared it to what the gate currently passes,
+  so an artifact recorded before `arguments` changed would keep certifying a different invocation.
+  Both are checked, with distinct diagnostics: self-consistency is not currency. The frozen digest
+  now lives once in the contract registry beside `action_pin`, read by the harness and the judge —
+  this module already refuses a second copy of the pin for the same reason. The check immediately
+  caught that the judge's own positive-control fixture was internally impossible (`canonical: "{}"`
+  with an unrelated digest).
+- **COREDEV-2801 — the SemVer grammar accepted non-ASCII digits.** Python's `\d` is Unicode-aware, so
+  `1٢.0.0` and `1.0.0-1٢` matched the "official" grammar added a day earlier, and `str.isdigit()`
+  and `int()` accept them too — so they compared as numbers and produced a stale-install warning
+  where Table A row 4 requires silence. `re.ASCII` narrows exactly the five numeric classes; the
+  pattern uses no `\w`, `\b` or `\s`, so nothing valid is rejected.
+- **COREDEV-2801 — the reversion note asserted a history it had not observed.** It said the record
+  "was reverted rather than never updated — expect it to revert again" on the strength of a directory
+  existing. A newer cache directory also exists when an update downloaded a version and then failed
+  before writing the registry, or when several scopes coexist. It now reports only what is observed —
+  the newer version is already downloaded, so the repair is a local re-select. This is the exact
+  defect class this campaign spent a day removing from guards and hook messages, reintroduced within
+  hours of fixing it elsewhere; the three tests that asserted the old phrasing were checking a
+  spelling and would have kept passing after the reword, so they were rewritten too.
+
+### Changed
+
+- The parity harness declares PyYAML rather than inheriting it from the runner image. Not a live
+  failure — the image ships it — but the harness has never run, so "it works" was untested. NOT via
+  `actions/setup-python`, which prepends a clean interpreter without PyYAML and would break a job
+  that currently works.
+
 ## [2.8.12] — 2026-09-02
 
 ### Added

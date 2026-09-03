@@ -25,6 +25,11 @@ schemaVersion: 1
 ticket: COREDEV-2780
 renders: docs/planning/COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md#§1
 action_pin: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa
+# The canonicalised `with:` block the shipped required workflow passes to that action, frozen. The
+# harness binds its own extraction to this, and the parity judge requires a recorded artifact to
+# carry it — so evidence generated for DIFFERENT inputs cannot certify the current invocation.
+# ONE copy: this module already refuses a second copy of `action_pin` for the same reason.
+action_inputs_digest: cc125ae649d85ba092aa5a92fe187df6d4d235e896a8b17a267b7f1e6a77cd36
 
 # ---------------------------------------------------------------------------------------------
 # The two workflows this contract governs. Cell 11 runs each obligation against the entries listed

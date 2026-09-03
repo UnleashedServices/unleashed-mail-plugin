@@ -138,12 +138,30 @@ jobs:
             esac
             echo "C6: the repository supplies ${path}; trunk merges files under .trunk/ into the configuration this gate freezes" >&2
             exit 1
-          done < <(find .trunk -type f 2>/dev/null | sed 's|^\./||' | sort)
+          # `! -type d`, NOT `-type f`. `-type f` matches REGULAR FILES ONLY, so it emitted neither a
+          # symlinked file nor a symlinked directory — and `find` never descends into the latter.
+          # The action's own `locate_trunk.sh` at the pinned SHA tests `[[ -f .trunk/bin/trunk && -x
+          # ... ]]`, and bash's file tests FOLLOW symlinks. The enumerator did not follow; the
+          # consumer does, and that asymmetry was the whole bypass: a committed symlink at
+          # `.trunk/bin/trunk` passed this guard and was then selected as TRUNK_PATH (codex, PR #84).
+          #
+          # The allowlist rewrite fixed the NAME axis and left the TYPE axis exactly as it was —
+          # narrowed on a second axis nobody varied. Inverting the type question the same way the
+          # path question was inverted closes the class: anything that is not a directory is a
+          # candidate, whatever its type.
+          #
+          # NOT `find -L`: it resolves symlinks and would emit the TARGET path, so `.trunk/bin/trunk`
+          # would print as `scripts/nolint.sh` and miss the allowlist `case` entirely.
+          done < <(find .trunk ! -type d 2>/dev/null | sed 's|^\./||' | sort)
           # The launcher paths proper, which live outside `.trunk/` and so are not covered above.
           # `-e` rather than `git ls-files`: an untracked one created by an earlier step would be
           # preferred by the action just the same.
+          # `-e` OR `-L`: `-e` follows the symlink and is FALSE for a dangling one, so a launcher
+          # symlinked to a path that does not exist yet — created by a later step, say — slipped
+          # past. This is the other half of the same `run:` body and the same defect; the sweep fix
+          # above does not reach it, because these two paths live outside `.trunk/`.
           for path in tools/trunk ./trunk; do
-            if [ -e "${path}" ]; then
+            if [ -e "${path}" ] || [ -L "${path}" ]; then
               echo "C6: the repository supplies ${path}, which the action would prefer over a verified download" >&2
               exit 1
             fi

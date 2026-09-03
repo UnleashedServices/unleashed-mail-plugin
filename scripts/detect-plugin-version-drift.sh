@@ -69,7 +69,14 @@ _IDENTIFIER = r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
 SEMVER = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
     rf"(?:-(?P<pre>{_IDENTIFIER}(?:\.{_IDENTIFIER})*))?"
-    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
+    # ASCII, because `\d` is UNICODE-AWARE in Python and SemVer's numeric identifiers are [0-9] only.
+    # Without this, `1٢.0.0` and `1.0.0-1٢` (Arabic-Indic digits) MATCH — and `str.isdigit()` and
+    # `int()` accept them too, so `precedence()` compares them as numbers and emits a stale-install
+    # warning where the contract's row 4 requires SILENCE for a non-comparable version (codex, PR #84).
+    # The flag narrows exactly the five `\d` classes; the pattern uses no `\w`, `\b` or `\s`, so
+    # nothing else changes and no valid version is rejected.
+    re.ASCII,
 )
 
 
@@ -151,8 +158,16 @@ def staged_but_unselected(install_path, installed):
     WHY IT EXISTS. A record that is behind has two very different causes and the same symptom:
     nobody ever updated, or an update was UNDONE. On 2026-09-02 the second happened — the record
     selected 2.7.0 while `.../unleashed-mail/2.8.3/` sat complete in the install cache beside it,
-    written the same second the record was. Telling those apart matters, because "you never ran the
-    update" and "your update was reverted, and it will revert again" call for different responses.
+    written the same second the record was.
+
+    IT REPORTS THE OBSERVATION, NOT THE HISTORY. The first version of this said the record "was
+    reverted rather than never updated — expect it to revert again", which is a claim about the past
+    that a directory listing cannot support: a newer cache directory also exists when an update
+    downloaded a version and then failed before writing the registry, or when several scopes coexist
+    (codex, PR #84). Naming a cause the code did not test is the exact defect this campaign spent a
+    day removing from guards and hook messages, and it reappeared here within hours. What IS observed
+    — the newer version is already on disk, so the repair is a local re-select rather than a download
+    — is the actionable half, and it is all this says now.
 
     The install cache is the evidence, and it needs no new environment variable: the sibling
     directories of the entry's own `installPath` are the versions actually present on disk.
@@ -206,8 +221,8 @@ if behind:
     )
     if staged:
         message += (
-            f" (note: {', '.join(sorted(staged))} is ALREADY in the install cache, so the record was"
-            " reverted rather than never updated — expect it to revert again)"
+            f" (note: {', '.join(sorted(staged))} is present in the install cache but is not what"
+            " the record selects, so the newer version is already downloaded locally)"
         )
     with open(os.environ["OUT_FILE"], "w", encoding="utf-8") as handle:
         handle.write(message)

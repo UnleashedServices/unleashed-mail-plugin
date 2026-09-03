@@ -151,14 +151,38 @@ EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
         "guard-resolver-digest": "4bec1e760e705bdb5427a9327cecb8c55d03d4f512fef15a568144c1638ab0cc",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
-        "guard-launcher-path": "f43b2c94d6685bc1d04a71d82821dab00f76d7b5bfabad40ffc04833bef8eae8",
+        "guard-launcher-path": "556cd1ffbb7217634c57c84e17afaa1ca9a0735c9fa453f507e31a41c2133472",
     },
     "canary": {
         "guard-resolver-digest": "011054c609a1f896f8fb73b3584f7048b666acc84bba82a65824563b106b7bd9",
         "guard-empty-diff": "9825dbd46b05c59173d8792d7aafb42cbe1e3ebb0623d6066850279a0902e5db",
-        "guard-launcher-path": "f43b2c94d6685bc1d04a71d82821dab00f76d7b5bfabad40ffc04833bef8eae8",
+        "guard-launcher-path": "556cd1ffbb7217634c57c84e17afaa1ca9a0735c9fa453f507e31a41c2133472",
     },
 }
+
+
+def _workflow_files() -> list[Path]:
+    """EVERY workflow GitHub would run, enumerated ONCE.
+
+    GitHub Actions honours BOTH `.yml` and `.yaml` in `.github/workflows`. Two separate censuses here
+    globbed `*.yml` only, so a `decoy.yaml` declaring a job named `trunk-check` was invisible to both
+    — and once the context is REQUIRED at M4, a second producer can report success for it while the
+    guarded workflow fails or never completes, defeating the exactly-one-producer protection
+    (codex, PR #84). One helper, because two independently patched call sites is how they diverged.
+
+    `not is_dir()` rather than `is_file()`: `is_file()` FOLLOWS symlinks and returns False for a
+    dangling one, which would silently DROP a workflow the old glob returned. That is the same
+    type-axis defect as the C6 `find -type f` bypass, in the opposite polarity — the reviewed fix for
+    this finding proposed exactly that, and it is why this uses the same inversion the guard now does.
+    """
+    directory = REPO / ".github/workflows"
+    if not directory.is_dir():
+        return []
+    return sorted(
+        entry
+        for entry in directory.iterdir()
+        if not entry.is_dir() and entry.suffix in (".yml", ".yaml")
+    )
 
 
 def _load_workflow() -> dict:
@@ -656,7 +680,7 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
     def _tree(self) -> dict[str, dict]:
         return {
             p.name: yaml.safe_load(p.read_text(encoding="utf-8"))
-            for p in sorted((REPO / ".github/workflows").glob("*.yml"))
+            for p in _workflow_files()
         }
 
     def test_exactly_one_producer_repo_wide(self):
@@ -700,7 +724,7 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
         rather than listed, because a listed set is one a fourth file can be added outside of.
         """
         found: dict[str, list[str]] = {}
-        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+        for path in _workflow_files():
             document = yaml.safe_load(path.read_text(encoding="utf-8"))
             for job in (document.get("jobs") or {}).values():
                 for step in job.get("steps") or []:
@@ -1779,6 +1803,60 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
                 completed = self._run(self.c6_guard, root)
                 self.assertNotEqual(0, completed.returncode, f"{path} was not caught")
                 self.assertIn(path, completed.stderr)
+
+    def test_each_guarded_path_is_caught_AS_A_SYMLINK_TOO(self):
+        """THE TYPE AXIS, which the path axis left open.
+
+        Every fixture above is a REGULAR FILE, so the guard could enumerate with `find -type f` —
+        which matches regular files only — and pass all seven while a committed symlink at the very
+        same path walked through. The action's `locate_trunk.sh` tests `[[ -f ]] && [[ -x ]]`, and
+        bash's file tests FOLLOW symlinks: the enumerator did not follow, the consumer did, and the
+        gate reported success having linted nothing (codex, PR #84).
+
+        Reverting the guard to `-type f` must make this red. Without it, the fix is unfalsifiable.
+        """
+        for path in C6_GUARDED_PATHS:
+            with self.subTest(fixture=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                relative = path.removeprefix("./")
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # The symlink TARGET lives outside the guarded tree, which is the realistic shape:
+                # a repository vendoring its own launcher and pointing at it.
+                payload = root / "vendor" / "payload"
+                payload.parent.mkdir(parents=True, exist_ok=True)
+                if path == ".trunk/setup-ci":
+                    payload.mkdir()
+                    (payload / "action.yml").write_text(
+                        "name: setup-ci\nruns:\n  using: composite\n  steps:\n"
+                        "    - run: 'true'\n      shell: bash\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    payload.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    payload.chmod(0o755)
+                target.symlink_to(payload)
+                completed = self._run(self.c6_guard, root)
+                self.assertNotEqual(
+                    0, completed.returncode, f"{path} as a SYMLINK was not caught"
+                )
+                self.assertIn(path, completed.stderr)
+
+    def test_a_DANGLING_launcher_symlink_is_caught(self):
+        """`-e` follows the link and is FALSE when the target does not exist, so a launcher pointing
+        at something a later step creates was invisible. That is the other half of the same `run:`
+        body, outside `.trunk/`, which the sweep fix does not reach."""
+        for path in ("tools/trunk", "./trunk"):
+            with self.subTest(fixture=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                target = root / path.removeprefix("./")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(root / "not-created-yet")
+                self.assertFalse(target.exists(), "the fixture must actually dangle")
+                completed = self._run(self.c6_guard, root)
+                self.assertNotEqual(
+                    0, completed.returncode, f"a dangling {path} was not caught"
+                )
 
     def test_the_c6a_guard_accepts_the_shipped_resolver_and_rejects_an_edited_one(self):
         """C6a.resolver-pinned-by-digest/edit-resolver — the invoking run bodies are left UNTOUCHED,

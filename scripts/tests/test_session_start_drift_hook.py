@@ -549,7 +549,19 @@ class TheVersionGrammarIsSemVerNotACharacterClass(_DetectorFixture):
     """
 
     VALID = ("2.8.0", "2.8.0-alpha.1", "2.8.0-1", "2.8.0-0alpha", "2.8.0+build.1")
-    INVALID = ("2.8.0-01", "2.8.0-alpha..1", "2.8.0-", "2.8.0-+x", "2.8..0", "v2.8.0")
+    INVALID = (
+        "2.8.0-01",
+        "2.8.0-alpha..1",
+        "2.8.0-",
+        "2.8.0-+x",
+        "2.8..0",
+        "v2.8.0",
+        # NON-ASCII DIGITS. Python's `\d` is Unicode-aware, so these MATCHED the "official" grammar
+        # — and `str.isdigit()`/`int()` accept them too, so they compared as numbers and warned where
+        # row 4 requires silence. SemVer's numeric identifiers are [0-9] only (codex, PR #84).
+        "1\u0662.0.0",
+        "2.8.0-1\u0662",
+    )
 
     def test_an_invalid_prerelease_takes_the_row_4_SILENT_path(self):
         for version in self.INVALID:
@@ -620,8 +632,13 @@ class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
         self._stage("2.7.0", "2.8.3", selected="2.7.0")
         out = self.run_detector(str(self.repo)).stdout
         self.assertIn("is behind origin/main", out)
-        self.assertIn("2.8.3 is ALREADY in the install cache", out)
-        self.assertIn("reverted rather than never updated", out)
+        self.assertIn("2.8.3 is present in the install cache", out)
+        self.assertIn("already downloaded locally", out)
+        self.assertNotIn(
+            "revert",
+            out,
+            "the message must not claim a history it did not observe",
+        )
 
     def test_with_NOTHING_newer_staged_the_warning_carries_no_such_claim(self):
         """The two-sided half. A note that always appears says nothing; it must be absent when the
@@ -630,13 +647,13 @@ class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
         self._stage("2.7.0", selected="2.7.0")
         out = self.run_detector(str(self.repo)).stdout
         self.assertIn("is behind origin/main", out)
-        self.assertNotIn("ALREADY in the install cache", out)
+        self.assertNotIn("present in the install cache", out)
 
     def test_it_reports_the_HIGHEST_staged_version_not_merely_a_newer_one(self):
         self._stage("2.7.0", "2.8.0", "2.8.2", "2.8.3", selected="2.7.0")
         out = self.run_detector(str(self.repo)).stdout
-        self.assertIn("2.8.3 is ALREADY in the install cache", out)
-        self.assertNotIn("2.8.0 is ALREADY", out)
+        self.assertIn("2.8.3 is present in the install cache", out)
+        self.assertNotIn("2.8.0 is present", out)
 
     def test_a_SILENT_row_stays_silent_even_with_a_newer_version_staged(self):
         """THE CONTRACT TEST. Table A's silent rows are the plan's binding promise, and this addition
@@ -687,7 +704,7 @@ class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
         )
         out = self.run_detector(str(self.repo)).stdout
         self.assertIn("is behind origin/main", out)
-        self.assertNotIn("ALREADY in the install cache", out)
+        self.assertNotIn("present in the install cache", out)
 
 
 if __name__ == "__main__":  # pragma: no cover

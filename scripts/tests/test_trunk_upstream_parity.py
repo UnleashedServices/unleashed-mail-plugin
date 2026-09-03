@@ -22,6 +22,7 @@ plan keeps repairing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -39,9 +40,33 @@ ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
 # contract; a fourth copy in this file is a fourth thing to forget on a bump, and two stale copies
 # agree with each other. `test_trunk_check_workflow.py` binds its own constant to this same key, so
 # the registry is the one authority and a bump that misses a file is caught rather than tolerated.
-ACTION_PIN = yaml.safe_load(
+_CONTRACT = yaml.safe_load(
     (REPO / "docs/planning/COREDEV-2780-contract.yaml").read_text(encoding="utf-8")
-)["action_pin"]
+)
+ACTION_PIN = _CONTRACT["action_pin"]
+# The canonicalised inputs the shipped workflow passes. A recorded artifact must carry THIS, or it
+# was generated for a different invocation and cannot certify the current one — the pin alone does
+# not settle it, because `arguments` and `save-annotations` can change while the pin stays fixed.
+EXPECTED_INPUTS_DIGEST = _CONTRACT["action_inputs_digest"]
+# The canonical form that hashes to it — derived from the shipped workflow rather than restated, so a
+# fixture cannot quietly describe inputs the gate does not actually pass.
+SHIPPED_CANONICAL = json.dumps(
+    next(
+        step
+        for step in next(
+            iter(
+                yaml.safe_load(
+                    (REPO / ".github/workflows/trunk-check.yml").read_text(
+                        encoding="utf-8"
+                    )
+                )["jobs"].values()
+            )
+        )["steps"]
+        if "trunk-io/trunk-action" in str(step.get("uses", ""))
+    )["with"],
+    sort_keys=True,
+    separators=(",", ":"),
+)
 
 
 def parity_problems(record: dict) -> list[str]:
@@ -139,6 +164,23 @@ def parity_problems(record: dict) -> list[str]:
     inputs = record.get("actionInputs") or {}
     if not inputs.get("digest"):
         problems.append("inputs: the harness recorded no action-input digest")
+    else:
+        # SELF-CONSISTENT AND CURRENT are different questions, and only the second one matters here.
+        # Recomputing sha256(canonical) catches a corrupted record; it happily accepts a record that
+        # is internally perfect and describes inputs the shipped workflow no longer passes. Both are
+        # checked, and the diagnostics name which failed (codex, PR #84).
+        recomputed = hashlib.sha256(
+            (inputs.get("canonical") or "").encode("utf-8")
+        ).hexdigest()
+        if recomputed != inputs["digest"]:
+            problems.append(
+                "inputs: the recorded digest does not match the recorded canonical form"
+            )
+        elif inputs["digest"] != EXPECTED_INPUTS_DIGEST:
+            problems.append(
+                f"inputs: evidence was recorded for {inputs.get('canonical')!r}, which is not what "
+                "the shipped workflow now passes — re-run the harness"
+            )
     # EQUALITY, NOT A SUBSTRING. `trunk-io/trunk-action@<anything>` satisfied the old check, so an
     # artifact recorded under a bumped or unpinned ref was ACCEPTED as parity evidence for the pin
     # this gate actually ships — the one thing the record exists to establish about itself.
@@ -183,8 +225,12 @@ def _clean_record(event: str = "pull_request") -> dict:
         },
         "action": {"outcome": "failure", "controlOutcome": "success"},
         "actionInputs": {
-            "canonical": "{}",
-            "digest": "d" * 64,
+            # THE REAL RECORDED SHAPE. This was `{"canonical": "{}", "digest": "d"*64}` — internally
+            # inconsistent by construction, which no genuine artifact ever is, and which meant the
+            # positive control was asserting that the judge accepts an impossible record. The judge
+            # now recomputes the digest, and caught it immediately.
+            "canonical": SHIPPED_CANONICAL,
+            "digest": EXPECTED_INPUTS_DIGEST,
             "uses": ACTION_PIN,
         },
     }
@@ -214,6 +260,41 @@ class TheJudgeDiscriminates(unittest.TestCase):
                 p.startswith("inputs: the harness ran") for p in parity_problems(record)
             ),
             parity_problems(record),
+        )
+
+    def test_a_CORRUPTED_record_whose_digest_does_not_match_its_canonical_is_refused(
+        self,
+    ):
+        record = _clean_record()
+        record["actionInputs"]["digest"] = "0" * 64
+        self.assertIn(
+            "inputs: the recorded digest does not match the recorded canonical form",
+            parity_problems(record),
+        )
+
+    def test_a_SELF_CONSISTENT_but_STALE_record_is_refused(self):
+        """The one that matters, and the one recomputing the digest alone would miss.
+
+        An artifact recorded before `arguments` or `save-annotations` changed is internally perfect —
+        its digest hashes its own canonical form exactly — and describes an invocation the gate no
+        longer makes. Self-consistency is not currency, so the digest is compared against the
+        registry's frozen value as well.
+        """
+        import hashlib as _h
+
+        record = _clean_record()
+        stale = '{"arguments":"--filter=-markdown-link-check --fix","save-annotations":true}'
+        record["actionInputs"]["canonical"] = stale
+        record["actionInputs"]["digest"] = _h.sha256(stale.encode()).hexdigest()
+        problems = parity_problems(record)
+        self.assertNotIn(
+            "inputs: the recorded digest does not match the recorded canonical form",
+            problems,
+            "the fixture must be internally CONSISTENT, or it tests the wrong check",
+        )
+        self.assertTrue(
+            any(p.startswith("inputs: evidence was recorded for") for p in problems),
+            problems,
         )
 
     def test_an_unpinned_action_ref_is_refused(self):
