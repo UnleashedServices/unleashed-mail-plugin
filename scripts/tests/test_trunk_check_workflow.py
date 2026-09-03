@@ -747,6 +747,20 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
                     raise AssertionError(
                         f"{path}: job {job_id} has an expression-valued name"
                     )
+                if "uses" in job:
+                    # FAIL CLOSED, for the same reason an expression-valued name does: a job
+                    # that calls a REUSABLE workflow takes its check-run names from the CALLED
+                    # file's jobs, so this census cannot name what it produces by reading this
+                    # file at all. The repository has no such job today — which is precisely
+                    # why the guard must exist BEFORE one is added. Once the context is
+                    # REQUIRED at M4, a second producer reporting success while the guarded
+                    # workflow fails or never completes defeats the exactly-one-producer
+                    # protection, and a census that silently skips the construct is how that
+                    # second producer arrives unnoticed.
+                    raise AssertionError(
+                        f"{path}: job {job_id} calls a reusable workflow; its check contexts "
+                        "cannot be enumerated from this file"
+                    )
                 if (explicit or job_id) == EXPECTED_CONTEXT:
                     found.append(f"{path}:{job_id}")
         return found
@@ -767,6 +781,15 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
 
     def test_zero_producers_is_detected(self):
         self.assertEqual([], self._producers({"none.yml": {"jobs": {"other": {}}}}))
+
+    def test_a_reusable_workflow_job_fails_closed(self):
+        """COREDEV-2809. `uses:` at job level was silently skipped, so a reusable workflow could
+        produce the required context while this census reported exactly one producer.
+        """
+        with self.assertRaises(AssertionError):
+            self._producers(
+                {"x.yml": {"jobs": {"j": {"uses": "./.github/workflows/other.yml"}}}}
+            )
 
     def test_an_expression_valued_name_fails_closed(self):
         with self.assertRaises(AssertionError):

@@ -326,8 +326,24 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
         """The commit is made from the INDEX. Checking the worktree lets a finding that is clean in
         the index but dirty in the worktree fail the commit, and vice versa."""
         _, argv = self._run()
-        self.assertIn("--index", argv)
-        self.assertNotIn("--all", argv)
+        # TOKENS, NOT SUBSTRINGS. `assertIn("--index", argv)` against the joined argv is
+        # satisfied by `--index-only`, or by `--index` appearing inside some other value, so it
+        # asserted a SPELLING rather than the argument actually passed (COREDEV-2809).
+        tokens = argv.split()
+        self.assertIn("--index", tokens)
+        self.assertNotIn("--all", tokens)
+
+    def test_the_whole_argument_vector_is_frozen(self):
+        """The per-flag checks above each constrain one token and say nothing about what else
+        may be present. Freezing the vector is what makes an ADDED argument a reviewed change.
+        """
+        _, argv = self._run()
+        self.assertEqual(
+            ["check", "--index", "--no-fix", "--filter=-markdown-link-check"],
+            argv.split(),
+            "the gate's invocation moved: re-pin this literal in the same commit, with the "
+            "reason, or revert the change to .githooks/pre-commit",
+        )
 
     def test_it_passes_no_fix_so_the_hook_never_rewrites_files(self):
         _, argv = self._run()
