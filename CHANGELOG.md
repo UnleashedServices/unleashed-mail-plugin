@@ -13,6 +13,42 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.14] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — the watchdog orphaned its own sleeper on every fast commit.** The watchdog
+  is a subshell BLOCKED IN `sleep`; signalling the subshell alone left that `sleep` reparented to
+  PPID 1, where it ran out the full 180-second deadline. Measured: a fast run left a live sleeper
+  behind, and they accumulate across commits. It is signalled as a process GROUP now, with the same
+  bare-pid retry the other signals carry.
+
+  The regression test needed two attempts, and the first could not fail: it planted a marker in a
+  `sleep` SHIM, but the shim `exec`s, so the marker never reached the running process's argv and
+  `pgrep` matched nothing whether the fix was present or not. Reverting the fix left it green. It
+  now keys on an unusual deadline value, which appears verbatim in the sleeper's own command line.
+
+- **COREDEV-2801 — `.strip()` trimmed malformed versions into validity.** `" 2.8.5 "` is not a
+  SemVer string, but stripping made it comparable, so malformed registry data produced a
+  stale-install warning where Table A row 4 requires silence. Removing the strip was only half the
+  fix: Python's `$` also matches JUST BEFORE a trailing newline, so `"2.8.5\n"` was still accepted.
+  The grammar is anchored with `\Z` now, and every whitespace form is covered by the table test.
+- **COREDEV-2798 — the duplicate-destination key contradicted the resolution.** `_tree_problems`
+  resolves a prepend-only destination by PAYLOAD and treats `destination.line` as a stale hint,
+  because a prepend shifts every line below it — while the uniqueness key still carried that line.
+  Two rewrites naming the same README payload with different hints therefore produced two distinct
+  identities and both passed, one destination silently satisfying two obligations while the second
+  rewrite's real destination went unchecked. Prepend-only destinations are keyed by path plus
+  payload hash now, the same way they are resolved.
+
+### Notes
+
+- Nine older review threads were verified STALE against this head rather than assumed: each reported
+  defect was checked in the shipped bytes and is already fixed. Two of those checks initially read
+  "still present" and were wrong — one grep expanded `${var}` inside a double-quoted command
+  substitution, the other matched the phrase inside an explanatory comment rather than the emitted
+  message. Both were re-checked against the parsed source before being called stale.
+
 ## [2.8.13] — 2026-09-03
 
 ### Fixed

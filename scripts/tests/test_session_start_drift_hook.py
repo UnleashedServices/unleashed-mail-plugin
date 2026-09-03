@@ -561,6 +561,14 @@ class TheVersionGrammarIsSemVerNotACharacterClass(_DetectorFixture):
         # row 4 requires silence. SemVer's numeric identifiers are [0-9] only (codex, PR #84).
         "1\u0662.0.0",
         "2.8.0-1\u0662",
+        # WHITESPACE-WRAPPED. `.strip()` used to trim these into validity, so malformed registry
+        # data warned where row 4 requires silence. The trailing-newline form is separate: Python's
+        # `$` matches just before one, so dropping `.strip()` alone left it accepted — the anchor is
+        # `\Z` (codex, PR #84).
+        " 2.8.5 ",
+        "2.8.5 ",
+        "\t2.8.5",
+        "2.8.5\n",
     )
 
     def test_an_invalid_prerelease_takes_the_row_4_SILENT_path(self):

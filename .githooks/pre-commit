@@ -80,7 +80,12 @@ run_with_timeout() {
 	_rwt_rc=$?
 
 	if [[ -n ${_rwt_watchdog} ]]; then
-		kill -TERM "${_rwt_watchdog}" 2>/dev/null
+		# THE GROUP, because the watchdog is a subshell BLOCKED IN `sleep`. Signalling the subshell
+		# alone leaves that `sleep` orphaned to PPID 1, where it runs out the full deadline — so
+		# every fast commit on a stock Mac left a `sleep 180` behind, and they accumulate (codex,
+		# PR #84). The watchdog is started while job control is on, so it leads its own group; the
+		# bare-pid retry is the same fallback the signals above use for a shell that granted none.
+		kill -TERM "-${_rwt_watchdog}" 2>/dev/null || kill -TERM "${_rwt_watchdog}" 2>/dev/null
 		wait "${_rwt_watchdog}" 2>/dev/null
 		[[ -e ${_rwt_marker} ]] && _rwt_timed_out=1
 		rm -f "${_rwt_marker}"

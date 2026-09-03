@@ -69,7 +69,10 @@ _IDENTIFIER = r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
 SEMVER = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
     rf"(?:-(?P<pre>{_IDENTIFIER}(?:\.{_IDENTIFIER})*))?"
-    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
+    # `\Z`, NOT `$`. In Python `$` also matches JUST BEFORE a trailing newline, so dropping
+    # `.strip()` rejected `" 2.8.5 "` and still accepted `"2.8.5\n"` — the fix was half of one.
+    # `\Z` matches only at the absolute end of the string.
+    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z",
     # ASCII, because `\d` is UNICODE-AWARE in Python and SemVer's numeric identifiers are [0-9] only.
     # Without this, `1٢.0.0` and `1.0.0-1٢` (Arabic-Indic digits) MATCH — and `str.isdigit()` and
     # `int()` accept them too, so `precedence()` compares them as numbers and emits a stale-install
@@ -84,7 +87,11 @@ def parse(value):
     """SemVer 2.0.0, or None. Row 4's 'comparable' means exactly this."""
     if not isinstance(value, str):
         return None
-    m = SEMVER.match(value.strip())
+    # NO `.strip()`. Trimming turned `" 2.8.5 "` — which is NOT a SemVer string — into a
+    # comparable version, so malformed registry data produced a stale-install WARNING where
+    # Table A row 4 requires silence (codex, PR #84). The grammar is anchored; a value that
+    # needs trimming to match it is exactly the "not comparable" case that row exists for.
+    m = SEMVER.match(value)
     if not m:
         return None
     pre = m.group("pre")

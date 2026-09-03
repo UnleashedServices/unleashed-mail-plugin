@@ -392,8 +392,16 @@ def _manifest_problems(manifest: dict) -> list[str]:
                 problems.append(
                     f"{location}: destination path must be a nonempty string"
                 )
+            # CONTENT-ADDRESSED WHERE THE LINE IS ONLY A HINT. `_tree_problems` resolves prepend-only
+            # destinations by payload and ignores `destination.line` — so keeping the line in the
+            # UNIQUENESS key let two rewrites point at the same README block with different hints and
+            # both pass, one destination silently satisfying two obligations while the second
+            # rewrite's real destination went unchecked (codex, PR #84). The identity must be keyed
+            # the way the resolution is, or the two disagree about what "the same destination" means.
             destination_identities.append(
-                (destination_path, destination_line, payload_sha256)
+                (destination_path, None, payload_sha256)
+                if destination_path in PREPEND_ONLY_FILES
+                else (destination_path, destination_line, payload_sha256)
             )
         elif any(key in site for key in ("contracts", "destination") + anchor_keys):
             problems.append(
@@ -948,6 +956,57 @@ class M1_ContentAddressedPrependOnlySites(unittest.TestCase):
         self.assertNotIn(diagnostic, without_branch)
         self.assertNotEqual(
             [], without_branch, "the case must stay red for its other reason"
+        )
+
+
+class M1_DuplicateDestinationsAreContentAddressedToo(unittest.TestCase):
+    """COREDEV-2798 / codex, PR #84 — the identity key and the RESOLUTION disagreed.
+
+    `_tree_problems` resolves a prepend-only destination by PAYLOAD and treats `destination.line` as
+    a stale hint, because a prepend shifts every physical line below it. The uniqueness key still
+    carried that line. So two rewrites naming the SAME README payload with DIFFERENT hints produced
+    two distinct identities, the duplicate check passed, and one destination silently satisfied two
+    obligations — while the second rewrite's real destination went unchecked by anything.
+
+    The fixture is built from the SHIPPED manifest rather than invented, so it cannot pass by
+    describing a shape the repository does not have.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = _load_manifest()
+
+    def _duplicated(self, *, shift_hint: bool):
+        """The manifest with one README rewrite duplicated; the copy's hint optionally moved."""
+        import copy
+
+        manifest = copy.deepcopy(self.manifest)
+        original = next(
+            site
+            for site in manifest["sites"]
+            if site["class"] == "rewrite" and _destination_path(site) == "README.md"
+        )
+        clone = copy.deepcopy(original)
+        if shift_hint:
+            clone["destination"]["line"] = original["destination"]["line"] + 137
+        manifest["sites"].append(clone)
+        return manifest
+
+    def test_a_duplicate_with_a_SHIFTED_hint_is_caught(self):
+        """The case the line-keyed identity missed entirely."""
+        problems = _manifest_problems(self._duplicated(shift_hint=True))
+        self.assertIn("rewrite destination identities are not unique", problems)
+
+    def test_a_duplicate_with_the_SAME_hint_is_still_caught(self):
+        """The case the old key did catch — kept so the fix cannot be mistaken for a loosening."""
+        problems = _manifest_problems(self._duplicated(shift_hint=False))
+        self.assertIn("rewrite destination identities are not unique", problems)
+
+    def test_the_SHIPPED_manifest_has_no_duplicate_destinations(self):
+        """The positive control: the check above must not be firing on the real inventory."""
+        self.assertNotIn(
+            "rewrite destination identities are not unique",
+            _manifest_problems(self.manifest),
         )
 
 

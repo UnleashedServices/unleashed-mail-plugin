@@ -464,6 +464,46 @@ class TheBoundedRun(unittest.TestCase):
                 )
                 self.assertEqual([], litter)
 
+    def test_a_fast_run_leaves_no_ORPHANED_SLEEPER_behind(self):
+        """The watchdog is a subshell BLOCKED IN `sleep`. Signalling the subshell alone orphans that
+        `sleep` to PPID 1, where it runs out the full deadline — so every fast commit on a stock Mac
+        left a `sleep 180` behind, and they accumulate (codex, PR #84).
+
+        Counted as PROCESSES rather than read off the source: the property is that nothing outlives
+        the run, not that a particular kill was written.
+        """
+        # THE DEADLINE ITSELF IS THE MARKER. A first draft put a marker in a `sleep` SHIM — but the
+        # shim `exec`s, so the marker never reached the running process's argv and `pgrep` matched
+        # nothing whether the fix was present or not. The mutation caught it: reverting the fix left
+        # the test green. An unusual duration appears verbatim in the sleeper's own command line.
+        deadline = 9173
+
+        def alive() -> int:
+            return len(
+                subprocess.run(
+                    ["pgrep", "-f", f"sleep {deadline}"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                ).stdout.split()
+            )
+
+        before = alive()
+        self.assertEqual(
+            0, before, "the fixture duration must be unique on this machine"
+        )
+        rc, elapsed, _litter, _ = self._harness(
+            "exit 0\n", seconds=deadline, branch="bare"
+        )
+        self.assertEqual(0, rc)
+        self.assertLess(
+            elapsed, 10, "the command itself must have returned immediately"
+        )
+        time.sleep(1.0)
+        self.assertLessEqual(
+            alive(), before, "the watchdog's sleeper outlived the run it was bounding"
+        )
+
     def test_a_TERM_IGNORING_grandchild_does_not_hold_the_caller_open(self):
         """The direct child dies on TERM, so the wait returns and the pending SIGKILL is cancelled —
         and a grandchild that ignores TERM then outlives the deadline still holding the caller's
