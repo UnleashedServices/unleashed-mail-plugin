@@ -41,9 +41,32 @@ run_with_timeout() {
 	local _rwt_bounded
 	_rwt_bounded="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 
-	local _rwt_t0=${SECONDS}
-	local _rwt_marker="${TMPDIR:-/tmp}/rwt.$$.${RANDOM}.deadline"
-	rm -f "${_rwt_marker}"
+	local _rwt_marker="" _rwt_dir
+	# THE CHANNEL IS LOAD-BEARING ON BOTH BRANCHES NOW, so it is probed BY WRITING rather than
+	# assumed. `${TMPDIR:-/tmp}` fails SILENTLY when TMPDIR names a directory that is missing or
+	# unwritable: the write happens in a subshell whose stderr goes to /dev/null, the marker never
+	# appears, and a genuine timeout is then classified as an external signal — the gate blocks with
+	# a diagnostic naming the wrong cause (COREDEV-2806). `-w` is NOT sufficient: a full filesystem,
+	# a read-only mount and a restrictive ACL each pass it and then fail the open.
+	for _rwt_dir in "${TMPDIR:-}" /tmp "$(git rev-parse --git-dir 2>/dev/null || true)" "${HOME-}" .; do
+		[[ -n ${_rwt_dir} && -d ${_rwt_dir} ]] || continue
+		_rwt_marker="${_rwt_dir%/}/rwt.$$.${RANDOM}.deadline"
+		# STDERR FIRST. Redirections are applied LEFT TO RIGHT, so `: >"${f}" 2>/dev/null`
+		# opens the file while stderr is still the caller's — and a failed open prints the
+		# full path, which is the leak the repo-wide writer scan exists to catch.
+		if : 2>/dev/null >"${_rwt_marker}"; then
+			rm -f "${_rwt_marker}"
+			break
+		fi
+		_rwt_marker=""
+	done
+	# PUBLISHED like RWT_TIMED_OUT, because the caller cannot infer this either: with no channel the
+	# deadline still KILLS, it simply cannot be RECORDED, and every timeout then looks like a signal.
+	if [[ -n ${_rwt_marker} ]]; then
+		RWT_NO_CHANNEL=0
+	else
+		RWT_NO_CHANNEL=1
+	fi
 
 	# JOB CONTROL, so the child leads its OWN process group and can be signalled as `-PGID`. Without
 	# it only the direct child is reached: a lint tool spawns helpers that INHERIT THE CALLER'S PIPE,
@@ -57,28 +80,39 @@ run_with_timeout() {
 	# each producible BY THE CHILD. Three separate fail-opens came from inferring the fact from the
 	# code. The fact is published here instead, and the caller reads the fact.
 	RWT_TIMED_OUT=0
+	# ONE MECHANISM, ONE FACT, ON BOTH BRANCHES. The deadline is owned by a watchdog that RECORDS it
+	# before it acts, because that is the only ordering in which the record cannot lose a race with
+	# the kill. `timeout`, where present, is kept as a BACKSTOP ten seconds later: it bounds the case
+	# where the watchdog subshell itself dies, and it never owns the deadline, so its status is never
+	# the thing that has to be interpreted.
+	#
+	# IT USED TO OWN IT, and it cannot say whether it fired — 124, 137 and 143 are each producible BY
+	# THE CHILD. The guard that resolved them compared `${SECONDS}`, an INTEGER clock sampled before
+	# the fork, so the elapsed it computed read up to a second HIGH and laundered a command's own exit
+	# 124 into "we timed out". That is a fail-OPEN — a timeout deliberately does not block the commit
+	# — and the fourth member of the very family the guard was written to close (COREDEV-2805).
 	if [[ -n ${_rwt_bounded} ]]; then
 		# `-k 5`, NOT `--kill-after=5`. Measured across implementations: the short form is accepted by
 		# GNU, FreeBSD, busybox and toybox, while the long form is rejected by busybox (exit 1) and
 		# toybox (exit 125) — and a rejected flag would fail EVERY commit for those users, trading a
 		# rare hang for universal breakage.
-		"${_rwt_bounded}" -k 5 "${seconds}" "$@" &
+		"${_rwt_bounded}" -k 5 "$((seconds + 10))" "$@" &
 		_rwt_cmd=$!
 	else
 		"$@" &
 		_rwt_cmd=$!
-		# TERM, A GRACE PERIOD, THEN KILL, with the deadline RECORDED before any signal. The
-		# watchdog's fds are redirected because a background subshell inherits this hook's stdout and
-		# would hold a capturing parent open for the whole timeout even after the hook exited.
-		(
-			sleep "${seconds}"
-			: >"${_rwt_marker}"
-			kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
-			sleep 5
-			kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
-		) >/dev/null 2>&1 &
-		_rwt_watchdog=$!
 	fi
+	# TERM, A GRACE PERIOD, THEN KILL, with the deadline RECORDED before any signal. The watchdog's
+	# fds are redirected because a background subshell inherits this hook's stdout and would hold a
+	# capturing parent open for the whole timeout even after the hook exited.
+	(
+		sleep "${seconds}"
+		: >"${_rwt_marker}"
+		kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
+		sleep 5
+		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
+	) >/dev/null 2>&1 &
+	_rwt_watchdog=$!
 	[[ ${_rwt_job_control} -eq 1 ]] && set +m
 
 	wait "${_rwt_cmd}" 2>/dev/null
@@ -94,18 +128,6 @@ run_with_timeout() {
 		wait "${_rwt_watchdog}" 2>/dev/null
 		[[ -e ${_rwt_marker} ]] && _rwt_timed_out=1
 		rm -f "${_rwt_marker}"
-	elif [[ (${_rwt_rc} -eq 124 || ${_rwt_rc} -eq 137 || ${_rwt_rc} -eq 143) && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
-		# EVERY ONE OF THESE THREE IS AMBIGUOUS, and the elapsed guard is the only thing that
-		# resolves any of them. `timeout -k` reports 137 when its SIGKILL lands — but so does an
-		# OOM-killed command. It reports 143 for its TERM — but so does an external `kill`. And it
-		# reports 124 for a real timeout — but ALSO passes through a child that exited 124 itself,
-		# which `trunk` can do by propagating an internal tool's timeout.
-		#
-		# THEY WERE FIXED ONE AT A TIME AND THAT WAS THE MISTAKE: 137 first, then 143 when a
-		# reviewer pointed at it, then 124 when the same reviewer pointed again (codex, PR #84).
-		# Three members of one family, each found only after the previous was closed. They share a
-		# guard now, so a fourth ambiguous status cannot be added without one.
-		_rwt_timed_out=1
 	fi
 
 	RWT_TIMED_OUT=${_rwt_timed_out}
@@ -148,6 +170,15 @@ if command -v trunk >/dev/null 2>&1; then
 			# there is no status left to misread. A child's own 124 falls through to the arms below
 			# and blocks, which is what an unexplained non-zero from a lint gate should do.
 			echo "⚠️  trunk check exceeded ${TRUNK_TIMEOUT_SECONDS}s — not blocking on a timeout"
+		elif [[ ${RWT_NO_CHANNEL:-0} -eq 1 && (${_trunk_rc} -eq 124 || ${_trunk_rc} -ge 128) ]]; then
+			# THE DEADLINE STILL KILLS WITHOUT A CHANNEL; it just cannot be RECORDED, so this status is
+			# genuinely unattributable rather than merely unrecognised. Reporting it as an external
+			# signal — which is what happened before `run_with_timeout` published this — names a cause
+			# the hook has no evidence for, and sends the developer looking for an OOM killer that was
+			# never involved (COREDEV-2806). It blocks, because the gate did not complete.
+			echo "❌ trunk did not finish, and no writable directory was found to record whether the"
+			echo "   ${TRUNK_TIMEOUT_SECONDS}s deadline was reached — point TMPDIR at a writable directory"
+			overall=1
 		elif [[ ${_trunk_rc} -eq 2 ]]; then
 			# TRUNK COULD NOT RUN, WHICH IS NOT THE SAME AS FINDING SOMETHING. Exit 2 is what the
 			# real binary returns when the invocation itself is unusable — measured on trunk 1.25.0

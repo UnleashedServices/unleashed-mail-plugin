@@ -367,7 +367,7 @@ class TheBoundedRun(unittest.TestCase):
                 return found
         return None
 
-    def _harness(self, script: str, seconds: int, *, branch: str):
+    def _harness(self, script: str, seconds: int, *, branch: str, tmpdir=None):
         hook = HOOK.read_text(encoding="utf-8")
         head = hook.index("run_with_timeout() {")
         body = hook[head : hook.index("\n}\n", head) + 3]
@@ -397,9 +397,13 @@ class TheBoundedRun(unittest.TestCase):
 
         (root / "target.sh").write_text(script, encoding="utf-8")
         (root / "probe.sh").write_text(
-            f"PATH={root / 'bin'}\nexport TMPDIR={root}\n{body}\n"
+            f"PATH={root / 'bin'}\n"
+            f"export TMPDIR={root if tmpdir is None else tmpdir}\n{body}\n"
             f'run_with_timeout {seconds} bash "{root / "target.sh"}"\n'
-            'echo "RC=$?"\n',
+            # THE STATUS ALONE CANNOT ANSWER THE QUESTION ANY MORE, and that is the point: a real
+            # timeout and a child's own 124 both return 124, so the probe reports the published
+            # fact beside it. RC is emitted LAST because the parser takes the final `RC=`.
+            "_rc=$?\n" 'echo "TO=${RWT_TIMED_OUT:-0}"\n' 'echo "RC=${_rc}"\n',
             encoding="utf-8",
         )
         started = time.monotonic()
@@ -619,6 +623,65 @@ class TheBoundedRun(unittest.TestCase):
             "the long form is rejected by busybox (exit 1) and toybox (exit 125); use `-k 5`",
         )
 
+    @staticmethod
+    def _reported_timeout(completed) -> int:
+        return int(completed.stdout.rsplit("TO=", 1)[1].split("\n", 1)[0].strip())
+
+    def test_a_childs_OWN_124_near_the_deadline_is_not_laundered_into_a_timeout(self):
+        """COREDEV-2805, the fourth member of the 124/137/143 family. `timeout` cannot say whether
+        it fired, so the branch that used it inferred the fact from elapsed seconds — and sampled
+        `${SECONDS}`, an INTEGER clock, BEFORE the fork. The elapsed it computed therefore read up
+        to a second high, and a command exiting 124 ON ITS OWN inside that second was reported as
+        our timeout. That is a fail-OPEN: a timeout deliberately does not block the commit, so an
+        incomplete lint passed the gate. Measured on the shipped code at 10 runs out of 10.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, _, _, completed = self._harness(
+                    "sleep 1.95\nexit 124\n", seconds=2, branch=branch
+                )
+                self.assertEqual(124, rc, "the child's own status must pass through")
+                self.assertEqual(
+                    0,
+                    self._reported_timeout(completed),
+                    "a status the CHILD produced must never be published as our deadline",
+                )
+
+    def test_a_real_timeout_is_still_published_as_one_on_both_branches(self):
+        """The other side of the same coin — narrowing the false positive must not lose the true
+        one, which is the failure mode the elapsed guard was protecting against.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, elapsed, _, completed = self._harness(
+                    "sleep 60\n", seconds=2, branch=branch
+                )
+                self.assertEqual(124, rc)
+                self.assertEqual(1, self._reported_timeout(completed))
+                self.assertLess(elapsed, 20, "the deadline must still bound the run")
+
+    def test_an_unwritable_TMPDIR_does_not_silence_the_deadline_record(self):
+        """COREDEV-2806. The marker channel is the only thing that carries the fact, and it was
+        assumed rather than probed: `${TMPDIR:-/tmp}` names a directory that may not exist, and the
+        write that fails lives in a subshell whose stderr goes to /dev/null. The marker never
+        appeared, so a genuine timeout was classified as an external signal and the gate blocked
+        naming a cause it had no evidence for. Measured on the shipped code: rc=143, fact=0.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, _, _, completed = self._harness(
+                    "sleep 60\n",
+                    seconds=2,
+                    branch=branch,
+                    tmpdir="/nonexistent/definitely-not-writable",
+                )
+                self.assertEqual(124, rc)
+                self.assertEqual(
+                    1,
+                    self._reported_timeout(completed),
+                    "the channel must fall back to a directory it PROVED it could write",
+                )
+
 
 class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
     """The gate's exit-code arms, driven with the SHIPPED block. Every arm must name a cause it
@@ -629,7 +692,7 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
     config does not enable, which is exactly the one literal this gate passes.
     """
 
-    def _classify(self, rc: int, *, timed_out: int = 0):
+    def _classify(self, rc: int, *, timed_out: int = 0, no_channel: int = 0):
         hook = HOOK.read_text(encoding="utf-8")
         block = hook[hook.index("if command -v trunk") :]
         block = block[: block.index("\nfi\n") + 4]
@@ -639,7 +702,8 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
             # THE STUB PUBLISHES THE FACT, because the real one does. The caller no longer
             # infers "we timed out" from an exit status — 124, 137 and 143 are each producible by
             # the child — so a stub returning only a status tests a contract the hook has dropped.
-            'run_with_timeout() { shift; RWT_TIMED_OUT="${FAKE_TO}"; return "${FAKE_RC}"; }\n'
+            'run_with_timeout() { shift; RWT_TIMED_OUT="${FAKE_TO}"; '
+            'RWT_NO_CHANNEL="${FAKE_NC}"; return "${FAKE_RC}"; }\n'
             + block
             + '\necho "overall=${overall}"\n'
         )
@@ -652,11 +716,29 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "FAKE_RC": str(rc), "FAKE_TO": str(timed_out)},
+            env={
+                **os.environ,
+                "FAKE_RC": str(rc),
+                "FAKE_TO": str(timed_out),
+                "FAKE_NC": str(no_channel),
+            },
             timeout=60,
         )
         blocks = "overall=1" in completed.stdout
         return blocks, completed.stdout
+
+    def test_an_unattributable_death_is_not_blamed_on_a_signal_it_cannot_evidence(self):
+        """COREDEV-2806's caller half. Without a channel the deadline still KILLS, it just cannot be
+        RECORDED — so 143 here means "we cannot tell", not "someone sent SIGTERM". Naming the signal
+        sends the developer hunting an OOM killer that was never involved. It still blocks: a gate
+        that did not complete must never report a pass.
+        """
+        for rc in (124, 137, 143):
+            with self.subTest(rc=rc):
+                blocks, out = self._classify(rc, no_channel=1)
+                self.assertTrue(blocks, "an incomplete gate must block")
+                self.assertIn("no writable directory", out)
+                self.assertNotIn("was killed (signal", out)
 
     def test_a_clean_run_allows_and_a_finding_blocks(self):
         self.assertFalse(self._classify(0)[0], "a clean run must not block")
