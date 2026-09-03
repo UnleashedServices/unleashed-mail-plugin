@@ -13,6 +13,34 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.12] — 2026-09-02
+
+### Added
+
+- **COREDEV-2801 — the detector distinguishes a REVERTED record from a never-updated one.**
+  Both look identical: installed is behind `origin/main`. They are not the same problem. On
+  2026-09-02 the user-scope entry read 2.7.0 while `.../unleashed-mail/2.8.3/` sat complete in the
+  install cache — written in the same second as the record — after an update on 2026-09-01 had
+  advanced it to 2.8.3 and something wrote it back. "You never updated" and "your update was undone,
+  and it will be undone again" call for different responses, so the warning now says which.
+
+  The evidence is the install cache, reached through the sibling directories of the entry's own
+  `installPath`. `${CLAUDE_PLUGIN_ROOT}` would be the obvious ground truth for what a session
+  actually LOADED — and it is unavailable here by design: it resolves against a plugin context and
+  this hook is project-scoped, confirmed against the plugins reference rather than assumed.
+
+  POST-GATE AND ADDITIVE, stated plainly. The plan's Table A is bound to a review verdict and this is
+  not in it. It changes no row's verdict: it runs only inside an existing row-7 warning and only
+  appends a sentence, so every silent row stays silent. The plan also explains why the detector could
+  not simply ship in the plugin — "a 2.7.0-pinned session runs 2.7.0's copy; it IS the defect" —
+  which is exactly why this lives in the checkout.
+
+  Three mutations verify it, and the third exposed a test of mine that could not fail: my first
+  contract test used an install EQUAL to `origin/main`, which `continue`s out of the loop before the
+  new code is reached, so a mutant that leaked the note into every row passed it. Row 8 — a locally
+  newer install, silent because every development clone looks like that — is the row that actually
+  reaches the new code, and is now the contract test.
+
 ### Fixed
 
 - **COREDEV-2780 — cell 4's normalised lint digest was computed and never compared to anything.**

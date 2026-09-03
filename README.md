@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.11
+# UnleashedMail — Claude Code Plugin v2.8.12
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,14 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.12
+
+- **The drift detector now says WHY you are behind.** A stale record has two causes with one
+  symptom: nobody ran the update, or an update was undone. On 2026-09-02 it was the second — the
+  record selected 2.7.0 while a complete `.../2.8.3/` sat in the install cache, written the same
+  second as the record itself. Those call for different responses, so the warning now names which it
+  is by reading the install cache beside the entry's own `installPath`.
 
 ### v2.8.11
 

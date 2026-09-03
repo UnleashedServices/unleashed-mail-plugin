@@ -57,7 +57,7 @@ trap 'rm -f "${tmp_out}"' EXIT
 
 EXPECTED_JSON="${expected_json}" INSTALLED_RECORD="${installed_record}" OUT_FILE="${tmp_out}" \
 	python3 <<'PY' 2>/dev/null
-import json, os, re, sys
+import json, os, pathlib, re, sys
 
 # THE OFFICIAL GRAMMAR, not a permissive character class. `[0-9A-Za-z.-]+` accepts strings SemVer
 # forbids -- `2.8.0-01` (a numeric identifier with a leading zero) and `2.8.0-alpha..1` (an empty
@@ -135,13 +135,55 @@ for key, installs in plugins.items():
     for info in installs:
         if not isinstance(info, dict):
             continue
-        entries.append((info.get("scope") or "?", key, info.get("version")))
+        entries.append(
+            (info.get("scope") or "?", key, info.get("version"), info.get("installPath"))
+        )
 
 if not entries:
     sys.exit(0)                                   # row 3
 
+def staged_but_unselected(install_path, installed):
+    """POST-GATE ADDITION (COREDEV-2801, 2026-09-02) — NOT part of the reviewed Table A.
+
+    It changes NO row's verdict. It runs only inside an existing row-7 warning and only adds a
+    sentence, so every silent row stays silent and the contract above is untouched.
+
+    WHY IT EXISTS. A record that is behind has two very different causes and the same symptom:
+    nobody ever updated, or an update was UNDONE. On 2026-09-02 the second happened — the record
+    selected 2.7.0 while `.../unleashed-mail/2.8.3/` sat complete in the install cache beside it,
+    written the same second the record was. Telling those apart matters, because "you never ran the
+    update" and "your update was reverted, and it will revert again" call for different responses.
+
+    The install cache is the evidence, and it needs no new environment variable: the sibling
+    directories of the entry's own `installPath` are the versions actually present on disk.
+    `${CLAUDE_PLUGIN_ROOT}` would be the obvious ground truth for what a session LOADED, and it is
+    unavailable here by design — it resolves against a plugin context, and this hook is
+    project-scoped (confirmed against the plugins reference).
+    """
+    if not isinstance(install_path, str) or not install_path:
+        return None
+    try:
+        versions_dir = pathlib.Path(install_path).parent
+        present = [
+            (parse(child.name), child.name)
+            for child in versions_dir.iterdir()
+            if child.is_dir()
+        ]
+    except OSError:
+        return None
+    newer = [
+        name
+        for parsed, name in present
+        if parsed is not None and precedence(parsed) > precedence(installed)
+    ]
+    if not newer:
+        return None
+    return max(newer, key=lambda name: precedence(parse(name)))
+
+
 behind = []
-for scope, name, version in entries:
+staged = set()
+for scope, name, version, install_path in entries:
     installed = parse(version)
     if installed is None:
         continue                                  # row 4 — not comparable
@@ -150,16 +192,25 @@ for scope, name, version in entries:
         continue
     if precedence(installed) < precedence(expected):
         behind.append(f"{scope}:{name} {version}")   # row 7 — the drift this exists for
+        found = staged_but_unselected(install_path, installed)
+        if found is not None:
+            staged.add(found)
     # row 8 (installed > expected) is silent: a locally newer install is not drift, and warning here
     # would fire on every development clone.
 
 if behind:
-    with open(os.environ["OUT_FILE"], "w", encoding="utf-8") as handle:
-        handle.write(
-            "unleashed-mail: " + ", ".join(sorted(behind))
-            + f" is behind origin/main {expected_raw} — "
-            + "run `claude plugin update unleashed-mail` to pick up fixes already released"
+    message = (
+        "unleashed-mail: " + ", ".join(sorted(behind))
+        + f" is behind origin/main {expected_raw} — "
+        + "run `claude plugin update unleashed-mail` to pick up fixes already released"
+    )
+    if staged:
+        message += (
+            f" (note: {', '.join(sorted(staged))} is ALREADY in the install cache, so the record was"
+            " reverted rather than never updated — expect it to revert again)"
         )
+    with open(os.environ["OUT_FILE"], "w", encoding="utf-8") as handle:
+        handle.write(message)
 PY
 
 warning="$(cat "${tmp_out}")"

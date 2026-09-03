@@ -582,5 +582,113 @@ class TheVersionGrammarIsSemVerNotACharacterClass(_DetectorFixture):
                 )
 
 
+class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
+    """COREDEV-2801, post-gate addition (2026-09-02). NOT part of the reviewed Table A — it changes
+    no row's verdict and only extends the text of an existing row-7 warning.
+
+    A record that is behind has two causes with one symptom: nobody updated, or an update was
+    UNDONE. On 2026-09-02 the second happened here — the record selected 2.7.0 while a complete
+    `.../2.8.3/` sat in the install cache, written the same second as the record. Those call for
+    different responses, so the detector now says which it is: the install cache is the evidence,
+    read from the sibling directories of the entry's own `installPath`.
+    """
+
+    def _stage(self, *versions, selected="2.7.0"):
+        """Build a real cache tree and point the record's installPath into it."""
+        cache = self.home / ".claude/plugins/cache/mkt/unleashed-mail"
+        for version in versions:
+            (cache / version).mkdir(parents=True, exist_ok=True)
+        (self.home / ".claude/plugins/installed_plugins.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "plugins": {
+                        "unleashed-mail@mkt": [
+                            {
+                                "scope": "user",
+                                "version": selected,
+                                "installPath": str(cache / selected),
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_a_newer_version_already_in_the_cache_is_reported_as_a_REVERSION(self):
+        self._stage("2.7.0", "2.8.3", selected="2.7.0")
+        out = self.run_detector(str(self.repo)).stdout
+        self.assertIn("is behind origin/main", out)
+        self.assertIn("2.8.3 is ALREADY in the install cache", out)
+        self.assertIn("reverted rather than never updated", out)
+
+    def test_with_NOTHING_newer_staged_the_warning_carries_no_such_claim(self):
+        """The two-sided half. A note that always appears says nothing; it must be absent when the
+        install genuinely was never updated, or it would misdiagnose every stale machine.
+        """
+        self._stage("2.7.0", selected="2.7.0")
+        out = self.run_detector(str(self.repo)).stdout
+        self.assertIn("is behind origin/main", out)
+        self.assertNotIn("ALREADY in the install cache", out)
+
+    def test_it_reports_the_HIGHEST_staged_version_not_merely_a_newer_one(self):
+        self._stage("2.7.0", "2.8.0", "2.8.2", "2.8.3", selected="2.7.0")
+        out = self.run_detector(str(self.repo)).stdout
+        self.assertIn("2.8.3 is ALREADY in the install cache", out)
+        self.assertNotIn("2.8.0 is ALREADY", out)
+
+    def test_a_SILENT_row_stays_silent_even_with_a_newer_version_staged(self):
+        """THE CONTRACT TEST. Table A's silent rows are the plan's binding promise, and this addition
+        must not create a warning where the reviewed table says nothing. An install already AT
+        origin/main is row 6 — silent — regardless of what else sits in the cache."""
+        # 2.8.6 is what the fixture's origin/main declares — row 6, exact identity, silent. Picking
+        # 2.8.3 here the first time made this fail for a FIXTURE reason (2.8.3 really is behind
+        # 2.8.6), which would have read as the contract breaking when it was the test that was wrong.
+        self._stage("2.8.6", "2.9.9", selected="2.8.6")
+        completed = self.run_detector(str(self.repo))
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual("", completed.stdout.strip())
+
+    def test_row_8_a_LOCALLY_NEWER_install_stays_silent_with_more_staged(self):
+        """THE CONTRACT TEST THAT ACTUALLY DISCRIMINATES.
+
+        The first one I wrote used an install EQUAL to origin/main — row 6 — which `continue`s out of
+        the loop before the new code is ever reached, so it could not have caught a leak. A mutation
+        that emitted the note for every row passed it. Row 8 (installed AHEAD of origin/main, silent
+        because every development clone looks like that) is the row that reaches the new code and
+        must still say nothing.
+        """
+        self._stage("2.9.0", "2.9.9", selected="2.9.0")
+        completed = self.run_detector(str(self.repo))
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual(
+            "",
+            completed.stdout.strip(),
+            "row 8 is silent; a locally newer install must not be warned about",
+        )
+
+    def test_an_unreadable_cache_directory_does_not_break_the_warning(self):
+        """The note is best-effort: losing it must not cost the warning it decorates."""
+        cache = self.home / ".claude/plugins/cache/mkt/unleashed-mail"
+        (cache / "2.7.0").mkdir(parents=True)
+        (self.home / ".claude/plugins/installed_plugins.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "plugins": {
+                        "unleashed-mail@mkt": [
+                            {"scope": "user", "version": "2.7.0", "installPath": None}
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = self.run_detector(str(self.repo)).stdout
+        self.assertIn("is behind origin/main", out)
+        self.assertNotIn("ALREADY in the install cache", out)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
