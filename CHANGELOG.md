@@ -13,6 +13,25 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.20] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2811 — `.trunk/configs/**` was an unfrozen lever on the required gate.** Cell 4 froze
+  which linters run; nothing froze what they tolerate. The C6 guard deliberately allows those paths,
+  so the whole surface sat outside every check — a permissive `ruff.toml` or a `.bandit` skipping
+  every test would report success having enforced almost nothing. Cell 4b freezes the config tree by
+  content, and the filesystem is the oracle rather than the index, because trunk reads an untracked
+  planted config exactly like a tracked one.
+- **COREDEV-2811 — the drift fixture made four distinct sources equal.** `set_expected` pointed
+  `origin/main` at `HEAD`, so worktree, index, HEAD and origin carried identical bytes and a detector
+  reading any of them passed. Measured: with the detector mutated to read the checkout, table rows 6,
+  7 and 8 all still passed. The fixture now diverges, and the question the detector exists to answer —
+  what does `origin/main` SERVE — is finally the one under test.
+- **COREDEV-2811 — the mutation survivor corpus executed nothing.** Fourteen recorded findings whose
+  tests only checked that fields were present. Each claim is now bound to an executing registry case,
+  or declares why it needs none; stripping C5's cases reddens the survivor that rests on it.
+
 ## [2.8.19] — 2026-09-03
 
 ### Fixed
