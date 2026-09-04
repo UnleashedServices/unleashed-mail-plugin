@@ -1,12 +1,190 @@
 #!/bin/bash
-# Git pre-commit hook — runs linting, build, tests, and PII checks
+# Git pre-commit hook — runs linting, build, tests, PII checks, and the diff-scoped trunk gate.
 # Install: git config core.hooksPath .githooks
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)/scripts"
+overall=0
 
-if [ -f "$SCRIPT_DIR/pre-commit-checks.sh" ]; then
-    bash "$SCRIPT_DIR/pre-commit-checks.sh"
+if [[ -f "$SCRIPT_DIR/pre-commit-checks.sh" ]]; then
+	bash "$SCRIPT_DIR/pre-commit-checks.sh" || overall=$?
 else
-    echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR"
-    exit 0
+	echo "⚠️  pre-commit-checks.sh not found at $SCRIPT_DIR"
+	exit 0
 fi
+
+# COREDEV-2780 M5a — the local half of the trunk gate (§6.3 decided: WIRE IT, blocking).
+#
+# `--index`, NOT the worktree: the commit is made from the INDEX, so checking anything else lets a
+# finding that is clean in the worktree and dirty in the index sail through — and reports findings for
+# work that is not being committed.
+# `--no-fix`: this Trunk version applies fixes automatically otherwise, and a hook that rewrites files
+# under you during a commit is worse than one that refuses.
+# §6.4's declared exclusion: markdown-link-check is a network round trip per commit, failing on someone
+# else's outage — the same "red by default" trap §1 rejects for CI.
+# NEVER `--all`: the 9027-issue backlog would block every commit.
+TRUNK_TIMEOUT_SECONDS=180 # M5a: measured 30.8s cold-bootstrap envelope x ~6 headroom.
+# docs/planning/evidence/COREDEV-2780-m5a-timeout-measurement.json
+
+# MACOS-PORTABLE. Stock macOS ships NEITHER `timeout` NOR `gtimeout` — they arrive only with homebrew
+# coreutils, so a hook that assumes them is broken on a clean Mac, which is most of the machines this
+# runs on. Prefer them when present, and otherwise use a watchdog built from what every shell has.
+run_with_timeout() {
+	local seconds="$1"
+	shift
+
+	# ONE SHAPE FOR ALL THREE BRANCHES. Previously the coreutils branches returned early, so the
+	# escalation, the process-group teardown and the timeout bookkeeping existed ONLY in the
+	# hand-rolled fallback — the branch that runs when neither tool is installed, which is neither
+	# this repo's CI (ubuntu-latest) nor any Mac with homebrew coreutils. The guarantees were proven
+	# for the branch that does not run (codex, PR #84). Everything below is now branch-independent;
+	# only the bounding MECHANISM differs.
+	local _rwt_bounded
+	_rwt_bounded="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+
+	local _rwt_t0=${SECONDS}
+	local _rwt_marker="${TMPDIR:-/tmp}/rwt.$$.${RANDOM}.deadline"
+	rm -f "${_rwt_marker}"
+
+	# JOB CONTROL, so the child leads its OWN process group and can be signalled as `-PGID`. Without
+	# it only the direct child is reached: a lint tool spawns helpers that INHERIT THE CALLER'S PIPE,
+	# so anything capturing this hook stays blocked after the hook itself has returned.
+	local _rwt_job_control=1
+	set -m 2>/dev/null || _rwt_job_control=0
+
+	local _rwt_cmd _rwt_watchdog="" _rwt_rc _rwt_timed_out=0
+	# DELIBERATELY NOT `local`. The caller has to distinguish "we stopped it" from "it exited with a
+	# status that happens to look like ours", and no exit status can carry that: 124, 137 and 143 are
+	# each producible BY THE CHILD. Three separate fail-opens came from inferring the fact from the
+	# code. The fact is published here instead, and the caller reads the fact.
+	RWT_TIMED_OUT=0
+	if [[ -n ${_rwt_bounded} ]]; then
+		# `-k 5`, NOT `--kill-after=5`. Measured across implementations: the short form is accepted by
+		# GNU, FreeBSD, busybox and toybox, while the long form is rejected by busybox (exit 1) and
+		# toybox (exit 125) — and a rejected flag would fail EVERY commit for those users, trading a
+		# rare hang for universal breakage.
+		"${_rwt_bounded}" -k 5 "${seconds}" "$@" &
+		_rwt_cmd=$!
+	else
+		"$@" &
+		_rwt_cmd=$!
+		# TERM, A GRACE PERIOD, THEN KILL, with the deadline RECORDED before any signal. The
+		# watchdog's fds are redirected because a background subshell inherits this hook's stdout and
+		# would hold a capturing parent open for the whole timeout even after the hook exited.
+		(
+			sleep "${seconds}"
+			: >"${_rwt_marker}"
+			kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
+			sleep 5
+			kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
+		) >/dev/null 2>&1 &
+		_rwt_watchdog=$!
+	fi
+	[[ ${_rwt_job_control} -eq 1 ]] && set +m
+
+	wait "${_rwt_cmd}" 2>/dev/null
+	_rwt_rc=$?
+
+	if [[ -n ${_rwt_watchdog} ]]; then
+		# THE GROUP, because the watchdog is a subshell BLOCKED IN `sleep`. Signalling the subshell
+		# alone leaves that `sleep` orphaned to PPID 1, where it runs out the full deadline — so
+		# every fast commit on a stock Mac left a `sleep 180` behind, and they accumulate (codex,
+		# PR #84). The watchdog is started while job control is on, so it leads its own group; the
+		# bare-pid retry is the same fallback the signals above use for a shell that granted none.
+		kill -TERM "-${_rwt_watchdog}" 2>/dev/null || kill -TERM "${_rwt_watchdog}" 2>/dev/null
+		wait "${_rwt_watchdog}" 2>/dev/null
+		[[ -e ${_rwt_marker} ]] && _rwt_timed_out=1
+		rm -f "${_rwt_marker}"
+	elif [[ (${_rwt_rc} -eq 124 || ${_rwt_rc} -eq 137 || ${_rwt_rc} -eq 143) && $((SECONDS - _rwt_t0)) -ge ${seconds} ]]; then
+		# EVERY ONE OF THESE THREE IS AMBIGUOUS, and the elapsed guard is the only thing that
+		# resolves any of them. `timeout -k` reports 137 when its SIGKILL lands — but so does an
+		# OOM-killed command. It reports 143 for its TERM — but so does an external `kill`. And it
+		# reports 124 for a real timeout — but ALSO passes through a child that exited 124 itself,
+		# which `trunk` can do by propagating an internal tool's timeout.
+		#
+		# THEY WERE FIXED ONE AT A TIME AND THAT WAS THE MISTAKE: 137 first, then 143 when a
+		# reviewer pointed at it, then 124 when the same reviewer pointed again (codex, PR #84).
+		# Three members of one family, each found only after the previous was closed. They share a
+		# guard now, so a fourth ambiguous status cannot be added without one.
+		_rwt_timed_out=1
+	fi
+
+	RWT_TIMED_OUT=${_rwt_timed_out}
+	if [[ ${_rwt_timed_out} -eq 1 ]]; then
+		# THE PENDING ESCALATION DIED WITH THE WATCHDOG, so do it here. `wait` returns as soon as the
+		# DIRECT child does, and killing the watchdog then cancels its `sleep 5; kill -KILL` — so a
+		# grandchild that ignores TERM outlives the deadline and keeps holding the caller's stdout.
+		# Measured at 45s against a 2s deadline before this line existed, on BOTH branches.
+		# THE PID FALLBACK IS NOT DECORATION. `set -m` can fail, and then the child is never a group
+		# leader, so `kill -- -PID` fails with ESRCH and kills NOTHING — measured. Lines above pair
+		# every group signal with a pid retry; this one did not, which left the teardown silently
+		# inert on exactly the shells that could not give the child its own group (gemini, PR #84).
+		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
+		# ONE STATUS FOR ONE FACT: every branch reports a timeout as 124, so the caller classifies a
+		# recorded fact rather than a per-branch exit code.
+		return 124
+	fi
+	return "${_rwt_rc}"
+}
+
+if command -v trunk >/dev/null 2>&1; then
+	echo "🧹 trunk check (staged diff only)…"
+	if run_with_timeout "${TRUNK_TIMEOUT_SECONDS}" \
+		trunk check --index --no-fix --filter=-markdown-link-check; then
+		echo "✅ trunk: no new findings in the staged diff"
+	else
+		_trunk_rc=$?
+		if [[ ${RWT_TIMED_OUT:-0} -eq 1 ]]; then
+			# A timeout is an INFRASTRUCTURE failure, not a lint finding. Blocking the commit on
+			# someone's slow network would teach people to pass --no-verify, which disables every
+			# check above as well.
+			#
+			# THE FACT, NOT A STATUS. This arm keyed on 124, then on `124 || 143`, and each time a
+			# reviewer found another status the CHILD can produce that is indistinguishable from the
+			# wrapper's own: 143 from an external kill, 137 from the OOM killer, and 124 from `trunk`
+			# propagating an internal tool timeout. Every one of those reported "exceeded 180s" and
+			# let the commit through after an incomplete lint.
+			#
+			# `run_with_timeout` knows whether it stopped the command and now says so directly, so
+			# there is no status left to misread. A child's own 124 falls through to the arms below
+			# and blocks, which is what an unexplained non-zero from a lint gate should do.
+			echo "⚠️  trunk check exceeded ${TRUNK_TIMEOUT_SECONDS}s — not blocking on a timeout"
+		elif [[ ${_trunk_rc} -eq 2 ]]; then
+			# TRUNK COULD NOT RUN, WHICH IS NOT THE SAME AS FINDING SOMETHING. Exit 2 is what the
+			# real binary returns when the invocation itself is unusable — measured on trunk 1.25.0
+			# with a `--filter` naming a linter this config does not enable, and reported for a
+			# branch with no detectable upstream. Both reach this gate through the one `--filter`
+			# literal it passes. Reported as "new findings in the staged diff" it is a false
+			# statement about the developer's diff that no amount of fixing the diff will clear, so
+			# it still blocks — a gate that did not run must not report a pass — but it says why.
+			echo "❌ trunk could not run (exit 2) — see its message above; this is NOT a lint finding"
+			overall=1
+		elif [[ ${_trunk_rc} -ge 128 ]]; then
+			# KILLED BY A SIGNAL, which is not a finding either. 128+N is the shell's encoding for a
+			# signal death: the OOM killer, an external `kill`, a crash. `run_with_timeout` has
+			# already converted the deadline cases to 124, so anything still carrying a signal status
+			# here died for a reason this hook did not cause and cannot describe. It blocks — the
+			# gate did not complete — but it does not blame the diff.
+			echo "❌ trunk was killed (signal $((_trunk_rc - 128))) before it finished — not a lint finding"
+			overall=1
+		else
+			echo "❌ trunk: new findings in the staged diff (fix them, or stage less)"
+			overall=1
+		fi
+	fi
+fi
+
+# COREDEV-2801 §3b — the drift detector's second surface, for the case where hooks are disabled in the
+# session but not in git. ADVISORY AND NON-BLOCKING: it never contributes to `overall`, because a stale
+# install is a thing to know about, not a reason to refuse a commit. Silent on every Table A row but
+# one, so an equal or locally-newer install cannot train anyone to ignore it.
+#
+# THE ROOT IS PASSED EXPLICITLY, derived here rather than inherited: git runs this hook from the
+# worktree, so `--show-toplevel` is correct — while CLAUDE_PROJECT_DIR may be unset, empty, or left
+# over from a DIFFERENT project, which would compare against a foreign manifest.
+if [[ -x "${SCRIPT_DIR}/detect-plugin-version-drift.sh" ]]; then
+	bash "${SCRIPT_DIR}/detect-plugin-version-drift.sh" "$(git rev-parse --show-toplevel)" || true
+fi
+
+# THE EXIT CODE AGGREGATES. Appending any passing command after the checks above would otherwise mask
+# a nonzero result from them — a hook that swallows a prior failure is worse than no hook.
+exit "${overall}"

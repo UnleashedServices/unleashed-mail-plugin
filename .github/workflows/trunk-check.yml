@@ -1,0 +1,183 @@
+# COREDEV-2780 — the diff-scoped, REQUIRED trunk gate.
+#
+# THIS JOB LIVES IN ITS OWN WORKFLOW ON PURPOSE. `trunk-check` may not sit in `plugin-ci.yml`,
+# which carries `workflow_dispatch` — the pinned action autodetects that event as check-mode=all,
+# which would re-litigate the whole 9027-finding backlog. Two earlier fixes for that hazard failed: a
+# job-level `on:` (GitHub has no such key at job scope) and an `if:` guard, which is STRICTLY WORSE
+# because a job skipped by a conditional REPORTS SUCCESS and a required context is satisfied by it.
+# GitHub's own guidance: "Avoid requiring workflows that can be skipped." The job is unreachable on
+# dispatch BY CONSTRUCTION here, not by condition.
+#
+# The full contract is COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md §1, clauses C0-C9 and C6a, rendered
+# from docs/planning/COREDEV-2780-contract.yaml. Values are stated THERE, never restated here.
+name: trunk-check
+
+# C1: one event, and its options are an allowlist — only `branches:` and `types:`.
+# C2: `types:` is REQUIRED. `pull_request`'s default activity set EXCLUDES `edited`, the event a
+# RETARGET fires, so without it a retargeted PR keeps a green check computed against the OLD base.
+# No `paths:`/`paths-ignore:` — those skip on changed files, leaving a required context PENDING,
+# which blocks merging just as hard as a red one and less visibly.
+on:
+  pull_request:
+    branches: [main, alpha]
+    types: [opened, synchronize, reopened, edited]
+
+# C0: the root mapping is an allowlist and `permissions` is pinned BY VALUE. Permitting the key
+# without pinning the value let `write-all` satisfy every structural check while contradicting §6.1 —
+# and a wider token produces byte-identical runtime evidence, so only a static assertion sees it.
+permissions:
+  contents: read
+
+jobs:
+  trunk-check:
+    # zizmor/anonymous-definition. IDENTICAL to the job id on purpose: cell 14 takes
+    # `name:` as the EFFECTIVE CHECK NAME when present, so any other value would
+    # silently rename the context a ruleset refers to.
+    name: trunk-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # C3: pinned at BOTH scopes. GitHub calculates the token workflow-level THEN job-level, so a
+    # job-level widening satisfies both allowlists while widening the effective token.
+    permissions:
+      contents: read
+    # M2 ONLY, AND AT JOB SCOPE ONLY — REMOVED AT M3.
+    # C3 forbids this key. M2 is deliberately exempt so cell 2's M2 half is observable: at job scope
+    # the Trunk step's own `conclusion` still reports `failure` in the workflow-jobs record, which
+    # the rollout evidence can bind to. STEP scope would rewrite that conclusion to `success` and
+    # leave only the in-job `outcome`, which the REST API never exposes — nothing could carry the
+    # claim. Cell 11's C3 assertions are written at M2 and ENABLED at M3.
+    continue-on-error: true
+    # C8: the step sequence is an allowlist, IN ORDER, and exactly these five. The two guards are
+    # separate because their correct positions differ — C6a's must precede the step that EXECUTES the
+    # resolver, and C6's must be the LAST thing before the action so nothing can create a launcher
+    # path behind its back. Revision 10 had one guard and the wrong order, which left an allowlisted
+    # step sitting exactly where it could create `tools/trunk` after the guard had passed.
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `fetch-depth: 2` so HEAD^1 exists: the action uses it as the upstream on the merge ref,
+          # deliberately in preference to base.sha, "which can be incorrect sometimes".
+          fetch-depth: 2
+          # REQUIRED, not merely permitted. checkout defaults `lfs` to false, so a PR that introduces
+          # an LFS-tracked source checks out the POINTER FILE: the diff stays non-empty, the guard
+          # passes, and Trunk lints a 130-byte pointer and reports green.
+          lfs: true
+          # REQUIRED. checkout persists the job credential by default, and zizmor's `artipacked` — one
+          # of the 19 linters THIS GATE REQUIRES — reports it. Without this input the workflow would
+          # fail the gate it defines, with the only in-workflow remedy prohibited.
+          persist-credentials: false
+
+      - name: guard-resolver-digest
+        # C6a. The resolver is REPOSITORY-SUPPLIED, so C8's run-body digest cannot reach it: this body
+        # hashes identically whatever the script contains. Verify, THEN execute — the next step is the
+        # one that runs it.
+        run: |
+          set -euo pipefail
+          expected='bb3218baaeec78cacb0f186539d3307e671c9da956fca61fa2eec3168d989d00'
+          actual="$(sha256sum scripts/ci/resolve-trunk-range.sh | cut -d' ' -f1)"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "C6a: scripts/ci/resolve-trunk-range.sh digest mismatch" >&2
+            echo "  expected ${expected}" >&2
+            echo "  actual   ${actual}" >&2
+            exit 1
+          fi
+
+      - name: guard-empty-diff
+        # Cell 1. `trunk check` exits 0 when the resolved diff matches no files, so the action alone
+        # reports GREEN HAVING CHECKED NOTHING — inherited defect 3. Resolve the range with the ONE
+        # shared implementation the action's own logic is transcribed into, and fail when it is empty.
+        run: |
+          set -euo pipefail
+          resolved="$(bash scripts/ci/resolve-trunk-range.sh)"
+          upstream="${resolved#upstream=}"
+          if [ -z "${upstream}" ] || [ "${upstream}" = "${resolved}" ]; then
+            echo "cell 1: resolver produced no upstream: ${resolved}" >&2
+            exit 1
+          fi
+          if [ -z "$(git diff --name-only "${upstream}" HEAD)" ]; then
+            echo "cell 1: resolved diff against ${upstream} is EMPTY — refusing a green run that lints nothing" >&2
+            exit 1
+          fi
+          git diff --name-only "${upstream}" HEAD | sed 's/^/  changed: /' >&2
+
+      - name: guard-launcher-path
+        # C6: THE REPOSITORY MAY NOT SUPPLY THE TOOL THAT TESTS IT. Verified at the pinned SHA:
+        # setup/locate_trunk.sh prefers a checked-out .trunk/bin/trunk, tools/trunk or ./trunk before
+        # downloading, and action.yaml:289 EXECUTES a checked-out .trunk/setup-ci as a composite action,
+        # which can rewrite TRUNK_PATH through GITHUB_ENV. .trunk/user.yaml and .trunk/env.yaml override
+        # the configuration cell 4 freezes. LAST before the action, so nothing can create one behind it.
+        run: |
+          set -euo pipefail
+          # AN ALLOWLIST, BECAUSE THE BLACKLIST RE-OPENED. This guard used to name six paths. It did
+          # not name `.trunk/user_trunk.yaml`, which trunk merges exactly as it merges `user.yaml` —
+          # `.trunk/.gitignore` lists both, one line apart. Reproduced end to end: a tracked
+          # `user_trunk.yaml` disabling two linters takes `trunk check --ci --upstream` from
+          # `exit 1 / 2 failures` to `exit 0 / Found no applicable linters`, while this guard printed
+          # PASSED. That is the founding hazard of this ticket — a required context reporting green
+          # having linted nothing — reached through the one name the enumeration missed.
+          #
+          # So the question is inverted. Instead of listing what the repository may not supply, we
+          # list what it MAY, and refuse everything else under `.trunk/`. A seventh override file, or
+          # a rename in a future trunk release, then fails closed by default instead of walking
+          # straight through.
+          #
+          # KNOWN AND DELIBERATELY OUT OF SCOPE: `.trunk/configs/**` is allowed, and its contents are
+          # a real lever on this gate — a permissive `ruff.toml` weakens linting without tripping
+          # anything here, because cell 4 freezes `.trunk/trunk.yaml`'s lint block and nothing else.
+          # Closing that needs a frozen digest per config file; it is a separate change and is
+          # tracked, not silently tolerated.
+          # THE FILESYSTEM IS THE ORACLE, NOT THE INDEX. A first draft asked `git ls-files`, which
+          # sees only TRACKED paths — and the existing per-path cases immediately caught that an
+          # untracked `.trunk/user.yaml` then walked straight through. Checkout materialises only
+          # tracked files, so anything else present here was put there by a step, which is precisely
+          # the case this guard is positioned LAST to catch.
+          while IFS= read -r path; do
+            case "${path}" in
+              .trunk/.gitignore | .trunk/trunk.yaml | .trunk/configs/*) continue ;;
+            esac
+            echo "C6: the repository supplies ${path}; trunk merges files under .trunk/ into the configuration this gate freezes" >&2
+            exit 1
+          # `! -type d`, NOT `-type f`. `-type f` matches REGULAR FILES ONLY, so it emitted neither a
+          # symlinked file nor a symlinked directory — and `find` never descends into the latter.
+          # The action's own `locate_trunk.sh` at the pinned SHA tests `[[ -f .trunk/bin/trunk && -x
+          # ... ]]`, and bash's file tests FOLLOW symlinks. The enumerator did not follow; the
+          # consumer does, and that asymmetry was the whole bypass: a committed symlink at
+          # `.trunk/bin/trunk` passed this guard and was then selected as TRUNK_PATH (codex, PR #84).
+          #
+          # The allowlist rewrite fixed the NAME axis and left the TYPE axis exactly as it was —
+          # narrowed on a second axis nobody varied. Inverting the type question the same way the
+          # path question was inverted closes the class: anything that is not a directory is a
+          # candidate, whatever its type.
+          #
+          # NOT `find -L`: it resolves symlinks and would emit the TARGET path, so `.trunk/bin/trunk`
+          # would print as `scripts/nolint.sh` and miss the allowlist `case` entirely.
+          done < <(find .trunk ! -type d 2>/dev/null | sed 's|^\./||' | sort)
+          # The launcher paths proper, which live outside `.trunk/` and so are not covered above.
+          # `-e` rather than `git ls-files`: an untracked one created by an earlier step would be
+          # preferred by the action just the same.
+          # `-e` OR `-L`: `-e` follows the symlink and is FALSE for a dangling one, so a launcher
+          # symlinked to a path that does not exist yet — created by a later step, say — slipped
+          # past. This is the other half of the same `run:` body and the same defect; the sweep fix
+          # above does not reach it, because these two paths live outside `.trunk/`.
+          for path in tools/trunk ./trunk; do
+            if [ -e "${path}" ] || [ -L "${path}" ]; then
+              echo "C6: the repository supplies ${path}, which the action would prefer over a verified download" >&2
+              exit 1
+            fi
+          done
+
+      - name: trunk
+        # C9: pinned by exact SHA. v1.3.0 and v1.3.1 resolve to the SAME SHA — tags in this action have
+        # moved, which is why AGENT_CONTRACTS §6 requires SHAs. A pin bump must re-run cell 11's mutants
+        # AND re-derive the extension-point enumeration; re-running mutants does not do the second.
+        uses: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa # v2.0.0
+        with:
+          # C4 is an ALLOWLIST — notably no `trunk-path` (it names the executed launcher) and no
+          # `post-init` (the action's own docs: "a caller-controlled escape hatch").
+          # §6.4's declared literal, matched as a WHOLE STRING: an appended argument would satisfy a
+          # substring test. Absence is a failure — it would run markdown-link-check in the required job.
+          arguments: --filter=-markdown-link-check
+          # §6.1 option (b): the action writes an annotation artifact INSTEAD of posting annotations,
+          # so `contents: read` stands and there is no 403 to hit.
+          save-annotations: true
