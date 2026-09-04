@@ -13,6 +13,43 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.23] — 2026-09-04
+
+### Fixed
+
+- **COREDEV-2801 — the recurring 2.7.0 reversion has a root cause, and it was ours.**
+  `.claude-plugin/marketplace.json` declared no `version` key. When a marketplace entry omits it,
+  Claude Code resolves the installed version down a fallback branch that takes `readdir()[0]` of the
+  plugin cache directory — raw filesystem order, no sort, no semver comparison. Index 0 on the
+  maintainer's machine is `2.7.0`, so every wholesale registry rebuild reinstated 2.7.0 while
+  `origin/main` was a dozen releases ahead, silently costing that session the plugin's agents and its
+  bundled MCP server.
+
+  Verified independently of the analysis: the entry's keys are `category, description, homepage,
+name, source` with no `version`; raw `readdir` of the cache yields
+  `['2.7.0','2.8.2','2.8.3','2.8.16','2.8.1','2.8.0']`. For this plugin alone that test is degenerate
+  — 2.7.0 is simultaneously first by raw order, lexicographically, by semver and by age — so the
+  discriminating evidence came from two sibling plugins where raw and sorted order disagree, and raw
+  order won three times out of three.
+
+  `version` is a real marketplace field, not one inferred from decompiled code: 17 of 297 entries
+  installed on this machine declare it, including one with the same dict-shaped `source` as ours. It
+  is now sync point 5 in `validate-version-sync.sh`, so it cannot drift from `plugin.json` — which is
+  the only reason declaring it helps.
+
+  **Two honest limits.** Pinning only takes effect once that version is present in the cache;
+  measured, `2.8.16` pins and an uncached `2.8.22` still falls back. And this fixes the WRONG VALUE
+  being chosen, not the rebuild itself — why the registry read returns ENOENT at session start is
+  not established.
+
+- **COREDEV-2780 — five codex findings, three of them counterexamples to the previous round.** Signal
+  handlers removed the marker directory and exited while leaving `trunk` and the watchdog running
+  (measured: three live processes; now zero across SIGTERM/SIGHUP/SIGINT). The placeholder collision
+  was closed on the named keys but not the inline `tool@version` specifiers. The 3.9 checker missed
+  `Alias = Foo | Bar` and `isinstance(v, Foo | Bar)`. `_mypy()` tested any ambient binary rather than
+  the pinned release. And the survivor binding checked a clause, so deleting one of seven C6 cases
+  left the survivor green — the exact regression it claimed to detect.
+
 ## [2.8.22] — 2026-09-04
 
 ### Fixed

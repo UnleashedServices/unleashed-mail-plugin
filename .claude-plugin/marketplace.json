@@ -8,13 +8,14 @@
   "plugins": [
     {
       "name": "unleashed-mail",
-      "description": "Multi-agent development plugin for UnleashedMail — a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture. Ships 21 specialized agents, 21 skills (18 auto-triggering + 3 model-invocable orchestration workflows), and a bundled deterministic review-synthesizer MCP server. Aligns agents with project's path-scoped rules (`.claude/rules/`) and defines cross-agent workflow contracts (AGENT_CONTRACTS.md).",
+      "description": "Multi-agent development plugin for UnleashedMail \u2014 a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture. Ships 21 specialized agents, 21 skills (18 auto-triggering + 3 model-invocable orchestration workflows), and a bundled deterministic review-synthesizer MCP server. Aligns agents with project's path-scoped rules (`.claude/rules/`) and defines cross-agent workflow contracts (AGENT_CONTRACTS.md).",
       "category": "development",
       "source": {
         "source": "github",
         "repo": "UnleashedServices/unleashed-mail-plugin"
       },
-      "homepage": "https://github.com/UnleashedServices/unleashed-mail-plugin"
+      "homepage": "https://github.com/UnleashedServices/unleashed-mail-plugin",
+      "version": "2.8.23"
     }
   ]
 }
