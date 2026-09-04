@@ -753,18 +753,29 @@ class TheBoundedRun(unittest.TestCase):
     def _reported_timeout(completed) -> int:
         return int(completed.stdout.rsplit("TO=", 1)[1].split("\n", 1)[0].strip())
 
-    def test_a_childs_OWN_124_near_the_deadline_is_not_laundered_into_a_timeout(self):
+    def test_a_childs_OWN_124_is_never_published_as_our_deadline(self):
         """COREDEV-2805, the fourth member of the 124/137/143 family. `timeout` cannot say whether
-        it fired, so the branch that used it inferred the fact from elapsed seconds — and sampled
-        `${SECONDS}`, an INTEGER clock, BEFORE the fork. The elapsed it computed therefore read up
-        to a second high, and a command exiting 124 ON ITS OWN inside that second was reported as
-        our timeout. That is a fail-OPEN: a timeout deliberately does not block the commit, so an
-        incomplete lint passed the gate. Measured on the shipped code at 10 runs out of 10.
+        it fired, so that branch inferred it from `${SECONDS}` sampled BEFORE the fork; the integer
+        clock read up to a second high and laundered a command's own exit 124 into "we timed out",
+        which is a fail-OPEN because a timeout deliberately does not block the commit.
+
+        THE MARGIN HERE IS DELIBERATELY HUGE, and the first version of this test is why. It ran the
+        child for 1.95s against a 2s deadline — a FIFTY MILLISECOND margin — because reproducing the
+        old integer-clock defect needs the child to finish inside the final second. On a loaded macOS
+        runner fork and interpreter startup alone cross 50ms, the watchdog then fires FOR REAL, and
+        reporting a timeout becomes the CORRECT answer. It went red in CI on exactly that.
+
+        A test cannot both reproduce that sub-second window and be stable, because the window IS
+        sub-second — that is the defect's whole shape. Stability wins for a gate that blocks every
+        commit, so this asserts the property with a margin nothing can cross, the structural
+        companion below covers the specific regression, and the discriminating measurement
+        (10 runs of 10 before, 0 of 10 after) is recorded in COREDEV-2805's commit rather than
+        re-run flakily forever.
         """
         for branch in self._both_branches():
             with self.subTest(branch=branch):
                 rc, _, _, completed = self._harness(
-                    "sleep 1.95\nexit 124\n", seconds=2, branch=branch
+                    "exit 124\n", seconds=8, branch=branch
                 )
                 self.assertEqual(124, rc, "the child's own status must pass through")
                 self.assertEqual(
@@ -772,6 +783,29 @@ class TheBoundedRun(unittest.TestCase):
                     self._reported_timeout(completed),
                     "a status the CHILD produced must never be published as our deadline",
                 )
+
+    def test_the_classification_does_no_arithmetic_on_a_clock(self):
+        """STRUCTURAL, and it says so — the same standing as the escalation test below.
+
+        The behavioural test above cannot catch a return to elapsed-based inference, because doing
+        so needs the sub-second window that made it flaky. This catches it directly instead: the
+        repair for COREDEV-2805 was to stop deriving the fact and start recording it, so any clock
+        arithmetic reappearing inside `run_with_timeout` is that defect returning, whatever the
+        surrounding logic looks like.
+        """
+        hook = HOOK.read_text(encoding="utf-8")
+        head = hook.index("run_with_timeout() {")
+        body = hook[head : hook.index("\n}\n", head)]
+        executable = [
+            line
+            for line in body.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertEqual(
+            [],
+            [line for line in executable if "SECONDS" in line],
+            "the deadline is RECORDED by the watchdog, never computed from a clock",
+        )
 
     def test_a_real_timeout_is_still_published_as_one_on_both_branches(self):
         """The other side of the same coin — narrowing the false positive must not lose the true

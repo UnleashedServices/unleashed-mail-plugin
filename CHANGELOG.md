@@ -13,6 +13,27 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.21] — 2026-09-04
+
+### Fixed
+
+- **COREDEV-2808 follow-up — the python3 guard was ordered behind a read that exits first.** The
+  `origin/main` lookup carries `|| exit 0`, and a CI checkout has no `refs/remotes/origin/main`, so a
+  machine without `python3` exited there and never reached the diagnostic. Caught by CI on PR #85 and
+  reproduced locally against a repo with no such ref. "I cannot run" now precedes "there is nothing
+  to compare".
+
+### Changed
+
+- **COREDEV-2805's timing test traded a 50ms race for a property that holds.** It ran the child for
+  1.95s against a 2s deadline, because reproducing the old integer-clock defect requires the child to
+  finish inside the final second. Fork and interpreter startup cross 50ms on a loaded runner, the
+  watchdog then fires for real, and a timeout becomes the correct answer — it went red in CI on
+  exactly that. No test can both reproduce a sub-second window and be stable, so the behavioural test
+  now asserts the property with a margin nothing can cross, a structural companion catches a return
+  to clock arithmetic directly (proven red against a reintroduced `${SECONDS}` sample), and the
+  discriminating 10-of-10 measurement stays recorded in COREDEV-2805's commit.
+
 ## [2.8.20] — 2026-09-03
 
 ### Fixed
