@@ -14,12 +14,25 @@ overall=0
 # FUNCTION RETURN under zsh and at PROCESS EXIT under bash, and a script owns exactly one EXIT
 # slot — so the function publishes the path and the script owns the disposal. SIGKILL cannot be
 # trapped and is not claimed to be: this narrows the leak to the one signal nothing can catch.
+# THE PROCESS GROUPS THIS RUN OWNS. `set -m` gives the bounded command and the watchdog their own
+# groups precisely so they can be signalled as a unit — which also means a signal aimed at THIS
+# script never reaches them. Removing the marker directory and exiting therefore looked orderly
+# while leaving `trunk` and a `sleep` running out the rest of the deadline: measured, three live
+# processes after the hook had exited (codex, PR #85). The handler tears down what it started.
 RWT_TMPDIR=""
+RWT_ACTIVE_PIDS=""
 # shellcheck disable=SC2329  # invoked only from the trap handlers below, which shellcheck
 # cannot see through: the name is a word in a trap string, not a call site. Verified by
 # measurement rather than by asserting it — a mid-run SIGINT, SIGTERM and SIGHUP each leave
 # no `rwt.*` behind, which is only true if this runs.
 _rwt_cleanup() {
+	local _pid
+	for _pid in ${RWT_ACTIVE_PIDS}; do
+		# THE GROUP, THEN THE PID — the same pairing every other signal site in this file uses,
+		# because `set -m` can fail and then `kill -- -PID` fails with ESRCH and kills NOTHING.
+		kill -KILL "-${_pid}" 2>/dev/null || kill -KILL "${_pid}" 2>/dev/null
+	done
+	RWT_ACTIVE_PIDS=""
 	if [[ -n ${RWT_TMPDIR} ]]; then
 		rm -rf "${RWT_TMPDIR}"
 		RWT_TMPDIR=""
@@ -173,6 +186,9 @@ run_with_timeout() {
 		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
 	) >/dev/null 2>&1 &
 	_rwt_watchdog=$!
+	# PUBLISHED for the interrupt handler — the only thing that runs if the commit is killed
+	# before `wait` returns.
+	RWT_ACTIVE_PIDS="${_rwt_cmd} ${_rwt_watchdog}"
 	[[ ${_rwt_job_control} -eq 1 ]] && set +m
 
 	wait "${_rwt_cmd}" 2>/dev/null
@@ -197,6 +213,7 @@ run_with_timeout() {
 			rm -rf "${_rwt_tmpdir}"
 		fi
 		RWT_TMPDIR=""
+		RWT_ACTIVE_PIDS=""
 	fi
 
 	RWT_TIMED_OUT=${_rwt_timed_out}

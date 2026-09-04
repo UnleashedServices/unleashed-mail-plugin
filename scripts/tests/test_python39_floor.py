@@ -19,7 +19,6 @@ from __future__ import annotations
 import ast
 import pathlib
 import re
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -115,17 +114,33 @@ _TYPE_NAMES = frozenset(
 )
 
 
-def _looks_like_a_type(node: ast.AST) -> bool:
+# CapWords, and it must CONTAIN A LOWERCASE LETTER. `\A[A-Z][A-Za-z0-9]*\Z` alone also matches
+# ALL-CAPS, which are constants by the same convention — `APPROVING | {"..."}` is a set union
+# valid on 3.9, and `Flags.RED | Flags.BLUE` is enum arithmetic. The first spelling flagged both.
+_CAPWORDS = re.compile(r"\A[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\Z")
+
+
+def _names_a_type(node: ast.AST) -> bool:
+    """Whether this operand reads as a TYPE rather than as an integer.
+
+    `_TYPE_NAMES` alone covered builtins and typing aliases, so `Alias = Foo | Bar` and
+    `isinstance(v, Foo | Bar)` — both runtime-evaluated, both TypeError on 3.9 — were reported as
+    clean, which is the commonest spelling of the very incompatibility this gate advertises
+    (codex, PR #85). CapWords is the discriminator Python's own conventions supply: `Foo` is a
+    class, `FLAG_A` is a constant, and `Flags.RED | Flags.BLUE` keeps its ALL-CAPS attribute so it
+    stays out. A convention is not a proof, and the alternative — resolving names — is not
+    available to a static scan, so the rule is stated here rather than implied.
+    """
     if isinstance(node, ast.Constant) and node.value is None:
         return True
     if isinstance(node, ast.Name):
-        return node.id in _TYPE_NAMES
+        return node.id in _TYPE_NAMES or bool(_CAPWORDS.match(node.id))
     if isinstance(node, ast.Attribute):
-        return node.attr in _TYPE_NAMES
+        return node.attr in _TYPE_NAMES or bool(_CAPWORDS.match(node.attr))
     if isinstance(node, ast.Subscript):
-        return _looks_like_a_type(node.value)
+        return _names_a_type(node.value)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        return _looks_like_a_type(node.left) or _looks_like_a_type(node.right)
+        return _names_a_type(node.left) or _names_a_type(node.right)
     return False
 
 
@@ -169,6 +184,18 @@ def _runtime_evaluated_unions(source: str) -> list[int]:
         elif isinstance(node, ast.AnnAssign) and node.annotation is not None:
             annotation_nodes.update(map(id, ast.walk(node.annotation)))
 
+    # A `|` inside the second argument of isinstance/issubclass is a TYPE union by construction,
+    # whatever the operands are called — no naming convention needed to know that.
+    isinstance_args: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"isinstance", "issubclass"}
+            and len(node.args) >= 2
+        ):
+            isinstance_args.update(map(id, ast.walk(node.args[1])))
+
     lines: list[int] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)):
@@ -177,7 +204,7 @@ def _runtime_evaluated_unions(source: str) -> list[int]:
         if in_annotation:
             if not postponed:
                 lines.append(node.lineno)
-        elif _looks_like_a_type(node):
+        elif id(node) in isinstance_args or _names_a_type(node):
             lines.append(node.lineno)
     return sorted(set(lines))
 
@@ -240,6 +267,29 @@ class TheRuntimeFloorHoldsOnEveryFileCICompilesOnThreeNine(unittest.TestCase):
                 [],
                 "nor is a union of names that are not types",
             ),
+            (
+                "from __future__ import annotations\nAlias = Foo | Bar\n",
+                [2],
+                "USER-DEFINED types count: _TYPE_NAMES alone missed the commonest spelling",
+            ),
+            (
+                (
+                    "from __future__ import annotations\ndef f(v):\n"
+                    "    return isinstance(v, Foo | Bar)\n"
+                ),
+                [3],
+                "an isinstance second argument is a type union whatever the operands are called",
+            ),
+            (
+                "APPROVING = {'A'}\nBOTH = APPROVING | {'B'}\n",
+                [],
+                "ALL-CAPS is a constant by the same convention: this set union is valid on 3.9",
+            ),
+            (
+                "mask = Flags.RED | Flags.BLUE\n",
+                [],
+                "and enum arithmetic stays out for the same reason",
+            ),
         ):
             with self.subTest(label):
                 self.assertEqual(expected, _runtime_evaluated_unions(source), label)
@@ -287,14 +337,51 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
     """
 
     @staticmethod
-    def _mypy() -> str | None:
-        found = shutil.which("mypy")
-        if found:
-            return found
+    def _pinned_version() -> str:
+        """The version `.trunk/trunk.yaml` pins, because that is the release under test."""
+        config = yaml.safe_load(
+            (REPO / ".trunk/trunk.yaml").read_text(encoding="utf-8")
+        )
+        for entry in config["lint"]["enabled"]:
+            name, _, version = str(entry).partition("@")
+            if name == "mypy":
+                return version
+        raise AssertionError("mypy is not pinned in .trunk/trunk.yaml")
+
+    @classmethod
+    def _mypy(cls) -> str | None:
+        """The PINNED binary, never whatever happens to be on PATH.
+
+        `shutil.which("mypy")` first meant a developer or runner with any ambient mypy tested that
+        one — and the property here is precisely WHICH Python targets a PARTICULAR release accepts,
+        so an older ambient binary passes while the pinned release refuses the configured target,
+        defeating the protection this cell exists to give (codex, PR #85).
+        """
+        pinned = cls._pinned_version()
         candidates = sorted(
-            pathlib.Path.home().glob(".cache/trunk/tools/mypy/*/bin/mypy")
+            pathlib.Path.home().glob(f".cache/trunk/tools/mypy/{pinned}-*/bin/mypy")
         )
         return str(candidates[-1]) if candidates else None
+
+    def test_it_interrogates_the_PINNED_release_not_an_ambient_one(self):
+        """The property under test is which Python targets a PARTICULAR mypy accepts, so resolving
+        `shutil.which("mypy")` first meant a developer or runner with any ambient mypy tested that
+        one instead — and an older binary passes where the pinned release refuses, defeating the
+        protection entirely (codex, PR #85). The pin is read from `.trunk/trunk.yaml`, so a bump
+        there moves this too.
+        """
+        pinned = self._pinned_version()
+        self.assertRegex(
+            pinned, r"\A\d+\.\d+\.\d+\Z", "the pin must be a concrete version"
+        )
+        resolved = self._mypy()
+        if resolved is None:
+            self.skipTest("the pinned mypy is not materialised on this machine")
+        self.assertIn(
+            f"/mypy/{pinned}-",
+            resolved,
+            "resolved a mypy that is not the pinned release",
+        )
 
     def test_the_pinned_mypy_does_not_refuse_the_configured_version(self):
         mypy = self._mypy()

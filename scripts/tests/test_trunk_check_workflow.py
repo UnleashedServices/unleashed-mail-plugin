@@ -431,11 +431,21 @@ def _normalised_trunk_config(config_text: str) -> str:
             ):
                 source["ref"] = _VERSION_PLACEHOLDER
                 normalised.append(f"plugins.sources[{index}].ref")
-    body = re.sub(
-        r"@\d+[\w.\-+]*",
-        "@" + _VERSION_PLACEHOLDER,
-        yaml.safe_dump(doc, sort_keys=True),
+    dumped = yaml.safe_dump(doc, sort_keys=True)
+    # THE INLINE SUBSTITUTIONS BELONG IN THE MANIFEST TOO. Recording only the two NAMED keys left the
+    # identical collision open one channel over: `zizmor@<version>` written verbatim is not
+    # `@<digits>`, so it is never substituted — and the document was then byte-identical to the one a
+    # genuine `zizmor@1.29.0` normalises into, leaving the frozen digest unmoved. Measured (codex,
+    # PR #85). What is recorded is the NAME whose version was normalised, never the version, so a
+    # real `trunk upgrade` still yields an identical manifest while a forged placeholder yields a
+    # shorter one.
+    normalised.extend(
+        f"inline:{name}"
+        for name in {
+            match.group(1) for match in re.finditer(r"([\w.\-]+)@\d+[\w.\-+]*", dumped)
+        }
     )
+    body = re.sub(r"@\d+[\w.\-+]*", "@" + _VERSION_PLACEHOLDER, dumped)
     return f"{body}\n# normalised: {','.join(sorted(normalised))}\n"
 
 
@@ -483,7 +493,7 @@ def _digest_of_tree(root: pathlib.Path) -> str:
 # `ignore` — moves it, and moving it is a reviewed change: update this literal in the same commit,
 # with the reason, exactly as the ignore-list literal above is maintained.
 EXPECTED_NORMALISED_CONFIG_DIGEST = (
-    "0f2c8eb57e9c893a0dfaf42a008b3ad7cdf28fac1588da932f8ee07cda88129f"
+    "afccfda8341a29d71cac8ab0ac38b4aa6ce243d9249ca3ac4a04ea86cbbb6e0b"
 )
 
 
@@ -1183,6 +1193,40 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         self.assertNotEqual(
             _normalised_trunk_config(self.config),
             _normalised_trunk_config(yaml.safe_dump(doc)),
+        )
+
+    def test_an_INLINE_placeholder_cannot_be_forged_either(self):
+        """The first repair recorded only the two NAMED keys, which left the identical collision
+        open one channel over: the inline `tool@version` specifiers are rewritten by regex, and
+        `zizmor@<version>` written verbatim is not `@<digits>`, so it is never substituted — and the
+        document was then byte-identical to the one `zizmor@1.29.0` normalises into. Closing a
+        collision on one channel and not the other is closing half of it (codex, PR #85).
+        """
+        for original, forged in (
+            ("zizmor@1.29.0", "zizmor@" + _VERSION_PLACEHOLDER),
+            ("go@1.21.0", "go@" + _VERSION_PLACEHOLDER),
+        ):
+            with self.subTest(original):
+                mutated = self.config.replace(original, forged)
+                self.assertNotEqual(
+                    self.config, mutated, "fixture must change the file"
+                )
+                self.assertNotEqual(
+                    _normalised_trunk_config(self.config),
+                    _normalised_trunk_config(mutated),
+                )
+
+    def test_a_genuine_upgrade_of_every_inline_version_is_still_absorbed(self):
+        """The manifest records the NAME, never the version — otherwise closing the forgery would
+        have re-broken the carve-out this freeze exists to keep."""
+        bumped = re.sub(
+            r"@(\d+)\.(\d+)\.(\d+)",
+            lambda m: f"@{int(m.group(1)) + 1}.0.0",
+            self.config,
+        )
+        self.assertNotEqual(self.config, bumped, "fixture must change the file")
+        self.assertEqual(
+            _normalised_trunk_config(self.config), _normalised_trunk_config(bumped)
         )
 
     def test_the_sanitisers_own_output_cannot_be_forged_as_input(self):
@@ -1899,44 +1943,47 @@ class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
                 ):
                     self.assertIn(field, entry)
 
-    def test_every_survivor_is_backed_by_something_that_EXECUTES(self):
-        """COREDEV-2811. The corpus recorded fourteen findings and the two tests beside this one
-        checked that each entry HAS certain fields and that its id does not collide with the
-        registry. Neither runs anything. A survivor could therefore claim "C6's guard fails on any
-        of the six paths" long after the case enforcing it was deleted, and the corpus would go on
-        asserting it — a document, not a check.
+    def test_every_survivor_names_the_EXACT_cases_that_protect_it(self):
+        """COREDEV-2811. The corpus records fourteen findings, and its other tests check only that
+        each entry HAS certain fields. Neither runs anything, so a survivor could go on claiming
+        "C6's guard fails on any of the six paths" long after the case enforcing it was deleted.
 
-        The mutants here are prose and cannot be applied mechanically, so this binds each claim to
-        the executing case that protects it instead: a survivor naming clauses must name at least
-        one whose obligation still carries cases, and one backed by something other than a clause
-        must SAY so. An absence meaning "deliberately different" and an absence meaning "nobody
-        bound this" are indistinguishable otherwise, and only one of them is acceptable.
+        The first repair bound each survivor to a CLAUSE — and that permitted the very regression it
+        claimed to detect: `C6` carries seven cases, so deleting
+        `C6.no-repository-supplied-launcher/setup-ci` left the clause present through its siblings
+        and the survivor resting on it stayed green (codex, PR #85). Binding is to the concrete case
+        ids now, which is the only granularity at which the claim means anything.
+
+        The two survivors with no clause are legitimately different — one is protected by an
+        executing test family, the other by a shape that was REMOVED so nothing is left to run — and
+        they declare `backed_by` instead, because an absence meaning "deliberately different" and an
+        absence meaning "nobody bound this" are indistinguishable in a file.
         """
         registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))[
             "obligations"
         ]
         executable = {
-            obligation["id"].split(".")[0]
+            case["id"]
             for obligation in registry
-            if obligation.get("cases")
+            for case in (obligation.get("cases") or [])
         }
-        self.assertGreater(len(executable), 5, "the registry census collapsed")
+        self.assertGreater(len(executable), 50, "the registry census collapsed")
         for entry in self.survivors["survivors"]:
             with self.subTest(survivor=entry["id"]):
-                named = sorted(
-                    set(re.findall(r"\bC\d+[a-z]?\b", entry["must_fail_because"]))
-                )
-                if not named:
+                covered = entry.get("covered_by")
+                if not covered:
                     self.assertIn(
                         "backed_by",
                         entry,
-                        "a survivor naming no contract clause must declare what does back it",
+                        "a survivor must name the cases that protect it, or declare what else does",
                     )
                     continue
-                self.assertTrue(
-                    [clause for clause in named if clause in executable],
-                    f"{entry['id']} rests on {named}, and none of those still has an executable "
-                    "case — the claim outlived the check that enforced it",
+                missing = [case for case in covered if case not in executable]
+                self.assertEqual(
+                    [],
+                    missing,
+                    f"{entry['id']} rests on {missing}, which no longer exists in the registry — "
+                    "the claim outlived the case that enforced it",
                 )
 
     def test_the_corpus_does_not_resolve_through_the_registry(self):
