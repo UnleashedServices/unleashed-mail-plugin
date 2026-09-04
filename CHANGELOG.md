@@ -13,6 +13,25 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.19] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2809 — the exactly-one-producer census had a blind spot, and an argv test asserted a
+  spelling.** A job that calls a REUSABLE workflow takes its check-run names from the CALLED file, so
+  the census could not name what it produces and skipped it silently; it now fails closed, as it
+  already did for an expression-valued job name. No such job exists yet, which is why the guard lands
+  before one does. Separately, `assertIn("--index", argv)` against the joined argument string is
+  satisfied by `--index-only` — demonstrated by mutation — so the flags are asserted as tokens and
+  the whole vector is frozen.
+- **COREDEV-2810 — the mypy 3.9 floor was advertised, not enforced.** mypy 2.3.1 refuses
+  `python_version = 3.9`: a hard error on the command line, and from a config file a note followed by
+  a silent fall back to its default. Measured: a PEP-604 annotation, a runtime TypeError on 3.9,
+  reported "Success: no issues found". The config now names a version mypy accepts and says so, and
+  the floor is enforced where it bites — a check over the files CI byte-compiles on 3.9, derived from
+  the workflow rather than hand-listed, rejecting PEP-604 in any annotation Python evaluates at
+  runtime. Byte-compilation cannot catch these: `int | None` is valid 3.9 syntax.
+
 ## [2.8.18] — 2026-09-03
 
 ### Fixed
