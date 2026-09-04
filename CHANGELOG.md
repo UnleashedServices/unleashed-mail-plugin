@@ -13,6 +13,35 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.22] — 2026-09-04
+
+### Fixed
+
+- **PR #85 review findings (COREDEV-2804/2809/2810/2811).** The timeout marker no longer opens a
+  predictable path in a shared directory — demonstrated: a pre-planted symlink was followed and the
+  target truncated. It now creates a private `mkdir -m 700` directory, chosen over `mktemp -d`
+  because `mktemp` is an external binary the hook never needed; depending on it silently disabled
+  deadline recording wherever it is absent, which measured as 8 red tests and is COREDEV-2806
+  returning through its own repair. The version carve-out now requires a full three-component shape,
+  because `123`, `1.2` and `9` are legal branch names that normalised away and left the supply-chain
+  freeze byte-identical. The 3.9 floor checker scopes its future-import exemption to annotation nodes
+  instead of skipping whole modules — it inspected 0 of 20 files before — and its census addresses
+  the `py39-smoke` job by name rather than taking the first `py_compile` match, which belonged to the
+  3.12 `validate` step.
+- **Three defects found in those fixes by an adversarial pass, not by the suite.** The leftover-marker
+  assertion had gone inert: it globbed `rwt.*.deadline` while the code now writes
+  `rwt.<rand>.d/deadline`, and `pathlib`'s `*` does not cross `/`, so deleting the teardown was a
+  passing mutant. Cleanup was straight-line code, so an interrupted commit leaked a directory —
+  measured against SIGINT, SIGTERM and SIGHUP, now disposed of by a script-scope trap (SIGKILL is not
+  claimed). And the normalisation placeholder sat inside its own input space: writing `<version>`
+  verbatim produced a document byte-identical to a normalised genuine one, so the digest now carries
+  a manifest of which paths were normalised.
+- **An overclaim retracted in one field and re-committed in another.** The SessionStart evidence was
+  corrected to say it exercises the wired command and not Claude Code's dispatcher — then asserted
+  that a marker was "written by a live SessionStart", provenance never verified. It now states the
+  inference and its basis: `marker_dir` is reached only after the `--session-start` check, the
+  repository's other caller passes no such flag, and the observation isolated `XDG_STATE_HOME`.
+
 ## [2.8.21] — 2026-09-04
 
 ### Fixed

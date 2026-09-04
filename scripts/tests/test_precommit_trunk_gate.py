@@ -479,7 +479,10 @@ class TheBoundedRun(unittest.TestCase):
     `.githooks/pre-commit` and sourced, so these are the shipped bytes, not a copy.
     """
 
-    NEEDED = ("sleep", "rm", "echo", "sh", "bash", "date", "cat")
+    # `mkdir` earns its place here: the deadline channel now creates a private directory rather
+    # than redirecting into a predictable name, and a harness that withholds it tests a hook the
+    # repository does not ship.
+    NEEDED = ("sleep", "rm", "echo", "sh", "bash", "date", "cat", "mkdir")
     IGNORES_TERM = "trap '' TERM\nsleep 60\nexit 0\n"
     LEAKS_A_TERM_IGNORING_GRANDCHILD = (
         "bash -c 'trap \"\" TERM; sleep 40' &\necho started\nsleep 40\n"
@@ -542,7 +545,12 @@ class TheBoundedRun(unittest.TestCase):
         )
         elapsed = time.monotonic() - started
         rc = int(completed.stdout.rsplit("RC=", 1)[1].strip())
-        return rc, elapsed, list(root.glob("rwt.*.deadline")), completed
+        # EVERY `rwt.*` ENTRY, not just the old flat filename. This read `rwt.*.deadline`,
+        # which was the shape before the marker moved into a private directory — and
+        # `pathlib`'s `*` does not cross `/`, so it could not match `rwt.<rand>.d/deadline`.
+        # The leftover-marker assertion was therefore inert: deleting the teardown outright
+        # left a real directory on disk and still passed (PR #85 adversarial pass).
+        return rc, elapsed, sorted(root.glob("rwt.*")), completed
 
     def _both_branches(self):
         return ("bare", "coreutils")

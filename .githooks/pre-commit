@@ -4,6 +4,33 @@
 
 overall=0
 
+# CLEANUP ON ANY EXIT, INCLUDING AN INTERRUPTED COMMIT. `run_with_timeout` creates a private
+# directory for its deadline marker and removes it on the normal path — but a Ctrl-C inside the
+# 180s window kills the hook outright, and the directory survives: one per interrupted commit,
+# accumulating in TMPDIR forever. Measured with a process-group SIGINT, SIGHUP and SIGKILL; the
+# straight-line `rm -rf` reached none of them.
+#
+# THE TRAP LIVES AT SCRIPT SCOPE, NOT INSIDE THE FUNCTION. A trap set in a function fires at
+# FUNCTION RETURN under zsh and at PROCESS EXIT under bash, and a script owns exactly one EXIT
+# slot — so the function publishes the path and the script owns the disposal. SIGKILL cannot be
+# trapped and is not claimed to be: this narrows the leak to the one signal nothing can catch.
+RWT_TMPDIR=""
+# shellcheck disable=SC2329  # invoked only from the trap handlers below, which shellcheck
+# cannot see through: the name is a word in a trap string, not a call site. Verified by
+# measurement rather than by asserting it — a mid-run SIGINT, SIGTERM and SIGHUP each leave
+# no `rwt.*` behind, which is only true if this runs.
+_rwt_cleanup() {
+	if [[ -n ${RWT_TMPDIR} ]]; then
+		rm -rf "${RWT_TMPDIR}"
+		RWT_TMPDIR=""
+	fi
+	return 0
+}
+trap _rwt_cleanup EXIT
+trap '_rwt_cleanup; exit 130' INT
+trap '_rwt_cleanup; exit 143' TERM
+trap '_rwt_cleanup; exit 129' HUP
+
 # RESOLVE OR REFUSE. `$(cd … && pwd)` yields an EMPTY string when the cd fails, which made
 # SCRIPT_DIR "/scripts", the helper test below fail, and the hook `exit 0` — reporting a clean
 # commit having run nothing at all. A hook that cannot locate itself has checked nothing, and
@@ -53,24 +80,42 @@ run_with_timeout() {
 	local _rwt_bounded
 	_rwt_bounded="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 
-	local _rwt_marker="" _rwt_dir
+	local _rwt_marker="" _rwt_dir _rwt_tmpdir="" _rwt_try
 	# THE CHANNEL IS LOAD-BEARING ON BOTH BRANCHES NOW, so it is probed BY WRITING rather than
 	# assumed. `${TMPDIR:-/tmp}` fails SILENTLY when TMPDIR names a directory that is missing or
 	# unwritable: the write happens in a subshell whose stderr goes to /dev/null, the marker never
 	# appears, and a genuine timeout is then classified as an external signal — the gate blocks with
 	# a diagnostic naming the wrong cause (COREDEV-2806). `-w` is NOT sufficient: a full filesystem,
 	# a read-only mount and a restrictive ACL each pass it and then fail the open.
+	# `mkdir`, NOT A BARE REDIRECT INTO A PREDICTABLE NAME. The probe used to open
+	# `${TMPDIR:-/tmp}/rwt.$$.${RANDOM}.deadline`, and with TMPDIR unset that is world-writable
+	# `/tmp`. `$$` is observable and RANDOM is 15 bits, so another local process can pre-create
+	# that exact name AS A SYMLINK; the redirection then follows it and TRUNCATES whatever the
+	# committing user can write. Demonstrated on this machine before the change (codex, PR #85).
+	# `mkdir` is ATOMIC and refuses a path that already exists in ANY form — file, directory or
+	# symlink — so a pre-planted name makes it fail rather than follow, and we simply try another.
+	# Everything the deadline needs then lives inside a directory that did not exist a moment ago
+	# and is ours at 0700. It also subsumes the writability probe: `-w` was never sufficient, since
+	# a full filesystem, a read-only mount and a restrictive ACL all pass it and then fail the open.
+	#
+	# `mkdir`, NOT `mktemp -d`, and the difference is not style. `mktemp` is an EXTERNAL binary
+	# this hook did not previously need; where it is absent every candidate fails, the channel
+	# dies, and a genuine timeout reports as a signal — COREDEV-2806 returning through its own
+	# repair. Measured: the sanitised harness has no `mktemp`, and the 2806 regression test went
+	# red with rc=143 exactly as it did before that ticket was fixed.
 	for _rwt_dir in "${TMPDIR:-}" /tmp "$(git rev-parse --git-dir 2>/dev/null || true)" "${HOME-}" .; do
 		[[ -n ${_rwt_dir} && -d ${_rwt_dir} ]] || continue
-		_rwt_marker="${_rwt_dir%/}/rwt.$$.${RANDOM}.deadline"
-		# STDERR FIRST. Redirections are applied LEFT TO RIGHT, so `: >"${f}" 2>/dev/null`
-		# opens the file while stderr is still the caller's — and a failed open prints the
-		# full path, which is the leak the repo-wide writer scan exists to catch.
-		if : 2>/dev/null >"${_rwt_marker}"; then
-			rm -f "${_rwt_marker}"
-			break
-		fi
-		_rwt_marker=""
+		for _rwt_try in 1 2 3 4 5; do
+			_rwt_tmpdir="${_rwt_dir%/}/rwt.$$.${RANDOM}.d"
+			if mkdir -m 700 "${_rwt_tmpdir}" 2>/dev/null; then
+				_rwt_marker="${_rwt_tmpdir}/deadline"
+				# PUBLISHED for the script-scope trap, which is the only thing that runs when the
+				# commit is interrupted before the teardown below is reached.
+				RWT_TMPDIR="${_rwt_tmpdir}"
+				break 2
+			fi
+		done
+		_rwt_tmpdir=""
 	done
 	# PUBLISHED like RWT_TIMED_OUT, because the caller cannot infer this either: with no channel the
 	# deadline still KILLS, it simply cannot be RECORDED, and every timeout then looks like a signal.
@@ -119,7 +164,10 @@ run_with_timeout() {
 	# capturing parent open for the whole timeout even after the hook exited.
 	(
 		sleep "${seconds}"
-		: >"${_rwt_marker}"
+		# GUARDED: with no writable directory anywhere, `_rwt_marker` is empty and `: >""` is an
+		# ambiguous redirect. The subshell suppresses it, but a suppressed error is still an error
+		# in the one path where the channel is already known to be broken (gemini, PR #85).
+		[[ -n ${_rwt_marker} ]] && : >"${_rwt_marker}"
 		kill -TERM "-${_rwt_cmd}" 2>/dev/null || kill -TERM "${_rwt_cmd}" 2>/dev/null
 		sleep 5
 		kill -KILL "-${_rwt_cmd}" 2>/dev/null || kill -KILL "${_rwt_cmd}" 2>/dev/null
@@ -139,7 +187,16 @@ run_with_timeout() {
 		kill -TERM "-${_rwt_watchdog}" 2>/dev/null || kill -TERM "${_rwt_watchdog}" 2>/dev/null
 		wait "${_rwt_watchdog}" 2>/dev/null
 		[[ -e ${_rwt_marker} ]] && _rwt_timed_out=1
-		rm -f "${_rwt_marker}"
+		# INLINE, NOT A CALL OUT TO THE SCRIPT-SCOPE HELPER. This function is sliced out of the
+		# file and sourced on its own by the suite, so a body that depends on a definition
+		# outside it silently stops disposing of anything there — which is exactly what happened
+		# when this was a bare `_rwt_cleanup` call: ten tests went red with real directories left
+		# on disk. The trap at script scope is the NET for an interrupted commit, not the
+		# primary path, and both act on the same variable so they cannot disagree.
+		if [[ -n ${_rwt_tmpdir} ]]; then
+			rm -rf "${_rwt_tmpdir}"
+		fi
+		RWT_TMPDIR=""
 	fi
 
 	RWT_TIMED_OUT=${_rwt_timed_out}

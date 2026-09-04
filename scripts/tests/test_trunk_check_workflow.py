@@ -368,7 +368,22 @@ def _resolve_ref_name(ref_name: dict, default_branch: str) -> set[str]:
     return include - exclude
 
 
-_CANONICAL_VERSION = re.compile(r"\Av?[0-9]+(?:\.[0-9]+)*\Z", re.ASCII)
+# THE FULL THREE-COMPONENT SHAPE, not "digits and dots". The first spelling here was
+# `v?[0-9]+(?:\.[0-9]+)*`, which accepts `123`, `1.2` and `9` — and `git check-ref-format
+# --branch 123` exits 0, so those are legal BRANCH names. A `ref` pointed at a mutable branch
+# therefore normalised away and left the frozen digest byte-identical: the carve-out laundering
+# exactly the supply-chain move it was written to expose (codex, PR #85). Verified: with the old
+# pattern, `ref: 123` did not move the digest.
+#
+# The `uri` beside it is frozen exactly, so reaching this needs a mutable ref that already
+# exists in the pinned source repository — narrow, but a carve-out that does not do what it
+# says is worth closing on its own terms rather than on its current exploitability.
+# The stand-in a normalised version becomes. It is deliberately NOT a legal version, but that
+# is not what stops it being forged — the manifest is (see `_normalised_trunk_config`).
+_VERSION_PLACEHOLDER = "<version>"
+_CANONICAL_VERSION = re.compile(
+    r"\Av?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\Z", re.ASCII
+)
 
 
 def _normalised_trunk_config(config_text: str) -> str:
@@ -394,19 +409,34 @@ def _normalised_trunk_config(config_text: str) -> str:
       * `plugins.sources[].uri` never normalises. It is the identity of the definition supply chain.
       * `actions.disabled` never normalises: `trunk-fmt-pre-commit` is disabled deliberately, and
         re-enabling it rewrites 191 files and breaks 211 mutation tests (COREDEV-2771).
+
+    THE SUBSTITUTION ALONE IS NOT INJECTIVE, and that is a bypass rather than a nicety: the
+    sanitiser's own output lives inside its input space, so setting `ref: '<version>'` verbatim —
+    which is NOT a version, and so is left untouched — produced a document byte-identical to the
+    one a genuine `v1.11.0` normalises into. Measured: the frozen digest did not move (PR #85
+    adversarial pass). Recording WHICH paths were normalised alongside the document distinguishes
+    the two, because the forged value was never normalised and so never appears in the manifest.
     """
     doc = yaml.safe_load(config_text)
+    normalised: list[str] = []
     cli = doc.get("cli")
     if isinstance(cli, dict) and _CANONICAL_VERSION.match(str(cli.get("version", ""))):
-        cli["version"] = "<version>"
+        cli["version"] = _VERSION_PLACEHOLDER
+        normalised.append("cli.version")
     plugins = doc.get("plugins")
     if isinstance(plugins, dict):
-        for source in plugins.get("sources") or []:
+        for index, source in enumerate(plugins.get("sources") or []):
             if isinstance(source, dict) and _CANONICAL_VERSION.match(
                 str(source.get("ref", ""))
             ):
-                source["ref"] = "<version>"
-    return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(doc, sort_keys=True))
+                source["ref"] = _VERSION_PLACEHOLDER
+                normalised.append(f"plugins.sources[{index}].ref")
+    body = re.sub(
+        r"@\d+[\w.\-+]*",
+        "@" + _VERSION_PLACEHOLDER,
+        yaml.safe_dump(doc, sort_keys=True),
+    )
+    return f"{body}\n# normalised: {','.join(sorted(normalised))}\n"
 
 
 def _config_tree_digest() -> str:
@@ -453,7 +483,7 @@ def _digest_of_tree(root: pathlib.Path) -> str:
 # `ignore` — moves it, and moving it is a reviewed change: update this literal in the same commit,
 # with the reason, exactly as the ignore-list literal above is maintained.
 EXPECTED_NORMALISED_CONFIG_DIGEST = (
-    "a1e9eee614fb73a5580f12d51f5f13b27c1276b711e6731024ecfccb6539f5c8"
+    "0f2c8eb57e9c893a0dfaf42a008b3ad7cdf28fac1588da932f8ee07cda88129f"
 )
 
 
@@ -1155,16 +1185,39 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
             _normalised_trunk_config(yaml.safe_dump(doc)),
         )
 
-    def test_a_non_version_ref_is_not_laundered_as_a_bump(self):
-        """A `ref` may name a branch or a SHA as readily as a tag. `main` is not a version, and a
-        MUTABLE ref on the definition source is the supply-chain move the carve-out must not launder.
+    def test_the_sanitisers_own_output_cannot_be_forged_as_input(self):
+        """The substitution alone is not injective. `<version>` is what a real version BECOMES, so
+        writing it verbatim — a value that is not a version, and so is left untouched — produced a
+        document byte-identical to the normalised genuine one, and the frozen digest did not move.
+        The digest now carries a manifest of WHICH paths were normalised, and the forged value was
+        never normalised, so it cannot appear there (PR #85 adversarial pass).
         """
         doc = yaml.safe_load(self.config)
-        doc["plugins"]["sources"][0]["ref"] = "main"
+        doc["plugins"]["sources"][0]["ref"] = _VERSION_PLACEHOLDER
         self.assertNotEqual(
             _normalised_trunk_config(self.config),
             _normalised_trunk_config(yaml.safe_dump(doc)),
+            "the placeholder is not a version and must not pass for one",
         )
+
+    def test_a_non_version_ref_is_not_laundered_as_a_bump(self):
+        """A `ref` may name a branch or a SHA as readily as a tag. `main` is not a version, and a
+        MUTABLE ref on the definition source is the supply-chain move the carve-out must not launder.
+
+        THE NUMERIC CASES ARE NOT PADDING. The carve-out first matched digits-and-dots,
+        which accepts `123`, `1.2` and `9` — every one of them a legal branch name, confirmed with
+        `git check-ref-format --branch 123`. Testing only `main` passed that pattern happily while
+        three shorter spellings walked straight through it (codex, PR #85).
+        """
+        for ref in ("main", "123", "1.2", "9", "abc123", "refs/heads/x"):
+            with self.subTest(ref=ref):
+                doc = yaml.safe_load(self.config)
+                doc["plugins"]["sources"][0]["ref"] = ref
+                self.assertNotEqual(
+                    _normalised_trunk_config(self.config),
+                    _normalised_trunk_config(yaml.safe_dump(doc)),
+                    f"a ref of {ref!r} is not a version bump and must move the digest",
+                )
 
     def test_reenabling_the_formatter_action_moves_the_digest(self):
         """`trunk-fmt-pre-commit` is disabled deliberately — COREDEV-2771 measured `trunk fmt`

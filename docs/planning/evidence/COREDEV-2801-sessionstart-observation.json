@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "ticket": "COREDEV-2801",
   "milestone": "M6",
-  "experiment": "sessionstart-entry-point-observation",
+  "experiment": "sessionstart-command-observation",
   "ranAt": "2026-09-03T23:30:16+00:00",
-  "why": "COREDEV-2808. The detector's SessionStart behaviour was asserted from its source and from unit harnesses, and the promised observation THROUGH THE REAL ENTRY POINT was never committed. A harness that calls the script directly cannot show that the wiring in .claude/settings.json reaches it, that the hook protocol it emits is well formed, or that the per-session dedup actually suppresses the second call.",
+  "why": "COREDEV-2808. The detector's SessionStart behaviour was asserted from its source and from unit harnesses, and no observation of the wired command was committed. This records one.",
   "entryPoint": {
     "source": ".claude/settings.json",
     "event": "SessionStart",
@@ -39,5 +39,17 @@
     "verdict": "BEHIND",
     "note": "This is the recurring reversion the maintainer reported. The detector reports it correctly; the drift itself is tracked separately and is NOT fixed by this evidence."
   },
-  "outcome": "PASS — the wired entry point runs, emits a well-formed hook protocol, and dedups."
+  "outcome": "PASS for the command, the protocol and the dedup. The host wiring is evidenced separately by the dispatcher-written markers above, not by the recorded run.",
+  "whatThisDoesAndDoesNotShow": {
+    "shows": "The command `.claude/settings.json` wires, run with a real SessionStart payload on stdin, emits a well-formed systemMessage envelope on the first call and zero bytes on the second in the same session — so the protocol and the per-session dedup both hold.",
+    "doesNotShow": "That Claude Code's hook DISPATCHER invokes it. The recorded run pipes the payload straight into the script, so it exercises the script and the argument vector, not the host wiring. The artifact previously described itself as an observation through the real entry point, which claimed more than it establishes (codex, PR #85).",
+    "wiringEvidenceInstead": "The dispatcher's side effect is the nearest independent evidence available: a `--session-start` run writes a dedup marker under ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/drift-warned/, this observation ran with XDG_STATE_HOME isolated, and no other caller passes that flag. The markers below therefore record some other `--session-start` invocation. That is an inference from the code paths, not a witnessed dispatcher call, and the first version of this file asserted the stronger claim without support (PR #85 adversarial pass)."
+  },
+  "dispatcherMarkersObserved": [
+    {
+      "name": "e1115b3196d39d63c2d3b1d611ec435c25931c2292d88f2e0aa5cc1eb6945e80.2956",
+      "mtime": "2026-09-02T20:59:46+00:00",
+      "note": "Provenance is INFERRED, not witnessed, and the inference is stated so it can be checked: the detector computes marker_dir only AFTER its `--session-start` mode check, so no other mode can write here; the repository's only other caller, the pre-commit hook, passes no such flag; and this observation ran with XDG_STATE_HOME pointed elsewhere. A marker in this directory therefore came from a `--session-start` invocation that was not this one. It is not proof that Claude Code's dispatcher made that invocation."
+    }
+  ]
 }

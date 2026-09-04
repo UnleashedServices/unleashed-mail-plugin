@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.21
+# UnleashedMail — Claude Code Plugin v2.8.22
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,15 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.22
+
+- **Review remediation, and a repair round that needed repairing.** Seven findings closed: a symlink
+  truncation on the timeout marker's path, a freeze carve-out that laundered mutable branch refs, a
+  3.9 floor checker that inspected 0 of 20 files, a census reading the wrong CI job, and an evidence
+  artifact claiming more than it showed. An adversarial pass over those fixes then found three more
+  defects **in the fixes themselves** — a cleanup with no working check behind it, a directory leaked
+  on every interrupted commit, and a placeholder that could be forged verbatim.
 
 ### v2.8.21
 

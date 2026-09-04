@@ -4,9 +4,11 @@
 THE CLAIM IS SPLIT HONESTLY. CI cannot invoke a real `SessionStart` hook: this repository does install
 Claude Code later in `plugin-ci.yml`, but the Python suites run BEFORE that step. So this file asserts
 the DECLARATION against the documented stdin contract, and exercises the detector's behaviour by
-running the shipped script. The one real session-start invocation is recorded separately as committed
-evidence, the same standing cells 10 and 12 have. Claiming a CI proof this pipeline cannot produce
-would be a cell that cannot pass.
+running the shipped script. A run of the WIRED COMMAND is recorded separately as committed evidence,
+the same standing cells 10 and 12 have — and that artifact is explicit that it exercises the command
+and not Claude Code's hook dispatcher, which nothing in this pipeline can invoke. Claiming a CI proof
+this pipeline cannot produce would be a cell that cannot pass; so would leaving the docstring saying
+"the one real session-start invocation" after the artifact itself retracted that (PR #85).
 """
 
 from __future__ import annotations
@@ -781,7 +783,7 @@ class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
         self.assertNotIn("present in the install cache", out)
 
 
-class TheRealEntryPointObservationIsCommitted(unittest.TestCase):
+class TheRecordedObservationIsCommittedAndBounded(unittest.TestCase):
     """COREDEV-2808. This module's own docstring defers to "one real session-start invocation
     recorded separately as committed evidence" — and that file did not exist. An observation nobody
     committed is indistinguishable from one nobody made, and the promise was worse than silence:
@@ -815,6 +817,40 @@ class TheRealEntryPointObservationIsCommitted(unittest.TestCase):
             self.observation["entryPoint"]["command"],
             "the observation records a command the repository no longer wires",
         )
+
+    def test_it_states_what_it_does_NOT_establish(self):
+        """The artifact first called itself an observation through the real entry point, while the
+        recorded run pipes a payload straight into the script — exercising the script and the
+        argument vector, not Claude Code's hook dispatcher. An evidence file that overstates its own
+        reach is worse than a missing one, because the gap stops being visible (codex, PR #85).
+
+        The wiring is evidenced separately, and independently: a live SessionStart writes a dedup
+        marker into the state directory, and this observation ran with XDG_STATE_HOME isolated, so
+        it cannot have written the markers it cites.
+        """
+        # THE PROPERTY, NOT THREE SPELLINGS. The first version of this asserted that certain words
+        # appeared in certain fields, which any rewording defeats and no rewording of the CLAIM
+        # would trip. What actually has to hold is that the artifact records a command DIFFERENT
+        # from the one settings.json wires — that gap is the limitation being disclosed — and that
+        # it does not present itself as having exercised the wiring.
+        scope = self.observation["whatThisDoesAndDoesNotShow"]
+        self.assertNotEqual(
+            self.observation["entryPoint"]["command"],
+            self.observation["command"],
+            "if these were the same, there would be no limitation to disclose",
+        )
+        self.assertTrue(
+            scope.get("doesNotShow", "").strip(),
+            "an artifact that cannot say what it fails to show is back to overclaiming",
+        )
+        # SCOPED TO THE FIELDS THAT MAKE CLAIMS. A blanket ban on the phrase fails against the
+        # RETRACTION, which has to name what it is retracting — the first version of this assertion
+        # did exactly that. What must not survive is the artifact still ASSERTING it.
+        asserting = " ".join(
+            str(self.observation.get(field, ""))
+            for field in ("experiment", "why", "outcome", "note")
+        ).lower()
+        self.assertNotIn("real entry point", asserting)
 
     def test_it_records_the_warning_AND_the_dedup(self):
         """One run only proves the hook fires. The dedup is a claim about the SECOND call, and no
