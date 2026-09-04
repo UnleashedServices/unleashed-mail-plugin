@@ -23,6 +23,7 @@ import copy
 import hashlib
 import json
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -151,12 +152,12 @@ EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
         "guard-resolver-digest": "4bec1e760e705bdb5427a9327cecb8c55d03d4f512fef15a568144c1638ab0cc",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
-        "guard-launcher-path": "556cd1ffbb7217634c57c84e17afaa1ca9a0735c9fa453f507e31a41c2133472",
+        "guard-launcher-path": "5ddf9995fb1b73487506d47d0d32abbd4ca866cf1e2fd586cc397a0b37512df9",
     },
     "canary": {
         "guard-resolver-digest": "011054c609a1f896f8fb73b3584f7048b666acc84bba82a65824563b106b7bd9",
         "guard-empty-diff": "9825dbd46b05c59173d8792d7aafb42cbe1e3ebb0623d6066850279a0902e5db",
-        "guard-launcher-path": "556cd1ffbb7217634c57c84e17afaa1ca9a0735c9fa453f507e31a41c2133472",
+        "guard-launcher-path": "5ddf9995fb1b73487506d47d0d32abbd4ca866cf1e2fd586cc397a0b37512df9",
     },
 }
 
@@ -186,6 +187,7 @@ def _workflow_files() -> list[Path]:
 
 
 ROLLOUT_EVIDENCE = REPO / "docs/planning/evidence/COREDEV-2780-rollout.json"
+TRUNK_CONFIG_DIR = REPO / ".trunk/configs"
 
 
 def _recorded_remote_halves():
@@ -407,6 +409,39 @@ def _normalised_trunk_config(config_text: str) -> str:
     return re.sub(r"@\d+[\w.\-+]*", "@<version>", yaml.safe_dump(doc, sort_keys=True))
 
 
+def _config_tree_digest() -> str:
+    """Every linter's OWN configuration, hashed as a tree of (path, content).
+
+    COREDEV-2811. `.trunk/trunk.yaml` decides WHICH linters run; `.trunk/configs/**` decides what
+    they will tolerate, and nothing froze it. The C6 guard deliberately ALLOWS these paths — they
+    are legitimate repository files — so the whole lever sat outside every check: a permissive
+    `ruff.toml`, a `.bandit` that skips every test, a `.shellcheckrc` full of disables, and the
+    required context reports success having enforced almost nothing. That is cell 4's founding
+    hazard one directory over, and the C6 comment named it as tracked-but-open rather than fixed.
+
+    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX — the same reasoning the C6 guard itself records.
+    An UNTRACKED config planted in this directory is read by trunk exactly like a tracked one, so
+    it must move this digest too. `not is_dir()` rather than `is_file()`, because `is_file()`
+    follows symlinks and is False for a dangling one, which would let a broken symlink drop a file
+    out of the census silently.
+    """
+    return _digest_of_tree(TRUNK_CONFIG_DIR)
+
+
+def _digest_of_tree(root: pathlib.Path) -> str:
+    """The digest ITSELF, parameterised by root, so the mutation fixtures below exercise the very
+    function the frozen oracle uses rather than a second copy of its logic that could drift.
+    """
+    entries = []
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(root).as_posix()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        entries.append(f"{relative}:{digest}")
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
+
 # THE ORACLE THE NORMALISED DIGEST NEVER HAD. Both users of `_normalised_lint_block` compared the
 # shipped config against a MUTATED COPY OF ITSELF, which cannot see a weakening that is already
 # committed: the "before" is the weakened file too. Measured — adding `success_codes: [0, 1, 2]` to
@@ -420,6 +455,72 @@ def _normalised_trunk_config(config_text: str) -> str:
 EXPECTED_NORMALISED_CONFIG_DIGEST = (
     "a1e9eee614fb73a5580f12d51f5f13b27c1276b711e6731024ecfccb6539f5c8"
 )
+
+
+# FROZEN, and re-pinned in the SAME COMMIT as any reviewed configuration change, exactly as the
+# lint-block digest above is. There is nothing to normalise here: these files carry no version
+# specifiers, so a `trunk upgrade` does not move them and every movement is somebody's edit.
+EXPECTED_CONFIG_TREE_DIGEST = (
+    "6a89eb8aa05f9aad5e9b2985ed0495e6579ec5a8a303874eb111f30e21c5c0f7"
+)
+
+
+class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
+    """COREDEV-2811. Cell 4 froze WHICH linters run. This freezes what they will TOLERATE."""
+
+    def test_the_config_tree_matches_its_frozen_oracle(self):
+        self.assertEqual(
+            EXPECTED_CONFIG_TREE_DIGEST,
+            _config_tree_digest(),
+            "a linter configuration moved: re-pin EXPECTED_CONFIG_TREE_DIGEST in the same commit, "
+            "with the reason, or revert the change under .trunk/configs/",
+        )
+
+    def test_a_permissive_rule_added_to_a_config_moves_the_digest(self):
+        """The whole point, stated as the attack: widen what a linter tolerates and the required
+        context still reports success. Run against a COPY, so the shipped tree is never mutated.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp) / "configs"
+            shutil.copytree(TRUNK_CONFIG_DIR, mirror)
+            before = _digest_of_tree(mirror)
+            target = mirror / "ruff.toml"
+            target.write_text(
+                target.read_text(encoding="utf-8") + '\nignore = ["ALL"]\n',
+                encoding="utf-8",
+            )
+            self.assertNotEqual(before, _digest_of_tree(mirror))
+
+    def test_an_UNTRACKED_config_planted_in_the_directory_moves_the_digest(self):
+        """trunk reads a planted file exactly like a tracked one, so the index is the wrong oracle
+        — the same conclusion the C6 guard reached after `git ls-files` let an untracked override
+        walk straight through.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp) / "configs"
+            shutil.copytree(TRUNK_CONFIG_DIR, mirror)
+            before = _digest_of_tree(mirror)
+            (mirror / ".flake8").write_text(
+                "[flake8]\nextend-ignore = E,W,F\n", encoding="utf-8"
+            )
+            self.assertNotEqual(before, _digest_of_tree(mirror))
+
+    def test_the_census_covers_every_config_the_repository_ships(self):
+        """A digest over an empty or truncated census is a digest that cannot fail."""
+        counted = [p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir()]
+        tracked = subprocess.run(
+            ["git", "ls-files", ".trunk/configs"],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=str(REPO),
+        ).stdout.split()
+        self.assertEqual(
+            len(tracked),
+            len(counted),
+            "the census and the repository disagree about what configuration exists",
+        )
+        self.assertGreaterEqual(len(counted), 9)
 
 
 def contract_problems(
