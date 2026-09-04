@@ -110,6 +110,22 @@ class _DetectorFixture(unittest.TestCase):
         self._git("commit", "-qm", version)
         self._git("update-ref", "refs/remotes/origin/main", "HEAD")
 
+    def diverge_worktree(self, version: str):
+        """Advance the WORKTREE, the INDEX and HEAD past `origin/main`, which stays where it was.
+
+        `set_expected` points `origin/main` AT `HEAD`, so all four sources carry identical bytes
+        and a detector reading the worktree, the index or HEAD behaves exactly like one reading
+        `origin/main`. Every assertion in this file passes either way — the fixture making
+        distinct sources equal, which is the defect class that already cost this repository three
+        guard regressions (COREDEV-2811). After this call they disagree, and only an
+        `origin/main` read produces the recorded answer.
+        """
+        (self.repo / ".claude-plugin/plugin.json").write_text(
+            json.dumps({"name": "unleashed-mail", "version": version}), encoding="utf-8"
+        )
+        self._git("add", "-A")
+        self._git("commit", "-qm", f"worktree ahead at {version}")
+
     def set_installed(self, version, scope="user", name="unleashed-mail"):
         """THE REAL RECORD SHAPE, read from a live machine rather than assumed:
 
@@ -230,6 +246,34 @@ class TableA(_DetectorFixture):
 
     def test_row_7_installed_below_expected_warns(self):
         self.assertIn("is behind origin/main", self._plain())
+
+    def test_the_expected_version_is_read_from_ORIGIN_and_not_the_checkout(self):
+        """COREDEV-2811. The whole point of this detector is "what does origin/main SERVE", not
+        "what is in my tree" — on a feature branch those differ by construction, and reading the
+        checkout would compare the install against unreleased work and warn about nothing.
+        """
+        self.diverge_worktree("9.9.9")
+        out = self._plain()
+        self.assertIn("is behind origin/main 2.8.6", out)
+        self.assertNotIn(
+            "9.9.9", out, "the worktree's version must not reach the comparison at all"
+        )
+
+    def test_a_worktree_ahead_of_origin_does_not_MANUFACTURE_a_warning(self):
+        """The silent direction, and it has to be built so the two reads DISAGREE.
+
+        My first attempt here set the worktree BEHIND origin and asserted silence — and a
+        worktree-reading detector produces silence too, by the locally-newer row. It passed
+        against the mutant, proving nothing. Setting the worktree AHEAD makes the wrong read
+        warn about an unreleased version while the right read stays silent.
+        """
+        self.set_installed("2.8.6")  # equal to origin/main -> silent
+        self.diverge_worktree("9.9.9")  # a worktree read would call this "behind 9.9.9"
+        self.assertEqual(
+            "",
+            self._plain(),
+            "unreleased work in the tree is not a released version to lag",
+        )
 
     def test_row_6_equal_is_silent(self):
         self.set_installed("2.8.6")
