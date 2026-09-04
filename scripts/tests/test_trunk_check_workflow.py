@@ -1846,6 +1846,46 @@ class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
                 ):
                     self.assertIn(field, entry)
 
+    def test_every_survivor_is_backed_by_something_that_EXECUTES(self):
+        """COREDEV-2811. The corpus recorded fourteen findings and the two tests beside this one
+        checked that each entry HAS certain fields and that its id does not collide with the
+        registry. Neither runs anything. A survivor could therefore claim "C6's guard fails on any
+        of the six paths" long after the case enforcing it was deleted, and the corpus would go on
+        asserting it — a document, not a check.
+
+        The mutants here are prose and cannot be applied mechanically, so this binds each claim to
+        the executing case that protects it instead: a survivor naming clauses must name at least
+        one whose obligation still carries cases, and one backed by something other than a clause
+        must SAY so. An absence meaning "deliberately different" and an absence meaning "nobody
+        bound this" are indistinguishable otherwise, and only one of them is acceptable.
+        """
+        registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))[
+            "obligations"
+        ]
+        executable = {
+            obligation["id"].split(".")[0]
+            for obligation in registry
+            if obligation.get("cases")
+        }
+        self.assertGreater(len(executable), 5, "the registry census collapsed")
+        for entry in self.survivors["survivors"]:
+            with self.subTest(survivor=entry["id"]):
+                named = sorted(
+                    set(re.findall(r"\bC\d+[a-z]?\b", entry["must_fail_because"]))
+                )
+                if not named:
+                    self.assertIn(
+                        "backed_by",
+                        entry,
+                        "a survivor naming no contract clause must declare what does back it",
+                    )
+                    continue
+                self.assertTrue(
+                    [clause for clause in named if clause in executable],
+                    f"{entry['id']} rests on {named}, and none of those still has an executable "
+                    "case — the claim outlived the check that enforced it",
+                )
+
     def test_the_corpus_does_not_resolve_through_the_registry(self):
         registry_ids = {
             case["id"]

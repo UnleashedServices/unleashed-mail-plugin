@@ -165,6 +165,11 @@ survivors:
       deliberately unrequired context named `trunk-check-push`.
 
   - id: survivor/exclude-blind-target-resolver
+    # NO CONTRACT CLAUSE BACKS THIS ONE: its protection is an executing TEST FAMILY (every
+    # form on both sides), not a clause, so the binding check has no obligation to resolve.
+    # Declared out loud because an absence meaning "deliberately different" and an absence
+    # meaning "nobody ever bound it" look identical, and only one of them is fine.
+    backed_by: test-family
     found_in_round: r35
     survived_formulation: >-
       Revision 32's resolution rule expanded `conditions.ref_name.include` and ignored `exclude`.
@@ -178,6 +183,10 @@ survivors:
       resolve() is include MINUS exclude, and the (side, form) family runs every form on BOTH sides.
 
   - id: survivor/two-currently-correct-private-resolvers
+    # NOTHING EXECUTES HERE BY CONSTRUCTION: the shape was REMOVED rather than asserted
+    # about, so the construct is inexpressible and there is no mutant left to run. That is
+    # the strongest form a survivor can take, and precisely why it must be stated.
+    backed_by: shape-removed
     found_in_round: r38
     survived_formulation: >-
       Cell 15 asserted that a spy on `resolve()` was REACHED from both entry points, then that an
