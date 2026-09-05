@@ -43,6 +43,29 @@ except ImportError:  # Direct execution from scripts/tests.
 
 
 CAPTURE_CODEX = WRAPPER_PATH.parent / "capture-codex-review.sh"
+
+
+def _remove_operand_guard(source: str, field: str) -> str:
+    """Delete the `[ -n "$FIELD" ] || die ...` guard line, found by the operand it TESTS.
+
+    Matching the literal text pinned the inner spacing, which this repo's own formatter changes —
+    and the resulting lookup failure was raised inside an `assertRaises`, so it passed silently.
+    Locating the line by what it checks keeps the mutation about the guard, not about whitespace.
+    """
+    lines = source.split("\n")
+    hits = [
+        index
+        for index, line in enumerate(lines)
+        if f'-n "${field}"' in line and "die" in line
+    ]
+    if len(hits) != 1:
+        raise AssertionError(
+            f'expected exactly one `-n "${field}"` guard line, found {len(hits)}'
+        )
+    del lines[hits[0]]
+    return "\n".join(lines)
+
+
 CAPTURE_GEMINI = WRAPPER_PATH.parent / "capture-gemini-review.sh"
 CAPTURE_HELPERS = {"codex": CAPTURE_CODEX, "gemini": CAPTURE_GEMINI}
 PROMPT_PREFIX = {"codex": ".codex-prompt-", "gemini": ".agy-prompt-"}
@@ -88,9 +111,11 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         for name, path in CAPTURE_HELPERS.items():
             helper = review_dir / path.name
             helper.write_text(
-                self.capture_helper_source(name)
-                if (helper_source is None or name != helper_reviewer)
-                else helper_source,
+                (
+                    self.capture_helper_source(name)
+                    if (helper_source is None or name != helper_reviewer)
+                    else helper_source
+                ),
                 encoding="utf-8",
             )
             helper.chmod(0o755)
@@ -108,7 +133,12 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         if not plan.exists():
             plan.write_text("# fixture plan\n", encoding="utf-8")
         bind = review_dir / "bind-prompt.py"
-        bind.write_text(CAPTURE_HELPERS["codex"].parent.joinpath("bind-prompt.py").read_text(encoding="utf-8"), encoding="utf-8")
+        bind.write_text(
+            CAPTURE_HELPERS["codex"]
+            .parent.joinpath("bind-prompt.py")
+            .read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         bind.chmod(0o755)
         recipe_log = self.root / (label + "-recipe.args")
 
@@ -144,11 +174,7 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
     def recipe_arguments(path: Path) -> List[str]:
         if not path.exists():
             return []
-        return [
-            item.decode("utf-8")
-            for item in path.read_bytes().split(b"\0")
-            if item
-        ]
+        return [item.decode("utf-8") for item in path.read_bytes().split(b"\0") if item]
 
     def assert_required_inputs(
         self,
@@ -196,29 +222,34 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
                 self.recipe_arguments(log),
             )
 
-    def test_M5_7_assertion_both_recipes_fail_before_missing_input_allocation(self) -> None:
+    def test_M5_7_assertion_both_recipes_fail_before_missing_input_allocation(
+        self,
+    ) -> None:
         self.assert_required_inputs(self.recipe_sources(), "required-positive")
 
     def test_M5_7_each_missing_input_guard_removal_is_rejected(self) -> None:
         recipes = self.recipe_sources()
         # Both arms now declare their operand guards in their own committed helper, in the same form,
         # so the mutation is the same edit applied to whichever helper the recipe under test calls.
-        guards = {
-            "ticket": '[ -n "$TICKET" ] || die "bind TICKET to the --ticket operand"\n',
-            "round": '[ -n "$ROUND" ]  || die "bind ROUND to the --round operand"\n',
-        }
+        # THE GUARD IS LOCATED, NOT SPELLED. These were literals including the exact inner spacing —
+        # `[ -n "$ROUND" ]  || die ...` with TWO spaces — so `trunk fmt` collapsing that to one made
+        # the codex anchor occur zero times. The failure was INVISIBLE: `_replace_once` raised
+        # AssertionError from INSIDE the `assertRaises(AssertionError)` below, satisfying it, so the
+        # subtest reported ok having removed no guard at all. The gemini arm was not reformatted and
+        # kept working, and that asymmetry was the only sign. Both halves are fixed: the guard is
+        # found by the operand it TESTS, and the mutation happens BEFORE the block so a guard that
+        # cannot be found fails loudly instead of quietly satisfying the raise.
         for reviewer in recipes:
-            for field, guard in guards.items():
+            for field in ("ticket", "round"):
                 with self.subTest(reviewer=reviewer, field=field):
+                    mutated = _remove_operand_guard(
+                        self.capture_helper_source(reviewer), field.upper()
+                    )
                     with self.assertRaises(AssertionError):
                         self.assert_required_inputs(
                             recipes,
                             "required-" + reviewer + "-" + field,
-                            helpers={
-                                reviewer: _replace_once(
-                                    self.capture_helper_source(reviewer), guard, ""
-                                )
-                            },
+                            helpers={reviewer: mutated},
                         )
 
     def test_M5_9_assertion_each_recipe_passes_its_literal_identity(self) -> None:
@@ -307,7 +338,9 @@ class GrantedRecipeShapeProofs(unittest.TestCase):
                 commands = _logical_commands(_extract_recipe(path, begin, end))
 
                 self.assertEqual(
-                    1, len(commands), f"{relative}: recipe is {len(commands)} commands, not one"
+                    1,
+                    len(commands),
+                    f"{relative}: recipe is {len(commands)} commands, not one",
                 )
                 command = commands[0]
                 for operator in ("&&", "||", ";", "|"):
@@ -325,7 +358,8 @@ class GrantedRecipeShapeProofs(unittest.TestCase):
                 covering = [
                     grant
                     for grant in self._grants(source)
-                    if grant.endswith("*") and command.startswith("bash " + grant[: -len("*")])
+                    if grant.endswith("*")
+                    and command.startswith("bash " + grant[: -len("*")])
                     or grant.startswith("bash " + HELPER_PREFIX)
                 ]
                 self.assertTrue(
@@ -335,8 +369,12 @@ class GrantedRecipeShapeProofs(unittest.TestCase):
 
     def test_the_helper_the_recipes_call_is_committed_and_executable(self) -> None:
         helper = REPO / "scripts" / "review" / "persist-verdict.sh"
-        self.assertTrue(helper.is_file(), "the recipes call a script that is not in the repo")
-        self.assertTrue(os.access(helper, os.X_OK), "the shipped helper is not executable")
+        self.assertTrue(
+            helper.is_file(), "the recipes call a script that is not in the repo"
+        )
+        self.assertTrue(
+            os.access(helper, os.X_OK), "the shipped helper is not executable"
+        )
 
 
 class EveryExecutableRecipeInvokesAGrantedScript(unittest.TestCase):
@@ -374,8 +412,11 @@ class EveryExecutableRecipeInvokesAGrantedScript(unittest.TestCase):
         for skill in sorted((REPO / "skills").glob("*/SKILL.md")):
             source = skill.read_text(encoding="utf-8")
             grants = next(
-                (GRANT.findall(line) for line in source.splitlines()
-                 if line.startswith("allowed-tools:")),
+                (
+                    GRANT.findall(line)
+                    for line in source.splitlines()
+                    if line.startswith("allowed-tools:")
+                ),
                 [],
             )
             granted = {
@@ -398,7 +439,9 @@ class EveryExecutableRecipeInvokesAGrantedScript(unittest.TestCase):
                         f"(granted: {sorted(granted) or 'none'})",
                     )
         # A sweep that matched nothing would pass silently forever.
-        self.assertGreater(checked, 5, "the sweep found almost no recipes — the extractor is broken")
+        self.assertGreater(
+            checked, 5, "the sweep found almost no recipes — the extractor is broken"
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
