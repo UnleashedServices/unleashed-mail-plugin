@@ -17,8 +17,10 @@ is precisely the gap between what CI's py39 job can see and what breaks on a sto
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -350,18 +352,38 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
 
     @classmethod
     def _mypy(cls) -> str | None:
-        """The PINNED binary, never whatever happens to be on PATH.
+        """The PINNED release, wherever it lives — never whatever happens to be on PATH.
 
-        `shutil.which("mypy")` first meant a developer or runner with any ambient mypy tested that
-        one — and the property here is precisely WHICH Python targets a PARTICULAR release accepts,
-        so an older ambient binary passes while the pinned release refuses the configured target,
-        defeating the protection this cell exists to give (codex, PR #85).
+        Resolving `shutil.which("mypy")` first meant any ambient binary was tested instead, and the
+        property here is precisely WHICH targets a PARTICULAR release accepts, so an older mypy
+        passes where the pinned one refuses (codex, PR #85). Two lookups, both version-checked:
+
+          * trunk's tool cache, honouring TRUNK_CACHE — CI pipelines relocate that cache to persist
+            it across runs, and hardcoding ~/.cache/trunk made this skip there (gemini, PR #85);
+          * a mypy on PATH, accepted ONLY if it reports the pinned version, so CI can install the
+            pin directly without this becoming the ambient-binary bug again.
         """
         pinned = cls._pinned_version()
-        candidates = sorted(
-            pathlib.Path.home().glob(f".cache/trunk/tools/mypy/{pinned}-*/bin/mypy")
-        )
-        return str(candidates[-1]) if candidates else None
+        cache = os.environ.get("TRUNK_CACHE")
+        base = pathlib.Path(cache) if cache else pathlib.Path.home() / ".cache/trunk"
+        cached = sorted(base.glob(f"tools/mypy/{pinned}-*/bin/mypy"))
+        if cached:
+            return str(cached[-1])
+        ambient = shutil.which("mypy")
+        if ambient:
+            try:
+                reported = subprocess.run(
+                    [ambient, "--version"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                ).stdout
+            except OSError:
+                return None
+            if pinned in reported:
+                return ambient
+        return None
 
     def test_it_interrogates_the_PINNED_release_not_an_ambient_one(self):
         """The property under test is which Python targets a PARTICULAR mypy accepts, so resolving
@@ -376,6 +398,15 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
         )
         resolved = self._mypy()
         if resolved is None:
+            # A SKIP ON CI IS THE DEFECT, NOT A COURTESY. This cell is the only guard on the
+            # mypy half of the 3.9 floor, and it skipped on every CI run — so a future pin that
+            # refuses the configured target would pass exactly where it gates (codex, PR #85).
+            # Contributors without the pin still skip; CI does not get that option.
+            if os.environ.get("CI"):
+                self.fail(
+                    f"the pinned mypy {self._pinned_version()} is not available on CI — "
+                    "this cell cannot gate what it claims to"
+                )
             self.skipTest("the pinned mypy is not materialised on this machine")
         self.assertIn(
             f"/mypy/{pinned}-",
@@ -386,6 +417,14 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
     def test_the_pinned_mypy_does_not_refuse_the_configured_version(self):
         mypy = self._mypy()
         if mypy is None:
+            # A SKIP ON CI IS THE DEFECT. This is the only guard on the mypy half of the 3.9
+            # floor, and it skipped on every CI run — so a pin that refuses the configured
+            # target would pass exactly where it gates (codex, PR #85).
+            if os.environ.get("CI"):
+                self.fail(
+                    f"the pinned mypy {self._pinned_version()} is not available on CI — "
+                    "this cell cannot gate what it claims to"
+                )
             self.skipTest(
                 "no materialised mypy to interrogate; trunk-check covers this in CI"
             )

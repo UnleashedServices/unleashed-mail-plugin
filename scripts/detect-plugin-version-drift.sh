@@ -52,7 +52,18 @@ fi
 # after it, a machine with no python3 went silent for the OTHER reason and the diagnostic was
 # unreachable exactly where it mattered. "I cannot run" precedes "there is nothing to compare".
 if ! command -v python3 >/dev/null 2>&1; then
-	printf 'unleashed-mail: python3 not found — the plugin version drift check did NOT run\n' >&2
+	# THE HOOK PROTOCOL, NOT FREE-FORM STDERR. A SessionStart hook's plain stdout is injected
+	# into the agent's context; only `systemMessage` is shown to the USER. This guard exits
+	# long before the mode-specific serialisation below, so in session mode it wrote stderr
+	# nobody sees — leaving the one environment it exists to diagnose with no notice at all
+	# (codex, PR #85). The envelope is emitted with printf because the interpreter that
+	# normally serialises it is precisely what is missing. The text carries no quote or
+	# backslash, so it needs no escaping; keep it that way.
+	if [[ ${mode} == "--session-start" ]]; then
+		printf '{"systemMessage": "unleashed-mail: python3 not found — the plugin version drift check did NOT run"}\n'
+	else
+		printf 'unleashed-mail: python3 not found — the plugin version drift check did NOT run\n' >&2
+	fi
 	exit 0
 fi
 

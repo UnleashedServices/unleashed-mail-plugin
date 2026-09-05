@@ -477,7 +477,18 @@ def _digest_of_tree(root: pathlib.Path) -> str:
         if path.is_dir():
             continue
         relative = path.relative_to(root).as_posix()
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        # SYMLINKS ARE HASHED AS LINKS, not followed. `not is_dir()` is True for a DANGLING symlink,
+        # so `read_bytes()` raised FileNotFoundError and the whole census crashed — chosen precisely
+        # so a dangling link could not be dropped silently, and then crashing on it instead (gemini,
+        # PR #85). Hashing the target PATH also makes a retarget visible: following the link would
+        # hash the destination's content, so pointing it at a different file with identical bytes
+        # would leave the digest unmoved.
+        if path.is_symlink():
+            digest = hashlib.sha256(
+                b"symlink:" + str(path.readlink()).encode()
+            ).hexdigest()
+        else:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
         entries.append(f"{relative}:{digest}")
     return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
 

@@ -122,6 +122,20 @@ run_with_timeout() {
 			_rwt_tmpdir="${_rwt_dir%/}/rwt.$$.${RANDOM}.d"
 			if mkdir -m 700 "${_rwt_tmpdir}" 2>/dev/null; then
 				_rwt_marker="${_rwt_tmpdir}/deadline"
+				# CREATING THE DIRECTORY IS NOT EVIDENCE THAT THE MARKER CAN BE WRITTEN. An inode or
+				# quota limit reached after `mkdir` leaves the later `: >"${_rwt_marker}"` failing
+				# silently in the watchdog, which still kills trunk — and both RWT_TIMED_OUT and
+				# RWT_NO_CHANNEL then read false, so the caller blames an external signal and blocks
+				# the commit naming a cause it has no evidence for (codex, PR #85). Probe the actual
+				# FILE, not just its parent, and treat a directory we cannot write in as no channel.
+				if : 2>/dev/null >"${_rwt_marker}"; then
+					rm -f "${_rwt_marker}"
+				else
+					rm -rf "${_rwt_tmpdir}"
+					_rwt_tmpdir=""
+					_rwt_marker=""
+					continue
+				fi
 				# PUBLISHED for the script-scope trap, which is the only thing that runs when the
 				# commit is interrupted before the teardown below is reached.
 				RWT_TMPDIR="${_rwt_tmpdir}"

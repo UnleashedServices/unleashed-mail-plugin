@@ -73,8 +73,23 @@ README_WHATSNEW="$(grep -m1 -oE '^### v[0-9]+\.[0-9]+\.[0-9]+' "$README" 2>/dev/
 # 5. marketplace.json — the pull signal AND the version resolver's input (COREDEV-2801).
 MARKETPLACE_JSON="${ROOT}/.claude-plugin/marketplace.json"
 if [[ -f ${MARKETPLACE_JSON} ]]; then
-	MARKETPLACE_VERSION="$(grep -m1 -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "${MARKETPLACE_JSON}" 2>/dev/null |
-		grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+	# THE unleashed-mail ENTRY, not the first "version" in the file. An unscoped `grep -m1` reads
+	# whichever entry appears first, so a decoy entry at the right version would satisfy this check
+	# while the real plugin entry drifted or lost its key — reopening the selection defect this
+	# check exists to close (codex, PR #85). Demonstrated: with a decoy inserted first, the grep
+	# returned the decoy's version.
+	#
+	# python3 is REQUIRED, not assumed: this is a validator, so a missing interpreter must fail
+	# loudly rather than silently skip the assertion.
+	command -v python3 >/dev/null 2>&1 ||
+		fail "python3 is required to read marketplace.json; refusing to validate by pattern"
+	MARKETPLACE_VERSION="$(python3 -c '
+import json, sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+hits = [p.get("version", "") for p in doc.get("plugins", []) if p.get("name") == "unleashed-mail"]
+print(hits[0] if len(hits) == 1 else "")
+' "${MARKETPLACE_JSON}" 2>/dev/null || true)"
 	[[ -n ${MARKETPLACE_VERSION} ]] ||
 		fail "marketplace.json declares no version — without it the installed version is chosen by raw directory order (COREDEV-2801)"
 	[[ ${MARKETPLACE_VERSION} == "${PLUGIN_VERSION}" ]] ||

@@ -98,6 +98,24 @@ jobs:
           python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
             python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
 
+      # The 3.9-floor cell interrogates the PINNED mypy, and it used to skipTest when the binary
+      # was absent — which is every run of this job, since nothing here materialises trunk's tools.
+      # The only guard on the mypy half of that floor therefore gated nothing exactly where it was
+      # supposed to gate (codex, PR #85). The cell now FAILS rather than skips when CI is set, so
+      # the pin has to be present: installed here, and READ FROM .trunk/trunk.yaml so the two
+      # cannot drift apart.
+      - name: Install the pinned mypy (the 3.9-floor cell refuses to skip on CI)
+        id: pinned_mypy
+        run: |
+          version="$(python3 -c '
+          import yaml
+          config = yaml.safe_load(open(".trunk/trunk.yaml", encoding="utf-8"))
+          print(next(str(e).partition("@")[2] for e in config["lint"]["enabled"] if str(e).startswith("mypy@")))
+          ')"
+          echo "pinned mypy: ${version}"
+          python3 -m pip install --disable-pip-version-check "mypy==${version}"
+          mypy --version
+
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
