@@ -73,6 +73,107 @@ class TheHookAggregatesItsExitCode(unittest.TestCase):
         self.assertNotIn("detect-plugin-version-drift", completed.stderr)
 
 
+class TheGateCannotSilentlyNotRun(unittest.TestCase):
+    """COREDEV-2807. Four paths let this hook finish with exit 0 having run no lint gate at all, and
+    a gate that is silently absent is worse than one that is loudly broken: `git commit` prints a
+    wall of green ticks either way, so nobody looks. Each path below is now either fatal (the hook
+    cannot locate itself) or stated out loud (the gate could not run, and why).
+    """
+
+    def _run(self, *, helper=True, trunk_rc=None, trunk_config=False, argv0=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "scripts").mkdir()
+        (root / ".githooks").mkdir()
+        (root / "bin").mkdir()
+        (root / ".githooks/pre-commit").write_bytes(HOOK.read_bytes())
+        if helper:
+            (root / "scripts/pre-commit-checks.sh").write_text(
+                "#!/bin/bash\nexit 0\n", encoding="utf-8"
+            )
+        if trunk_config:
+            (root / ".trunk").mkdir()
+            (root / ".trunk/trunk.yaml").write_text("version: 0.1\n", encoding="utf-8")
+        if trunk_rc is not None:
+            # A STAND-IN, because the real binary's behaviour here is already MEASURED: in a
+            # checkout with no `.trunk/`, `trunk check --index` exits 1 with "Please run
+            # 'trunk init'". The stub reproduces that status without needing the network.
+            (root / "bin/trunk").write_text(
+                f"#!/bin/bash\necho \"Please run 'trunk init' to setup trunk\" >&2\n"
+                f"exit {trunk_rc}\n",
+                encoding="utf-8",
+            )
+            (root / "bin/trunk").chmod(0o755)
+        subprocess.run(
+            ["git", "-C", str(root), "init", "-q", "."], check=True, capture_output=True
+        )
+        env = {"PATH": f"{root / 'bin'}:/usr/bin:/bin", "HOME": str(root)}
+        if argv0 is None:
+            argv = ["bash", str(root / ".githooks/pre-commit")]
+        else:
+            # `$0` NAMING A PATH THAT IS NOT THERE — a hook invoked through a directory that has
+            # since been removed. `bash -c script name` sets `$0` to name, which is the only way to
+            # drive the resolution failure without also making the hook itself unreadable.
+            argv = ["bash", "-c", HOOK.read_text(encoding="utf-8"), argv0]
+        return subprocess.run(
+            argv,
+            check=False,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+
+    def test_an_unresolvable_root_refuses_instead_of_reporting_success(self):
+        """`$(cd … && pwd)` is EMPTY when the cd fails, so SCRIPT_DIR became `/scripts`, the helper
+        test failed, and the hook took the `exit 0` branch — a clean commit having run nothing.
+        """
+        completed = self._run(argv0="/nonexistent/gone/pre-commit")
+        self.assertNotEqual(
+            0,
+            completed.returncode,
+            "a hook that cannot locate itself has checked nothing",
+        )
+        self.assertIn("NO check ran", completed.stdout + completed.stderr)
+
+    def test_a_missing_helper_disables_the_helper_and_nothing_else(self):
+        """It used to `exit 0`, taking the trunk gate and the drift detector down with it — so
+        renaming one script silently removed a gate that has nothing to do with it.
+        """
+        completed = self._run(helper=False)
+        combined = completed.stdout + completed.stderr
+        self.assertIn("not found", combined)
+        self.assertIn(
+            "did NOT run",
+            combined,
+            "the LATER gate must still have been reached and reported",
+        )
+
+    def test_a_checkout_with_no_trunk_config_is_stated_not_blamed_on_the_diff(self):
+        """MEASURED: `trunk check --index` exits 1 with "Please run 'trunk init'" when there is no
+        `.trunk/`. Exit 1 is this gate's "new findings in the staged diff" — a false statement about
+        the developer's diff that no amount of fixing the diff can clear. Branches that predate the
+        config reach it simply by being checked out and committed to.
+        """
+        completed = self._run(trunk_rc=1, trunk_config=False)
+        combined = completed.stdout + completed.stderr
+        self.assertEqual(
+            0, completed.returncode, "an absent config must not block a commit"
+        )
+        self.assertIn("no .trunk/trunk.yaml", combined)
+        self.assertNotIn("new findings in the staged diff", combined)
+
+    def test_an_absent_trunk_binary_says_the_gate_did_not_run(self):
+        """Not blocking — contributors without trunk must still commit, and CI is the enforcing
+        copy. But the hook printed NOTHING, so "no output" read as "checked, and clean".
+        """
+        completed = self._run(trunk_rc=None)
+        self.assertEqual(0, completed.returncode)
+        self.assertIn("trunk is not installed", completed.stdout + completed.stderr)
+
+
 class TheDetectorsSecondCaller(unittest.TestCase):
     def setUp(self):
         self.hook = HOOK.read_text(encoding="utf-8")
@@ -188,6 +289,11 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
             DETECTOR.read_bytes()
         )
         (root / "scripts/detect-plugin-version-drift.sh").chmod(0o755)
+        # COREDEV-2807 MADE THE CONFIG A PRECONDITION, so a fixture without it now exercises
+        # the "gate did not run" arm instead of the gate. These cases are about what the hook
+        # DOES with trunk, so the precondition has to hold for them to be about anything.
+        (root / ".trunk").mkdir()
+        (root / ".trunk/trunk.yaml").write_text("version: 0.1\n", encoding="utf-8")
         argv_log = root / "argv.log"
         argv_log.write_text("", encoding="utf-8")
         if with_trunk:
@@ -220,8 +326,24 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
         """The commit is made from the INDEX. Checking the worktree lets a finding that is clean in
         the index but dirty in the worktree fail the commit, and vice versa."""
         _, argv = self._run()
-        self.assertIn("--index", argv)
-        self.assertNotIn("--all", argv)
+        # TOKENS, NOT SUBSTRINGS. `assertIn("--index", argv)` against the joined argv is
+        # satisfied by `--index-only`, or by `--index` appearing inside some other value, so it
+        # asserted a SPELLING rather than the argument actually passed (COREDEV-2809).
+        tokens = argv.split()
+        self.assertIn("--index", tokens)
+        self.assertNotIn("--all", tokens)
+
+    def test_the_whole_argument_vector_is_frozen(self):
+        """The per-flag checks above each constrain one token and say nothing about what else
+        may be present. Freezing the vector is what makes an ADDED argument a reviewed change.
+        """
+        _, argv = self._run()
+        self.assertEqual(
+            ["check", "--index", "--no-fix", "--filter=-markdown-link-check"],
+            argv.split(),
+            "the gate's invocation moved: re-pin this literal in the same commit, with the "
+            "reason, or revert the change to .githooks/pre-commit",
+        )
 
     def test_it_passes_no_fix_so_the_hook_never_rewrites_files(self):
         _, argv = self._run()
@@ -281,6 +403,10 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
         root = pathlib.Path(tmp.name)
         for sub in ("scripts", ".githooks", "bin"):
             (root / sub).mkdir()
+        # The gate now requires its config as a PRECONDITION (COREDEV-2807); without it these
+        # cases exercise the "did not run" arm instead of the bound they exist to measure.
+        (root / ".trunk").mkdir()
+        (root / ".trunk/trunk.yaml").write_text("version: 0.1\n", encoding="utf-8")
         (root / ".githooks/pre-commit").write_text(hook, encoding="utf-8")
         (root / ".githooks/pre-commit").chmod(0o755)
         (root / "scripts/pre-commit-checks.sh").write_text(
@@ -353,7 +479,10 @@ class TheBoundedRun(unittest.TestCase):
     `.githooks/pre-commit` and sourced, so these are the shipped bytes, not a copy.
     """
 
-    NEEDED = ("sleep", "rm", "echo", "sh", "bash", "date", "cat")
+    # `mkdir` earns its place here: the deadline channel now creates a private directory rather
+    # than redirecting into a predictable name, and a harness that withholds it tests a hook the
+    # repository does not ship.
+    NEEDED = ("sleep", "rm", "echo", "sh", "bash", "date", "cat", "mkdir")
     IGNORES_TERM = "trap '' TERM\nsleep 60\nexit 0\n"
     LEAKS_A_TERM_IGNORING_GRANDCHILD = (
         "bash -c 'trap \"\" TERM; sleep 40' &\necho started\nsleep 40\n"
@@ -367,7 +496,7 @@ class TheBoundedRun(unittest.TestCase):
                 return found
         return None
 
-    def _harness(self, script: str, seconds: int, *, branch: str):
+    def _harness(self, script: str, seconds: int, *, branch: str, tmpdir=None):
         hook = HOOK.read_text(encoding="utf-8")
         head = hook.index("run_with_timeout() {")
         body = hook[head : hook.index("\n}\n", head) + 3]
@@ -397,9 +526,13 @@ class TheBoundedRun(unittest.TestCase):
 
         (root / "target.sh").write_text(script, encoding="utf-8")
         (root / "probe.sh").write_text(
-            f"PATH={root / 'bin'}\nexport TMPDIR={root}\n{body}\n"
+            f"PATH={root / 'bin'}\n"
+            f"export TMPDIR={root if tmpdir is None else tmpdir}\n{body}\n"
             f'run_with_timeout {seconds} bash "{root / "target.sh"}"\n'
-            'echo "RC=$?"\n',
+            # THE STATUS ALONE CANNOT ANSWER THE QUESTION ANY MORE, and that is the point: a real
+            # timeout and a child's own 124 both return 124, so the probe reports the published
+            # fact beside it. RC is emitted LAST because the parser takes the final `RC=`.
+            "_rc=$?\n" 'echo "TO=${RWT_TIMED_OUT:-0}"\n' 'echo "RC=${_rc}"\n',
             encoding="utf-8",
         )
         started = time.monotonic()
@@ -412,7 +545,12 @@ class TheBoundedRun(unittest.TestCase):
         )
         elapsed = time.monotonic() - started
         rc = int(completed.stdout.rsplit("RC=", 1)[1].strip())
-        return rc, elapsed, list(root.glob("rwt.*.deadline")), completed
+        # EVERY `rwt.*` ENTRY, not just the old flat filename. This read `rwt.*.deadline`,
+        # which was the shape before the marker moved into a private directory — and
+        # `pathlib`'s `*` does not cross `/`, so it could not match `rwt.<rand>.d/deadline`.
+        # The leftover-marker assertion was therefore inert: deleting the teardown outright
+        # left a real directory on disk and still passed (PR #85 adversarial pass).
+        return rc, elapsed, sorted(root.glob("rwt.*")), completed
 
     def _both_branches(self):
         return ("bare", "coreutils")
@@ -619,6 +757,99 @@ class TheBoundedRun(unittest.TestCase):
             "the long form is rejected by busybox (exit 1) and toybox (exit 125); use `-k 5`",
         )
 
+    @staticmethod
+    def _reported_timeout(completed) -> int:
+        return int(completed.stdout.rsplit("TO=", 1)[1].split("\n", 1)[0].strip())
+
+    def test_a_childs_OWN_124_is_never_published_as_our_deadline(self):
+        """COREDEV-2805, the fourth member of the 124/137/143 family. `timeout` cannot say whether
+        it fired, so that branch inferred it from `${SECONDS}` sampled BEFORE the fork; the integer
+        clock read up to a second high and laundered a command's own exit 124 into "we timed out",
+        which is a fail-OPEN because a timeout deliberately does not block the commit.
+
+        THE MARGIN HERE IS DELIBERATELY HUGE, and the first version of this test is why. It ran the
+        child for 1.95s against a 2s deadline — a FIFTY MILLISECOND margin — because reproducing the
+        old integer-clock defect needs the child to finish inside the final second. On a loaded macOS
+        runner fork and interpreter startup alone cross 50ms, the watchdog then fires FOR REAL, and
+        reporting a timeout becomes the CORRECT answer. It went red in CI on exactly that.
+
+        A test cannot both reproduce that sub-second window and be stable, because the window IS
+        sub-second — that is the defect's whole shape. Stability wins for a gate that blocks every
+        commit, so this asserts the property with a margin nothing can cross, the structural
+        companion below covers the specific regression, and the discriminating measurement
+        (10 runs of 10 before, 0 of 10 after) is recorded in COREDEV-2805's commit rather than
+        re-run flakily forever.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, _, _, completed = self._harness(
+                    "exit 124\n", seconds=8, branch=branch
+                )
+                self.assertEqual(124, rc, "the child's own status must pass through")
+                self.assertEqual(
+                    0,
+                    self._reported_timeout(completed),
+                    "a status the CHILD produced must never be published as our deadline",
+                )
+
+    def test_the_classification_does_no_arithmetic_on_a_clock(self):
+        """STRUCTURAL, and it says so — the same standing as the escalation test below.
+
+        The behavioural test above cannot catch a return to elapsed-based inference, because doing
+        so needs the sub-second window that made it flaky. This catches it directly instead: the
+        repair for COREDEV-2805 was to stop deriving the fact and start recording it, so any clock
+        arithmetic reappearing inside `run_with_timeout` is that defect returning, whatever the
+        surrounding logic looks like.
+        """
+        hook = HOOK.read_text(encoding="utf-8")
+        head = hook.index("run_with_timeout() {")
+        body = hook[head : hook.index("\n}\n", head)]
+        executable = [
+            line
+            for line in body.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertEqual(
+            [],
+            [line for line in executable if "SECONDS" in line],
+            "the deadline is RECORDED by the watchdog, never computed from a clock",
+        )
+
+    def test_a_real_timeout_is_still_published_as_one_on_both_branches(self):
+        """The other side of the same coin — narrowing the false positive must not lose the true
+        one, which is the failure mode the elapsed guard was protecting against.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, elapsed, _, completed = self._harness(
+                    "sleep 60\n", seconds=2, branch=branch
+                )
+                self.assertEqual(124, rc)
+                self.assertEqual(1, self._reported_timeout(completed))
+                self.assertLess(elapsed, 20, "the deadline must still bound the run")
+
+    def test_an_unwritable_TMPDIR_does_not_silence_the_deadline_record(self):
+        """COREDEV-2806. The marker channel is the only thing that carries the fact, and it was
+        assumed rather than probed: `${TMPDIR:-/tmp}` names a directory that may not exist, and the
+        write that fails lives in a subshell whose stderr goes to /dev/null. The marker never
+        appeared, so a genuine timeout was classified as an external signal and the gate blocked
+        naming a cause it had no evidence for. Measured on the shipped code: rc=143, fact=0.
+        """
+        for branch in self._both_branches():
+            with self.subTest(branch=branch):
+                rc, _, _, completed = self._harness(
+                    "sleep 60\n",
+                    seconds=2,
+                    branch=branch,
+                    tmpdir="/nonexistent/definitely-not-writable",
+                )
+                self.assertEqual(124, rc)
+                self.assertEqual(
+                    1,
+                    self._reported_timeout(completed),
+                    "the channel must fall back to a directory it PROVED it could write",
+                )
+
 
 class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
     """The gate's exit-code arms, driven with the SHIPPED block. Every arm must name a cause it
@@ -629,9 +860,19 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
     config does not enable, which is exactly the one literal this gate passes.
     """
 
-    def _classify(self, rc: int, *, timed_out: int = 0):
+    def _classify(self, rc: int, *, timed_out: int = 0, no_channel: int = 0):
         hook = HOOK.read_text(encoding="utf-8")
-        block = hook[hook.index("if command -v trunk") :]
+        # ANCHOR ON THE PROPERTY, NOT THE SPELLING. This keyed on the literal
+        # `if command -v trunk`, so when COREDEV-2807 turned that into a three-arm guard the
+        # slice raised ValueError and every test in this class ERRORED — reporting a broken
+        # harness as if the hook were broken. The gate is "the block whose opening line tests
+        # for the binary", however that line is spelled.
+        opening = re.search(r"^if .*command -v trunk.*$", hook, re.MULTILINE)
+        if opening is None:
+            # `self.fail` is typed NoReturn, which narrows the Optional for mypy;
+            # `assertIsNotNone` does not, and mypy/union-attr rejected the attribute access.
+            self.fail("the trunk gate must still open on a test for the binary")
+        block = hook[opening.start() :]
         block = block[: block.index("\nfi\n") + 4]
         harness = (
             "TRUNK_TIMEOUT_SECONDS=180\noverall=0\n"
@@ -639,7 +880,8 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
             # THE STUB PUBLISHES THE FACT, because the real one does. The caller no longer
             # infers "we timed out" from an exit status — 124, 137 and 143 are each producible by
             # the child — so a stub returning only a status tests a contract the hook has dropped.
-            'run_with_timeout() { shift; RWT_TIMED_OUT="${FAKE_TO}"; return "${FAKE_RC}"; }\n'
+            'run_with_timeout() { shift; RWT_TIMED_OUT="${FAKE_TO}"; '
+            'RWT_NO_CHANNEL="${FAKE_NC}"; return "${FAKE_RC}"; }\n'
             + block
             + '\necho "overall=${overall}"\n'
         )
@@ -652,11 +894,29 @@ class TheCallerClassifiesWhatItWasTold(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "FAKE_RC": str(rc), "FAKE_TO": str(timed_out)},
+            env={
+                **os.environ,
+                "FAKE_RC": str(rc),
+                "FAKE_TO": str(timed_out),
+                "FAKE_NC": str(no_channel),
+            },
             timeout=60,
         )
         blocks = "overall=1" in completed.stdout
         return blocks, completed.stdout
+
+    def test_an_unattributable_death_is_not_blamed_on_a_signal_it_cannot_evidence(self):
+        """COREDEV-2806's caller half. Without a channel the deadline still KILLS, it just cannot be
+        RECORDED — so 143 here means "we cannot tell", not "someone sent SIGTERM". Naming the signal
+        sends the developer hunting an OOM killer that was never involved. It still blocks: a gate
+        that did not complete must never report a pass.
+        """
+        for rc in (124, 137, 143):
+            with self.subTest(rc=rc):
+                blocks, out = self._classify(rc, no_channel=1)
+                self.assertTrue(blocks, "an incomplete gate must block")
+                self.assertIn("no writable directory", out)
+                self.assertNotIn("was killed (signal", out)
 
     def test_a_clean_run_allows_and_a_finding_blocks(self):
         self.assertFalse(self._classify(0)[0], "a clean run must not block")

@@ -27,19 +27,43 @@ _TRANSCRIPT_RUN_ID = _verdict._TRANSCRIPT_RUN_ID
 REVIEW = "review"
 REVIEWER_FLAG = "--" + REVIEW + "er"
 
-FAKE_WRITER = r'''#!/bin/sh
+FAKE_WRITER = r"""#!/bin/sh
 : > "${M5_WRITER_LOG:?}"
 for argument in "$@"; do
     printf '%s\0' "$argument" >> "$M5_WRITER_LOG"
 done
-'''
+"""
+
+
+def _exec_block_mutation(source: str, script: str, operand: str, replacement: str):
+    """Return (old, new) for the `exec bash .../<script>` block, read out of the SOURCE.
+
+    Anchors that spell a command's line continuation break whenever the formatter reflows it, and
+    the breakage is silent here because `_replace_once` raises inside an `assertRaises` — see the
+    comment at the call site. Reading the block from the file makes the mutation independent of how
+    the command happens to be wrapped.
+    """
+    lines = source.split("\n")
+    for index, line in enumerate(lines):
+        if script not in line or "exec bash" not in line:
+            continue
+        block = [line]
+        cursor = index
+        while block[-1].rstrip().endswith("\\"):
+            cursor += 1
+            block.append(lines[cursor])
+        old = "\n".join(block)
+        if old.count(operand) != 1:
+            raise AssertionError(
+                f"expected exactly one {operand} in the {script} exec block, got {old.count(operand)}"
+            )
+        return old, old.replace(operand, replacement)
+    raise AssertionError(f"no `exec bash ... {script}` block in the capture helper")
 
 
 def _replace_once(source: str, old: str, new: str) -> str:
     if source.count(old) != 1:
-        raise AssertionError(
-            "mutation anchor must occur exactly once: " + repr(old)
-        )
+        raise AssertionError("mutation anchor must occur exactly once: " + repr(old))
     return source.replace(old, new, 1)
 
 
@@ -91,7 +115,7 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
             if line.startswith(marker_prefix)
         ]
         self.assertEqual(1, len(markers), result.stdout)
-        allocated = markers[0][len(marker_prefix):]
+        allocated = markers[0][len(marker_prefix) :]
         records = [
             json.loads(line)
             for line in self.capture_log.read_text(encoding="utf-8").splitlines()
@@ -229,7 +253,9 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         fake_python.chmod(0o755)
         log = self.root / (label + "-writer.args")
 
-        plugin_root = REPO if helper_source is None else self.stage_plugin_root(helper_source)
+        plugin_root = (
+            REPO if helper_source is None else self.stage_plugin_root(helper_source)
+        )
         env = dict(os.environ)
         env.update(
             {
@@ -251,11 +277,7 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(log.is_file())
-        return [
-            item.decode("utf-8")
-            for item in log.read_bytes().split(b"\0")
-            if item
-        ]
+        return [item.decode("utf-8") for item in log.read_bytes().split(b"\0") if item]
 
     @staticmethod
     def reviewer_arguments(argv: List[str]) -> List[str]:
@@ -281,7 +303,9 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
 
     def capture_helper_source(self, reviewer: str = "codex") -> str:
         """The committed capture helper the named arm's recipe now calls."""
-        path = threading.CAPTURE_CODEX if reviewer == "codex" else threading.CAPTURE_GEMINI
+        path = (
+            threading.CAPTURE_CODEX if reviewer == "codex" else threading.CAPTURE_GEMINI
+        )
         return path.read_text(encoding="utf-8")
 
     def persist_helper_source(self) -> str:
@@ -350,11 +374,17 @@ class M51AndM52PropagationProofs(M5PathFixture):
             # Re-anchored when the codex arm gained the gemini arm's isolation: it now execs
             # `isolated-codex-review.sh` with the transcript operand, symmetric with gemini below. The
             # mutant re-derives that operand, which is exactly what M5.2 forbids.
-            "codex": (
-                'exec bash "${SCRIPT_DIR}/isolated-codex-review.sh" \\\n'
-                '    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
-                'exec bash "${SCRIPT_DIR}/isolated-codex-review.sh" \\\n'
-                '    "${CODEX_TRANSCRIPT}.prompt" "${XDG_STATE_HOME}/derived-codex.txt" "$TIMEOUT" "$PLAN"',
+            # DERIVED FROM THE FILE, not pinned to its formatting. This anchor spelled the exec's
+            # line continuation as backslash-newline plus FOUR SPACES, so the repo's own `trunk fmt`
+            # retabbing the wrapper made it occur zero times — and `_replace_once` then raised
+            # inside the `assertRaises(AssertionError)` below, which SWALLOWED the failure and let
+            # the subtest pass without ever mutating anything. Deriving the block from the source
+            # keeps the mutation about the transcript operand instead of about whitespace.
+            "codex": _exec_block_mutation(
+                self.capture_helper_source("codex"),
+                "isolated-codex-review.sh",
+                '"$CODEX_TRANSCRIPT"',
+                '"${XDG_STATE_HOME}/derived-codex.txt"',
             ),
             # Re-anchored when the arm began handing the prompt SNAPSHOT instead of the caller's
             # path: the operand is now `"${GEMINI_TRANSCRIPT}.prompt"`. The mutant is unchanged in
@@ -373,7 +403,8 @@ class M51AndM52PropagationProofs(M5PathFixture):
         for reviewer, (old, new) in mutations.items():
             with self.subTest(reviewer=reviewer):
                 self.install_capture_helper(
-                    _replace_once(self.capture_helper_source(reviewer), old, new), reviewer
+                    _replace_once(self.capture_helper_source(reviewer), old, new),
+                    reviewer,
                 )
                 try:
                     with self.assertRaises(AssertionError):
@@ -385,7 +416,9 @@ class M51AndM52PropagationProofs(M5PathFixture):
                 finally:
                     # Restore INLINE, not via addCleanup: cleanups run after tearDown, by which point
                     # the staged plugin directory no longer exists.
-                    self.install_capture_helper(self.capture_helper_source(reviewer), reviewer)
+                    self.install_capture_helper(
+                        self.capture_helper_source(reviewer), reviewer
+                    )
 
 
 class M56ConsumerProofs(M5PathFixture):
@@ -428,13 +461,9 @@ class M56ConsumerProofs(M5PathFixture):
         self.write_transcript(derived, "derived gemini")
         self.bind_transcript_to_plan(str(derived))
 
-        synthesis_old = (
-            "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
-        )
+        synthesis_old = "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
         synthesis_new = (
-            "    "
-            + REVIEWER_FLAG
-            + ' "gemini=APPROVE:${M5_DERIVED_PATH}" \\\n'
+            "    " + REVIEWER_FLAG + ' "gemini=APPROVE:${M5_DERIVED_PATH}" \\\n'
         )
         synthesis = _replace_once(
             self.synthesis_source(),
@@ -464,9 +493,7 @@ class M56ConsumerProofs(M5PathFixture):
             + ' "gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}" \\\n'
         )
         brainstorm_new = (
-            "    "
-            + REVIEWER_FLAG
-            + ' "gemini=APPROVE:${M5_DERIVED_PATH}" \\\n'
+            "    " + REVIEWER_FLAG + ' "gemini=APPROVE:${M5_DERIVED_PATH}" \\\n'
         )
         brainstorm = _replace_once(
             self.brainstorm_source(),
@@ -517,7 +544,9 @@ class M510SynthesisShapeProofs(M5PathFixture):
         self.write_transcript(gemini_path, "gemini")
         self.write_transcript(codex_path, "codex")
         bindings = self.synthesis_bindings(gemini_path, codex_path, "APPROVE")
-        argv = self.fake_writer_arguments(recipe, bindings, label, helper_source=helper_source)
+        argv = self.fake_writer_arguments(
+            recipe, bindings, label, helper_source=helper_source
+        )
         self.assertEqual(
             [
                 bindings["GEMINI_REVIEWER_SPEC"],
@@ -615,11 +644,7 @@ class M515ArtifactProofs(M5PathFixture):
         self.write_transcript(derived, "artifact derived gemini")
         self.bind_transcript_to_plan(str(derived))
         old = "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
-        new = (
-            "    "
-            + REVIEWER_FLAG
-            + ' "gemini=APPROVE:${M5_DERIVED_PATH}" \\\n'
-        )
+        new = "    " + REVIEWER_FLAG + ' "gemini=APPROVE:${M5_DERIVED_PATH}" \\\n'
         mutant = _replace_once(self.synthesis_source(), old, new)
         artifact, argv = self.run_persistence_recipe(
             mutant,
@@ -655,7 +680,9 @@ class M517EmptyTranscriptProofs(M5PathFixture):
             "GEMINI_REVIEWER_SPEC": "gemini=APPROVE:" + str(gemini_path),
             "CODEX_REVIEWER_SPEC": "codex=APPROVE:" + str(codex_path),
         }
-        argv = self.fake_writer_arguments(recipe, bindings, label, helper_source=helper_source)
+        argv = self.fake_writer_arguments(
+            recipe, bindings, label, helper_source=helper_source
+        )
         self.assertEqual(
             ["gemini=MISSING", bindings["CODEX_REVIEWER_SPEC"]],
             self.reviewer_arguments(argv),
@@ -700,7 +727,9 @@ class PersistedRecipeDriftProofs(M5PathFixture):
             "GEMINI_REVIEWER_SPEC": "gemini=MISSING",
             "CODEX_REVIEWER_SPEC": "codex=APPROVE:" + str(codex_path),
         }
-        argv = self.fake_writer_arguments(self.synthesis_source(), bindings, "bare-missing")
+        argv = self.fake_writer_arguments(
+            self.synthesis_source(), bindings, "bare-missing"
+        )
         self.assertEqual(
             ["gemini=MISSING", bindings["CODEX_REVIEWER_SPEC"]],
             self.reviewer_arguments(argv),
@@ -710,7 +739,7 @@ class PersistedRecipeDriftProofs(M5PathFixture):
         """The inline copy's rule, restored into the helper, must fail this."""
         mutant = _replace_once(
             self.persist_helper_source(),
-            "        MISSING) status=MISSING; transcript=\"\" ;;\n",
+            '        MISSING) status=MISSING; transcript="" ;;\n',
             "",
         )
         base = self.root / "bare missing mutant base"

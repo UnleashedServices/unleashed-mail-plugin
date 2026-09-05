@@ -94,9 +94,7 @@
       "line": 187,
       "class": "rewrite",
       "reason": "Current feature documentation must describe explicit per-run transcript inputs.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 292,
         "payloads": [
@@ -172,9 +170,7 @@
       "line": 27,
       "class": "rewrite",
       "reason": "The Codex usage example must demonstrate capture to a reserved allocated leaf.",
-      "contracts": [
-        "S-CAPTURE"
-      ],
+      "contracts": ["S-CAPTURE"],
       "destination": {
         "line": 27,
         "payloads": [
@@ -194,9 +190,7 @@
       "line": 31,
       "class": "rewrite",
       "reason": "The Gemini usage example must demonstrate capture to a reserved allocated leaf.",
-      "contracts": [
-        "S-CAPTURE"
-      ],
+      "contracts": ["S-CAPTURE"],
       "destination": {
         "line": 31,
         "payloads": [
@@ -216,9 +210,7 @@
       "line": 317,
       "class": "rewrite",
       "reason": "Live security commentary must describe reserved leaves after fixed paths are retired.",
-      "contracts": [
-        "S-CAPTURE"
-      ],
+      "contracts": ["S-CAPTURE"],
       "destination": {
         "line": 566,
         "payloads": [
@@ -254,9 +246,7 @@
       "line": 194,
       "class": "rewrite",
       "reason": "The Gemini verdict argument must use the allocated transcript path returned for this run.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 202,
         "payloads": [
@@ -276,9 +266,7 @@
       "line": 195,
       "class": "rewrite",
       "reason": "The Codex verdict argument must use the allocated transcript path returned for this run.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 203,
         "payloads": [
@@ -298,9 +286,7 @@
       "line": 7,
       "class": "rewrite",
       "reason": "The fixed-path cleanup grant is removed and the allocator wrapper grant is added.",
-      "contracts": [
-        "S-PRECLEAN"
-      ],
+      "contracts": ["S-PRECLEAN"],
       "destination": {
         "line": 14,
         "payloads": [
@@ -320,24 +306,20 @@
       "line": 48,
       "class": "rewrite",
       "reason": "The pre-clean command is replaced by allocation before capture.",
-      "contracts": [
-        "S-PRECLEAN",
-        "S-WRAPPER",
-        "S-CAPTURE"
-      ],
+      "contracts": ["S-PRECLEAN", "S-WRAPPER", "S-CAPTURE"],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 86,
+        "line": 89,
         "payloads": [
           "if TRANSCRIPT_MARKER=\"$(bash \"${SCRIPT_DIR}/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex)\"; then",
-          "    :",
+          "\t:",
           "else",
-          "    status=\"$?\"",
-          "    exit \"$status\"",
+          "\tstatus=\"$?\"",
+          "\texit \"$status\"",
           "fi",
           "case \"$TRANSCRIPT_MARKER\" in",
-          "    UNLEASHED_TRANSCRIPT=?*) ;;",
-          "    *) die \"allocator returned an invalid marker\" ;;",
+          "UNLEASHED_TRANSCRIPT=?*) ;;",
+          "*) die \"allocator returned an invalid marker\" ;;",
           "esac",
           "CODEX_TRANSCRIPT=\"${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}\"",
           "printf '%s\\n' \"$TRANSCRIPT_MARKER\"",
@@ -348,8 +330,8 @@
           "# (deep review, P1). It writes both sidecars with O_NOFOLLOW|O_EXCL, which the shell redirect it",
           "# replaced did not. A failed binding aborts here, before the reviewer launches.",
           "python3 \"${SCRIPT_DIR}/bind-prompt.py\" \\",
-          "    --prompt \"$PROMPT\" --transcript \"${CODEX_TRANSCRIPT}\" --plan \"$PLAN\" \\",
-          "    || die \"refusing to review: the prompt/plan binding could not be established\"",
+          "\t--prompt \"$PROMPT\" --transcript \"${CODEX_TRANSCRIPT}\" --plan \"$PLAN\" ||",
+          "\tdie \"refusing to review: the prompt/plan binding could not be established\"",
           "#",
           "# ISOLATE LIKE THE GEMINI ARM (PR #63 recheck, P1). codex used to run `-s read-only` in the LIVE tree,",
           "# so the plan file it opened was the mutable working-tree one: an A->B->A swap during codex's read",
@@ -359,9 +341,9 @@
           "# `stage-bound-plan.py` — the same isolation and the same staging the gemini arm uses, so the two arms",
           "# cannot drift again. It feeds the prompt SNAPSHOT (the O_EXCL `.prompt`), never the caller's path.",
           "exec bash \"${SCRIPT_DIR}/isolated-codex-review.sh\" \\",
-          "    \"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""
+          "\t\"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""
         ],
-        "payloadSha256": "99403c968000e88dea860de32d24f770198658e536687e20e69492e6f18bfdc4"
+        "payloadSha256": "c06d1ef81d225fae51f59b8fd0fe1fc4f23beb7cf4e9cee538fe0bcc7d7a82cf"
       },
       "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
       "precedingAnchorLine": 47,
@@ -375,18 +357,15 @@
       "line": 49,
       "class": "rewrite",
       "reason": "The PTY capture target must be the allocated path passed as one argument.",
-      "contracts": [
-        "S-CAPTURE",
-        "S-THREAD"
-      ],
+      "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 115,
+        "line": 118,
         "payloads": [
           "exec bash \"${SCRIPT_DIR}/isolated-codex-review.sh\" \\",
-          "    \"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""
+          "\t\"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""
         ],
-        "payloadSha256": "eabe915437fcd098d6d17b6cadc4304147d37c998060446f86a4462a6610e8e8"
+        "payloadSha256": "180a6f49a5a3f3133396751d574fe4e447dfa725407929d6ce4fa93599cef9c6"
       },
       "sourceSha256": "140cfc84e527dc2259392ae57eed8ba2e0c5a61496d8476a25d7db90a8c1a4cf",
       "precedingAnchorLine": 47,
@@ -400,12 +379,9 @@
       "line": 51,
       "class": "rewrite",
       "reason": "The live recipe commentary must point readers to the allocated capture target.",
-      "contracts": [
-        "S-CAPTURE",
-        "S-THREAD"
-      ],
+      "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 104,
+        "line": 108,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -424,15 +400,13 @@
       "line": 181,
       "class": "rewrite",
       "reason": "Plan-review synthesis must consume the two allocated transcript paths.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
-        "line": 242,
+        "line": 247,
         "payloads": [
-          "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
+          "1. **Plan review:** `codex exec -c model_reasoning_effort=ultra -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
-        "payloadSha256": "2fa4e7b2b3d16f2e54394bd0913718f32afe3dbbc1cd98c57f73c310d7638029"
+        "payloadSha256": "95205eb31130fc30f0ac13b85b867ed6a600d5d81cb29df987c669cac93a3bbf"
       },
       "sourceSha256": "2db38ffecb2222616bb614ba6bc7eaea51228347866d78c3e7cf654678fc7829",
       "precedingAnchorLine": 180,
@@ -446,9 +420,7 @@
       "line": 8,
       "class": "rewrite",
       "reason": "The fixed-path cleanup grant is removed when allocation eliminates pre-cleaning.",
-      "contracts": [
-        "S-PRECLEAN"
-      ],
+      "contracts": ["S-PRECLEAN"],
       "destination": {
         "line": 16,
         "payloads": [
@@ -468,10 +440,7 @@
       "line": 71,
       "class": "rewrite",
       "reason": "The isolated review helper must capture to the single allocated output argument.",
-      "contracts": [
-        "S-CAPTURE",
-        "S-THREAD"
-      ],
+      "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
         "line": 120,
         "payloads": [
@@ -493,10 +462,7 @@
       "line": 137,
       "class": "rewrite",
       "reason": "The primary isolated review recipe must capture to the allocated output argument.",
-      "contracts": [
-        "S-CAPTURE",
-        "S-THREAD"
-      ],
+      "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
         "line": 210,
         "payloads": [
@@ -518,10 +484,7 @@
       "line": 197,
       "class": "rewrite",
       "reason": "The live capture instruction must identify the allocated target, not a shared path.",
-      "contracts": [
-        "S-CAPTURE",
-        "S-THREAD"
-      ],
+      "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
         "line": 272,
         "payloads": [
@@ -542,9 +505,7 @@
       "line": 199,
       "class": "rewrite",
       "reason": "Synthesis must receive both reviewers' allocated paths as opaque arguments.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 275,
         "payloads": [
@@ -568,9 +529,7 @@
       "line": 23,
       "class": "rewrite",
       "reason": "Default Gemini input must become the explicitly supplied allocated transcript path.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 24,
         "payloads": [
@@ -590,14 +549,10 @@
       "line": 24,
       "class": "rewrite",
       "reason": "Default Codex input must become the explicitly supplied allocated transcript path.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 25,
-        "payloads": [
-          "  --reviewer \"codex=<STATUS>:<codex-allocated-path>\""
-        ],
+        "payloads": ["  --reviewer \"codex=<STATUS>:<codex-allocated-path>\""],
         "payloadSha256": "9110bd7d570f8b8ef13ac81356f46f9ded8e2c77bbc568cc3bfe21605f552b68"
       },
       "sourceSha256": "416c9417bc7eb1173a951308a7d14ce5acd1a808702858900a7fb3c9dfc01022",
@@ -612,9 +567,7 @@
       "line": 38,
       "class": "rewrite",
       "reason": "Synthesis must read the two opaque allocated paths supplied for this run.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 41,
         "payloads": [
@@ -638,14 +591,10 @@
       "line": 137,
       "class": "rewrite",
       "reason": "The Gemini reviewer argument must carry its allocated path into the verdict artifact.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 160,
-        "payloads": [
-          "    --reviewer \"$GEMINI_REVIEWER_SPEC\" \\"
-        ],
+        "payloads": ["    --reviewer \"$GEMINI_REVIEWER_SPEC\" \\"],
         "payloadSha256": "48edb8ac7d02f796d072b85659f2ec5d86a689ada5266ec5795ff54423d8ac93"
       },
       "sourceSha256": "ca3f44a34edfa4cc64175b45c7ffffa7f65b4aee8a5381cd7f88f67230d1b1d7",
@@ -660,14 +609,10 @@
       "line": 138,
       "class": "rewrite",
       "reason": "The Codex reviewer argument must carry its allocated path into the verdict artifact.",
-      "contracts": [
-        "S-THREAD"
-      ],
+      "contracts": ["S-THREAD"],
       "destination": {
         "line": 161,
-        "payloads": [
-          "    --reviewer \"$CODEX_REVIEWER_SPEC\""
-        ],
+        "payloads": ["    --reviewer \"$CODEX_REVIEWER_SPEC\""],
         "payloadSha256": "516aa19b833ee82b1fdcf3c13ed1f6d00694ac6594ee8e5c833c3dd7eb44b6bb"
       },
       "sourceSha256": "833317d1cd59935e55540c732344b39897b17fb10d304aa7c81fae6f65447157",

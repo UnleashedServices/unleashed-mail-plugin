@@ -13,6 +13,199 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.24] — 2026-09-05
+
+### Changed
+
+- **Review tooling retargeted to Codex GPT-6 "Astra" @ `ultra`.** `~/.codex/config.toml` now carries
+  `model = "gpt-6-astra"` on `codex-cli` 0.153.4; the skill and wrappers still pinned `gpt-5.6-sol`.
+  More importantly the mandated effort, `xhigh`, is **fifth of seven** on the current ladder —
+  `minimal < low < medium < high < xhigh < max < ultra` — read from the shipped binary's own enum,
+  which serialises it in ascending order. The gate had been running two tiers below the ceiling since
+  Astra shipped, with nothing to signal it. Every review path now pins `ultra`.
+- **The pty cap moved 1200s → 2400s** alongside the tier. `xhigh` ran to ~12 min against the old cap
+  and `ultra` runs longer. Provisional until a full plan review is timed at ultra; exit 124 continues
+  to mean the wrapper budget is short and is never a reason to drop the tier.
+
+### Fixed
+
+- **The reasoning tier is now asserted, because the CLI will not do it.** Measured on 0.153.4:
+  `-c model_reasoning_effort=definitely-not-valid` is echoed in the run banner and the review
+  proceeds at the backend default — no error, no warning, no non-zero exit. A stale or mistyped tier
+  was therefore an _invisible_ downgrade of the gate, the same class as the 5.6 upgrade silently
+  resetting the config to `low`. The wrappers now check the token against the seven known tiers and
+  exit 2; verified they reject `ultrra`, an empty value, and `xhigh; rm -rf /`, while accepting each
+  real tier. The value stays non-overridable by callers — the guard catches an editing typo, not a
+  caller trying to weaken the gate.
+
+## [2.8.23] — 2026-09-04
+
+### Fixed
+
+- **COREDEV-2801 — the recurring 2.7.0 reversion has a root cause, and it was ours.**
+  `.claude-plugin/marketplace.json` declared no `version` key. When a marketplace entry omits it,
+  Claude Code resolves the installed version down a fallback branch that takes `readdir()[0]` of the
+  plugin cache directory — raw filesystem order, no sort, no semver comparison. Index 0 on the
+  maintainer's machine is `2.7.0`, so every wholesale registry rebuild reinstated 2.7.0 while
+  `origin/main` was a dozen releases ahead, silently costing that session the plugin's agents and its
+  bundled MCP server.
+
+  Verified independently of the analysis: the entry's keys are `category, description, homepage,
+name, source` with no `version`; raw `readdir` of the cache yields
+  `['2.7.0','2.8.2','2.8.3','2.8.16','2.8.1','2.8.0']`. For this plugin alone that test is degenerate
+  — 2.7.0 is simultaneously first by raw order, lexicographically, by semver and by age — so the
+  discriminating evidence came from two sibling plugins where raw and sorted order disagree, and raw
+  order won three times out of three.
+
+  `version` is a real marketplace field, not one inferred from decompiled code: 17 of 297 entries
+  installed on this machine declare it, including one with the same dict-shaped `source` as ours. It
+  is now sync point 5 in `validate-version-sync.sh`, so it cannot drift from `plugin.json` — which is
+  the only reason declaring it helps.
+
+  **Two honest limits.** Pinning only takes effect once that version is present in the cache;
+  measured, `2.8.16` pins and an uncached `2.8.22` still falls back. And this fixes the WRONG VALUE
+  being chosen, not the rebuild itself — why the registry read returns ENOENT at session start is
+  not established.
+
+- **COREDEV-2780 — five codex findings, three of them counterexamples to the previous round.** Signal
+  handlers removed the marker directory and exited while leaving `trunk` and the watchdog running
+  (measured: three live processes; now zero across SIGTERM/SIGHUP/SIGINT). The placeholder collision
+  was closed on the named keys but not the inline `tool@version` specifiers. The 3.9 checker missed
+  `Alias = Foo | Bar` and `isinstance(v, Foo | Bar)`. `_mypy()` tested any ambient binary rather than
+  the pinned release. And the survivor binding checked a clause, so deleting one of seven C6 cases
+  left the survivor green — the exact regression it claimed to detect.
+
+## [2.8.22] — 2026-09-04
+
+### Fixed
+
+- **PR #85 review findings (COREDEV-2804/2809/2810/2811).** The timeout marker no longer opens a
+  predictable path in a shared directory — demonstrated: a pre-planted symlink was followed and the
+  target truncated. It now creates a private `mkdir -m 700` directory, chosen over `mktemp -d`
+  because `mktemp` is an external binary the hook never needed; depending on it silently disabled
+  deadline recording wherever it is absent, which measured as 8 red tests and is COREDEV-2806
+  returning through its own repair. The version carve-out now requires a full three-component shape,
+  because `123`, `1.2` and `9` are legal branch names that normalised away and left the supply-chain
+  freeze byte-identical. The 3.9 floor checker scopes its future-import exemption to annotation nodes
+  instead of skipping whole modules — it inspected 0 of 20 files before — and its census addresses
+  the `py39-smoke` job by name rather than taking the first `py_compile` match, which belonged to the
+  3.12 `validate` step.
+- **Three defects found in those fixes by an adversarial pass, not by the suite.** The leftover-marker
+  assertion had gone inert: it globbed `rwt.*.deadline` while the code now writes
+  `rwt.<rand>.d/deadline`, and `pathlib`'s `*` does not cross `/`, so deleting the teardown was a
+  passing mutant. Cleanup was straight-line code, so an interrupted commit leaked a directory —
+  measured against SIGINT, SIGTERM and SIGHUP, now disposed of by a script-scope trap (SIGKILL is not
+  claimed). And the normalisation placeholder sat inside its own input space: writing `<version>`
+  verbatim produced a document byte-identical to a normalised genuine one, so the digest now carries
+  a manifest of which paths were normalised.
+- **An overclaim retracted in one field and re-committed in another.** The SessionStart evidence was
+  corrected to say it exercises the wired command and not Claude Code's dispatcher — then asserted
+  that a marker was "written by a live SessionStart", provenance never verified. It now states the
+  inference and its basis: `marker_dir` is reached only after the `--session-start` check, the
+  repository's other caller passes no such flag, and the observation isolated `XDG_STATE_HOME`.
+
+## [2.8.21] — 2026-09-04
+
+### Fixed
+
+- **COREDEV-2808 follow-up — the python3 guard was ordered behind a read that exits first.** The
+  `origin/main` lookup carries `|| exit 0`, and a CI checkout has no `refs/remotes/origin/main`, so a
+  machine without `python3` exited there and never reached the diagnostic. Caught by CI on PR #85 and
+  reproduced locally against a repo with no such ref. "I cannot run" now precedes "there is nothing
+  to compare".
+
+### Changed
+
+- **COREDEV-2805's timing test traded a 50ms race for a property that holds.** It ran the child for
+  1.95s against a 2s deadline, because reproducing the old integer-clock defect requires the child to
+  finish inside the final second. Fork and interpreter startup cross 50ms on a loaded runner, the
+  watchdog then fires for real, and a timeout becomes the correct answer — it went red in CI on
+  exactly that. No test can both reproduce a sub-second window and be stable, so the behavioural test
+  now asserts the property with a margin nothing can cross, a structural companion catches a return
+  to clock arithmetic directly (proven red against a reintroduced `${SECONDS}` sample), and the
+  discriminating 10-of-10 measurement stays recorded in COREDEV-2805's commit.
+
+## [2.8.20] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2811 — `.trunk/configs/**` was an unfrozen lever on the required gate.** Cell 4 froze
+  which linters run; nothing froze what they tolerate. The C6 guard deliberately allows those paths,
+  so the whole surface sat outside every check — a permissive `ruff.toml` or a `.bandit` skipping
+  every test would report success having enforced almost nothing. Cell 4b freezes the config tree by
+  content, and the filesystem is the oracle rather than the index, because trunk reads an untracked
+  planted config exactly like a tracked one.
+- **COREDEV-2811 — the drift fixture made four distinct sources equal.** `set_expected` pointed
+  `origin/main` at `HEAD`, so worktree, index, HEAD and origin carried identical bytes and a detector
+  reading any of them passed. Measured: with the detector mutated to read the checkout, table rows 6,
+  7 and 8 all still passed. The fixture now diverges, and the question the detector exists to answer —
+  what does `origin/main` SERVE — is finally the one under test.
+- **COREDEV-2811 — the mutation survivor corpus executed nothing.** Fourteen recorded findings whose
+  tests only checked that fields were present. Each claim is now bound to an executing registry case,
+  or declares why it needs none; stripping C5's cases reddens the survivor that rests on it.
+
+## [2.8.19] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2809 — the exactly-one-producer census had a blind spot, and an argv test asserted a
+  spelling.** A job that calls a REUSABLE workflow takes its check-run names from the CALLED file, so
+  the census could not name what it produces and skipped it silently; it now fails closed, as it
+  already did for an expression-valued job name. No such job exists yet, which is why the guard lands
+  before one does. Separately, `assertIn("--index", argv)` against the joined argument string is
+  satisfied by `--index-only` — demonstrated by mutation — so the flags are asserted as tokens and
+  the whole vector is frozen.
+- **COREDEV-2810 — the mypy 3.9 floor was advertised, not enforced.** mypy 2.3.1 refuses
+  `python_version = 3.9`: a hard error on the command line, and from a config file a note followed by
+  a silent fall back to its default. Measured: a PEP-604 annotation, a runtime TypeError on 3.9,
+  reported "Success: no issues found". The config now names a version mypy accepts and says so, and
+  the floor is enforced where it bites — a check over the files CI byte-compiles on 3.9, derived from
+  the workflow rather than hand-listed, rejecting PEP-604 in any annotation Python evaluates at
+  runtime. Byte-compilation cannot catch these: `int | None` is valid 3.9 syntax.
+
+## [2.8.18] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2807 — the local trunk gate could silently not run.** Four fall-through paths finished
+  with exit 0 having linted nothing, and a gate that is absent is worse than one that is broken:
+  `git commit` prints the same green ticks either way. `$(cd … && pwd)` is EMPTY when the cd fails,
+  so `SCRIPT_DIR` became `/scripts` and the hook took its `exit 0` branch; the missing-helper branch
+  ended the HOOK rather than the helper, taking the trunk gate and drift detector with it; an absent
+  `trunk` printed nothing; and — measured — in a checkout with no `.trunk/` the gate's own invocation
+  exits 1 with "Please run 'trunk init'", which it reported as "new findings in the staged diff", a
+  false statement about the diff that no edit to the diff can clear.
+- **COREDEV-2808 — the drift detector reported "no drift" when it could not check.** Every
+  comparison runs inside `python3 <<'PY' 2>/dev/null`; with no interpreter the heredoc fails, its
+  diagnostic is discarded and the empty-warning guard exits 0 exactly as a healthy install does. It
+  now says the check did not run, still without blocking. The real SessionStart observation that
+  `test_session_start_drift_hook.py` explicitly defers to is committed as evidence, bound by a test
+  to the command `.claude/settings.json` actually wires so it cannot decay into a souvenir.
+
+## [2.8.17] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2804 — the linter-config freeze could not see the linter SOURCE.** Cell 4 hashed only
+  the `lint:` block, leaving `plugins.sources[].uri`/`ref`, `cli.version`, `runtimes` and `actions`
+  unfrozen. Measured on the shipped tree: repointing `plugins.sources[0].uri` at
+  `github.com/attacker/plugins` left the digest byte-identical and the full suite green. The digest
+  now covers the whole document; `cli.version` and a semver `ref` still normalise so `trunk upgrade`
+  does not red the cell, while a `ref` naming a branch or SHA does — a mutable ref on the definition
+  source is the move the carve-out must not launder.
+- **COREDEV-2805 — the fourth member of the 124/137/143 family, and a live fail-open.** `timeout`
+  cannot report whether it fired, so that branch inferred it from `${SECONDS}` sampled before the
+  fork; the integer clock read up to a second high and laundered a command's own exit 124 into "we
+  timed out", passing the commit after an incomplete lint. Measured 10/10 on the shipped code, 0/10
+  after. The deadline now belongs to the watchdog that records it before it acts — the only ordering
+  where the record cannot lose the race — on both branches, with `timeout` kept as a backstop.
+- **COREDEV-2806 — the marker channel was assumed rather than probed.** `${TMPDIR:-/tmp}` may name a
+  directory that is missing or unwritable, and the write lives in a subshell whose stderr goes to
+  `/dev/null`, so a genuine timeout produced no marker and was reported as an external signal.
+  Measured: `rc=143`, fact 0. The channel is now probed by WRITING (`-w` passes on a full filesystem,
+  a read-only mount and a restrictive ACL, then fails the open), and when no directory can be
+  written `run_with_timeout` publishes that so the caller stops naming a cause it cannot evidence.
+
 ## [2.8.16] — 2026-09-03
 
 ### Fixed

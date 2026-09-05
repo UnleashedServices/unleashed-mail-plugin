@@ -40,6 +40,33 @@ if [[ -z ${root} ]] || [[ ! -d ${root} ]]; then
 	exit 0
 fi
 
+# PYTHON IS THE WHOLE DETECTOR, so its absence is not an answer about drift. Every comparison
+# below runs inside `python3 <<'PY' 2>/dev/null`; with no interpreter the heredoc fails, its
+# diagnostic is discarded, `warning` stays empty, and `[[ -n ${warning} ]] || exit 0` then
+# reports precisely what a healthy up-to-date install reports — SILENCE. A detector that could
+# not run must not be indistinguishable from one that ran and found nothing (COREDEV-2808).
+# Still exit 0: this is advisory, and must never block a commit or a session.
+#
+# ORDERING IS LOAD-BEARING: this sits BEFORE the `origin/main` read, whose `|| exit 0` fires
+# whenever that ref is absent -- which is the normal state of a CI checkout. With the guard
+# after it, a machine with no python3 went silent for the OTHER reason and the diagnostic was
+# unreachable exactly where it mattered. "I cannot run" precedes "there is nothing to compare".
+if ! command -v python3 >/dev/null 2>&1; then
+	# THE HOOK PROTOCOL, NOT FREE-FORM STDERR. A SessionStart hook's plain stdout is injected
+	# into the agent's context; only `systemMessage` is shown to the USER. This guard exits
+	# long before the mode-specific serialisation below, so in session mode it wrote stderr
+	# nobody sees — leaving the one environment it exists to diagnose with no notice at all
+	# (codex, PR #85). The envelope is emitted with printf because the interpreter that
+	# normally serialises it is precisely what is missing. The text carries no quote or
+	# backslash, so it needs no escaping; keep it that way.
+	if [[ ${mode} == "--session-start" ]]; then
+		printf '{"systemMessage": "unleashed-mail: python3 not found — the plugin version drift check did NOT run"}\n'
+	else
+		printf 'unleashed-mail: python3 not found — the plugin version drift check did NOT run\n' >&2
+	fi
+	exit 0
+fi
+
 expected_json="$(git -C "${root}" show origin/main:.claude-plugin/plugin.json 2>/dev/null)" || exit 0
 [[ -n ${expected_json} ]] || exit 0
 
@@ -63,6 +90,7 @@ installed_record="${CLAUDE_CONFIG_DIR:-${HOME-}/.claude}/plugins/installed_plugi
 # the heredoc. So the substitution became a SYNTAX ERROR the moment a prose comment in the Python
 # body used an apostrophe. CI runs bash 5 and parses it happily, so this would have shipped green
 # and been broken on every machine that actually runs the hooks. Measured: bash 3.2.57 fails.
+
 tmp_out="$(mktemp "${TMPDIR:-/tmp}/unleashed-drift.XXXXXX")" || exit 0
 trap 'rm -f "${tmp_out}"' EXIT
 

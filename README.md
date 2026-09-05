@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.16
+# UnleashedMail — Claude Code Plugin v2.8.24
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,91 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.24
+
+- **Review tooling moved to Codex GPT-6 "Astra" at the `ultra` tier.** The wrappers pinned
+  `gpt-5.6-sol` @ `xhigh`; `xhigh` turned out to be **fifth of seven** on the current ladder
+  (`minimal < low < medium < high < xhigh < max < ultra`), so the gate had been quietly running two
+  tiers below the ceiling since Astra shipped.
+- **The CLI does not validate the reasoning tier — so the wrappers now do.** Measured: an unknown
+  value is echoed back and the run proceeds at the backend default, with no error. A stale or
+  mistyped tier was therefore an invisible downgrade; the wrappers assert against the seven known
+  tiers and exit 2. The pty cap moved 1200s → 2400s with the tier.
+
+### v2.8.23
+
+- **Found and fixed the cause of the recurring 2.7.0 reversion.** `marketplace.json` declared no
+  `version`, and without one Claude Code resolves the installed version by taking the FIRST entry of
+  a raw directory read of the plugin cache — no sort, no semver comparison. On the maintainer's
+  machine index 0 was `2.7.0`, so every registry rebuild reinstated it while `main` was many releases
+  ahead. The version is now declared, and version-sync enforces it against `plugin.json` so it cannot
+  drift back.
+- **Five more review findings closed**, three of them counterexamples to the previous round's fixes:
+  signal handlers that left `trunk` running, a placeholder collision closed on only one of two
+  channels, a 3.9 checker blind to user-defined types, an ambient mypy standing in for the pinned
+  one, and a survivor binding that permitted the exact regression it claimed to detect.
+
+### v2.8.22
+
+- **Review remediation, and a repair round that needed repairing.** Seven findings closed: a symlink
+  truncation on the timeout marker's path, a freeze carve-out that laundered mutable branch refs, a
+  3.9 floor checker that inspected 0 of 20 files, a census reading the wrong CI job, and an evidence
+  artifact claiming more than it showed. An adversarial pass over those fixes then found three more
+  defects **in the fixes themselves** — a cleanup with no working check behind it, a directory leaked
+  on every interrupted commit, and a placeholder that could be forged verbatim.
+
+### v2.8.21
+
+- **The drift detector's "I could not run" message was unreachable where it mattered.** Its guard sat
+  after the `origin/main` read, whose `|| exit 0` fires whenever that ref is absent — the normal state
+  of a CI checkout. A machine with no `python3` went silent for the other reason. Capability check now
+  precedes the data check.
+
+### v2.8.20
+
+- **The linters' own configuration was an unfrozen lever on the required check.** `.trunk/configs/**`
+  decides what every linter tolerates, and nothing froze it — a permissive `ruff.toml` would take the
+  gate green having enforced almost nothing. It is now digest-frozen, including untracked files
+  planted in the directory, because trunk reads those identically.
+- **Two suites could not see what they claimed to.** The drift fixture pointed `origin/main` at `HEAD`,
+  so a detector reading the checkout passed every test; and the mutation survivor corpus recorded
+  fourteen findings that nothing executed. Both are now bound to something that fails.
+
+### v2.8.19
+
+- **A reusable workflow could have produced the required check unseen.** The producer census skipped
+  `uses:` jobs entirely; it now refuses them, because their check names come from another file. And
+  the gate's argument test matched `--index` as a substring, which `--index-only` also satisfies — it
+  now asserts tokens, and freezes the whole vector.
+- **The Python 3.9 floor was advertised but not enforced.** The pinned mypy refuses `python_version =
+3.9` and silently falls back to its default, so a PEP-604 union — a runtime error on 3.9 — checked
+  clean. The floor is now enforced by a check derived from the files CI actually compiles on 3.9.
+
+### v2.8.18
+
+- **The pre-commit gate could finish green having run nothing.** Four paths reached `exit 0` without
+  linting: a failed `cd` yielding an empty command substitution, a missing helper that ended the whole
+  hook rather than itself, an absent `trunk` that printed nothing at all, and a checkout with no
+  `.trunk/` where `trunk check` exits 1 and the gate reported it as findings in your diff. Each is now
+  either fatal or stated out loud.
+- **The drift detector went silent when it could not run.** With no `python3` the heredoc failed, its
+  diagnostic was discarded, and the result was indistinguishable from a healthy up-to-date install.
+  The SessionStart observation this repo's own tests defer to is also now committed as evidence.
+
+### v2.8.17
+
+- **The `.trunk/trunk.yaml` freeze covered the linters but not where they come from.** Repointing
+  `plugins.sources[].uri` at another repository left the frozen digest byte-identical and all 1384
+  tests green — the required check would have reported success having run somebody else's linter
+  definitions, or none. The digest now covers the whole document, with the `trunk upgrade` carve-out
+  named explicitly rather than implied by scope.
+- **The timeout deadline is no longer inferred from an integer clock.** The `timeout` branch resolved
+  its ambiguous statuses by comparing `${SECONDS}` sampled before the fork, which read up to a second
+  high: a command exiting 124 on its own inside that second was published as our timeout, and a
+  timeout does not block the commit. Measured 10 runs out of 10. The deadline now belongs to a
+  watchdog that records it before acting, on both branches, and the marker directory is probed by
+  writing instead of assumed — an unwritable `TMPDIR` used to turn a real timeout into "signal 15".
 
 ### v2.8.16
 

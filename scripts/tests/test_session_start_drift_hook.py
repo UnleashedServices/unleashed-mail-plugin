@@ -4,9 +4,11 @@
 THE CLAIM IS SPLIT HONESTLY. CI cannot invoke a real `SessionStart` hook: this repository does install
 Claude Code later in `plugin-ci.yml`, but the Python suites run BEFORE that step. So this file asserts
 the DECLARATION against the documented stdin contract, and exercises the detector's behaviour by
-running the shipped script. The one real session-start invocation is recorded separately as committed
-evidence, the same standing cells 10 and 12 have. Claiming a CI proof this pipeline cannot produce
-would be a cell that cannot pass.
+running the shipped script. A run of the WIRED COMMAND is recorded separately as committed evidence,
+the same standing cells 10 and 12 have — and that artifact is explicit that it exercises the command
+and not Claude Code's hook dispatcher, which nothing in this pipeline can invoke. Claiming a CI proof
+this pipeline cannot produce would be a cell that cannot pass; so would leaving the docstring saying
+"the one real session-start invocation" after the artifact itself retracted that (PR #85).
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SETTINGS = REPO / ".claude/settings.json"
+OBSERVATION = REPO / "docs/planning/evidence/COREDEV-2801-sessionstart-observation.json"
 DETECTOR = REPO / "scripts/detect-plugin-version-drift.sh"
 BUCKET_SECONDS = (
     604800  # seven days, asserted as an OPERAND, not merely "a constant exists"
@@ -108,6 +111,22 @@ class _DetectorFixture(unittest.TestCase):
         self._git("add", "-A")
         self._git("commit", "-qm", version)
         self._git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def diverge_worktree(self, version: str):
+        """Advance the WORKTREE, the INDEX and HEAD past `origin/main`, which stays where it was.
+
+        `set_expected` points `origin/main` AT `HEAD`, so all four sources carry identical bytes
+        and a detector reading the worktree, the index or HEAD behaves exactly like one reading
+        `origin/main`. Every assertion in this file passes either way — the fixture making
+        distinct sources equal, which is the defect class that already cost this repository three
+        guard regressions (COREDEV-2811). After this call they disagree, and only an
+        `origin/main` read produces the recorded answer.
+        """
+        (self.repo / ".claude-plugin/plugin.json").write_text(
+            json.dumps({"name": "unleashed-mail", "version": version}), encoding="utf-8"
+        )
+        self._git("add", "-A")
+        self._git("commit", "-qm", f"worktree ahead at {version}")
 
     def set_installed(self, version, scope="user", name="unleashed-mail"):
         """THE REAL RECORD SHAPE, read from a live machine rather than assumed:
@@ -229,6 +248,34 @@ class TableA(_DetectorFixture):
 
     def test_row_7_installed_below_expected_warns(self):
         self.assertIn("is behind origin/main", self._plain())
+
+    def test_the_expected_version_is_read_from_ORIGIN_and_not_the_checkout(self):
+        """COREDEV-2811. The whole point of this detector is "what does origin/main SERVE", not
+        "what is in my tree" — on a feature branch those differ by construction, and reading the
+        checkout would compare the install against unreleased work and warn about nothing.
+        """
+        self.diverge_worktree("9.9.9")
+        out = self._plain()
+        self.assertIn("is behind origin/main 2.8.6", out)
+        self.assertNotIn(
+            "9.9.9", out, "the worktree's version must not reach the comparison at all"
+        )
+
+    def test_a_worktree_ahead_of_origin_does_not_MANUFACTURE_a_warning(self):
+        """The silent direction, and it has to be built so the two reads DISAGREE.
+
+        My first attempt here set the worktree BEHIND origin and asserted silence — and a
+        worktree-reading detector produces silence too, by the locally-newer row. It passed
+        against the mutant, proving nothing. Setting the worktree AHEAD makes the wrong read
+        warn about an unreleased version while the right read stays silent.
+        """
+        self.set_installed("2.8.6")  # equal to origin/main -> silent
+        self.diverge_worktree("9.9.9")  # a worktree read would call this "behind 9.9.9"
+        self.assertEqual(
+            "",
+            self._plain(),
+            "unreleased work in the tree is not a released version to lag",
+        )
 
     def test_row_6_equal_is_silent(self):
         self.set_installed("2.8.6")
@@ -734,6 +781,137 @@ class TheRevertedRecordIsDistinguishedFromANeverUpdatedOne(_DetectorFixture):
         out = self.run_detector(str(self.repo)).stdout
         self.assertIn("is behind origin/main", out)
         self.assertNotIn("present in the install cache", out)
+
+
+class TheRecordedObservationIsCommittedAndBounded(unittest.TestCase):
+    """COREDEV-2808. This module's own docstring defers to "one real session-start invocation
+    recorded separately as committed evidence" — and that file did not exist. An observation nobody
+    committed is indistinguishable from one nobody made, and the promise was worse than silence:
+    it made the absence read as a deliberate split of the claim rather than as a gap in it.
+    """
+
+    def setUp(self):
+        self.assertTrue(
+            OBSERVATION.is_file(),
+            f"{OBSERVATION.name} is the evidence this module explicitly defers to",
+        )
+        self.observation = json.loads(OBSERVATION.read_text(encoding="utf-8"))
+
+    def test_the_observation_is_bound_to_the_LIVE_wiring(self):
+        """A recorded command that no longer matches settings.json is evidence about a hook that is
+        no longer wired. Binding the two here is what stops the file decaying into a souvenir —
+        the failure mode this repo has already hit three times with digests written and never read.
+        """
+        settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        live = [
+            hook["command"]
+            for group in settings["hooks"]["SessionStart"]
+            for hook in group["hooks"]
+            if "detect-plugin-version-drift" in hook["command"]
+        ]
+        self.assertEqual(
+            1, len(live), "exactly one SessionStart drift invocation is wired"
+        )
+        self.assertEqual(
+            live[0],
+            self.observation["entryPoint"]["command"],
+            "the observation records a command the repository no longer wires",
+        )
+
+    def test_it_states_what_it_does_NOT_establish(self):
+        """The artifact first called itself an observation through the real entry point, while the
+        recorded run pipes a payload straight into the script — exercising the script and the
+        argument vector, not Claude Code's hook dispatcher. An evidence file that overstates its own
+        reach is worse than a missing one, because the gap stops being visible (codex, PR #85).
+
+        The wiring is evidenced separately, and independently: a live SessionStart writes a dedup
+        marker into the state directory, and this observation ran with XDG_STATE_HOME isolated, so
+        it cannot have written the markers it cites.
+        """
+        # THE PROPERTY, NOT THREE SPELLINGS. The first version of this asserted that certain words
+        # appeared in certain fields, which any rewording defeats and no rewording of the CLAIM
+        # would trip. What actually has to hold is that the artifact records a command DIFFERENT
+        # from the one settings.json wires — that gap is the limitation being disclosed — and that
+        # it does not present itself as having exercised the wiring.
+        scope = self.observation["whatThisDoesAndDoesNotShow"]
+        self.assertNotEqual(
+            self.observation["entryPoint"]["command"],
+            self.observation["command"],
+            "if these were the same, there would be no limitation to disclose",
+        )
+        self.assertTrue(
+            scope.get("doesNotShow", "").strip(),
+            "an artifact that cannot say what it fails to show is back to overclaiming",
+        )
+        # SCOPED TO THE FIELDS THAT MAKE CLAIMS. A blanket ban on the phrase fails against the
+        # RETRACTION, which has to name what it is retracting — the first version of this assertion
+        # did exactly that. What must not survive is the artifact still ASSERTING it.
+        asserting = " ".join(
+            str(self.observation.get(field, ""))
+            for field in ("experiment", "why", "outcome", "note")
+        ).lower()
+        self.assertNotIn("real entry point", asserting)
+
+    def test_it_records_the_warning_AND_the_dedup(self):
+        """One run only proves the hook fires. The dedup is a claim about the SECOND call, and no
+        reading of the source establishes it — that is precisely why an observation was owed.
+        """
+        observed = self.observation["observed"]
+        self.assertEqual(0, observed["run1"]["commandExitCode"])
+        self.assertIn(
+            "systemMessage",
+            observed["run1"]["stdout"],
+            "SessionStart's protocol is the systemMessage envelope, not a bare line",
+        )
+        self.assertEqual(
+            0,
+            observed["run2"]["stdoutBytes"],
+            "the repeat in one session must be suppressed",
+        )
+
+
+class TheDetectorSaysWhenItCouldNotRun(unittest.TestCase):
+    """COREDEV-2808's second half. Every comparison in the detector happens inside
+    `python3 <<'PY' 2>/dev/null`, so with no interpreter the heredoc fails, its diagnostic is
+    discarded, and the empty-warning guard takes the same silent exit 0 a healthy up-to-date
+    install takes. "Could not check" must never look like "checked, and found nothing".
+    """
+
+    def test_an_absent_python3_is_stated_rather_than_read_as_no_drift(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fake = Path(tmp.name) / "bin"
+        fake.mkdir()
+        # EVERY OTHER TOOL STAYS. Dropping whole PATH directories also drops `git` and `mktemp`,
+        # and the detector then exits early for an unrelated reason — a probe that reproduces
+        # silence without reproducing its cause proves nothing.
+        for directory in ("/usr/bin", "/bin"):
+            source = Path(directory)
+            if not source.is_dir():
+                continue
+            for entry in source.iterdir():
+                if entry.name.startswith("python"):
+                    continue
+                target = fake / entry.name
+                if not target.exists():
+                    with contextlib.suppress(OSError):
+                        target.symlink_to(entry)
+        if (fake / "git").exists() is False:
+            self.skipTest("no git available to build a python3-free PATH")
+        completed = subprocess.run(
+            ["bash", str(REPO / "scripts/detect-plugin-version-drift.sh"), str(REPO)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": str(fake), "HOME": tmp.name},
+            timeout=120,
+        )
+        self.assertEqual(0, completed.returncode, "advisory: it must never block")
+        self.assertIn(
+            "did NOT run",
+            completed.stdout + completed.stderr,
+            "silence here is indistinguishable from a clean, up-to-date install",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
