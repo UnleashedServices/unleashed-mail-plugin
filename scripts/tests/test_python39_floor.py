@@ -332,6 +332,136 @@ class TheRuntimeFloorHoldsOnEveryFileCICompilesOnThreeNine(unittest.TestCase):
         self.assertGreater(len(files), 10, "the derivation lost CI's file list")
 
 
+_SUITE_COMMAND = "unittest discover"
+_SUITE_DIRECTORY = "scripts/tests"
+_MYPY_VERSION = re.compile(r"\bmypy\s+(\d+(?:\.\d+)*[0-9A-Za-z.+-]*)")
+
+
+def _logical_lines(step: dict) -> list[str]:
+    """`step`'s run script as logical commands: continuations folded, whitespace collapsed."""
+    folded = re.sub(r"\\\n\s*", " ", step.get("run") or "")
+    return [re.sub(r"\s+", " ", line).strip() for line in folded.splitlines()]
+
+
+def _runs_scripts_suite(step: dict) -> bool:
+    """Whether `step` runs the scripts suite — keyed on the SHAPE, not on one spelling of it.
+
+    `"unittest discover -s scripts/tests" in run` is a check on a spelling. Wrapping that command
+    with a trailing backslash — the natural thing to do to a long line — or merely padding it with
+    a second space makes the substring absent, `runs_suite` false, and the job SILENTLY exempt
+    from the invariant that every job running the suite installs the pin (codex, PR #85). The two
+    tokens must land on the SAME logical command, so an unrelated `echo` mentioning one of them
+    elsewhere in a multi-line script cannot conjure a match that is not there.
+    """
+    return any(
+        _SUITE_COMMAND in line and _SUITE_DIRECTORY in line
+        for line in _logical_lines(step)
+    )
+
+
+def _jobs_missing_the_pin(workflow: dict) -> list[str]:
+    """Jobs that run the scripts suite without installing the pinned mypy before it.
+
+    Separated from disk so the predicate can be exercised against a workflow that ACTUALLY HAS
+    the defect. Reading the real file only ever proves the current shape passes, which is the
+    reachability-is-not-discrimination failure this module has been repaired for once already.
+    """
+    offenders = []
+    for name, job in (workflow.get("jobs") or {}).items():
+        steps = job.get("steps") or []
+        suite_at = next(
+            (index for index, step in enumerate(steps) if _runs_scripts_suite(step)),
+            None,
+        )
+        if suite_at is None:
+            continue
+        installs = [
+            index
+            for index, step in enumerate(steps)
+            if any("mypy==" in line for line in _logical_lines(step))
+        ]
+        if not installs:
+            offenders.append(f"{name}: runs the suite, never installs the pinned mypy")
+        elif installs[0] > suite_at:
+            offenders.append(f"{name}: installs the pin AFTER running the suite")
+    return offenders
+
+
+def _installs_pep668_refuses(workflow: dict) -> list[str]:
+    """Steps installing the pinned mypy in the one form an externally-managed interpreter rejects.
+
+    This checks the two forms known to SURVIVE PEP 668 — a venv, or an explicit
+    `--break-system-packages` — rather than executing pip against an externally-managed
+    interpreter, because no such interpreter is guaranteed on the machine running this suite. It
+    is therefore a narrower claim than "the install works", and it is stated that way on purpose:
+    what it does discriminate is the bare form, which is the defect that was actually here.
+    """
+    offenders = []
+    for name, job in (workflow.get("jobs") or {}).items():
+        for step in job.get("steps") or []:
+            lines = _logical_lines(step)
+            if not any("mypy==" in line for line in lines):
+                continue
+            survives = any(
+                "-m venv" in line or "--break-system-packages" in line for line in lines
+            )
+            if not survives:
+                offenders.append(
+                    f"{name}: installs the pin through a possibly externally-managed interpreter"
+                )
+    return offenders
+
+
+def _reported_mypy_version(binary: str) -> str | None:
+    """The version token `binary` REPORTS, parsed out rather than substring-matched.
+
+    `pinned in reported` is TRUE of a mypy reporting 2.3.10 when the pin is 2.3.1 — and of 12.3.1
+    as well — so the ambient-binary guard accepted precisely the releases it exists to reject
+    (codex, PR #85). Compare the token, never the sentence that contains it.
+    """
+    try:
+        completed = subprocess.run(
+            [binary, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except OSError:
+        return None
+    match = _MYPY_VERSION.search(completed.stdout)
+    return match.group(1) if match else None
+
+
+class EveryJobRunningTheSuiteCanSatisfyItsOwnGate(unittest.TestCase):
+    """The cell below FAILS rather than skips when CI is set, so every CI job that runs this suite
+    must be able to reach the pinned mypy. That coupling lives across two files and a local run
+    cannot see it: locally `CI` is unset, so the guard skips and the mismatch is invisible.
+
+    It was invisible exactly once. The install step was added to `validate` only; `darwin-suite`
+    runs the same suite and went red on a machine that had no pin to find. This asserts the
+    invariant where it can be checked before pushing.
+    """
+
+    def test_every_job_that_runs_the_suite_installs_the_pinned_mypy(self):
+        workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [],
+            _jobs_missing_the_pin(workflow),
+            "the 3.9-floor cell fails rather than skips on CI, so a job that runs the suite "
+            "without the pin cannot satisfy it",
+        )
+
+    def test_no_job_installs_the_pin_in_the_form_pep668_refuses(self):
+        workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [],
+            _installs_pep668_refuses(workflow),
+            "`darwin-suite` has no setup-python step, so a bare `pip install` there is refused "
+            "by an externally-managed interpreter and the job cannot reach the pin at all",
+        )
+
+
 class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
     """The defect's own shape: a config naming a version mypy refuses is a NOTE, not an error, so
     it survives every green run. This asserts the acceptance rather than the spelling, so the next
@@ -370,19 +500,12 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
         if cached:
             return str(cached[-1])
         ambient = shutil.which("mypy")
-        if ambient:
-            try:
-                reported = subprocess.run(
-                    [ambient, "--version"],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                ).stdout
-            except OSError:
-                return None
-            if pinned in reported:
-                return ambient
+        # THE TOKEN, NOT A SUBSTRING OF THE LINE. `pinned in reported` accepted a mypy reporting
+        # 2.3.10 against a 2.3.1 pin, and 12.3.1 against it too — so the guard whose entire
+        # purpose is refusing an ambient binary admitted exactly the neighbouring releases whose
+        # behaviour differs (codex, PR #85).
+        if ambient and _reported_mypy_version(ambient) == pinned:
+            return ambient
         return None
 
     def test_it_interrogates_the_PINNED_release_not_an_ambient_one(self):
@@ -408,10 +531,19 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
                     "this cell cannot gate what it claims to"
                 )
             self.skipTest("the pinned mypy is not materialised on this machine")
-        self.assertIn(
-            f"/mypy/{pinned}-",
-            resolved,
-            "resolved a mypy that is not the pinned release",
+        # THE VERSION IT REPORTS, not the path it sits at. This asserted the resolved path
+        # contained "/mypy/<pinned>-", which is the shape of TRUNK'S CACHE — so the moment CI
+        # satisfied the pin by installing it with pip, the correct binary at
+        # /opt/hostedtoolcache/.../bin/mypy failed an assertion about pinning. The property is
+        # which release this is, and `--version` is what answers that.
+        # assertEqual on the PARSED TOKEN, not assertIn on the banner: `assertIn("2.3.1", ...)`
+        # is satisfied by "mypy 2.3.10" and by "mypy 12.3.1", which is the same substring defect
+        # the resolver above carried (codex, PR #85).
+        reported = _reported_mypy_version(resolved)
+        self.assertEqual(
+            pinned,
+            reported,
+            f"resolved a mypy reporting {reported!r}, not the pinned {pinned}",
         )
 
     def test_the_pinned_mypy_does_not_refuse_the_configured_version(self):
@@ -448,6 +580,156 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
             "the configured python_version is one this mypy refuses, so it is silently ignored "
             "and the target is whatever mypy defaults to",
         )
+
+
+class TheCensusSeesJobsThatDoNotSpellItTheOneWay(unittest.TestCase):
+    """Mutation proof for the evasion codex found in the census (PR #85).
+
+    The old predicate asked whether the literal `unittest discover -s scripts/tests` appeared in a
+    step. Every case below runs the suite and installs nothing, so every case MUST be reported —
+    under the old spelling test each of the first two was silently skipped, and the invariant went
+    green while covering neither job.
+    """
+
+    @staticmethod
+    def _one_job(run: str) -> dict:
+        return {"jobs": {"target": {"steps": [{"run": run}]}}}
+
+    def test_a_continuation_between_discover_and_its_flag_is_still_the_suite(self):
+        self.assertEqual(
+            ["target: runs the suite, never installs the pinned mypy"],
+            _jobs_missing_the_pin(
+                self._one_job("python3 -m unittest discover \\\n  -s scripts/tests -v")
+            ),
+        )
+
+    def test_padded_whitespace_is_still_the_suite(self):
+        self.assertEqual(
+            ["target: runs the suite, never installs the pinned mypy"],
+            _jobs_missing_the_pin(
+                self._one_job("python3 -m unittest  discover -s  scripts/tests")
+            ),
+        )
+
+    def test_the_two_tokens_must_share_one_logical_command(self):
+        # The complement of the above: folding the WHOLE script into a single string would make
+        # this a false positive, and a census that cries wolf gets its assertion relaxed.
+        self.assertEqual(
+            [],
+            _jobs_missing_the_pin(
+                self._one_job("echo 'unittest discover'\nls scripts/tests")
+            ),
+            "two tokens on unrelated lines are not a suite run",
+        )
+
+    def test_installing_the_pin_after_the_suite_is_still_an_offence(self):
+        workflow = {
+            "jobs": {
+                "late": {
+                    "steps": [
+                        {"run": "python3 -m unittest discover -s scripts/tests"},
+                        {"run": "python3 -m pip install mypy==2.3.1"},
+                    ]
+                }
+            }
+        }
+        self.assertEqual(
+            ["late: installs the pin AFTER running the suite"],
+            _jobs_missing_the_pin(workflow),
+        )
+
+    def test_a_job_that_installs_first_is_clean(self):
+        workflow = {
+            "jobs": {
+                "good": {
+                    "steps": [
+                        {"run": "python3 -m venv v && v/bin/pip install mypy==2.3.1"},
+                        {"run": "python3 -m unittest discover -s scripts/tests"},
+                    ]
+                }
+            }
+        }
+        self.assertEqual([], _jobs_missing_the_pin(workflow))
+
+
+class TheBareInstallFormIsRefused(unittest.TestCase):
+    """Mutation proof for the PEP 668 finding (codex, PR #85): the bare form must be reported."""
+
+    @staticmethod
+    def _one_step(run: str) -> dict:
+        return {"jobs": {"target": {"steps": [{"run": run}]}}}
+
+    def test_a_bare_pip_install_is_an_offender(self):
+        self.assertEqual(
+            [
+                "target: installs the pin through a possibly externally-managed interpreter"
+            ],
+            _installs_pep668_refuses(
+                self._one_step('python3 -m pip install "mypy==2.3.1"')
+            ),
+        )
+
+    def test_a_venv_install_is_accepted(self):
+        self.assertEqual(
+            [],
+            _installs_pep668_refuses(
+                self._one_step(
+                    'python3 -m venv "${RUNNER_TEMP}/v"\n'
+                    '"${RUNNER_TEMP}/v/bin/python" -m pip install "mypy==2.3.1"'
+                )
+            ),
+        )
+
+    def test_an_explicit_break_system_packages_is_accepted(self):
+        self.assertEqual(
+            [],
+            _installs_pep668_refuses(
+                self._one_step(
+                    "python3 -m pip install --break-system-packages mypy==2.3.1"
+                )
+            ),
+        )
+
+
+class TheVersionGuardComparesTokensNotSubstrings(unittest.TestCase):
+    """`pinned in reported` was true of 2.3.10 for a 2.3.1 pin, and of 12.3.1 (codex, PR #85).
+
+    These run a real binary rather than stubbing the call, because the property is what the
+    resolver does with what a binary PRINTS, and a stub asserting my own parse would be testing
+    the mechanism I chose instead of the behaviour it exists to produce.
+    """
+
+    def _fake_mypy(self, banner: str) -> str:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        binary = pathlib.Path(tmp.name) / "mypy"
+        binary.write_text(f"#!/bin/sh\necho '{banner}'\n", encoding="utf-8")
+        binary.chmod(0o755)
+        return str(binary)
+
+    def test_a_longer_patch_is_not_the_pin(self):
+        self.assertEqual(
+            "2.3.10",
+            _reported_mypy_version(self._fake_mypy("mypy 2.3.10 (compiled: yes)")),
+        )
+
+    def test_a_longer_major_is_not_the_pin(self):
+        self.assertEqual(
+            "12.3.1",
+            _reported_mypy_version(self._fake_mypy("mypy 12.3.1 (compiled: yes)")),
+        )
+
+    def test_the_pin_itself_is_recognised(self):
+        self.assertEqual(
+            "2.3.1",
+            _reported_mypy_version(self._fake_mypy("mypy 2.3.1 (compiled: yes)")),
+        )
+
+    def test_a_binary_that_cannot_be_executed_reports_nothing(self):
+        self.assertIsNone(_reported_mypy_version("/nonexistent/mypy"))
+
+    def test_a_banner_without_a_version_reports_nothing(self):
+        self.assertIsNone(_reported_mypy_version(self._fake_mypy("mypy (unknown)")))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -381,8 +381,26 @@ def _resolve_ref_name(ref_name: dict, default_branch: str) -> set[str]:
 # The stand-in a normalised version becomes. It is deliberately NOT a legal version, but that
 # is not what stops it being forged — the manifest is (see `_normalised_trunk_config`).
 _VERSION_PLACEHOLDER = "<version>"
+# THE OFFICIAL GRAMMAR, borrowed from the one this repository already wrote for COREDEV-2801 in
+# `scripts/detect-plugin-version-drift.sh`. Three tightenings happened here in sequence, and the
+# first two were each "shape, not membership":
+#
+#   1. `v?[0-9]+(?:\.[0-9]+)*` accepted `123`, `1.2` and `9` — all legal branch names.
+#   2. Requiring three components still accepted `v01.2.3` and `1.2.3-01`, which SemVer forbids
+#      (leading zeroes in a core or numeric prerelease identifier) and `git check-ref-format
+#      --branch` accepts as branches. Verified: both normalised away and left the digest identical.
+#   3. This. An identifier is a numeric one with no leading zero, or one containing a non-digit —
+#      exactly the rule the detector states, and the reason it states it: `precedence()` there calls
+#      `int()` on all-digit identifiers, so `-01` compared as 1.
+#
+# Writing a looser pattern beside a rigorous one that already existed is what made two of these
+# rounds necessary. Reuse the grammar, do not re-derive it.
+_SEMVER_IDENTIFIER = r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
 _CANONICAL_VERSION = re.compile(
-    r"\Av?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\Z", re.ASCII
+    r"\Av?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    rf"(?:-{_SEMVER_IDENTIFIER}(?:\.{_SEMVER_IDENTIFIER})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z",
+    re.ASCII,
 )
 
 
@@ -1264,7 +1282,20 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         `git check-ref-format --branch 123`. Testing only `main` passed that pattern happily while
         three shorter spellings walked straight through it (codex, PR #85).
         """
-        for ref in ("main", "123", "1.2", "9", "abc123", "refs/heads/x"):
+        # `v01.2.3` and `1.2.3-01` are the THIRD round of this: SemVer forbids leading zeroes
+        # in a core component and in a numeric prerelease identifier, `git check-ref-format
+        # --branch` accepts both as branches, and the previous three-component pattern
+        # normalised them away — leaving the digest byte-identical (codex, PR #85).
+        for ref in (
+            "main",
+            "123",
+            "1.2",
+            "9",
+            "abc123",
+            "refs/heads/x",
+            "v01.2.3",
+            "1.2.3-01",
+        ):
             with self.subTest(ref=ref):
                 doc = yaml.safe_load(self.config)
                 doc["plugins"]["sources"][0]["ref"] = ref
