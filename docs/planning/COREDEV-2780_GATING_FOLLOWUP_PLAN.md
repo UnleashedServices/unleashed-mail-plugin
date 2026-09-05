@@ -216,17 +216,57 @@ The predicate now splits each logical line into shell commands and tokenises the
 then asks whether **one command** invokes `unittest` and names something under `scripts/tests`.
 `discover` is deliberately not required: it is one spelling of running the suite, not the property.
 
-**The last row is stated as a limit, not closed.** No static match over YAML can follow a shell
-variable, and a predicate that looks total when it is not is worse than one whose edge is known.
-It is carried by an executable cell, so if a later change closes it, that cell fails and the
-disclaimer has to be removed with it.
+**Round 2 broke that encoding too, on both arms, and the limit above was over-claimed.** Asking
+whether two tokens share a *line* was still asking about text:
+
+| round-2 evasion / false positive | found by | why it worked |
+|---|---|---|
+| `-p 'test_[a-z;]*.py'` — a quoted `;` | codex | the split ran **before** the tokeniser |
+| `2>&1` — a redirection containing `&` | codex | same |
+| `printf 'ignored; unittest scripts/tests/x.py'` — **false positive** | codex | same |
+| `-s=scripts/tests` and `-s ./scripts/tests` | agy | both **verified by running them**; both discover and pass |
+| `unittest.main`, and naming a module file directly | agy | requiring the token `unittest` |
+| `echo 'unittest' 'scripts/tests'` — **false positive** | agy | names both, runs nothing |
+
+The root cause of the first three was mine: **the separator split happened before tokenising**, so
+quoted and redirected metacharacters shredded the command. It now tokenises with `shlex`
+(`punctuation_chars`), which respects quoting, and separators are found as *tokens*.
+
+The remaining cases share one cause: each encoding named something narrower than the property. The
+predicate now asks the question that actually distinguishes — **is the executable a Python
+interpreter, and does the command name something under `scripts/tests`?** `unittest` is not
+required at all: `python3 scripts/tests/test_x.py` runs tests and needs the pin just as much, and
+requiring the token is what let `echo` in.
+
+**The limit is narrowed, because round 1's wording was too absolute (codex, r2).** "No static match
+over YAML can follow a shell variable" is false as stated: a constant `DIR=scripts/tests` *is*
+resolvable statically. What is genuinely out of scope is arbitrary shell evaluation. So the
+supported syntax is a **literal operand**, and a value the step never spells is not followed. That
+boundary is carried by an executable cell.
 
 The census was also lifted out of the test so it can run against a workflow that *actually has*
 the defect — reading the real file only ever proves the current shape passes.
 
-**All are mutation-proven.** Reverting each fix reddens its own cells and only its own; restoring
-the tree returns all 31 to green. Reverting the `$GITHUB_PATH` line alone reddens the cell written
-for it, and reverting the predicate to its line-based form reddens five.
+### 2.4 — the two venv guards keyed on the wrong unit (round 2)
+
+Both were repaired in round 1 and both were still wrong, in the same way: they bound a property to
+a *region of text* instead of to the thing that has the property.
+
+- **The PEP 668 guard bound the venv to a LINE.** So
+  `v/bin/python -m pip --version && python3 -m pip install mypy==2.3.1` passed, while the install
+  ran under the original interpreter — the exact call PEP 668 refuses (codex, r2, reproduced).
+  Round 1's commit message asserted the install "must now run out of a venv created there"; it did
+  not. The unit is the **command**, and the thing checked is its **executable**.
+- **The publication guard required an exact `<target>/bin` string.** A trailing slash defeated it,
+  `printf` instead of `echo` defeated it, `-m venv --clear "${T}"` made the regex capture `--clear`
+  as the target, and creating the venv in one step while publishing in the next defeated it
+  because targets were collected per step (both arms, r2). It now keys on **any path inside a
+  venv**, with venv targets collected **job-wide**.
+
+**All are mutation-proven, and every evasion above was reproduced before being accepted.** 41
+cells. The suite covers 12 spellings that must be detected, 4 that must not be, 4 install shapes
+and 6 publication shapes — including the complement in each case, because a guard that only ever
+says "offender" is inverted rather than correct.
 
 ---
 
@@ -276,6 +316,9 @@ branch can match it**, and the other route, pushing a lint-failing commit straig
 - [ ] **Bind the failure to the expected lint diagnostic.** A checkout, setup, download or fetch
       failure yields the same three conclusions while Trunk never reached lint evaluation — an
       unbound cell certifies a canary that never linted anything.
+- [ ] **Commit the resulting evidence under `docs/planning/evidence/`.** M2c carries this step and
+      M2b did not, which is the same omission in a second place: an uncommitted artifact leaves the
+      cell calling `skipTest`, and the milestone reads complete while proving nothing (agy, r2).
 
 ### M2c-evidence — accept the harness artifact against its schema
 
@@ -297,6 +340,15 @@ The harness workflow exists on `main`. What does **not** exist is the accepted a
 - [ ] Accept `parity-<event>.json` against its schema: captured argv, resolved range, and pre/post
       tree hashes. **Both** event paths must appear — the cell asserts `{"pull_request", "push"}`,
       because they resolve their ranges differently.
+- [ ] **Capture the PRIMARY invocation's diagnostic, and reject a setup-only failure (codex, r2).**
+      The judge currently checks `outcome != "failure"` and that `controlPost` differs from the
+      fixture's original hash, and neither binds the primary failure to a *lint* diagnostic:
+      injecting `"HTTP 503 downloading linter; lint never started"` leaves `parity_problems()`
+      empty for both events — reproduced. The plausible sequence is real: argv is recorded before
+      `exec "${real_trunk}"`, the primary invocation dies before linting, and the autofix control
+      — scheduled `if: always()` — still succeeds and changes the fixture. So the artifact must
+      carry the primary diagnostic, and a record whose primary never reached lint evaluation must
+      be **rejected**, not accepted.
 - [ ] Confirm `harness-base` and `harness/**` are documented in `CLAUDE.md` as **permanent**
       repository citizens. They are needed again at every Dependabot pin bump to re-derive the
       extension-point enumeration; deleting them is a change, not tidying.
@@ -320,6 +372,18 @@ its own version bump.
 - [ ] Include **a real RETARGET case** and the historically-dirty-file controls the original plan
       requires. A gate observed only on a freshly-created branch has not been observed against the
       condition that actually breaks range resolution.
+- [ ] **State the route for the red run, because the obvious one is closed (agy, r2).** `Control`
+      protects `main` and `alpha` with an empty `bypass_actors`, so a failing commit cannot be
+      pushed to either, and once `continue-on-error` is gone a failing PR cannot merge. The
+      evidence therefore comes from a **PR targeting** the base whose head is deliberately red and
+      **is never merged** — the check runs on the PR head, so no broken commit ever lands. Any
+      `push`-event red evidence belongs to the non-required canary, not to this milestone.
+- [ ] **Schedule cell 10's annotation observation (codex, r2).** The original contract requires a
+      **non-fork PR** (no 403), exercise of the `--github-annotate-file` branch, and a produced
+      `trunk-annotations` artifact, and it assigns that observation to the committed rollout
+      artifact. M3's criteria named the conclusion and diagnostic but never scheduled this.
+- [ ] **Commit each observation under `docs/planning/evidence/`**, for the same reason M2b and M2c
+      must: an uncommitted tuple leaves its cell skipping.
 
 ### M4 / M4a — NOT IN SCOPE OF THIS PLAN
 
@@ -363,6 +427,16 @@ New cells added with §2:
 - `ThePinIsPublishedWithoutReplacingTheInterpreter` — publishing a venv's `bin` to `$GITHUB_PATH`
   is an offender; publishing a directory of symlinks is accepted. This is the only cover that
   exists for the P1, because the property is about a runner variable no local run has.
+- `TheCensusSurvivesRealShellSyntax` — the round-2 evasions (quoted `;`, `2>&1`, `-s=`, `./`,
+  `unittest.main`, a bare module path) and the round-2 **false positives** (`echo` and `printf`
+  naming both tokens while running nothing).
+- `TheVenvGuardsKeyOnTheThingThatMatters` — the install command's executable; and publication by
+  trailing slash, by `printf`, past a `--clear` flag, and across two steps. Each carries its
+  complement, so neither guard can be satisfied by being inverted.
+
+Every case in both classes was **reproduced before being accepted**, including two of agy's that I
+initially doubted: `-s=scripts/tests` and `-s ./scripts/tests` both discover and pass the suite,
+which I confirmed by running them.
 - `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking the
   call, because the property is what the resolver does with what a binary *prints*.
 
@@ -373,7 +447,7 @@ New cells added with §2:
 | Path | Change |
 |---|---|
 | `.github/workflows/plugin-ci.yml` | pinned-mypy install moved into a venv in **both** jobs that run the scripts suite |
-| `scripts/tests/test_python39_floor.py` | argv-tokenised census lifted out of the test; token-equality version guard; venv bound to its install; `$GITHUB_PATH` cell; four proof classes, 31 cells |
+| `scripts/tests/test_python39_floor.py` | quote-respecting `shlex` tokenisation; census keyed on the executable; venv targets collected job-wide; install checked per command; publication keyed on any in-venv path; six proof classes, 41 cells |
 | `docs/planning/COREDEV-2780_GATING_FOLLOWUP_PLAN.md` | this document |
 
 ---
@@ -410,6 +484,20 @@ New cells added with §2:
   reproduction** — but that is a rule about individual findings, not about arms. Weighting by arm
   would have discarded agy's round-1 findings on the strength of its round-0 record, and two of
   them were real.
-- **Post-gate fixes are ungated by construction.** Everything in §2 after the first round was
-  written in response to review and has not itself been through a round. That is stated rather
-  than glossed: it is why round 2 exists.
+- **Post-gate fixes are ungated by construction.** Everything in §2 after a round is written in
+  response to review and has not itself been through one. That is why round 2 exists, and why
+  round 3 will.
+- **Round 2: codex `REQUEST_CHANGES` (5 findings, all reproduced). agy's round was VOID.** The
+  isolation harness exited 3: the reviewer left a `.mypy_cache/` directory — 19 files — inside the
+  disposable checkout. That is the COREDEV-2607 signature, agent-mode behaviour, and it is exactly
+  what the harness exists to catch. **A void round cannot count toward the gate**, so round 2 has
+  one valid arm.
+- The voided arm's *findings* were still triaged, because a defect does not stop being real
+  because the round that surfaced it was invalidated — and they were checkable claims about file
+  contents. Two of them (`-s=scripts/tests`, `-s ./scripts/tests`) I doubted and then confirmed by
+  running the commands. They are fixed. **But they are not gate evidence**: agy must be re-run for
+  a valid round.
+- Round 2's findings landed almost entirely on **round 1's repairs**, which is where the prompt
+  pointed both arms. Four consecutive fixes on this campaign have each introduced a defect; this
+  round makes it six, counting the `PERF401` fix that produced a mypy error and the venv fix that
+  produced the `$GITHUB_PATH` P1.
