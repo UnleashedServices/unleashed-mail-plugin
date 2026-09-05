@@ -124,9 +124,17 @@ jobs:
           echo "pinned mypy: ${version}"
           python3 -m venv "${RUNNER_TEMP}/pinned-mypy"
           "${RUNNER_TEMP}/pinned-mypy/bin/python" -m pip install --disable-pip-version-check "mypy==${version}"
+          # PUBLISH THE BINARY, NEVER THE INTERPRETER. `$GITHUB_PATH` PREPENDS, so putting the
+          # venv's whole `bin` on it makes the NEXT step's `python3` the venv's python — which has
+          # mypy and NOT PyYAML, while every module in the suite opens with `import yaml`. Both
+          # jobs would have gone red; reproduced as ModuleNotFoundError (codex, PR #85). A
+          # directory holding only a `mypy` symlink gives `shutil.which` the pin and leaves the
+          # suite's interpreter exactly as the steps above set it up.
+          mkdir -p "${RUNNER_TEMP}/pinned-mypy-bin"
+          ln -sf "${RUNNER_TEMP}/pinned-mypy/bin/mypy" "${RUNNER_TEMP}/pinned-mypy-bin/mypy"
           # $GITHUB_PATH takes effect in LATER steps, so verify through the absolute path here.
-          "${RUNNER_TEMP}/pinned-mypy/bin/mypy" --version
-          echo "${RUNNER_TEMP}/pinned-mypy/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
+          echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
 
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
@@ -678,9 +686,17 @@ jobs:
           echo "pinned mypy: ${version}"
           python3 -m venv "${RUNNER_TEMP}/pinned-mypy"
           "${RUNNER_TEMP}/pinned-mypy/bin/python" -m pip install --disable-pip-version-check "mypy==${version}"
+          # PUBLISH THE BINARY, NEVER THE INTERPRETER. `$GITHUB_PATH` PREPENDS, so putting the
+          # venv's whole `bin` on it makes the NEXT step's `python3` the venv's python — which has
+          # mypy and NOT PyYAML, while every module in the suite opens with `import yaml`. Both
+          # jobs would have gone red; reproduced as ModuleNotFoundError (codex, PR #85). A
+          # directory holding only a `mypy` symlink gives `shutil.which` the pin and leaves the
+          # suite's interpreter exactly as the steps above set it up.
+          mkdir -p "${RUNNER_TEMP}/pinned-mypy-bin"
+          ln -sf "${RUNNER_TEMP}/pinned-mypy/bin/mypy" "${RUNNER_TEMP}/pinned-mypy-bin/mypy"
           # $GITHUB_PATH takes effect in LATER steps, so verify through the absolute path here.
-          "${RUNNER_TEMP}/pinned-mypy/bin/mypy" --version
-          echo "${RUNNER_TEMP}/pinned-mypy/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
+          echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
 
       - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
         run: python3 -m unittest discover -s scripts/tests -v

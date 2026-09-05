@@ -2,7 +2,10 @@
 
 **Ticket:** COREDEV-2780 (Epic COREDEV-2485) · children COREDEV-2804 … COREDEV-2813
 **Branch:** `feat/COREDEV-2780-gating-followup` · **PR:** #85 · **Base:** `main`
-**Status:** implementation complete for COREDEV-2804 … 2811; milestones M2a, M2c-evidence and M3 outstanding.
+**Status:** implementation complete for COREDEV-2804 … 2811; milestones M2a, **M2b-evidence**, M2c-evidence
+and M3 outstanding. M2b's *static* half is accepted (`cell16CanaryNotRequired` in
+`docs/planning/evidence/COREDEV-2780-rollout.json`); its **runtime** half — a controlled canary
+failure — has never been produced, and revision 1 of this plan omitted it entirely (codex, r1).
 
 ---
 
@@ -162,7 +165,22 @@ skips* under `CI`, the job could not have gone green either way.
 **Fixed with a venv, not the flag.** The flag is the wrong instrument here: PyYAML only has to be
 *importable*, whereas the floor cell resolves the mypy **binary** through `shutil.which`, and a
 fallback install can land the console script somewhere off `PATH`. A venv is externally-managed on
-no platform and puts the script at a path we compute and add to `$GITHUB_PATH` ourselves.
+no platform and puts the script at a path we compute.
+
+**And the first version of that fix carried a P1 of its own (codex, r1 — reproduced).** It added
+the venv's whole `bin` to `$GITHUB_PATH`. `$GITHUB_PATH` **prepends**, so every later step's
+`python3` became the venv's python — which holds mypy and *nothing else*, while every module in
+the scripts suite opens with `import yaml`. Both jobs would have failed with
+`ModuleNotFoundError: No module named 'yaml'`.
+
+The local gate could not see it, because `$GITHUB_PATH` does not exist locally. That is the third
+time on this branch that a change of mine was invisible to the local gate and would have been red
+on CI, and the first two are recorded in §0 as process failures. The rule this yields is narrower
+than "mirror CI": **a fix that manipulates the runner's environment cannot be validated by a local
+run at all**, and needs a cell asserting the property statically.
+
+What ships now publishes a directory containing **only a `mypy` symlink**, so `shutil.which` finds
+the pin and `python3` is left exactly as the steps above configured it.
 
 ### 2.2 — a version guard that accepted the releases it existed to reject (P2)
 
@@ -182,13 +200,33 @@ Wrapping that command with a trailing backslash — the natural thing to do to a
 padding it with a second space makes the substring absent, `runs_suite` false, and the job
 **silently exempt** from the invariant, while the suite stays green.
 
-The predicate now folds continuations, collapses whitespace, and requires the two identifying tokens
-on the **same logical command** (so an unrelated `echo` elsewhere in a multi-line script cannot
-conjure a match). The census was also lifted out of the test so it can be run against a workflow
-that *actually has* the defect — reading the real file only ever proves the current shape passes.
+That fix was also insufficient, and both arms said so independently. Asking whether two tokens
+appear on one *line* was still asking about text:
 
-**All three are mutation-proven.** Reverting each fix reddens its own cell and only its own cell;
-restoring the tree returns all 23 to green.
+| evasion | found by | status |
+|---|---|---|
+| `unittest 'discover'` — argv identical to canonical | codex r1 | closed |
+| `scripts/"tests"` — argv identical to canonical | codex r1 | closed |
+| a flag between the two words (`unittest -v discover`) | agy r1 | closed |
+| no `discover` at all (`unittest scripts/tests/test_x.py`) | agy r1 | closed |
+| `echo 'unittest discover'; ls scripts/tests` — **false positive** | codex r1 | closed |
+| `DIR=scripts/tests` on one line, `-s "$DIR"` on the next | agy r1 | **declared limit** |
+
+The predicate now splits each logical line into shell commands and tokenises them with `shlex`,
+then asks whether **one command** invokes `unittest` and names something under `scripts/tests`.
+`discover` is deliberately not required: it is one spelling of running the suite, not the property.
+
+**The last row is stated as a limit, not closed.** No static match over YAML can follow a shell
+variable, and a predicate that looks total when it is not is worse than one whose edge is known.
+It is carried by an executable cell, so if a later change closes it, that cell fails and the
+disclaimer has to be removed with it.
+
+The census was also lifted out of the test so it can run against a workflow that *actually has*
+the defect — reading the real file only ever proves the current shape passes.
+
+**All are mutation-proven.** Reverting each fix reddens its own cells and only its own; restoring
+the tree returns all 31 to green. Reverting the `$GITHUB_PATH` line alone reddens the cell written
+for it, and reverting the predicate to its line-based form reddens five.
 
 ---
 
@@ -215,6 +253,30 @@ other protected base.
 - [ ] Confirm the advisory job actually *emits* a check run on an `alpha` PR — presence of the file
       is not evidence that the event fires.
 
+### M2b-evidence — cause a controlled canary failure
+
+The canary workflow exists on `main` and its **static** half is accepted: the rollout evidence
+records `cell16CanaryNotRequired` from a point-in-time ruleset read. Its **runtime** half has never
+been produced, and revision 1 of this plan did not list it at all (codex, r1).
+
+The original plan is specific about why this is hard, and that reasoning is carried here rather
+than re-derived: the canary's `branches:` are exactly the ruleset's resolved targets (`main`,
+`alpha`), and `push.branches` matches the branch actually pushed — so **no additional in-repo
+branch can match it**, and the other route, pushing a lint-failing commit straight to protected
+`main`, is what the ruleset exists to prevent.
+
+- [ ] Produce the stimulus in a **provenance-bound disposable fork** whose default branch is named
+      `main`, carrying the same canary workflow at the same SHA pins; land the failing commit there.
+- [ ] **Enable Actions in that fork** — GitHub disables them on forks until someone turns them on,
+      so without this the stimulus silently produces nothing and the cell is quietly unfalsifiable.
+- [ ] Record the tuple **Trunk step `failure` / canary job `failure` / workflow run not failed**.
+      Job-level `continue-on-error` does *not* make the job conclude `success`; it stops the job's
+      failure from failing the *run*. A step-`failure`/job-`success` tuple is not producible at that
+      scope, and asking for one makes the cell unpassable.
+- [ ] **Bind the failure to the expected lint diagnostic.** A checkout, setup, download or fetch
+      failure yields the same three conclusions while Trunk never reached lint evaluation — an
+      unbound cell certifies a canary that never linted anything.
+
 ### M2c-evidence — accept the harness artifact against its schema
 
 The harness workflow exists on `main`. What does **not** exist is the accepted artifact. Cells 1 and
@@ -225,8 +287,16 @@ The harness workflow exists on `main`. What does **not** exist is the accepted a
       `push` to `harness/**`. It must fire on **real events**: the action maps `workflow_dispatch`
       to `check-mode=all`, and `GITHUB_EVENT_NAME` cannot be overridden, so a dispatch-only harness
       measures a mode the gate never runs.
+- [ ] **Download the artifact from the run and commit it under `docs/planning/evidence/`.**
+      Revision 1 omitted this and the omission is load-bearing: the harness *uploads*
+      `parity-*.json` to Actions artifact storage, while the acceptance cell reads
+      `EVIDENCE_DIR = REPO / "docs/planning/evidence"` from disk. With no committed artifact the
+      cell calls `self.skipTest(...)` and the milestone looks complete while proving nothing —
+      the exact "produced vs accepted" conflation this plan's own risk table warns about, which
+      revision 1 then committed (agy, r1).
 - [ ] Accept `parity-<event>.json` against its schema: captured argv, resolved range, and pre/post
-      tree hashes.
+      tree hashes. **Both** event paths must appear — the cell asserts `{"pull_request", "push"}`,
+      because they resolve their ranges differently.
 - [ ] Confirm `harness-base` and `harness/**` are documented in `CLAUDE.md` as **permanent**
       repository citizens. They are needed again at every Dependabot pin bump to re-derive the
       extension-point enumeration; deleting them is a change, not tidying.
@@ -243,6 +313,13 @@ its own version bump.
 - [ ] **Evidence on each base separately**: one genuinely strict green run **and one deliberately
       red run**. A context observed only while failures were suppressed is a context that has never
       been able to fail, and promoting it would certify nothing.
+- [ ] **Record what the original contract requires, not merely "it went red" (codex, r1).** Generic
+      red evidence is indistinguishable from a setup failure, so each observation binds: the Trunk
+      step's **API-reported `conclusion`** *and* its **expected lint diagnostic**, together with the
+      workflow path, the **effective check name** (not the YAML job id) and the **exact head SHA**.
+- [ ] Include **a real RETARGET case** and the historically-dirty-file controls the original plan
+      requires. A gate observed only on a freshly-created branch has not been observed against the
+      condition that actually breaks range resolution.
 
 ### M4 / M4a — NOT IN SCOPE OF THIS PLAN
 
@@ -260,7 +337,8 @@ not be self-authorised. M4a observes mergeability **read-only**; the merge endpo
 | The advisory job lands on `alpha` but never fires | Presence of a workflow file is not evidence an event triggers it — this is precisely the `main`-only failure restated | Observe an actual check run on an `alpha` PR |
 | The harness artifact is produced but not *accepted* | "Produced" and "accepted against a schema" have been conflated once already on this campaign | The milestone gate is acceptance, and it is written as a separate box above |
 | M3's "green run" is observed while `continue-on-error` is still set | A suppressed-failure green is indistinguishable from a real one in the UI | The deliberately red run — a gate that cannot go red has not been observed |
-| The venv install works on `ubuntu` and is never exercised on `darwin` | The macOS leg is push-to-main only, so a PR does not run it | The PEP 668 census cell fails on the *shape* locally, before any runner sees it |
+| A claim about which CI legs run is carried from memory | Revision 1 asserted "the macOS leg is push-to-main only, so a PR does not run it". **That is false** (codex, r1): `plugin-ci.yml` declares `pull_request: branches: [main, alpha]` and `darwin-suite` carries no `if:` guard, so it runs on every PR to either base. The true statement belongs to a *different* workflow's macOS matrix leg | Read the trigger block, do not recall it |
+| A runner-environment fix passes locally and breaks CI | **Measured twice on this branch.** `$GITHUB_PATH` does not exist locally, so no local run can evaluate it — this is not "the gate does not mirror CI", it is a class the gate *cannot* cover | A static cell over the workflow, asserted on the shape rather than the run — which is how the venv P1 is now held |
 
 ---
 
@@ -275,11 +353,16 @@ New cells added with §2:
 - `TheCensusSeesJobsThatDoNotSpellItTheOneWay` — five cases, including the two evasions
   (continuation, padded whitespace) and the **complement** (two tokens on unrelated lines must
   *not* register, so the census cannot cry wolf and get itself relaxed).
-- `TheBareInstallFormIsRefused` — the bare form is an offender; venv and explicit
-  `--break-system-packages` are accepted. **Stated limit:** this checks the two forms known to
-  survive PEP 668 rather than executing pip against an externally-managed interpreter, because no
-  such interpreter is guaranteed on the machine running the suite. It is a narrower claim than "the
-  install works", and it is written that way on purpose.
+- `TheBareInstallFormIsRefused` — the bare form is an offender; a venv **that performs the
+  install** and an explicit `--break-system-packages` are accepted. The binding matters: the first
+  version accepted `-m venv` anywhere in the step, which passed a step that creates a venv and then
+  installs with the original interpreter — the exact call PEP 668 refuses (codex, r1).
+  **Stated limit:** this checks the forms known to survive PEP 668 rather than executing pip
+  against an externally-managed interpreter, because none is guaranteed on the machine running the
+  suite. A narrower claim than "the install works", written that way on purpose.
+- `ThePinIsPublishedWithoutReplacingTheInterpreter` — publishing a venv's `bin` to `$GITHUB_PATH`
+  is an offender; publishing a directory of symlinks is accepted. This is the only cover that
+  exists for the P1, because the property is about a runner variable no local run has.
 - `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking the
   call, because the property is what the resolver does with what a binary *prints*.
 
@@ -290,7 +373,7 @@ New cells added with §2:
 | Path | Change |
 |---|---|
 | `.github/workflows/plugin-ci.yml` | pinned-mypy install moved into a venv in **both** jobs that run the scripts suite |
-| `scripts/tests/test_python39_floor.py` | shape-keyed census lifted out of the test; token-equality version guard; three new proof classes |
+| `scripts/tests/test_python39_floor.py` | argv-tokenised census lifted out of the test; token-equality version guard; venv bound to its install; `$GITHUB_PATH` cell; four proof classes, 31 cells |
 | `docs/planning/COREDEV-2780_GATING_FOLLOWUP_PLAN.md` | this document |
 
 ---
@@ -311,11 +394,22 @@ New cells added with §2:
 
 ## §8 — Notes
 
-- The `agy` arm returned `REQUEST_CHANGES` on the pre-fix tree with two findings, **both refuted**
-  against the file contents: the CI-fail guard it reported as absent is present in both cells, and
-  the install step it reported as landing in one job is in both. Its hypothesised mechanism — that
-  the ubuntu job "omits `-s` or spreads across multiple lines" — is contradicted by that job's own
-  single-line command. Recorded here so a later round does not re-raise them.
-- That is consistent with the standing reliability note on this campaign: **weight the arm that
-  produces a reproduction, not the arm that produces an assertion.** Codex's three findings each
-  came with a mechanism that reproduced; all three were real and are fixed in §2.
+- **Pre-gate round (against the tree before this plan existed).** `agy` returned
+  `REQUEST_CHANGES` with two findings, **both refuted** against the file contents: the CI-fail
+  guard it reported absent is present in both cells, and the install step it reported as landing in
+  one job is in both. Its stated mechanism — that the ubuntu job "omits `-s` or spreads across
+  multiple lines" — is contradicted by that job's own single-line command. Recorded so a later
+  round does not re-raise them.
+- **Round 1 of this plan's gate: `agy` APPROVE_WITH_NOTES, `codex` REQUEST_CHANGES.** Both arms
+  were substantive and their findings were largely **disjoint**, which is the useful outcome —
+  codex found the `$GITHUB_PATH` P1 and the argv-quoting evasions; agy found the missing M2c
+  commit step and two evasions codex did not raise. Every finding acted on was reproduced locally
+  before being accepted, and one of agy's three claimed evasions turned out to be caught by the
+  predicate as written.
+- The standing reliability note holds and is refined: **weight the arm that produces a
+  reproduction** — but that is a rule about individual findings, not about arms. Weighting by arm
+  would have discarded agy's round-1 findings on the strength of its round-0 record, and two of
+  them were real.
+- **Post-gate fixes are ungated by construction.** Everything in §2 after the first round was
+  written in response to review and has not itself been through a round. That is stated rather
+  than glossed: it is why round 2 exists.
