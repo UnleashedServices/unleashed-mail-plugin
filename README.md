@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.23
+# UnleashedMail — Claude Code Plugin v2.8.24
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,17 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.24
+
+- **Review tooling moved to Codex GPT-6 "Astra" at the `ultra` tier.** The wrappers pinned
+  `gpt-5.6-sol` @ `xhigh`; `xhigh` turned out to be **fifth of seven** on the current ladder
+  (`minimal < low < medium < high < xhigh < max < ultra`), so the gate had been quietly running two
+  tiers below the ceiling since Astra shipped.
+- **The CLI does not validate the reasoning tier — so the wrappers now do.** Measured: an unknown
+  value is echoed back and the run proceeds at the backend default, with no error. A stale or
+  mistyped tier was therefore an invisible downgrade; the wrappers assert against the seven known
+  tiers and exit 2. The pty cap moved 1200s → 2400s with the tier.
 
 ### v2.8.23
 

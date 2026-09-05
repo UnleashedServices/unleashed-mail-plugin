@@ -219,8 +219,10 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                     f"COREDEV-2504: {rel} lost the bare-token reference {ref!r}",
                 )
 
-    def test_codex_review_pty_timeout_is_1200(self):
-        # COREDEV-2504 medium: every codex-review pty cap must be 1200s (xhigh survives), not 600.
+    def test_codex_review_pty_timeout_is_2400(self):
+        # COREDEV-2504 medium: every codex-review pty cap must clear the mandated tier, never 600.
+        # RAISED 1200 -> 2400 alongside the move from `xhigh` to `ultra` — two tiers higher, so
+        # longer runs. Exit 124 means THIS budget is short; it is never a reason to drop the tier.
         # One of the two caps moved into `capture-codex-review.sh` when the capture recipe was
         # extracted (COREDEV-2642), so counting occurrences in the SKILL alone would now pass while
         # the cap that actually governs a gate round went unchecked. Assert BOTH homes.
@@ -229,33 +231,41 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
         isolated = _read("scripts/review/isolated-codex-review.sh")
         audit = _read("scripts/review/audit-codex.sh")
         self.assertIn(
-            "--timeout 1200",
+            "--timeout 2400",
             audit,
-            "the audit wrapper must keep the 1200s cap",
+            "the audit wrapper must keep the 2400s cap",
         )
         self.assertIn(
-            'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1200',
+            'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 2400',
             src,
-            "the capture recipe must pass the 1200s cap to the helper",
+            "the capture recipe must pass the 2400s cap to the helper",
         )
         self.assertRegex(
             helper,
-            r'TIMEOUT="\$\{\d+-1200\}"',
-            "the helper's default cap must be 1200s (the operand INDEX is not pinned — it moved when "
+            r'TIMEOUT="\$\{\d+-2400\}"',
+            "the helper's default cap must be 2400s (the operand INDEX is not pinned — it moved when "
             "the plan operand was added, and pinning it made this cell fail for an unrelated reason)",
         )
         # The cap now threads capture-codex -> isolated-codex-review.sh -> pty-capture (COREDEV-2642, the
         # codex arm gained the gemini arm's isolation). Assert it is HANDED to the isolation harness and
         # that the harness PASSES it to pty-capture — the pty cap that governs a gate round lives there.
+        # THE PROPERTY, NOT THE BYTES. This pinned the exact line-continuation and indentation of
+        # the invocation, so `trunk fmt` reflowing the wrapper — which the repo's own formatter
+        # demands the moment the file is touched — broke a test about cap PLUMBING for reasons that
+        # have nothing to do with plumbing. Collapse the whitespace and assert the operands.
+        # Strip line continuations BEFORE collapsing: `\\` survives `.split()` as its own token,
+        # so collapsing alone still encodes where the author happened to wrap the command.
+        collapsed = " ".join(helper.replace("\\\n", " ").split())
         self.assertIn(
-            'isolated-codex-review.sh" \\\n    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
-            helper,
+            'isolated-codex-review.sh" "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" '
+            '"$TIMEOUT" "$PLAN"',
+            collapsed,
             "the helper must hand its cap to the codex isolation harness",
         )
         self.assertRegex(
             isolated,
-            r'TIMEOUT="\$\{\d+:-1200\}"',
-            "the codex isolation harness must default the cap to 1200s",
+            r'TIMEOUT="\$\{\d+:-2400\}"',
+            "the codex isolation harness must default the cap to 2400s",
         )
         self.assertIn(
             '--timeout "$TIMEOUT"',

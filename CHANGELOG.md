@@ -13,6 +13,31 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.24] — 2026-09-05
+
+### Changed
+
+- **Review tooling retargeted to Codex GPT-6 "Astra" @ `ultra`.** `~/.codex/config.toml` now carries
+  `model = "gpt-6-astra"` on `codex-cli` 0.153.4; the skill and wrappers still pinned `gpt-5.6-sol`.
+  More importantly the mandated effort, `xhigh`, is **fifth of seven** on the current ladder —
+  `minimal < low < medium < high < xhigh < max < ultra` — read from the shipped binary's own enum,
+  which serialises it in ascending order. The gate had been running two tiers below the ceiling since
+  Astra shipped, with nothing to signal it. Every review path now pins `ultra`.
+- **The pty cap moved 1200s → 2400s** alongside the tier. `xhigh` ran to ~12 min against the old cap
+  and `ultra` runs longer. Provisional until a full plan review is timed at ultra; exit 124 continues
+  to mean the wrapper budget is short and is never a reason to drop the tier.
+
+### Fixed
+
+- **The reasoning tier is now asserted, because the CLI will not do it.** Measured on 0.153.4:
+  `-c model_reasoning_effort=definitely-not-valid` is echoed in the run banner and the review
+  proceeds at the backend default — no error, no warning, no non-zero exit. A stale or mistyped tier
+  was therefore an _invisible_ downgrade of the gate, the same class as the 5.6 upgrade silently
+  resetting the config to `low`. The wrappers now check the token against the seven known tiers and
+  exit 2; verified they reject `ultrra`, an empty value, and `xhigh; rm -rf /`, while accepting each
+  real tier. The value stays non-overridable by callers — the guard catches an editing typo, not a
+  caller trying to weaken the gate.
+
 ## [2.8.23] — 2026-09-04
 
 ### Fixed
