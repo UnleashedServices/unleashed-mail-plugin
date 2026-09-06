@@ -224,35 +224,39 @@ Worse, the audit reproduced the consequence end to end: refactoring the two dupl
 invocations to share a `$SUITE_DIR` and deleting `darwin-suite`'s pin install — **the original P1
 restored** — left all three predicates reporting no offenders.
 
-#### What replaced it
+#### What replaced it, and what round 5 then broke
 
-**There is no detector.** Every job in every workflow either installs the pinned mypy, or is named
-in `_JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE` with a reason. A job that is neither is an offender,
-so adding a job forces an explicit decision instead of inheriting a silent exemption. The failure
-direction is the whole argument: a detector fails **open**, a declaration fails **closed**.
+Round 4 removed the detector: every job either installed the pin or was declared. Round 5 broke
+**both halves of that**, on both arms independently, and the two findings are the same mistake:
 
-**All four workflow files are read.** The previous guards were keyed by `(filename, job)` while only
-ever being handed `plugin-ci.yml`, so three of the four workflows were governed by nothing.
+| round-5 evasion | found by | why it worked |
+|---|---|---|
+| `env: {RUNNER_TEMP: /tmp/fake}` on the frozen install step | agy | the digest covered `run:` only |
+| `working-directory:` on the frozen suite step | agy | same |
+| `shell: bash -c "bash {0}; exit 0"` — probe measured **17 → 0** | codex | same; and it swallows the exit code |
+| job-level `if: ${{ false }}` on `darwin-suite` | codex | nothing read job-level scheduling |
+| a **declared** job acquiring an unpinned suite step | both | a declaration was recorded once and never re-checked |
+| a `.yaml` workflow | codex | `glob("*.yml")`, and the ">= 4 files" control still passed |
 
-**The two steps that manipulate `$PATH`, and the two that run the suite, are frozen by digest.**
-Every remaining evasion was a different way to spell the same step — `>` for `>>`, `tee -a`,
-`printf`, `echo -n`, a second append chained on one line, a comment carrying `/bin/python`,
-`|| true` swallowing the exit code. Freezing the bytes closes all of them at once and forces any
-future edit through a re-declaration, which is the review checkpoint a PATH-manipulating step
-should have. It is the pattern COREDEV-2804 already uses for `.trunk/trunk.yaml`.
+Freezing `run:` alone and trusting a declaration forever are the same error: each covered *part*
+of what decides whether the suite runs, and reviewers found the rest. A declaration records why
+something was true once; without a binding it silently outlives its reason.
 
-**And it makes the remaining parsing safe.** The cells that read those bodies parse bytes that
-cannot change without the digest failing first, so "the parser missed a spelling" stops being a
-route past them.
+**So the unit is the JOB, and the whole of it.** `yaml.safe_dump(job, sort_keys=True)` covers the
+steps, their `env`, `shell`, `working-directory` and `if`, and the job's own `if`, `defaults`,
+`container`, `strategy` and `continue-on-error` — every input that decides what runs and whether
+its result is believed. A job absent from the freeze table, or whose digest has moved, is an
+offender. A declared job that acquires a step breaks its own digest, so the declaration cannot
+outlive its reason.
 
-**Structural properties are read from the YAML, not from text:** no suite step may carry an `if:`
-or a step-level `continue-on-error`, no pin-installing job may be advisory, and any job that is
-advisory must be declared.
+**Both extensions are read**, and the vacuity control now compares what is READ against what is
+ON DISK rather than asserting a count — the previous control passed with an invisible workflow.
 
-**Vacuity controls, because the previous cells had none.** `_unclassified_jobs() == []` is satisfied
-by a workflow nobody matches and by a declaration that exempts everything. So the suite also asserts
-*which* jobs install the pin, that at least four workflow files are read, that no declaration names
-a job that no longer exists, and that no declared job installs the pin after all.
+**The cost is deliberate and worth stating.** Editing any CI job now requires updating its digest
+here, and the failure message prints the new value so that is one paste. For the file that decides
+what CI runs, a checkpoint on every change is the point rather than the price; it is the trade
+COREDEV-2804 already made for `.trunk/trunk.yaml`. The alternative — partial coverage — has now
+been defeated five times.
 
 ## §3 — Forward plan: the rollout that is still owed
 
@@ -402,34 +406,27 @@ Nothing in the repo runs the suite under `CI=1`, so a contributor without that s
 warning of the class it exists to catch. Treating it as a repository control would be wrong; it is
 a personal harness, and closing that gap properly is COREDEV-2817.
 
-Cells covering §2, after the declaration rewrite:
+Cells covering §2, after the whole-job freeze:
 
-- `EveryJobIsClassified` — every job in every workflow installs the pin or is declared; the
-  declaration still describes reality (no name that has been renamed away, no declared job that
-  installs the pin after all); **and the vacuity controls the previous cells lacked** — *which*
-  jobs install the pin is asserted by name, at least four workflow files must be read, and the
-  census is shown able to fail on a synthetic undeclared job.
-- `TheStepsThatChangePathAreFrozen` — every step in the repository that mentions `$GITHUB_PATH`
-  anywhere in its YAML (not only in `run:`) must match the frozen digest; exactly two do; the
-  frozen body publishes one directory and it is not inside a venv created by that step.
-- `TheSuiteStepCannotSwallowItsResult` — the suite steps are frozen, carry no `if:` and no
-  step-level `continue-on-error`; no pin-installing job is advisory; and any job that *is*
-  advisory is declared.
-- `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking, so
-  the property is what the resolver does with what a binary *prints*.
+- `EveryJobIsFrozenAndClassified` — every job matches its frozen definition; every declaration
+  (freeze table, reason table, advisory table) still describes a job that exists and behaves as
+  declared; the two tables partition the same jobs; **what is read equals what is on disk**; the
+  pin-installing jobs are named; and the `.yaml` reader is *exercised* on a scratch directory
+  rather than asserted about — the first version of that cell checked a docstring for the string
+  `*.yaml`, which is a check on a spelling, the exact defect this section exists to record.
+- `TheStepsThatChangePathAreFrozen` — the `$GITHUB_PATH` step bodies are frozen, exactly two
+  exist, the published directory is not inside a venv created there, and no pin-installing job is
+  advisory or behind a job-level `if:`.
+- `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking.
 
-**Seven mutants, seven reddenings**, and two of them are why this section was rewritten rather
-than patched:
+**Five mutants, five reddenings**, one per round-5 evasion — `env:`, `working-directory:`,
+`shell:`, a job-level `if:`, and a declared job acquiring a suite step.
 
-| mutant | previously |
-|---|---|
-| a new job running the suite with the path in `env:` | **passed** — the mention trigger cannot see `env:` |
-| the DRY refactor: share `$SUITE_DIR`, drop `darwin-suite`'s pin install | **passed all three guards** — the original P1, restored, undetected |
-| republish the venv `bin` | caught only after an earlier fix; now caught by the freeze |
-| `tee -a` instead of `>>` | **passed** |
-| `\|\| true` on the suite step | **passed** — nothing read the exit code |
-| `validate` made advisory | **passed** |
-| a declaration naming a renamed job | **passed** |
+**And one of those five initially passed because the PROBE was wrong, not the guard.** Inserting a
+second `run:` key into an existing step produces a duplicate key that PyYAML resolves to the last
+occurrence, so the parsed job never changed and nothing should have failed. A real added step
+moves the digest. That is the fourth bad probe on this branch, and the lesson is the same each
+time: **a probe that reports success without observing anything is indistinguishable from a pass**.
 
 ## §6 — Files changed
 

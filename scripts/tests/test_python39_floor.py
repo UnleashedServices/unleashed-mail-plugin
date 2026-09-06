@@ -336,29 +336,68 @@ class TheRuntimeFloorHoldsOnEveryFileCICompilesOnThreeNine(unittest.TestCase):
 _SUITE_COMMAND = "unittest"
 _WORKFLOW_DIR = REPO / ".github/workflows"
 
-# ── WHY THIS IS A DECLARATION AND NOT A CHECK ──────────────────────────────────────────────────
+# ── WHY EVERY JOB IS FROZEN ────────────────────────────────────────────────────────────────────
 #
-# Four encodings of a "which jobs run the scripts suite" detector were defeated in a row:
+# Five encodings of a "which jobs run the scripts suite" detector were defeated in five rounds, and
+# the two designs that replaced detection were defeated in one round each. The pattern is the same
+# every time: the check covered PART of what decides whether the suite runs, and reviewers found
+# the rest.
 #
-#   literal substring   -> a line continuation, padded whitespace
-#   tokens on a line    -> quoting, a flag between the words, no `discover` at all
-#   shlex argv          -> a quoted `;`, `2>&1`, `-s=`, `./`, wrappers, pytest, coverage
-#   a substring mention -> `env:` holding the path, `working-directory:`, `${{ matrix.* }}`,
-#                          a `uses:` step with no `run:` at all, a wrapper script
+#   `run:` text                  -> the path can live in `env:`, `working-directory:`, a matrix
+#                                   value, a wrapper script, or a `uses:` step with no `run:`
+#   a digest of `run:`           -> `shell: bash -c "bash {0}; exit 0"` swallows the exit code,
+#                                   `env: {RUNNER_TEMP: /tmp/fake}` redirects the install, and
+#                                   `working-directory:` moves it — none change a `run:` byte
+#   a declaration, trusted       -> a declared job can later ACQUIRE a suite step; the declaration
+#                                   records why it was true once and is never re-checked
 #
-# The last row is the one that ends the argument. A step can run the suite while its `run:` text
-# names nothing — the path lives in `env:` three lines above, which is this repository's own house
-# style for shared values and is what zizmor's template-injection remediation tells contributors to
-# do. No amount of reading `run:` finds it.
+# So the unit is the JOB, and the whole of it. `yaml.safe_dump(job, sort_keys=True)` covers the
+# steps, their `env`, `shell`, `working-directory` and `if`, the job's own `if`, `defaults`,
+# `container`, `strategy` and `continue-on-error` — every input that decides what runs. A job that
+# is not in this table, or whose digest moved, is an offender.
 #
-# The failure direction is what decides the design: a detector fails OPEN — every spelling it does
-# not model is a job that escapes silently — while a declaration fails CLOSED. So there is no
-# detector. Every job in every workflow either installs the pinned mypy, or is named below with a
-# reason. A job that is neither is an offender, so ADDING a job forces an explicit decision rather
-# than inheriting a silent exemption.
+# THE COST IS DELIBERATE. Editing any CI job now requires updating its digest here, and the failure
+# message prints the new value so that is one paste. For the file that decides what CI runs, an
+# explicit checkpoint on every change is the point rather than the price — it is the same trade
+# COREDEV-2804 already made for `.trunk/trunk.yaml`.
 #
-# ALL WORKFLOW FILES, not one. The previous guards were keyed by `(filename, job)` while only ever
-# being handed `plugin-ci.yml`, so three of the four workflows were governed by nothing at all.
+# BOTH EXTENSIONS. GitHub accepts `.yml` and `.yaml`; globbing only `*.yml` left a `.yaml` workflow
+# invisible, and the ">= 4 files" control still passed (PR #85 round 5).
+_JOB_DIGESTS = {
+    ("plugin-ci.yml", "validate"): (
+        "873948c744de057ac974f4c6b5813b92c23a01e2f4c58545af4daa67ec9da8e3"
+    ),
+    ("plugin-ci.yml", "py39-smoke"): (
+        "e87d60109f929643f84ee362d581e4306ab54bf98cf8c3e269e814163b3f7de7"
+    ),
+    ("plugin-ci.yml", "linux-primitive-probe"): (
+        "9364cf91c8d53c02b357618450f37ecf61aa320657983615bd9361e96bb3e904"
+    ),
+    ("plugin-ci.yml", "load-check"): (
+        "3ebd88459a7a56467cdb862f06f1b8f9a8b406f2ec78fadcb33714b50ee6abf9"
+    ),
+    ("plugin-ci.yml", "redactor-equivalence"): (
+        "4fea961a111c1c7670a2a51f5c573076a907013e2491893576852134b3a67e72"
+    ),
+    ("plugin-ci.yml", "darwin-suite"): (
+        "5b3353add742eda269f607672de3d7719cd659b0a6a8c0aa7b963f4f058e4581"
+    ),
+    ("plugin-ci.yml", "secret-scan"): (
+        "054002e2d1f9657955831df0b242439e59ecae4d2b26146d800dd251a6eed1a0"
+    ),
+    ("trunk-check-push.yml", "trunk-check-push"): (
+        "aaea34984148bfcf2e375e07fbd21a22a012e5e50ba22da2a365a7851ef374c5"
+    ),
+    ("trunk-check.yml", "trunk-check"): (
+        "ff1a0d7c665fd7225415a63cdba73dc8108bbb2e85c7c76c79f281bf56f875a8"
+    ),
+    ("trunk-parity-harness.yml", "parity"): (
+        "ece6b83e5b9d8307d9115158a9818bce9da4e1288016a3a846795883ac505095"
+    ),
+}
+
+# WHY each job needs no pinned mypy, or does. Documentation the digest cannot carry — and it is
+# asserted against the digest table, so the two cannot drift apart.
 _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE = {
     (
         "plugin-ci.yml",
@@ -382,30 +421,11 @@ _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE = {
     ("trunk-parity-harness.yml", "parity"): "the parity sensor, on fixture refs",
 }
 
-# ── THE FROZEN BODIES, AND WHY A FREEZE ────────────────────────────────────────────────────────
-#
-# Everything above removes parsing from the QUESTION of which jobs are governed. These two step
-# bodies are where the remaining hazard lives, and they were the source of every other evasion:
-# `>` instead of `>>`, `tee -a`, `printf`, `echo -n`, a second append chained onto the same line,
-# a comment carrying `/bin/python`, `|| true` swallowing the suite's exit code. Each was a new way
-# to spell the same step, and each defeated a checker that read the step's text.
-#
-# So the text is FROZEN. Any edit to either step — including every evasion above — breaks the
-# digest and forces the author to re-state the declaration, which is exactly the review checkpoint
-# a step that manipulates `$PATH` should have. This is the pattern COREDEV-2804 already uses for
-# `.trunk/trunk.yaml`, applied to the other thing that can silently change what CI runs.
-#
-# AND IT MAKES THE PARSING BELOW SAFE. The cells that read these bodies parse bytes that cannot
-# change without this digest failing first, so "the parser missed a spelling" stops being a way to
-# get past them.
 _PINNED_MYPY_STEP_DIGEST = (
     "52a0c0147dbb58a74984e8c7ecdbbb8f5071a1f29307b1e46353d4adfaf5e8e9"
 )
-_SUITE_STEP_DIGEST = "78a778068483d7d379ee76e2e894110b56cf84f6b1e55786e8e9b11fcad17270"
 _PUBLISHED_DIRECTORY = "${RUNNER_TEMP}/pinned-mypy-bin"
 
-# Jobs whose advisory posture is deliberate. `continue-on-error` on a job that runs the suite would
-# make a green check meaningless, so the ones that legitimately carry it are named.
 _JOBS_ALLOWED_TO_CONTINUE_ON_ERROR = {
     ("plugin-ci.yml", "linux-primitive-probe"),
     ("trunk-check-push.yml", "trunk-check-push"),
@@ -418,19 +438,33 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _job_digest(job: dict) -> str:
+    return _digest(yaml.safe_dump(job, sort_keys=True))
+
+
+def _workflow_files(directory: pathlib.Path | None = None) -> list[pathlib.Path]:
+    """Every workflow file, BOTH extensions — GitHub accepts `.yml` and `.yaml`.
+
+    Takes a directory so the globbing can be EXERCISED on the extension that escaped it, rather
+    than asserted about: the first version of that cell checked this docstring for the string
+    "*.yaml", which is a check on a spelling and not on the behaviour.
+    """
+    root = _WORKFLOW_DIR if directory is None else directory
+    return sorted(
+        [*root.glob("*.yml"), *root.glob("*.yaml")], key=lambda path: path.name
+    )
+
+
 def _workflows() -> list[tuple[str, dict]]:
-    """Every workflow file in the repository, parsed."""
     return [
         (path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-        for path in sorted(_WORKFLOW_DIR.glob("*.yml"))
+        for path in _workflow_files()
     ]
 
 
 def _installs_the_pin(job: dict) -> bool:
-    """Whether the job installs the pinned mypy, keyed on the FROZEN step body.
-
-    `"mypy==" in step` was satisfied by an `echo`, by a comment, and by any version at all — it
-    checked a mention, not the pin (PR #85 audit).
+    """Keyed on the frozen STEP body — `"mypy==" in text` was satisfied by an echo, by a comment,
+    and by any version at all.
     """
     return any(
         _digest(step.get("run") or "") == _PINNED_MYPY_STEP_DIGEST
@@ -438,27 +472,27 @@ def _installs_the_pin(job: dict) -> bool:
     )
 
 
-def _unclassified_jobs() -> list[str]:
-    """Jobs that neither install the pin nor are declared as not running the suite."""
+def _jobs_off_their_frozen_definition() -> list[str]:
+    """Jobs absent from the freeze table, or whose whole definition has moved."""
     offenders = []
     for filename, document in _workflows():
         for name, job in (document.get("jobs") or {}).items():
-            if (filename, name) in _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE:
-                continue
-            if not _installs_the_pin(job):
+            expected = _JOB_DIGESTS.get((filename, name))
+            actual = _job_digest(job)
+            if expected is None:
                 offenders.append(
-                    f"{filename}::{name}: neither installs the pinned mypy nor is declared as "
-                    "a job that does not run the scripts suite"
+                    f"{filename}::{name}: not in the freeze table — add it with digest {actual}"
+                )
+            elif expected != actual:
+                offenders.append(
+                    f"{filename}::{name}: definition changed; digest is now {actual}"
                 )
     return offenders
 
 
 def _stale_declarations() -> list[str]:
-    """Declared names that no longer exist, and declarations that contradict themselves.
-
-    THE VACUITY CONTROL. `_unclassified_jobs()` returning `[]` is satisfied by a workflow nobody
-    matches, and by a declaration that exempts everything — so the empty result is only evidence
-    while the declaration still describes reality (PR #85 audit).
+    """Every declaration checked against reality — the freeze table, the reason table, and the
+    advisory table. A declaration that outlives its subject is how an exemption becomes silent.
     """
     live = {
         (filename, name)
@@ -466,27 +500,40 @@ def _stale_declarations() -> list[str]:
         for name in (document.get("jobs") or {})
     }
     offenders = [
-        f"{filename}::{name}: declared, but no such job exists"
+        f"{filename}::{name}: frozen, but no such job exists"
+        for (filename, name) in sorted(_JOB_DIGESTS)
+        if (filename, name) not in live
+    ]
+    offenders += [
+        f"{filename}::{name}: declared as not running the suite, but no such job exists"
         for (filename, name) in sorted(_JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE)
         if (filename, name) not in live
     ]
     offenders += [
-        f"{filename}::{name}: declared as not running the suite, yet installs the pin"
-        for filename, document in _workflows()
-        for name, job in (document.get("jobs") or {}).items()
-        if (filename, name) in _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE
-        and _installs_the_pin(job)
+        f"{filename}::{name}: declared advisory, but no such job exists"
+        for (filename, name) in sorted(_JOBS_ALLOWED_TO_CONTINUE_ON_ERROR)
+        if (filename, name) not in live
     ]
+    # An advisory declaration that no longer describes an advisory job is equally stale.
+    for filename, document in _workflows():
+        for name, job in (document.get("jobs") or {}).items():
+            declared_advisory = (filename, name) in _JOBS_ALLOWED_TO_CONTINUE_ON_ERROR
+            if declared_advisory and not job.get("continue-on-error"):
+                offenders.append(
+                    f"{filename}::{name}: declared advisory, but carries no continue-on-error"
+                )
+            if (
+                filename,
+                name,
+            ) in _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE and _installs_the_pin(job):
+                offenders.append(
+                    f"{filename}::{name}: declared as not running the suite, yet installs the pin"
+                )
     return offenders
 
 
 def _github_path_steps() -> list[tuple[str, str, dict]]:
-    """Every step in every workflow that mentions `$GITHUB_PATH` ANYWHERE in its YAML.
-
-    Not just in `run:` — a `uses:` step, a `with:` value or an `env:` entry can put a directory on
-    `$PATH` for the rest of the job just as effectively, and reading `run:` alone made those
-    invisible (PR #85 audit).
-    """
+    """Every step mentioning `$GITHUB_PATH` anywhere in its YAML — not only in `run:`."""
     found: list[tuple[str, str, dict]] = []
     for filename, document in _workflows():
         for name, job in (document.get("jobs") or {}).items():
@@ -683,24 +730,52 @@ class TheVersionGuardComparesTokensNotSubstrings(unittest.TestCase):
         self.assertIsNone(_reported_mypy_version(self._fake_mypy("mypy (unknown)")))
 
 
-class EveryJobIsClassified(unittest.TestCase):
-    """No detection, so nothing to evade — and controls proving the emptiness means something."""
+class EveryJobIsFrozenAndClassified(unittest.TestCase):
+    """The unit is the whole job, so every input that decides what runs is covered at once."""
 
-    def test_every_job_installs_the_pin_or_is_declared(self):
+    def test_every_job_matches_its_frozen_definition(self):
         self.assertEqual(
             [],
-            _unclassified_jobs(),
-            "a job that runs the scripts suite without the pinned mypy fails the 3.9-floor cell "
-            "on CI; adding a job must be an explicit decision, not a silent exemption",
+            _jobs_off_their_frozen_definition(),
+            "a job's steps, its env, shell, working-directory, if, defaults, container and "
+            "continue-on-error all decide whether the scripts suite runs and whether its result "
+            "is believed — so the whole job is frozen, and changing CI is a deliberate act",
         )
 
-    def test_the_declaration_still_describes_reality(self):
+    def test_every_declaration_still_describes_reality(self):
         self.assertEqual([], _stale_declarations())
 
-    def test_the_jobs_that_install_the_pin_are_the_ones_that_run_the_suite(self):
-        """VACUITY CONTROL. `_unclassified_jobs() == []` is satisfied by a workflow nobody
-        matches and by a declaration that exempts everything, so the count is asserted too.
+    def test_the_freeze_table_and_the_reason_table_partition_the_same_jobs(self):
+        """The digest cannot say WHY a job needs no pin; the reason table can, and the two must
+        not drift. Every frozen job is either declared as not running the suite, or installs it.
         """
+        offenders = []
+        for filename, document in _workflows():
+            for name, job in (document.get("jobs") or {}).items():
+                declared = (filename, name) in _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE
+                if declared == _installs_the_pin(job):
+                    offenders.append(
+                        f"{filename}::{name}: declared={declared}, installs_pin="
+                        f"{_installs_the_pin(job)} — exactly one must hold"
+                    )
+        self.assertEqual([], offenders)
+
+    def test_every_workflow_file_on_disk_is_read(self):
+        """VACUITY CONTROL, and it replaces a broken one. The previous control asserted ">= 4
+        files read", which a `.yaml` workflow satisfied while being invisible: `glob("*.yml")`
+        never saw it. This compares what is READ against what is THERE.
+        """
+        on_disk = {
+            path.name
+            for path in _WORKFLOW_DIR.iterdir()
+            if path.is_file() and path.suffix in {".yml", ".yaml"}
+        }
+        self.assertEqual(on_disk, {name for name, _ in _workflows()})
+        self.assertGreaterEqual(
+            len(on_disk), 4, "the workflow directory has been emptied"
+        )
+
+    def test_the_jobs_that_install_the_pin_are_named(self):
         installers = {
             f"{filename}::{name}"
             for filename, document in _workflows()
@@ -711,85 +786,48 @@ class EveryJobIsClassified(unittest.TestCase):
             {"plugin-ci.yml::validate", "plugin-ci.yml::darwin-suite"}, installers
         )
 
-    def test_every_workflow_file_is_actually_read(self):
-        """The previous guards were keyed by filename while being handed ONE file, so three of the
-        four workflows were governed by nothing. This asserts the breadth, not just the verdict.
+    def test_a_yaml_extension_workflow_is_actually_read(self):
+        """EXERCISED, not asserted about. `glob("*.yml")` left a `.yaml` workflow invisible while
+        the old ">= 4 files" control still passed (codex, PR #85 round 5).
         """
-        names = {filename for filename, _ in _workflows()}
-        self.assertIn("plugin-ci.yml", names)
-        self.assertGreaterEqual(
-            len(names), 4, f"only {len(names)} workflow(s) read: {names}"
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        scratch = pathlib.Path(tmp.name)
+        (scratch / "a.yml").write_text("jobs: {}\n", encoding="utf-8")
+        (scratch / "b.yaml").write_text("jobs: {}\n", encoding="utf-8")
+        (scratch / "notes.md").write_text("ignored\n", encoding="utf-8")
+        self.assertEqual(
+            ["a.yml", "b.yaml"], [path.name for path in _workflow_files(scratch)]
         )
-
-    def test_a_new_undeclared_job_is_an_offender(self):
-        """The discriminating case, since every real job passes: prove the census can fail."""
-        live = {
-            (filename, name)
-            for filename, document in _workflows()
-            for name in (document.get("jobs") or {})
-        }
-        self.assertNotIn(
-            ("plugin-ci.yml", "a-job-nobody-declared"),
-            live,
-            "fixture name collided with a real job",
-        )
-        # The predicate is exercised through its own helpers on a synthetic document rather than
-        # by writing a file, because writing one would void any review round in flight.
-        synthetic = {"jobs": {"a-job-nobody-declared": {"steps": [{"run": "echo hi"}]}}}
-        offenders = [
-            f"x.yml::{name}"
-            for name, job in synthetic["jobs"].items()
-            if ("x.yml", name) not in _JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE
-            and not _installs_the_pin(job)
-        ]
-        self.assertEqual(["x.yml::a-job-nobody-declared"], offenders)
 
 
 class TheStepsThatChangePathAreFrozen(unittest.TestCase):
-    """`$GITHUB_PATH` PREPENDS: publishing a venv's `bin` replaces `python3` for every later step
-    in the job, which is how the scripts suite lost PyYAML. Every evasion of the previous checks
-    was a different way to spell this step, so the step is frozen instead of parsed.
+    """`$GITHUB_PATH` PREPENDS: publishing a venv's `bin` replaces `python3` for every later step,
+    which is how the scripts suite lost PyYAML. The step body is frozen; the job around it is too.
     """
 
-    def test_every_github_path_step_in_the_repository_is_frozen(self):
-        offenders = []
-        for filename, name, step in _github_path_steps():
-            if _digest(step.get("run") or "") != _PINNED_MYPY_STEP_DIGEST:
-                offenders.append(
-                    f"{filename}::{name}: touches $GITHUB_PATH with an unfrozen body"
-                )
+    def test_every_github_path_step_is_frozen(self):
+        offenders = [
+            f"{filename}::{name}: touches $GITHUB_PATH with an unfrozen body"
+            for filename, name, step in _github_path_steps()
+            if _digest(step.get("run") or "") != _PINNED_MYPY_STEP_DIGEST
+        ]
         self.assertEqual([], offenders)
 
     def test_the_freeze_covers_exactly_the_two_known_steps(self):
-        """VACUITY CONTROL — the cell above passes trivially if nothing touches $GITHUB_PATH."""
         self.assertEqual(
             [("plugin-ci.yml", "validate"), ("plugin-ci.yml", "darwin-suite")],
             [(f, n) for f, n, _ in _github_path_steps()],
         )
 
-    def test_the_frozen_body_publishes_the_declared_directory_and_nothing_else(self):
-        """Parsing is safe HERE because the bytes are frozen: they cannot change without the
-        digest cell failing first. Every append in the body is checked, not just the first —
-        `split(">>", 1)` read only one, so a second append chained onto the same line was invisible.
-        """
-        for filename, name, step in _github_path_steps():
-            body = step.get("run") or ""
-            published = [
-                segment.rsplit(">>", 1)[-1]
-                for segment in body.split("\n")
-                if "GITHUB_PATH" in segment and ">>" in segment
-            ]
-            with self.subTest(job=f"{filename}::{name}"):
-                self.assertEqual(1, len(published), "exactly one append is expected")
-                self.assertIn(_PUBLISHED_DIRECTORY, body)
-
     def test_the_published_directory_is_not_inside_a_venv_created_by_that_step(self):
-        """THE PROPERTY THE P1 VIOLATED, stated over the frozen text."""
+        """THE PROPERTY THE P1 VIOLATED, stated over bytes that cannot move silently."""
         for filename, name, step in _github_path_steps():
             body = step.get("run") or ""
             targets = re.findall(r"-m venv\s+(\S+)", body)
             with self.subTest(job=f"{filename}::{name}"):
                 self.assertTrue(targets, "the step is expected to create a venv")
+                self.assertIn(_PUBLISHED_DIRECTORY, body)
                 for target in targets:
                     clean = target.strip("\"'").rstrip("/")
                     self.assertFalse(
@@ -797,34 +835,7 @@ class TheStepsThatChangePathAreFrozen(unittest.TestCase):
                         f"{_PUBLISHED_DIRECTORY} is inside the venv {clean}",
                     )
 
-
-class TheSuiteStepCannotSwallowItsResult(unittest.TestCase):
-    """A job can install the pin, run the suite, and stay green while the suite fails — `|| true`,
-    a step-level `continue-on-error`, or an `if:` that never fires all do it (PR #85 audit).
-    """
-
-    def _suite_steps(self):
-        for filename, document in _workflows():
-            for name, job in (document.get("jobs") or {}).items():
-                for step in job.get("steps") or []:
-                    if _digest(step.get("run") or "") == _SUITE_STEP_DIGEST:
-                        yield filename, name, step
-
-    def test_both_suite_steps_are_frozen(self):
-        found = [(f, n) for f, n, _ in self._suite_steps()]
-        self.assertEqual(
-            [("plugin-ci.yml", "validate"), ("plugin-ci.yml", "darwin-suite")], found
-        )
-
-    def test_no_suite_step_is_conditional_or_advisory(self):
-        for filename, name, step in self._suite_steps():
-            with self.subTest(job=f"{filename}::{name}"):
-                self.assertNotIn(
-                    "if", step, "a suite step that can skip proves nothing"
-                )
-                self.assertIsNone(step.get("continue-on-error"))
-
-    def test_no_pin_installing_job_is_advisory(self):
+    def test_no_pin_installing_job_is_advisory_or_conditional(self):
         offenders = []
         for filename, document in _workflows():
             for name, job in (document.get("jobs") or {}).items():
@@ -834,22 +845,9 @@ class TheSuiteStepCannotSwallowItsResult(unittest.TestCase):
                     offenders.append(
                         f"{filename}::{name}: runs the suite but is advisory"
                     )
-        self.assertEqual([], offenders)
-
-    def test_advisory_jobs_are_declared(self):
-        offenders = []
-        for filename, document in _workflows():
-            for name, job in (document.get("jobs") or {}).items():
-                if (
-                    job.get("continue-on-error")
-                    and (
-                        filename,
-                        name,
-                    )
-                    not in _JOBS_ALLOWED_TO_CONTINUE_ON_ERROR
-                ):
+                if "if" in job:
                     offenders.append(
-                        f"{filename}::{name}: undeclared continue-on-error"
+                        f"{filename}::{name}: runs the suite behind a job-level if:"
                     )
         self.assertEqual([], offenders)
 
