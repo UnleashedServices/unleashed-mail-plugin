@@ -148,7 +148,7 @@ registry rebuild, whose trigger is still unproven.
 
 ---
 
-## §2 — The three defects found on the current diff, and their fixes
+## §2 — The defects found on this PR's own work, and their fixes
 
 These were found by the codex arm against the working tree and are fixed in the same breath as this
 plan. They are listed separately from §1 because they are defects **this PR introduced**, not
@@ -193,82 +193,56 @@ Both now compare a **parsed token** for equality. *This is COREDEV-2809's `--ind
 again, in a second file — a check keyed on a spelling is not a check on the property. The two are
 recorded together so the family is closed rather than half-closed.*
 
-### 2.3 — an invariant a line break could walk past (P2)
+### 2.3 — three rounds of parser, then a reversal
 
-The census asked whether the literal string `unittest discover -s scripts/tests` appeared in a step.
-Wrapping that command with a trailing backslash — the natural thing to do to a long line — or merely
-padding it with a second space makes the substring absent, `runs_suite` false, and the job
-**silently exempt** from the invariant, while the suite stays green.
+The original defect was small: the census asked whether the literal string
+`unittest discover -s scripts/tests` appeared in a step, so a trailing backslash or one extra
+space made a job **silently exempt** from the invariant while the suite stayed green.
 
-That fix was also insufficient, and both arms said so independently. Asking whether two tokens
-appear on one *line* was still asking about text:
+Three rounds of repair followed, and each one was evaded:
 
-| evasion | found by | status |
+| encoding | defeated by | round |
 |---|---|---|
-| `unittest 'discover'` — argv identical to canonical | codex r1 | closed |
-| `scripts/"tests"` — argv identical to canonical | codex r1 | closed |
-| a flag between the two words (`unittest -v discover`) | agy r1 | closed |
-| no `discover` at all (`unittest scripts/tests/test_x.py`) | agy r1 | closed |
-| `echo 'unittest discover'; ls scripts/tests` — **false positive** | codex r1 | closed |
-| `DIR=scripts/tests` on one line, `-s "$DIR"` on the next | agy r1 | **declared limit** |
+| literal substring | line continuation; padded whitespace | 1 |
+| both tokens on one logical line | `unittest 'discover'`; `scripts/"tests"`; a flag between the words; no `discover` at all; and a **false positive** on `echo 'unittest discover'; ls scripts/tests` | 2 |
+| `shlex` argv per command | a quoted `;` in `-p`; `2>&1`; `-s=`; `./`; `unittest.main`; `timeout`/`exec`/`sudo`/`env -u` wrappers; `pytest`; `coverage`; and a **false positive** on `--log-dir=scripts/tests` | 3 |
 
-The predicate now splits each logical line into shell commands and tokenises them with `shlex`,
-then asks whether **one command** invokes `unittest` and names something under `scripts/tests`.
-`discover` is deliberately not required: it is one spelling of running the suite, not the property.
+Round 3's prescription, from the codex arm, was to *"parse complete shell constructs rather than
+treating physical lines as independent commands"*. That is the correct fix for the approach, and
+it is the point at which the approach should be abandoned: a unit test is the wrong place for a
+shell interpreter, and each round modelled more shell only to leave more unmodelled.
 
-**Round 2 broke that encoding too, on both arms, and the limit above was over-claimed.** Asking
-whether two tokens share a *line* was still asking about text:
+**The failure direction settles it.** An approximate parser fails **open** — every spelling it
+does not model is a job that escapes silently, which is the exact defect being guarded against. A
+declaration fails **closed**.
 
-| round-2 evasion / false positive | found by | why it worked |
-|---|---|---|
-| `-p 'test_[a-z;]*.py'` — a quoted `;` | codex | the split ran **before** the tokeniser |
-| `2>&1` — a redirection containing `&` | codex | same |
-| `printf 'ignored; unittest scripts/tests/x.py'` — **false positive** | codex | same |
-| `-s=scripts/tests` and `-s ./scripts/tests` | agy | both **verified by running them**; both discover and pass |
-| `unittest.main`, and naming a module file directly | agy | requiring the token `unittest` |
-| `echo 'unittest' 'scripts/tests'` — **false positive** | agy | names both, runs nothing |
+**So the question is inverted.** Any step whose text mentions `scripts/tests` puts its job under
+the requirement, however that text is spelled. Every evasion in the table above contains that
+substring; all 22 are now carried as an executable table, and no future spelling can be added to
+it. A job that mentions the path *without* running the suite is not a defect to be parsed away —
+it is declared in `_JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT`, with a reason. **That dict is
+empty today**, which is itself the finding: both mentioning jobs really do run the suite.
 
-The root cause of the first three was mine: **the separator split happened before tokenising**, so
-quoted and redirected metacharacters shredded the command. It now tokenises with `shlex`
-(`punctuation_chars`), which respects quoting, and separators are found as *tokens*.
+One normalisation is needed and only one: quote characters are removed before the search, because
+`-s scripts/"tests"` names the directory and does not contain the substring. That is the whole of
+it — no tokenising, no command splitting, none of what failed three times.
 
-The remaining cases share one cause: each encoding named something narrower than the property. The
-predicate now asks the question that actually distinguishes — **is the executable a Python
-interpreter, and does the command name something under `scripts/tests`?** `unittest` is not
-required at all: `python3 scripts/tests/test_x.py` runs tests and needs the pin just as much, and
-requiring the token is what let `echo` in.
+The same reversal covers the `$GITHUB_PATH` hazard. There are exactly **two** such writes in this
+repository's workflows, and both are now declared in `_GITHUB_PATH_WRITES` along with the exact
+directory each publishes. An undeclared write is an offender; a declared one publishing something
+else is an offender; and a separate cell asserts no declared path ends in `/bin`, which is the
+shape of a venv interpreter directory.
 
-**The limit is narrowed, because round 1's wording was too absolute (codex, r2).** "No static match
-over YAML can follow a shell variable" is false as stated: a constant `DIR=scripts/tests` *is*
-resolvable statically. What is genuinely out of scope is arbitrary shell evaluation. So the
-supported syntax is a **literal operand**, and a value the step never spells is not followed. That
-boundary is carried by an executable cell.
+**This cell could not fail for its own defect, and mutation testing is what found that.** The
+first version of the declaration check asked whether the declared path appeared anywhere in the
+step. It does — the shipped step names `pinned-mypy-bin` on its `ln -sf` and `--version` lines —
+so switching the published directory back to the venv's `bin`, the exact P1, left the cell green.
+It now reads the **operand of the append**. Six mutants redden six cells, including that one.
 
-The census was also lifted out of the test so it can run against a workflow that *actually has*
-the defect — reading the real file only ever proves the current shape passes.
-
-### 2.4 — the two venv guards keyed on the wrong unit (round 2)
-
-Both were repaired in round 1 and both were still wrong, in the same way: they bound a property to
-a *region of text* instead of to the thing that has the property.
-
-- **The PEP 668 guard bound the venv to a LINE.** So
-  `v/bin/python -m pip --version && python3 -m pip install mypy==2.3.1` passed, while the install
-  ran under the original interpreter — the exact call PEP 668 refuses (codex, r2, reproduced).
-  Round 1's commit message asserted the install "must now run out of a venv created there"; it did
-  not. The unit is the **command**, and the thing checked is its **executable**.
-- **The publication guard required an exact `<target>/bin` string.** A trailing slash defeated it,
-  `printf` instead of `echo` defeated it, `-m venv --clear "${T}"` made the regex capture `--clear`
-  as the target, and creating the venv in one step while publishing in the next defeated it
-  because targets were collected per step (both arms, r2). It now keys on **any path inside a
-  venv**, with venv targets collected **job-wide**.
-
-**All are mutation-proven, and every evasion above was reproduced before being accepted.** 41
-cells. The suite covers 12 spellings that must be detected, 4 that must not be, 4 install shapes
-and 6 publication shapes — including the complement in each case, because a guard that only ever
-says "offender" is inverted rather than correct.
-
----
+**Declared boundary, and this one is meant to stay.** The supported syntax is a literal mention.
+What is out of scope is a step that names the suite directory through a value it never spells —
+constructed by `printf`, decoded from base64, or assembled at runtime. Those are not shapes a
+contributor writes by accident, and chasing them is what produced three rounds of parser.
 
 ## §3 — Forward plan: the rollout that is still owed
 
@@ -412,35 +386,28 @@ The local gate mirrors CI's checks and now runs the scripts suite **twice** — 
 and once with `CI=1` — because the 3.9-floor cell's behaviour differs between them and a commit
 passed all thirteen locally and went red on CI for exactly that reason.
 
-New cells added with §2:
+Cells covering §2, after the reversal:
 
-- `TheCensusSeesJobsThatDoNotSpellItTheOneWay` — five cases, including the two evasions
-  (continuation, padded whitespace) and the **complement** (two tokens on unrelated lines must
-  *not* register, so the census cannot cry wolf and get itself relaxed).
-- `TheBareInstallFormIsRefused` — the bare form is an offender; a venv **that performs the
-  install** and an explicit `--break-system-packages` are accepted. The binding matters: the first
-  version accepted `-m venv` anywhere in the step, which passed a step that creates a venv and then
-  installs with the original interpreter — the exact call PEP 668 refuses (codex, r1).
-  **Stated limit:** this checks the forms known to survive PEP 668 rather than executing pip
-  against an externally-managed interpreter, because none is guaranteed on the machine running the
-  suite. A narrower claim than "the install works", written that way on purpose.
-- `ThePinIsPublishedWithoutReplacingTheInterpreter` — publishing a venv's `bin` to `$GITHUB_PATH`
-  is an offender; publishing a directory of symlinks is accepted. This is the only cover that
-  exists for the P1, because the property is about a runner variable no local run has.
-- `TheCensusSurvivesRealShellSyntax` — the round-2 evasions (quoted `;`, `2>&1`, `-s=`, `./`,
-  `unittest.main`, a bare module path) and the round-2 **false positives** (`echo` and `printf`
-  naming both tokens while running nothing).
-- `TheVenvGuardsKeyOnTheThingThatMatters` — the install command's executable; and publication by
-  trailing slash, by `printf`, past a `--clear` flag, and across two steps. Each carries its
-  complement, so neither guard can be satisfied by being inverted.
+- `TheMentionTriggerCatchesEverySpelling` — **all 22 evasions from three rounds in one table**,
+  each asserted to be caught. That table is the argument for the reversal: every row defeated some
+  encoding of a tokenising census, several defeated two, and one check now catches all of them.
+  It also carries the complements — a job that never mentions the suite is not flagged, a pin
+  installed after the suite still is, and the exemption dict works and is empty.
+- `TheGithubPathAllowlistRefusesUndeclaredWrites` — an undeclared write is an offender; a declared
+  job publishing something other than its declared directory is an offender; and **a read of
+  `$GITHUB_PATH` is not a write**, which also covers the append test itself.
+- `ThePinIsInstalledInAFormPEP668Accepts` — a bare install is an offender, a venv that does not
+  perform the install is an offender, and both surviving forms are accepted.
+- `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking, so
+  the property is what the resolver does with what a binary *prints*.
+- `test_no_declared_path_is_a_venv_bin` — the declaration is only worth having if something checks
+  what is declared.
 
-Every case in both classes was **reproduced before being accepted**, including two of agy's that I
-initially doubted: `-s=scripts/tests` and `-s ./scripts/tests` both discover and pass the suite,
-which I confirmed by running them.
-- `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking the
-  call, because the property is what the resolver does with what a binary *prints*.
-
----
+**Six mutants, six reddenings**, and one of them is the reason this section exists: mutating the
+real workflow to republish the venv's `bin` — the exact P1 — initially left the suite **green**,
+because the check asked whether the declared path appeared anywhere in the step rather than
+reading the operand of the append. A cell that cannot fail for its own defect is not evidence, and
+only running the mutant found it.
 
 ## §6 — Files changed
 

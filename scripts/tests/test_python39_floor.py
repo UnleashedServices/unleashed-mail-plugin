@@ -20,7 +20,6 @@ import ast
 import os
 import pathlib
 import re
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -335,228 +334,166 @@ class TheRuntimeFloorHoldsOnEveryFileCICompilesOnThreeNine(unittest.TestCase):
 
 _SUITE_COMMAND = "unittest"
 _SUITE_DIRECTORY = "scripts/tests"
-_MYPY_VERSION = re.compile(r"\bmypy\s+(\d+(?:\.\d+)*[0-9A-Za-z.+-]*)")
+
+# THE TRIGGER IS A MENTION, NOT A PARSE — and that is a deliberate reversal.
+#
+# Three review rounds drove a tokeniser through quoting, redirection, process wrappers, alternate
+# runners and venv operand grammar. Each round modelled more shell and each round produced more
+# shell left unmodelled; round 3's prescription was, literally, "parse complete shell constructs".
+# A unit test is the wrong place for a shell interpreter, and the failure direction is what
+# settles it: an approximate parser fails OPEN. Every spelling it does not model is a job that
+# escapes silently, which is exactly the defect this cell exists to prevent.
+#
+# So the question is inverted. ANY step whose text mentions `scripts/tests` puts its job under the
+# requirement, however that text is spelled. Every evasion found across three rounds —
+# `unittest 'discover'`, `scripts/"tests"`, `-s=scripts/tests`, `./scripts/tests`, a line
+# continuation, `2>&1`, `-p 'test_[a-z;]*.py'`, `timeout 300 python3 …`, `pytest`, `coverage run`,
+# `unittest.main`, a bare module path — contains that substring. None can hide from it.
+#
+# The cost is false positives: a job may mention the path without running the suite. That is not a
+# defect to be parsed away, it is DECLARED below with a reason, and a declaration is reviewable in
+# a way a parser's silence is not.
+_JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT: dict[str, str] = {}
+
+# Steps permitted to write `$GITHUB_PATH`, and the exact directory each publishes.
+#
+# `$GITHUB_PATH` PREPENDS, so a published venv `bin` silently replaces `python3` for every later
+# step in the job — the P1 that broke this branch, invisible to any local run because the variable
+# does not exist locally. There are exactly two such writes in this repository's workflows and both
+# are here. The guard's job is to refuse an UNDECLARED write, which no spelling can evade, because
+# the trigger is again a mention.
+_GITHUB_PATH_WRITES = {
+    ("plugin-ci.yml", "validate"): "${RUNNER_TEMP}/pinned-mypy-bin",
+    ("plugin-ci.yml", "darwin-suite"): "${RUNNER_TEMP}/pinned-mypy-bin",
+}
 
 
-def _logical_lines(step: dict) -> list[str]:
-    """`step`'s run script as logical commands: continuations folded, whitespace collapsed."""
-    folded = re.sub(r"\\\n\s*", " ", step.get("run") or "")
-    return [re.sub(r"\s+", " ", line).strip() for line in folded.splitlines()]
+def _step_text(step: dict) -> str:
+    """The step's script with quote characters removed.
 
-
-_PYTHON_EXE = re.compile(r"\Apython[0-9.]*\Z", re.ASCII)
-
-
-def _commands(step: dict) -> list[list[str]]:
-    """Each logical line split into shell commands, tokenised the way a shell would.
-
-    THE SPLIT USED TO HAPPEN BEFORE THE TOKENISER, and that was the defect. Splitting the raw text
-    on `;&|` shredded commands whose metacharacters were quoted or part of a redirection, so
-    `-p 'test_[a-z;]*.py'` and `2>&1` both produced fragments that matched nothing, while
-    `printf 'ignored; unittest scripts/tests/x.py'` produced a fragment that matched everything
-    (codex, PR #85 round 2 — all three reproduced). `shlex` with `punctuation_chars` tokenises
-    shell-like AND respects quoting, so separators are found as TOKENS, never as characters.
+    ONE normalisation, and it is needed: `-s scripts/"tests"` names the suite directory and does
+    NOT contain the substring, because a quote sits inside the path (codex, PR #85 round 1).
+    Dropping `"` and `'` before the search is the whole of it — no tokenising, no command
+    splitting, nothing that failed across three rounds. Two adjacent quoted words could in
+    principle be joined into a spurious match; that costs a false positive, which is declarable,
+    rather than a false negative, which is silent.
     """
-    out: list[list[str]] = []
-    for line in _logical_lines(step):
-        try:
-            lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-            lexer.whitespace_split = True
-            tokens = list(lexer)
-        except ValueError:
-            # Unbalanced quotes: fall back rather than refuse, since refusing to parse a step is
-            # a silent exemption from the census.
-            tokens = line.split()
-        current: list[str] = []
-        for token in tokens:
-            if token and all(character in ";&|" for character in token):
-                if current:
-                    out.append(current)
-                    current = []
-            else:
-                current.append(token)
-        if current:
-            out.append(current)
-    return out
-
-
-def _operand(token: str) -> str:
-    """The path a token names, with `-s=`, quotes, `./` and a trailing slash removed.
-
-    Every one of those spellings evaded an earlier encoding of this check while naming exactly the
-    same thing: `-s=scripts/tests` and `-s ./scripts/tests` both run the suite (agy, PR #85
-    round 2 — verified by running them), and `${T}/bin/` and `${T}/bin` are the same directory
-    (codex, same round).
-    """
-    value = token
-    if value.startswith("-") and "=" in value:
-        value = value.split("=", 1)[1]
-    value = value.strip("\"'")
-    while value.startswith("./"):
-        value = value[2:]
-    return value.rstrip("/")
-
-
-def _is_python(token: str) -> bool:
-    """Whether the token invokes a Python interpreter."""
-    return bool(_PYTHON_EXE.match(_operand(token).rsplit("/", 1)[-1]))
-
-
-def _runs_scripts_suite(step: dict) -> bool:
-    """Whether `step` runs the scripts suite: A PYTHON INVOCATION THAT NAMES `scripts/tests`.
-
-    Four encodings of this check have now been evaded, each because it named a narrower thing than
-    the property. Requiring the literal `unittest discover -s scripts/tests` lost to a line
-    continuation; requiring both tokens on a line lost to quoting and to a flag between the words;
-    requiring the token `unittest` lost to `unittest.main` and to naming a module file directly,
-    and false-positived on `echo 'unittest' 'scripts/tests'` — which names both and runs nothing
-    (agy and codex, PR #85 round 2).
-
-    So the question is the one that actually distinguishes: is the EXECUTABLE a Python interpreter,
-    and does the command name something under `scripts/tests`? `unittest` is not required at all —
-    `python3 scripts/tests/test_x.py` runs tests and needs the pin exactly as much.
-
-    DECLARED BOUNDARY, narrowed from the round-1 wording, which over-claimed. What is not followed
-    is a value the step never spells: `DIR=scripts/tests` on one line and `-s "$DIR"` on the next.
-    A constant assignment like that IS resolvable statically and simply is not resolved here; full
-    shell evaluation is the genuinely hard case. The supported syntax is a literal operand.
-    """
-    for tokens in _commands(step):
-        index = 0
-        while index < len(tokens) and (
-            tokens[index] == "env"
-            or ("=" in tokens[index] and not tokens[index].startswith("-"))
-        ):
-            index += 1
-        if index >= len(tokens) or not _is_python(tokens[index]):
-            continue
-        if any(
-            _operand(token) == _SUITE_DIRECTORY
-            or _operand(token).startswith(_SUITE_DIRECTORY + "/")
-            for token in tokens[index + 1 :]
-        ):
-            return True
-    return False
-
-
-def _venv_targets(job: dict) -> set[str]:
-    """Every venv created ANYWHERE in the job, flags skipped.
-
-    Job-wide because a venv created in one step and published in the next escaped a per-step
-    scope entirely; flags skipped because `-m venv --clear "${T}"` made a regex capture `--clear`
-    as the target (agy and codex, PR #85 round 2).
-    """
-    targets = set()
-    for step in job.get("steps") or []:
-        for tokens in _commands(step):
-            for index, token in enumerate(tokens):
-                if token != "venv":
-                    continue
-                for candidate in tokens[index + 1 :]:
-                    if candidate.startswith("-"):
-                        continue
-                    targets.add(_operand(candidate))
-                    break
-    return targets
+    return (step.get("run") or "").replace('"', "").replace("'", "")
 
 
 def _jobs_missing_the_pin(workflow: dict) -> list[str]:
-    """Jobs that run the scripts suite without installing the pinned mypy before it.
+    """Jobs mentioning the suite directory without installing the pinned mypy before it.
 
-    Separated from disk so the predicate can be exercised against a workflow that ACTUALLY HAS
-    the defect. Reading the real file only ever proves the current shape passes, which is the
-    reachability-is-not-discrimination failure this module has been repaired for already.
+    Separated from disk so it can be exercised against a workflow that ACTUALLY HAS the defect —
+    reading the real file only ever proves the current shape passes.
     """
     offenders = []
     for name, job in (workflow.get("jobs") or {}).items():
+        if name in _JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT:
+            continue
         steps = job.get("steps") or []
-        suite_at = next(
-            (index for index, step in enumerate(steps) if _runs_scripts_suite(step)),
+        mention_at = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if _SUITE_DIRECTORY in _step_text(step)
+            ),
             None,
         )
-        if suite_at is None:
+        if mention_at is None:
             continue
         installs = [
-            index
-            for index, step in enumerate(steps)
-            if any("mypy==" in line for line in _logical_lines(step))
+            index for index, step in enumerate(steps) if "mypy==" in _step_text(step)
         ]
         if not installs:
-            offenders.append(f"{name}: runs the suite, never installs the pinned mypy")
-        elif installs[0] > suite_at:
+            offenders.append(
+                f"{name}: mentions {_SUITE_DIRECTORY}, never installs the pinned mypy"
+            )
+        elif installs[0] > mention_at:
             offenders.append(f"{name}: installs the pin AFTER running the suite")
     return offenders
 
 
+def _undeclared_github_path_writes(workflow: dict, filename: str) -> list[str]:
+    """`$GITHUB_PATH` writes the allowlist above does not account for."""
+    offenders = []
+    for name, job in (workflow.get("jobs") or {}).items():
+        for step in job.get("steps") or []:
+            text = _step_text(step)
+            # A WRITE, not a mention. `>>` is required and `#` lines are skipped, because this
+            # module's own explanatory comments say "$GITHUB_PATH" and were read as publications.
+            writes = [
+                line
+                for line in text.splitlines()
+                if "GITHUB_PATH" in line
+                and ">>" in line
+                and not line.strip().startswith("#")
+            ]
+            if not writes:
+                continue
+            declared = _GITHUB_PATH_WRITES.get((filename, name))
+            if declared is None:
+                offenders.append(
+                    f"{name}: writes $GITHUB_PATH, which is not declared in this module"
+                )
+                continue
+            # THE OPERAND OF THE APPEND, NOT THE STEP'S TEXT. Asking whether the declared path
+            # appeared anywhere in the step made this cell UNABLE TO FAIL for its own defect:
+            # the shipped step names `pinned-mypy-bin` on its `ln -sf` and `--version` lines, so
+            # switching the published directory back to the venv's `bin` — the exact P1 — left
+            # the declared string present and the cell green. Caught by mutating the real
+            # workflow and watching nothing go red.
+            for line in writes:
+                published = line.split(">>", 1)[0].strip()
+                for command in ("echo", "printf"):
+                    if published.startswith(command):
+                        published = published[len(command) :].strip()
+                if published != declared:
+                    offenders.append(
+                        f"{name}: publishes {published!r} to $GITHUB_PATH, not the declared "
+                        f"{declared!r}"
+                    )
+    return offenders
+
+
 def _installs_pep668_refuses(workflow: dict) -> list[str]:
-    """Pip installs of the pin whose OWN EXECUTABLE is not a venv interpreter.
+    """Steps installing the pin in the one form an externally-managed interpreter rejects.
 
-    Round 1 bound the venv to the step, round 2 to the line — and both were the wrong unit:
+    `darwin-suite` has no setup-python step, so its `python3` is the runner's system interpreter,
+    which REFUSES a plain `pip install`. Two forms survive: an install run through a venv's own
+    interpreter, or an explicit `--break-system-packages`.
 
-        python3 -m venv v
-        v/bin/python -m pip --version && python3 -m pip install mypy==2.3.1
-
-    passed a line-scoped check while the install ran under the original interpreter, which is
-    exactly the call PEP 668 refuses (codex, PR #85 rounds 1 and 2). The unit is the COMMAND, and
-    the thing checked is the executable running it.
-
-    This does not execute pip against an externally-managed interpreter — none is guaranteed on
-    the machine running this suite — so it is a narrower claim than "the install works".
+    DECLARED BOUNDARY: this asserts the shape of a step, not arbitrary shell. Round 2 showed a
+    text-scoped version accepting `v/bin/python -m pip --version && python3 -m pip install …`,
+    where the venv interpreter runs something else entirely. Requiring the venv's `bin/python` to
+    appear on the SAME line as `mypy==` closes the case that was found; a step contrived to defeat
+    even that is out of scope here, and `_GITHUB_PATH_WRITES` above is what actually bounds the
+    blast radius of a wrong install.
     """
     offenders = []
     for name, job in (workflow.get("jobs") or {}).items():
-        targets = _venv_targets(job)
         for step in job.get("steps") or []:
-            for tokens in _commands(step):
-                if not tokens or not any("mypy==" in token for token in tokens):
-                    continue
-                if "--break-system-packages" in tokens:
-                    continue
-                executable = _operand(tokens[0])
-                if any(executable.startswith(target + "/") for target in targets):
-                    continue
-                offenders.append(
-                    f"{name}: installs the pin through a possibly externally-managed interpreter"
-                )
-    return offenders
-
-
-def _publishes_a_venv_interpreter(workflow: dict) -> list[str]:
-    """Steps that put anything inside a venv on `$GITHUB_PATH`.
-
-    `$GITHUB_PATH` PREPENDS, so publishing a venv's `bin` silently replaces `python3` for every
-    later step. That venv holds mypy and nothing else, while every module in the scripts suite
-    opens with `import yaml` — the suite died with ModuleNotFoundError in both jobs, and no local
-    run can see it because `$GITHUB_PATH` does not exist locally (codex, PR #85 round 1).
-
-    Keyed on ANY path inside a venv rather than the exact `<target>/bin` string, because that
-    equality lost to a trailing slash, to `printf` instead of `echo`, and to creating the venv in
-    a different step (both arms, round 2). Publishing anything under a venv is the suspect shape.
-    """
-    offenders: list[str] = []
-    for name, job in (workflow.get("jobs") or {}).items():
-        targets = _venv_targets(job)
-        if not targets:
-            continue
-        for step in job.get("steps") or []:
-            published: set[str] = set()
-            for tokens in _commands(step):
-                if not any("GITHUB_PATH" in token for token in tokens):
-                    continue
-                published.update(
-                    _operand(token)
-                    for token in tokens
-                    if "GITHUB_PATH" not in token and not token.startswith("-")
-                )
-            offenders.extend(
-                f"{name}: publishes venv content at {target} to $GITHUB_PATH"
-                for target in sorted(targets)
-                if any(
-                    path == target or path.startswith(target + "/")
-                    for path in published
-                )
+            install = next(
+                (
+                    line
+                    for line in _step_text(step).splitlines()
+                    if "mypy==" in line and "pip install" in line
+                ),
+                None,
+            )
+            if install is None:
+                continue
+            if "--break-system-packages" in install:
+                continue
+            if "/bin/python" in install and "-m venv" in _step_text(step):
+                continue
+            offenders.append(
+                f"{name}: installs the pin through a possibly externally-managed interpreter"
             )
     return offenders
+
+
+_MYPY_VERSION = re.compile(r"\bmypy\s+(\d+(?:\.\d+)*[0-9A-Za-z.+-]*)")
 
 
 def _reported_mypy_version(binary: str) -> str | None:
@@ -599,14 +536,27 @@ class EveryJobRunningTheSuiteCanSatisfyItsOwnGate(unittest.TestCase):
             "without the pin cannot satisfy it",
         )
 
-    def test_no_job_publishes_a_venv_interpreter_to_github_path(self):
+    def test_every_github_path_write_in_this_workflow_is_declared(self):
         workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
         self.assertEqual(
             [],
-            _publishes_a_venv_interpreter(workflow),
-            "$GITHUB_PATH prepends, so publishing a venv's bin replaces python3 for every later "
-            "step — and this venv has mypy but not PyYAML, which every suite module imports",
+            _undeclared_github_path_writes(workflow, CI.name),
+            "$GITHUB_PATH PREPENDS, so an undeclared write can silently replace python3 for every "
+            "later step in its job — which is exactly how the suite lost PyYAML",
         )
+
+    def test_no_declared_path_is_a_venv_bin(self):
+        """The declaration is only worth having if something checks WHAT is declared.
+
+        The P1 was publishing a venv's own `bin`; a declaration naming one would reintroduce it
+        with review cover. A venv publishes `<target>/bin` — that suffix is the property.
+        """
+        for (filename, job), path in sorted(_GITHUB_PATH_WRITES.items()):
+            with self.subTest(job=f"{filename}::{job}"):
+                self.assertFalse(
+                    path.endswith("/bin"),
+                    f"{job} declares {path}, which is the shape of a venv interpreter directory",
+                )
 
     def test_no_job_installs_the_pin_in_the_form_pep668_refuses(self):
         workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
@@ -738,366 +688,6 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
         )
 
 
-class TheCensusSeesJobsThatDoNotSpellItTheOneWay(unittest.TestCase):
-    """Mutation proof for the evasion codex found in the census (PR #85).
-
-    The old predicate asked whether the literal `unittest discover -s scripts/tests` appeared in a
-    step. Every case below runs the suite and installs nothing, so every case MUST be reported —
-    under the old spelling test each of the first two was silently skipped, and the invariant went
-    green while covering neither job.
-    """
-
-    @staticmethod
-    def _one_job(run: str) -> dict:
-        return {"jobs": {"target": {"steps": [{"run": run}]}}}
-
-    def test_a_continuation_between_discover_and_its_flag_is_still_the_suite(self):
-        self.assertEqual(
-            ["target: runs the suite, never installs the pinned mypy"],
-            _jobs_missing_the_pin(
-                self._one_job("python3 -m unittest discover \\\n  -s scripts/tests -v")
-            ),
-        )
-
-    def test_padded_whitespace_is_still_the_suite(self):
-        self.assertEqual(
-            ["target: runs the suite, never installs the pinned mypy"],
-            _jobs_missing_the_pin(
-                self._one_job("python3 -m unittest  discover -s  scripts/tests")
-            ),
-        )
-
-    def test_the_two_tokens_must_share_one_COMMAND_not_merely_one_line(self):
-        # The complement: a census that cries wolf gets its assertion relaxed, so the false
-        # positives matter as much as the evasions. Both of these mention the tokens without
-        # running anything; the second is codex's, and it registered as a suite run when the
-        # predicate asked about a LINE rather than a COMMAND (PR #85 round 2).
-        for run in (
-            "echo 'unittest discover'\nls scripts/tests",
-            "echo 'unittest discover'; ls scripts/tests",
-        ):
-            with self.subTest(run=run):
-                self.assertEqual([], _jobs_missing_the_pin(self._one_job(run)))
-
-    def test_quoting_that_leaves_argv_identical_is_still_the_suite(self):
-        # Both have argv identical to the canonical command, and both evaded the substring
-        # predicate (codex, PR #85 round 2).
-        for run in (
-            "python3 -m unittest 'discover' -s scripts/tests",
-            'python3 -m unittest discover -s scripts/"tests"',
-        ):
-            with self.subTest(run=run):
-                self.assertEqual(
-                    ["target: runs the suite, never installs the pinned mypy"],
-                    _jobs_missing_the_pin(self._one_job(run)),
-                )
-
-    def test_a_flag_between_the_two_words_is_still_the_suite(self):
-        # `discover` is one spelling of running the suite, not the property (agy, PR #85 round 2).
-        self.assertEqual(
-            ["target: runs the suite, never installs the pinned mypy"],
-            _jobs_missing_the_pin(
-                self._one_job("python3 -m unittest -v discover -s scripts/tests")
-            ),
-        )
-
-    def test_naming_the_modules_directly_is_still_the_suite(self):
-        # No `discover` at all — this runs the suite perfectly well (agy, PR #85 round 2).
-        self.assertEqual(
-            ["target: runs the suite, never installs the pinned mypy"],
-            _jobs_missing_the_pin(
-                self._one_job(
-                    "python3 -m unittest scripts/tests/test_python39_floor.py"
-                )
-            ),
-        )
-
-    def test_the_declared_limit_is_real_and_stays_declared(self):
-        """Shell-variable indirection across lines is NOT caught, and the docstring says so.
-
-        Recorded as an executable statement of the boundary rather than left implicit: if a later
-        change closes it, this cell fails and the docstring's disclaimer gets removed with it.
-        """
-        self.assertEqual(
-            [],
-            _jobs_missing_the_pin(
-                self._one_job(
-                    'DIR="scripts/tests"\npython3 -m unittest discover -s "$DIR"'
-                )
-            ),
-            "a static census cannot follow shell variables; the limit is declared, not hidden",
-        )
-
-    def test_installing_the_pin_after_the_suite_is_still_an_offence(self):
-        workflow = {
-            "jobs": {
-                "late": {
-                    "steps": [
-                        {"run": "python3 -m unittest discover -s scripts/tests"},
-                        {"run": "python3 -m pip install mypy==2.3.1"},
-                    ]
-                }
-            }
-        }
-        self.assertEqual(
-            ["late: installs the pin AFTER running the suite"],
-            _jobs_missing_the_pin(workflow),
-        )
-
-    def test_a_job_that_installs_first_is_clean(self):
-        workflow = {
-            "jobs": {
-                "good": {
-                    "steps": [
-                        {"run": "python3 -m venv v && v/bin/pip install mypy==2.3.1"},
-                        {"run": "python3 -m unittest discover -s scripts/tests"},
-                    ]
-                }
-            }
-        }
-        self.assertEqual([], _jobs_missing_the_pin(workflow))
-
-
-class TheBareInstallFormIsRefused(unittest.TestCase):
-    """Mutation proof for the PEP 668 finding (codex, PR #85): the bare form must be reported."""
-
-    @staticmethod
-    def _one_step(run: str) -> dict:
-        return {"jobs": {"target": {"steps": [{"run": run}]}}}
-
-    def test_a_bare_pip_install_is_an_offender(self):
-        self.assertEqual(
-            [
-                "target: installs the pin through a possibly externally-managed interpreter"
-            ],
-            _installs_pep668_refuses(
-                self._one_step('python3 -m pip install "mypy==2.3.1"')
-            ),
-        )
-
-    def test_a_venv_install_is_accepted(self):
-        self.assertEqual(
-            [],
-            _installs_pep668_refuses(
-                self._one_step(
-                    'python3 -m venv "${RUNNER_TEMP}/v"\n'
-                    '"${RUNNER_TEMP}/v/bin/python" -m pip install "mypy==2.3.1"'
-                )
-            ),
-        )
-
-    def test_a_venv_created_but_NOT_USED_to_install_is_an_offender(self):
-        # The step creates a venv and then installs with the ORIGINAL interpreter — the exact
-        # call PEP 668 refuses. Accepting `-m venv` anywhere in the step passed this
-        # (codex, PR #85 round 2).
-        self.assertEqual(
-            [
-                "target: installs the pin through a possibly externally-managed interpreter"
-            ],
-            _installs_pep668_refuses(
-                self._one_step("python3 -m venv v\npython3 -m pip install mypy==2.3.1")
-            ),
-        )
-
-    def test_an_explicit_break_system_packages_is_accepted(self):
-        self.assertEqual(
-            [],
-            _installs_pep668_refuses(
-                self._one_step(
-                    "python3 -m pip install --break-system-packages mypy==2.3.1"
-                )
-            ),
-        )
-
-
-class ThePinIsPublishedWithoutReplacingTheInterpreter(unittest.TestCase):
-    """Mutation proof for the P1 codex reproduced (PR #85 round 2).
-
-    `$GITHUB_PATH` PREPENDS. Publishing the venv's own `bin` therefore makes `python3` the venv's
-    python for every later step in the job — and that venv holds mypy and nothing else, while
-    every module in the scripts suite opens with `import yaml`. Both jobs would have gone red, and
-    the local gate could not see it because `$GITHUB_PATH` does not exist locally.
-    """
-
-    @staticmethod
-    def _one_step(run: str) -> dict:
-        return {"jobs": {"target": {"steps": [{"run": run}]}}}
-
-    def test_publishing_the_venv_bin_is_an_offender(self):
-        self.assertEqual(
-            ["target: publishes venv content at ${RUNNER_TEMP}/v to $GITHUB_PATH"],
-            _publishes_a_venv_interpreter(
-                self._one_step(
-                    'python3 -m venv "${RUNNER_TEMP}/v"\n'
-                    'echo "${RUNNER_TEMP}/v/bin" >> "${GITHUB_PATH}"'
-                )
-            ),
-        )
-
-    def test_publishing_a_directory_of_symlinks_is_accepted(self):
-        self.assertEqual(
-            [],
-            _publishes_a_venv_interpreter(
-                self._one_step(
-                    'python3 -m venv "${RUNNER_TEMP}/v"\n'
-                    'ln -sf "${RUNNER_TEMP}/v/bin/mypy" "${RUNNER_TEMP}/vbin/mypy"\n'
-                    'echo "${RUNNER_TEMP}/vbin" >> "${GITHUB_PATH}"'
-                )
-            ),
-            "a directory holding only the binary leaves python3 alone",
-        )
-
-
-class TheCensusSurvivesRealShellSyntax(unittest.TestCase):
-    """Round-2 evasions and false positives, from both arms (PR #85).
-
-    Every case here was REPRODUCED before being accepted, and the four "runs nothing" cases matter
-    as much as the evasions: a census that cries wolf gets its assertion relaxed, which is how a
-    real one goes quiet.
-    """
-
-    @staticmethod
-    def _one(run: str) -> dict:
-        return {"jobs": {"target": {"steps": [{"run": run}]}}}
-
-    def test_quoted_and_redirected_metacharacters_do_not_shred_the_command(self):
-        # Splitting the raw text on `;&|` before tokenising cut both of these in half (codex).
-        for run in (
-            "python3 -m unittest discover -p 'test_[a-z;]*.py' -s scripts/tests",
-            "python3 -m unittest discover 2>&1 -s scripts/tests",
-        ):
-            with self.subTest(run=run):
-                self.assertEqual(
-                    ["target: runs the suite, never installs the pinned mypy"],
-                    _jobs_missing_the_pin(self._one(run)),
-                )
-
-    def test_equivalent_spellings_of_the_start_directory(self):
-        # Both VERIFIED by running them: each discovers and passes the suite (agy).
-        for run in (
-            "python3 -m unittest discover -s=scripts/tests",
-            "python3 -m unittest discover -s ./scripts/tests",
-        ):
-            with self.subTest(run=run):
-                self.assertEqual(
-                    ["target: runs the suite, never installs the pinned mypy"],
-                    _jobs_missing_the_pin(self._one(run)),
-                )
-
-    def test_running_the_suite_without_the_unittest_token(self):
-        # Requiring the token `unittest` lost to both of these (agy).
-        for run in (
-            "python3 scripts/tests/test_python39_floor.py",
-            "python3 -m unittest.main scripts/tests",
-        ):
-            with self.subTest(run=run):
-                self.assertEqual(
-                    ["target: runs the suite, never installs the pinned mypy"],
-                    _jobs_missing_the_pin(self._one(run)),
-                )
-
-    def test_commands_that_only_MENTION_the_suite_run_nothing(self):
-        # The executable is what distinguishes these from a suite run. `echo 'unittest'
-        # 'scripts/tests'` names both and runs nothing (agy); the printf case false-positived
-        # under the character-split (codex).
-        for run in (
-            "echo 'unittest' 'scripts/tests'",
-            "echo 'unittest discover'; ls scripts/tests",
-            "printf '%s\\n' 'ignored; unittest scripts/tests/test_x.py'",
-            "ls scripts/tests",
-        ):
-            with self.subTest(run=run):
-                self.assertEqual([], _jobs_missing_the_pin(self._one(run)))
-
-
-class TheVenvGuardsKeyOnTheThingThatMatters(unittest.TestCase):
-    """Round-2 findings on the two venv guards, both arms, all reproduced (PR #85)."""
-
-    @staticmethod
-    def _one(run: str) -> dict:
-        return {"jobs": {"target": {"steps": [{"run": run}]}}}
-
-    def test_the_install_command_itself_must_run_the_venv_interpreter(self):
-        # A line-scoped check passed this: the venv python only runs `--version`, and the
-        # install runs under the original interpreter (codex).
-        self.assertEqual(
-            [
-                "target: installs the pin through a possibly externally-managed interpreter"
-            ],
-            _installs_pep668_refuses(
-                self._one(
-                    "python3 -m venv v\n"
-                    "v/bin/python -m pip --version && python3 -m pip install mypy==2.3.1"
-                )
-            ),
-        )
-
-    def test_an_equivalent_path_spelling_still_publishes_the_interpreter(self):
-        # Same directory, one character different — exact membership missed it (codex).
-        self.assertEqual(
-            ["target: publishes venv content at ${R}/v to $GITHUB_PATH"],
-            _publishes_a_venv_interpreter(
-                self._one(
-                    'python3 -m venv "${R}/v"\necho "${R}/v/bin/" >> "${GITHUB_PATH}"'
-                )
-            ),
-        )
-
-    def test_publication_by_something_other_than_echo(self):
-        # The regex matched `echo` specifically (both arms).
-        self.assertEqual(
-            ["target: publishes venv content at ${R}/v to $GITHUB_PATH"],
-            _publishes_a_venv_interpreter(
-                self._one(
-                    'python3 -m venv "${R}/v"\nprintf "%s/bin\\n" "${R}/v" >> "${GITHUB_PATH}"'
-                )
-            ),
-        )
-
-    def test_a_flag_before_the_venv_target_does_not_hide_it(self):
-        # `-m venv --clear "${R}/v"` made the regex capture `--clear` as the target (agy).
-        self.assertEqual(
-            ["target: publishes venv content at ${R}/v to $GITHUB_PATH"],
-            _publishes_a_venv_interpreter(
-                self._one(
-                    'python3 -m venv --clear "${R}/v"\necho "${R}/v/bin" >> "${GITHUB_PATH}"'
-                )
-            ),
-        )
-
-    def test_a_venv_created_in_one_step_and_published_in_another(self):
-        # Per-step target scope missed this entirely (both arms).
-        self.assertEqual(
-            ["target: publishes venv content at ${R}/v to $GITHUB_PATH"],
-            _publishes_a_venv_interpreter(
-                {
-                    "jobs": {
-                        "target": {
-                            "steps": [
-                                {"run": 'python3 -m venv "${R}/v"'},
-                                {"run": 'echo "${R}/v/bin" >> "${GITHUB_PATH}"'},
-                            ]
-                        }
-                    }
-                }
-            ),
-        )
-
-    def test_the_shipped_symlink_shape_is_accepted(self):
-        # The complement: the fix that actually ships must NOT be an offender, or the guard
-        # would simply be inverted rather than correct.
-        self.assertEqual(
-            [],
-            _publishes_a_venv_interpreter(
-                self._one(
-                    'python3 -m venv "${R}/pinned-mypy"\n'
-                    'ln -sf "${R}/pinned-mypy/bin/mypy" "${R}/pinned-mypy-bin/mypy"\n'
-                    'echo "${R}/pinned-mypy-bin" >> "${GITHUB_PATH}"'
-                )
-            ),
-        )
-
-
 class TheVersionGuardComparesTokensNotSubstrings(unittest.TestCase):
     """`pinned in reported` was true of 2.3.10 for a 2.3.1 pin, and of 12.3.1 (codex, PR #85).
 
@@ -1137,6 +727,208 @@ class TheVersionGuardComparesTokensNotSubstrings(unittest.TestCase):
 
     def test_a_banner_without_a_version_reports_nothing(self):
         self.assertIsNone(_reported_mypy_version(self._fake_mypy("mypy (unknown)")))
+
+
+class TheMentionTriggerCatchesEverySpelling(unittest.TestCase):
+    """Every evasion found across three review rounds, against one check.
+
+    This class is the argument for the reversal. Each row below defeated some encoding of a
+    tokenising census — several defeated two, and each fix that closed one opened another. All of
+    them mention `scripts/tests`, so all of them are caught by asking that question instead, and
+    no future spelling can be added to this list.
+    """
+
+    EVASIONS = {
+        # round 1 — the literal-substring census
+        "continuation": "python3 -m unittest discover \\\n  -s scripts/tests",
+        "padded whitespace": "python3 -m unittest  discover -s  scripts/tests",
+        # round 2 — the line-scoped token census
+        "quoted subcommand": "python3 -m unittest 'discover' -s scripts/tests",
+        "quoted path segment": 'python3 -m unittest discover -s scripts/"tests"',
+        "flag between words": "python3 -m unittest -v discover -s scripts/tests",
+        "no discover": "python3 -m unittest scripts/tests/test_x.py",
+        "quoted separator": "python3 -m unittest discover -p 'test_[a-z;]*.py' -s scripts/tests",
+        "redirection": "python3 -m unittest discover 2>&1 -s scripts/tests",
+        # round 3 — the shlex census
+        "option-assignment": "python3 -m unittest discover -s=scripts/tests",
+        "explicit relative": "python3 -m unittest discover -s ./scripts/tests",
+        "module entrypoint": "python3 -m unittest.main scripts/tests",
+        "direct script": "python3 scripts/tests/test_x.py",
+        "timeout wrapper": "timeout 300 python3 -m unittest discover -s scripts/tests",
+        "exec wrapper": "exec python3 scripts/tests/test_x.py",
+        "sudo wrapper": "sudo python3 -m unittest discover -s scripts/tests",
+        "env -u wrapper": "env -u PYTHONPATH python3 -m unittest discover -s scripts/tests",
+        "pytest": "pytest scripts/tests",
+        "coverage": "coverage run -m unittest discover -s scripts/tests",
+        "pypy": "pypy3 -m unittest discover -s scripts/tests",
+        "unclosed quote": 'python3 -m unittest discover -s scripts/tests; echo "unclosed',
+        "separator-only argument": "printf '%s\\n' ';' python3 -m unittest discover -s scripts/tests",
+        # the shell-variable case round 1 declared unclosable, closed by the reversal because the
+        # ASSIGNMENT still spells the path
+        "variable indirection": 'DIR="scripts/tests"\npython3 -m unittest discover -s "$DIR"',
+    }
+
+    def test_every_known_evasion_is_caught(self):
+        for label, run in sorted(self.EVASIONS.items()):
+            with self.subTest(evasion=label):
+                self.assertEqual(
+                    ["target: mentions scripts/tests, never installs the pinned mypy"],
+                    _jobs_missing_the_pin(
+                        {"jobs": {"target": {"steps": [{"run": run}]}}}
+                    ),
+                )
+
+    def test_a_job_that_never_mentions_the_suite_is_not_flagged(self):
+        self.assertEqual(
+            [],
+            _jobs_missing_the_pin(
+                {
+                    "jobs": {
+                        "target": {
+                            "steps": [{"run": "python3 -m unittest discover -s mcp"}]
+                        }
+                    }
+                }
+            ),
+        )
+
+    def test_installing_the_pin_after_the_suite_is_still_an_offence(self):
+        self.assertEqual(
+            ["late: installs the pin AFTER running the suite"],
+            _jobs_missing_the_pin(
+                {
+                    "jobs": {
+                        "late": {
+                            "steps": [
+                                {
+                                    "run": "python3 -m unittest discover -s scripts/tests"
+                                },
+                                {"run": "python3 -m pip install mypy==2.3.1"},
+                            ]
+                        }
+                    }
+                }
+            ),
+        )
+
+    def test_a_declared_exemption_is_honoured_and_is_currently_empty(self):
+        """The escape hatch works — and nothing uses it, which is the fact worth asserting.
+
+        An empty declaration means both mentioning jobs really do run the suite. If a future job
+        mentions the path without running it, this dict is where that gets said out loud.
+        """
+        self.assertEqual({}, _JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT)
+        # THE DICT ITSELF, not `patch.dict` by module path. Under `discover -s scripts/tests` this
+        # module is imported as `test_python39_floor`, so patching
+        # "scripts.tests.test_python39_floor.<name>" reached a DIFFERENT module object: the cell
+        # passed when run as `-m unittest scripts.tests.test_python39_floor` and failed in the
+        # suite CI actually runs.
+        self.addCleanup(_JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT.clear)
+        _JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT["target"] = (
+            "a hypothetical mention that runs nothing"
+        )
+        self.assertEqual(
+            [],
+            _jobs_missing_the_pin(
+                {"jobs": {"target": {"steps": [{"run": "ls scripts/tests"}]}}}
+            ),
+        )
+
+
+class TheGithubPathAllowlistRefusesUndeclaredWrites(unittest.TestCase):
+    """`$GITHUB_PATH` PREPENDS — an undeclared write can replace `python3` for a whole job."""
+
+    def test_an_undeclared_write_is_an_offender(self):
+        self.assertEqual(
+            ["mystery: writes $GITHUB_PATH, which is not declared in this module"],
+            _undeclared_github_path_writes(
+                {"jobs": {"mystery": {"steps": [{"run": 'echo x >> "$GITHUB_PATH"'}]}}},
+                "plugin-ci.yml",
+            ),
+        )
+
+    def test_reading_github_path_is_not_writing_it(self):
+        """A read must not be reported as a publication (codex, PR #85 round 3).
+
+        This also covers the `>>` requirement itself: without it the comment filter alone still
+        happens to give the right answer on the real workflow, so nothing would fail if the
+        append test were deleted — an operand covered by no cell.
+        """
+        self.assertEqual(
+            [],
+            _undeclared_github_path_writes(
+                {
+                    "jobs": {
+                        "reader": {"steps": [{"run": 'grep -F v/bin "$GITHUB_PATH"'}]}
+                    }
+                },
+                "plugin-ci.yml",
+            ),
+        )
+
+    def test_a_declared_job_publishing_something_else_is_an_offender(self):
+        self.assertEqual(
+            [
+                (
+                    "validate: publishes '${RUNNER_TEMP}/pinned-mypy/bin' to $GITHUB_PATH, "
+                    "not the declared '${RUNNER_TEMP}/pinned-mypy-bin'"
+                )
+            ],
+            _undeclared_github_path_writes(
+                {
+                    "jobs": {
+                        "validate": {
+                            "steps": [
+                                {
+                                    "run": 'echo "${RUNNER_TEMP}/pinned-mypy/bin" >> "$GITHUB_PATH"'
+                                }
+                            ]
+                        }
+                    }
+                },
+                "plugin-ci.yml",
+            ),
+            "the venv's own bin is the P1 shape, and a declaration must not launder it",
+        )
+
+
+class ThePinIsInstalledInAFormPEP668Accepts(unittest.TestCase):
+    """`darwin-suite` has no setup-python, so its `python3` refuses a plain `pip install`."""
+
+    @staticmethod
+    def _one(run: str) -> dict:
+        return {"jobs": {"target": {"steps": [{"run": run}]}}}
+
+    def test_a_bare_install_is_an_offender(self):
+        self.assertEqual(
+            [
+                "target: installs the pin through a possibly externally-managed interpreter"
+            ],
+            _installs_pep668_refuses(self._one('python3 -m pip install "mypy==2.3.1"')),
+        )
+
+    def test_a_venv_that_does_not_perform_the_install_is_an_offender(self):
+        # Round 2's evasion: the venv interpreter runs `--version`, not the install.
+        self.assertEqual(
+            [
+                "target: installs the pin through a possibly externally-managed interpreter"
+            ],
+            _installs_pep668_refuses(
+                self._one(
+                    "python3 -m venv v\n"
+                    "v/bin/python -m pip --version\n"
+                    "python3 -m pip install mypy==2.3.1"
+                )
+            ),
+        )
+
+    def test_the_shipped_shape_and_the_explicit_flag_are_accepted(self):
+        for run in (
+            'python3 -m venv "${R}/v"\n"${R}/v/bin/python" -m pip install "mypy==2.3.1"',
+            "python3 -m pip install --break-system-packages mypy==2.3.1",
+        ):
+            with self.subTest(run=run):
+                self.assertEqual([], _installs_pep668_refuses(self._one(run)))
 
 
 if __name__ == "__main__":  # pragma: no cover
