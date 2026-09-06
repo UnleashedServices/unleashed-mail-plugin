@@ -55,7 +55,11 @@ def _py_compile_tokens(workflow: dict, job_name: str) -> list[str]:
     # line — the census silently keeps the first fragment and drops the rest, while the suite
     # stays green. That is the same "derivation reading less than it claims" defect this
     # function was just repaired for, one level down (PR #85 adversarial pass).
-    folded = re.sub(r"\\\n\s*", " ", commands[0])
+    # `\r?` — a CRLF continuation is `\`, CR, LF, and the pattern expected `\` immediately
+    # followed by LF, so it did not fold and the census kept only the FIRST fragment. That is
+    # the fail-OPEN direction: a shorter command means a smaller derived file set (gemini,
+    # PR #85 GitHub review). Widening the fold can only ever read MORE of the command.
+    folded = re.sub(r"\\\r?\n\s*", " ", commands[0])
     match = re.search(r"python3 -m py_compile ([^\n]+)", folded)
     assert match is not None, "the py39 byte-compile command changed shape"
     return [t for t in match.group(1).split() if not t.startswith("-")]
@@ -737,11 +741,36 @@ class TheConfiguredTargetIsOneThePinnedMypyAccepts(unittest.TestCase):
             text=True,
             timeout=300,
         )
-        self.assertNotIn(
-            "is not supported",
-            completed.stdout + completed.stderr,
-            "the configured python_version is one this mypy refuses, so it is silently ignored "
-            "and the target is whatever mypy defaults to",
+        output = completed.stdout + completed.stderr
+        # NO CONFIG DIAGNOSTIC AT ALL, not merely the absence of one phrase.
+        #
+        # Asserting `"is not supported" not in output` is a requirement phrased as an absence, and
+        # any OTHER config failure satisfies it — a future pin refusing the target with different
+        # wording, or an unrelated broken option (codex, PR #85 GitHub review). The finding is
+        # right; its proposed remedy is not, and the difference was measured:
+        #
+        #   config              rc   "Success: no issues found"   ": [mypy]:" line
+        #   healthy (3.10)      0    yes                          no
+        #   python_version=3.9  0    yes                          YES
+        #   unknown option      0    yes                          YES
+        #
+        # mypy exits 0 while REFUSING the configured version, so "assert a successful exit" adds
+        # nothing, and "Success: no issues found" is printed in all three. What discriminates is
+        # that mypy reports config problems as `<file>: [mypy]: …`. Assert none is present, which
+        # covers the wording this cell was written for AND every other config failure.
+        config_diagnostics = [
+            line for line in output.splitlines() if ": [mypy]: " in line
+        ]
+        self.assertEqual(
+            [],
+            config_diagnostics,
+            "the pinned mypy reported a problem with the configured file, so the target it "
+            "actually used is not the one the config names",
+        )
+        self.assertIn(
+            "Success: no issues found",
+            output,
+            "the probe must actually have been checked",
         )
 
 

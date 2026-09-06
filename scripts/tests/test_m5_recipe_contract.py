@@ -302,7 +302,7 @@ GRANTED_RECIPES = (
 
 def _logical_commands(recipe: str) -> List[str]:
     """Commands in a recipe, with line continuations joined and comments dropped."""
-    joined = re.sub(r"\\\n\s*", " ", recipe)
+    joined = re.sub(r"\\\r?\n\s*", " ", recipe)
     return [
         line.strip()
         for line in joined.splitlines()

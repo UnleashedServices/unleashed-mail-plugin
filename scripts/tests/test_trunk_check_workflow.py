@@ -492,7 +492,17 @@ def _digest_of_tree(root: pathlib.Path) -> str:
     """
     entries = []
     for path in sorted(root.rglob("*")):
-        if path.is_dir():
+        # `and not path.is_symlink()` IS THE WHOLE FIX, and its absence was a freeze bypass.
+        # `is_dir()` FOLLOWS symlinks, so a symlink pointing at a directory answered True, hit this
+        # `continue`, and was never hashed — while `rglob` does not descend into it either, so the
+        # planted directory's contents went unhashed too. Measured: planting a directory symlink
+        # into the frozen tree left the digest BYTE-IDENTICAL (gemini, PR #85 GitHub review).
+        #
+        # The reasoning that produced the bug is one line up in this module's history: `not
+        # is_dir()` was chosen over `is_file()` BECAUSE `is_file()` follows symlinks — correct about
+        # `is_file()`, and blind to `is_dir()` doing exactly the same thing. Knowing a predicate
+        # follows links is not knowing which predicates do.
+        if path.is_dir() and not path.is_symlink():
             continue
         relative = path.relative_to(root).as_posix()
         # SYMLINKS ARE HASHED AS LINKS, not followed. `not is_dir()` is True for a DANGLING symlink,
@@ -576,7 +586,10 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
 
     def test_the_census_covers_every_config_the_repository_ships(self):
         """A digest over an empty or truncated census is a digest that cannot fail."""
-        counted = [p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir()]
+        # Mirrors `_digest_of_tree`: a directory SYMLINK is hashed, so it must be counted.
+        counted = [
+            p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir() or p.is_symlink()
+        ]
         tracked = subprocess.run(
             ["git", "ls-files", ".trunk/configs"],
             check=True,
