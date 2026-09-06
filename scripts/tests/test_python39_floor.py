@@ -859,7 +859,7 @@ class EveryJobIsFrozenAndClassified(unittest.TestCase):
         extra unpinned run inside an advisory job is then noise: it cannot make a required check
         report green having tested nothing, which is the hazard this campaign exists for.
 
-        The residue — an advisory job doing something misleading — is COREDEV-2821.
+        The residue — an advisory job doing something misleading — is COREDEV-2823.
         """
         believed = {
             f"{filename}::{name}"

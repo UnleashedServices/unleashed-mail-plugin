@@ -271,7 +271,7 @@ digest covered "every input that decides what runs", and it did not:
   conditional**, and removing the suite from those jobs, making one advisory, or putting one behind
   an `if:` each moves a frozen digest. An extra unpinned run inside an advisory job is therefore
   noise — it cannot make a required check report green having tested nothing, which is the hazard
-  this campaign exists for. The residue is **COREDEV-2821**.
+  this campaign exists for. The residue is **COREDEV-2823**.
 
 **Both extensions are read**, and the vacuity control now compares what is READ against what is
 ON DISK rather than asserting a count — the previous control passed with an invisible workflow.
@@ -509,7 +509,7 @@ time: **a probe that reports success without observing anything is indistinguish
   the anchors silently no-op, and mutation proofs go green while testing nothing (182 failures from
   shfmt alone, measured).
 
-  The susceptibility is pre-existing — it voided COREDEV-2711 rounds too — so it is **COREDEV-2822**
+  The susceptibility is pre-existing — it voided COREDEV-2711 rounds too — so it is **COREDEV-2824**
   rather than in-flight work. Verified in the meantime: the harness does not sanitise its
   environment, so exporting `MYPY_CACHE_DIR` at the invocation redirects the cache and leaves the
   checkout clean. That is a workaround for this campaign's rounds, not a repository fix.
