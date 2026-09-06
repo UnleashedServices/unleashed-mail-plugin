@@ -392,8 +392,11 @@ _JOB_DIGESTS = {
     ("trunk-check-push.yml", "trunk-check-push"): (
         "aaea34984148bfcf2e375e07fbd21a22a012e5e50ba22da2a365a7851ef374c5"
     ),
+    # M3: the job-scoped `continue-on-error: true` advisory exemption was removed here, so this
+    # digest moved. The freeze caught the change, which is the point — re-declaring it is the
+    # deliberate act.
     ("trunk-check.yml", "trunk-check"): (
-        "ff1a0d7c665fd7225415a63cdba73dc8108bbb2e85c7c76c79f281bf56f875a8"
+        "791ad3a0dd38cec342756a85e4c2e1bd85cbeeed7a989a50a743f395587cfcbc"
     ),
     ("trunk-parity-harness.yml", "parity"): (
         "ece6b83e5b9d8307d9115158a9818bce9da4e1288016a3a846795883ac505095"
@@ -432,8 +435,12 @@ _PUBLISHED_DIRECTORY = "${RUNNER_TEMP}/pinned-mypy-bin"
 
 _JOBS_ALLOWED_TO_CONTINUE_ON_ERROR = {
     ("plugin-ci.yml", "linux-primitive-probe"),
+    # `trunk-check-push` is the CANARY and stays advisory permanently — it can never block because
+    # its context is not required, which is the whole design.
     ("trunk-check-push.yml", "trunk-check-push"),
-    ("trunk-check.yml", "trunk-check"),
+    # ("trunk-check.yml", "trunk-check") — REMOVED AT M3. The required-to-be job is strict now, and
+    # leaving it declared here would have been a stale declaration that outlived its subject: the
+    # very shape `_stale_declarations()` was added to catch, which is exactly how this was found.
     ("trunk-parity-harness.yml", "parity"),
 }
 
