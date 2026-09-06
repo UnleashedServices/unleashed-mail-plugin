@@ -244,10 +244,34 @@ something was true once; without a binding it silently outlives its reason.
 
 **So the unit is the JOB, and the whole of it.** `yaml.safe_dump(job, sort_keys=True)` covers the
 steps, their `env`, `shell`, `working-directory` and `if`, and the job's own `if`, `defaults`,
-`container`, `strategy` and `continue-on-error` — every input that decides what runs and whether
-its result is believed. A job absent from the freeze table, or whose digest has moved, is an
-offender. A declared job that acquires a step breaks its own digest, so the declaration cannot
-outlive its reason.
+`container`, `strategy` and `continue-on-error`. A job absent from the freeze table, or whose
+digest has moved, is an offender. A declared job that acquires a step breaks its own digest, so the
+declaration cannot outlive its reason.
+
+**Round 6 then showed that sentence had claimed too much, twice** — the first revision said the job
+digest covered "every input that decides what runs", and it did not:
+
+- **Workflow-level keys are outside every job.** Prepending
+  `defaults: {run: {shell: 'bash -c "bash {0}; exit 0"'}}` to `plugin-ci.yml` leaves all ten job
+  digests **byte-identical**; both suite steps inherit that shell; and a measured probe — `python3`
+  stubbed to exit 17 — returned **17 normally and 0 under the wrapper**. The suite's failure would
+  have been reported as success with every cell green (codex, r6). `on:`, `env:`, `defaults:`,
+  `permissions:` and `concurrency:` are frozen per file now. *(Implementation note: YAML 1.1 reads
+  a bare `on` as the boolean `True`, so keys are stringified before sorting — sorting them raw
+  raises `TypeError`, which is how this was found.)*
+- **The freeze covers the workflow, not what the workflow invokes.** A declared job runs
+  `scripts/review/linux-primitive-probe.sh`; editing that script to run the suite leaves every
+  digest intact (codex, r6). **This one is NOT closed, and the reason is a judgement, not an
+  oversight:** the transitive closure of everything CI invokes is unbounded — a script calls a
+  script — and freezing the nine scripts declared jobs currently invoke would put a digest bump in
+  front of `resolve-trunk-range.sh`, which is under active development in this very campaign.
+
+  What bounds it instead is stated positively and asserted:
+  **the suite's believed verdict comes from jobs that install the pin and are neither advisory nor
+  conditional**, and removing the suite from those jobs, making one advisory, or putting one behind
+  an `if:` each moves a frozen digest. An extra unpinned run inside an advisory job is therefore
+  noise — it cannot make a required check report green having tested nothing, which is the hazard
+  this campaign exists for. The residue is **COREDEV-2821**.
 
 **Both extensions are read**, and the vacuity control now compares what is READ against what is
 ON DISK rather than asserting a count — the previous control passed with an invisible workflow.
@@ -470,6 +494,26 @@ time: **a probe that reports success without observing anything is indistinguish
   reproduction** — but that is a rule about individual findings, not about arms. Weighting by arm
   would have discarded agy's round-1 findings on the strength of its round-0 record, and two of
   them were real.
+- **agy voided two of six rounds with a `.mypy_cache/`, and the in-repo fix was built and then
+  BACKED OUT.** The harnesses fingerprint the disposable checkout, so a reviewer that runs mypy to
+  check a claim leaves a cache and the round is discarded — round 2 and round 6, the second time
+  despite an explicit read-only instruction in the prompt, which is what proves the instruction was
+  never the control. The harness already records the correct remedy for the identical `__pycache__`
+  problem: *suppress at the source, never exclude a path from the manifest, because an exclusion is
+  a blacklist a real mutation could hide behind.*
+
+  I implemented that — `MYPY_CACHE_DIR` redirected outside the checkout in all three harnesses —
+  and then reverted it, because **two of those three files carry pre-existing `shfmt` debt, so
+  editing them at all turns the gate red, and paying that debt means reformatting files whose exact
+  bytes ten test modules `.replace()` on.** That is the COREDEV-2771 hazard precisely: shfmt retabs,
+  the anchors silently no-op, and mutation proofs go green while testing nothing (182 failures from
+  shfmt alone, measured).
+
+  The susceptibility is pre-existing — it voided COREDEV-2711 rounds too — so it is **COREDEV-2822**
+  rather than in-flight work. Verified in the meantime: the harness does not sanitise its
+  environment, so exporting `MYPY_CACHE_DIR` at the invocation redirects the cache and leaves the
+  checkout clean. That is a workaround for this campaign's rounds, not a repository fix.
+
 - **Post-gate fixes are ungated by construction.** Everything in §2 after a round is written in
   response to review and has not itself been through one. That is why round 2 exists, and why
   round 3 will.

@@ -434,12 +434,68 @@ _JOBS_ALLOWED_TO_CONTINUE_ON_ERROR = {
 }
 
 
+# ── AND THE KEYS OUTSIDE `jobs:` ───────────────────────────────────────────────────────────────
+#
+# The job digests cover everything INSIDE a job. They cover nothing outside one, and round 6 showed
+# that is not a detail: prepending
+#
+#     defaults:
+#       run:
+#         shell: bash -c "bash {0}; exit 0"
+#
+# to `plugin-ci.yml` leaves ALL TEN job digests byte-identical, because `defaults:` is a
+# workflow-level key. Both suite steps inherit that shell, and a measured probe — `python3` stubbed
+# to exit 17 — returned **17 normally and 0 under the mutant shell**. The suite's failure would be
+# reported as success while every cell passed (codex, PR #85 round 6).
+#
+# So the workflow-level keys are frozen too: `on:`, `env:`, `defaults:`, `permissions:`,
+# `concurrency:` and anything else a future edit adds beside them.
+#
+# NOTE THE `on:` KEY. YAML 1.1 reads a bare `on` as the BOOLEAN True, so it arrives as `True` and
+# not as the string "on" — which is why the keys are stringified before sorting. Sorting them
+# unstringified raises `TypeError: '<' not supported between instances of 'bool' and 'str'`, which
+# is how this was found.
+_WORKFLOW_LEVEL_DIGESTS = {
+    "plugin-ci.yml": "e64c6c46d7d605d58605839716ed012ee7ae65f1206816b14925a089ea361a19",
+    "trunk-check-push.yml": (
+        "649aca568e734004f031e7a8c8dd06d7916364a7be656f75b42d93f246ffa125"
+    ),
+    "trunk-check.yml": "950aea6ecb808d9d8d0b7b5f4ee57d323bd43c7bd95b10f45bbe3772535e5a17",
+    "trunk-parity-harness.yml": (
+        "ae1e606b59e5ae9277c23f8e0b5fd7b66ac6f11645a37cce64c3cb93b7fb3272"
+    ),
+}
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _job_digest(job: dict) -> str:
     return _digest(yaml.safe_dump(job, sort_keys=True))
+
+
+def _workflow_level_digest(document: dict) -> str:
+    """Everything OUTSIDE `jobs:`. Keys are stringified because `on:` arrives as boolean True."""
+    top = {str(key): value for key, value in document.items() if str(key) != "jobs"}
+    return _digest(yaml.safe_dump(top, sort_keys=True))
+
+
+def _workflows_off_their_frozen_level() -> list[str]:
+    """Workflow files whose keys outside `jobs:` are unfrozen or have moved."""
+    offenders = []
+    for filename, document in _workflows():
+        expected = _WORKFLOW_LEVEL_DIGESTS.get(filename)
+        actual = _workflow_level_digest(document)
+        if expected is None:
+            offenders.append(
+                f"{filename}: workflow-level keys are not frozen — add them with digest {actual}"
+            )
+        elif expected != actual:
+            offenders.append(
+                f"{filename}: workflow-level keys changed; digest is now {actual}"
+            )
+    return offenders
 
 
 def _workflow_files(directory: pathlib.Path | None = None) -> list[pathlib.Path]:
@@ -742,6 +798,19 @@ class EveryJobIsFrozenAndClassified(unittest.TestCase):
             "is believed — so the whole job is frozen, and changing CI is a deliberate act",
         )
 
+    def test_every_workflow_level_key_matches_its_freeze(self):
+        """`defaults.run.shell` sits OUTSIDE `jobs:` and is inherited by every step in the file.
+
+        A wrapper shell there turns the suite's failure into success while every job digest stays
+        byte-identical — measured at 17 -> 0 (codex, PR #85 round 6).
+        """
+        self.assertEqual(
+            [],
+            _workflows_off_their_frozen_level(),
+            "on:, env:, defaults:, permissions: and concurrency: all change what runs without "
+            "touching a single job",
+        )
+
     def test_every_declaration_still_describes_reality(self):
         self.assertEqual([], _stale_declarations())
 
@@ -773,6 +842,38 @@ class EveryJobIsFrozenAndClassified(unittest.TestCase):
         self.assertEqual(on_disk, {name for name, _ in _workflows()})
         self.assertGreaterEqual(
             len(on_disk), 4, "the workflow directory has been emptied"
+        )
+
+    def test_at_least_one_believed_job_runs_the_suite_with_the_pin(self):
+        """THE PROPERTY, STATED POSITIVELY — and it is what bounds the finding below.
+
+        A declared job invokes a repository script (`linux-primitive-probe.sh`), and that script is
+        outside the workflow YAML, so editing it to run the suite leaves every digest intact
+        (codex, PR #85 round 6). The freeze covers the workflow; it does not cover the transitive
+        closure of everything a workflow invokes, and chasing that is unbounded — a script calls a
+        script.
+
+        What bounds the impact is this cell. The suite's BELIEVED verdict comes from jobs that
+        install the pin and are neither advisory nor conditional, and removing the suite from those
+        jobs, making one advisory, or putting one behind an `if:` all move a frozen digest. An
+        extra unpinned run inside an advisory job is then noise: it cannot make a required check
+        report green having tested nothing, which is the hazard this campaign exists for.
+
+        The residue — an advisory job doing something misleading — is COREDEV-2821.
+        """
+        believed = {
+            f"{filename}::{name}"
+            for filename, document in _workflows()
+            for name, job in (document.get("jobs") or {}).items()
+            if _installs_the_pin(job)
+            and not job.get("continue-on-error")
+            and "if" not in job
+        }
+        self.assertEqual(
+            {"plugin-ci.yml::validate", "plugin-ci.yml::darwin-suite"},
+            believed,
+            "the suite's verdict must come from at least one job that installs the pin and whose "
+            "failure actually fails the run",
         )
 
     def test_the_jobs_that_install_the_pin_are_named(self):
