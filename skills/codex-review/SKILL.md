@@ -63,7 +63,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 
 - **Tool:** `codex` CLI.
 - **Working directory:** always run from the project root (top-level workspace directory containing `Unleashed Mail.xcodeproj/`). Codex resolves relative paths against `$PWD`.
-- **Model:** `~/.codex/config.toml` sets `model = "gpt-6-astra"` (GPT-6 "Astra"; `codex-cli` 0.153.4, verified 2026-09-05 by reading the live config and the CLI banner). The model is inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded). Supersedes `gpt-6-astra`, which this file pinned until the Astra release.
+- **Model:** `~/.codex/config.toml` sets `model = "gpt-6-astra"` (GPT-6 "Astra"; `codex-cli` 0.153.4, verified 2026-09-05 by reading the live config and the CLI banner). The model is inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded). Supersedes `gpt-5.6-sol`, which this file pinned until the Astra release.
 - **⚠️ Effort: ALWAYS pass `-c model_reasoning_effort=ultra` on a review call — do not rely on the config default.** The ladder, read from the shipped binary's own enum (it serialises in ascending order), is **`minimal` < `low` < `medium` < `high` < `xhigh` < `max` < `ultra`**. `ultra` is the ceiling; this file previously mandated `xhigh`, which is **fifth of seven** — correct when it was written, and a silent under-powering of the gate once Astra shipped the two tiers above it.
 - **⚠️ The CLI does NOT validate this value.** Measured on `codex-cli` 0.153.4: `-c model_reasoning_effort=definitely-not-valid` is echoed back in the run banner and the review proceeds at the backend default — no error, no warning, no exit code. A stale or mistyped tier is therefore an invisible downgrade, which is the same class as the config reset the 5.6 upgrade caused (it silently became `low`). Passing the tier explicitly is what makes the gate resilient to a config reset; the wrappers additionally assert the token against the seven known tiers and exit 2 rather than let a typo run. There is no dedicated `--reasoning-effort` flag; the generic `-c key=value` is the mechanism.
 - **Pinning a config value one-off (rarely needed):** `codex exec -c model=gpt-6-astra -c model_reasoning_effort=ultra -s read-only "PROMPT"` — the `-c model=…` shows an explicit model pin. Normally let the config supply the model and only force effort; never `--model` (zero-byte failure on this install).
@@ -151,7 +151,7 @@ codex exec -c model_reasoning_effort=ultra -s read-only -o /tmp/output.md "PROMP
 > only overrides effort; the built-in review resolves its model from config — and if `~/.codex/config.toml`
 > sets `review_model` (a recognized key, verified on 0.153.4), `codex review` uses THAT, not the session
 > `model`. So a machine left with a stale `review_model` can run the diff audit on an old model despite the
-> v2.5.0 "review tooling is on `gpt-6-astra`" guidance. For the built-in path, either verify `review_model`
+> guidance here — and the release that set it is not recoverable from the value. For the built-in path, either verify `review_model`
 > is unset/`gpt-6-astra` or pin it inline with a `-c review_model=gpt-6-astra` override alongside the effort
 > override. The `codex exec "/skill …"` audits are unaffected — they inherit the session `model`.
 >

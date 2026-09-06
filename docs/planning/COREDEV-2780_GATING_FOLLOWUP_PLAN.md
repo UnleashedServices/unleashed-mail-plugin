@@ -25,8 +25,11 @@ So this document does two different jobs and labels which is which:
   review the *intent* against the *implementation*, which is the check that was skipped. Approval
   here does not certify the code — PR #85's own review rounds do that. It certifies that the
   intent was sound and that the implementation matches it.
-- **§3 is a genuine forward plan.** Nothing in it has been implemented. It is the part of the gate
-  working as designed.
+- **§3 is a genuine forward plan**, with one qualification that the first revision got wrong by
+  stating it flatly: *none of §3's milestones are complete*, but parts of their groundwork already
+  exist on `main` — the canary and harness workflows are present, M2b's static half is accepted in
+  the committed rollout evidence, and M2a's ancestry is measured rather than assumed. "Nothing has
+  been implemented" was false as written (PR #85 audit).
 
 **The correction rule applies to this document.** Where §1 records a decision that a reviewer
 overturns, the fix is to change the implementation and re-state §1 — not to annotate §1 with a note
@@ -62,7 +65,12 @@ true. Each was proven old-vs-new: the pre-fix code fails the new cell, the post-
 different repository therefore left the digest **byte-identical** with all 1384 tests green — the
 gate's own supply chain was outside the thing that freezes the gate.
 
-The digest now covers the whole document. The `trunk upgrade` carve-out — which must let a version
+The digest now covers the whole document — **and precisely what that means was overstated in the
+first revision (PR #85 audit).** The digest is taken over `safe_dump(safe_load(text))`, so it covers
+the document's PARSED SEMANTICS, not its bytes: a comment-only edit does not move it, which is
+deliberate, since a comment fix should not red the gate. The limit worth recording is that anything
+PyYAML normalises away is outside the freeze, and whether trunk's own parser agrees with PyYAML on
+a duplicate key is **unmeasured** — that is COREDEV-2818, not a claim made here. The `trunk upgrade` carve-out — which must let a version
 bump through without letting a source swap through — needed **three** tightenings across review
 rounds, and the progression is worth recording because each round's fix carried the next defect:
 
@@ -135,7 +143,7 @@ The drift-detector fixture pointed `origin/main` at `HEAD`. Rows 6, 7 and 8 of i
 **all passed against a detector that read the checkout** — the exact mutant they existed to catch.
 The survivor corpus now binds each finding to concrete executable case ids instead of a prose clause.
 
-### The recurring 2.7.0 reversion — root-caused
+### The recurring 2.7.0 reversion — the SELECTION root-caused, the rebuild not
 
 Not a stale marketplace. `.claude-plugin/marketplace.json` declared **no `version` key**, and without
 one the installed version is resolved by taking the **first entry of a raw directory read** of the
@@ -193,56 +201,58 @@ Both now compare a **parsed token** for equality. *This is COREDEV-2809's `--ind
 again, in a second file — a check keyed on a spelling is not a check on the property. The two are
 recorded together so the family is closed rather than half-closed.*
 
-### 2.3 — three rounds of parser, then a reversal
+### 2.3 — four encodings of a detector, then a declaration
 
 The original defect was small: the census asked whether the literal string
-`unittest discover -s scripts/tests` appeared in a step, so a trailing backslash or one extra
-space made a job **silently exempt** from the invariant while the suite stayed green.
-
-Three rounds of repair followed, and each one was evaded:
+`unittest discover -s scripts/tests` appeared in a step, so a trailing backslash made a job
+**silently exempt** while the suite stayed green. Four encodings were then defeated in turn:
 
 | encoding | defeated by | round |
 |---|---|---|
-| literal substring | line continuation; padded whitespace | 1 |
-| both tokens on one logical line | `unittest 'discover'`; `scripts/"tests"`; a flag between the words; no `discover` at all; and a **false positive** on `echo 'unittest discover'; ls scripts/tests` | 2 |
-| `shlex` argv per command | a quoted `;` in `-p`; `2>&1`; `-s=`; `./`; `unittest.main`; `timeout`/`exec`/`sudo`/`env -u` wrappers; `pytest`; `coverage`; and a **false positive** on `--log-dir=scripts/tests` | 3 |
+| literal substring | a line continuation; padded whitespace | 1 |
+| both tokens on one logical line | quoting; a flag between the words; no `discover`; and a false positive on `echo …; ls …` | 2 |
+| `shlex` argv per command | a quoted `;`; `2>&1`; `-s=`; `./`; `unittest.main`; `timeout`/`sudo`/`env -u`; `pytest`; `coverage` | 3 |
+| **a substring mention** | **`env:` holding the path**; `working-directory:`; `${{ matrix.* }}`; a `uses:` step with no `run:` at all; a wrapper script | 4 |
 
-Round 3's prescription, from the codex arm, was to *"parse complete shell constructs rather than
-treating physical lines as independent commands"*. That is the correct fix for the approach, and
-it is the point at which the approach should be abandoned: a unit test is the wrong place for a
-shell interpreter, and each round modelled more shell only to leave more unmodelled.
+**The fourth row ends the argument.** A step can run the suite while its `run:` text names nothing,
+because the path lives in `env:` three lines above — which is this repository's own house style for
+shared values (`CLAUDE_CODE_VERSION`, `GITLEAKS_VERSION`), and is exactly what zizmor's
+template-injection remediation tells contributors to do. The repo's own linter pushes people toward
+the one spelling the guard could not see. No amount of reading `run:` finds it.
 
-**The failure direction settles it.** An approximate parser fails **open** — every spelling it
-does not model is a job that escapes silently, which is the exact defect being guarded against. A
-declaration fails **closed**.
+Worse, the audit reproduced the consequence end to end: refactoring the two duplicated suite
+invocations to share a `$SUITE_DIR` and deleting `darwin-suite`'s pin install — **the original P1
+restored** — left all three predicates reporting no offenders.
 
-**So the question is inverted.** Any step whose text mentions `scripts/tests` puts its job under
-the requirement, however that text is spelled. Every evasion in the table above contains that
-substring; all 22 are now carried as an executable table, and no future spelling can be added to
-it. A job that mentions the path *without* running the suite is not a defect to be parsed away —
-it is declared in `_JOBS_THAT_MENTION_THE_SUITE_WITHOUT_RUNNING_IT`, with a reason. **That dict is
-empty today**, which is itself the finding: both mentioning jobs really do run the suite.
+#### What replaced it
 
-One normalisation is needed and only one: quote characters are removed before the search, because
-`-s scripts/"tests"` names the directory and does not contain the substring. That is the whole of
-it — no tokenising, no command splitting, none of what failed three times.
+**There is no detector.** Every job in every workflow either installs the pinned mypy, or is named
+in `_JOBS_THAT_DO_NOT_RUN_THE_SCRIPTS_SUITE` with a reason. A job that is neither is an offender,
+so adding a job forces an explicit decision instead of inheriting a silent exemption. The failure
+direction is the whole argument: a detector fails **open**, a declaration fails **closed**.
 
-The same reversal covers the `$GITHUB_PATH` hazard. There are exactly **two** such writes in this
-repository's workflows, and both are now declared in `_GITHUB_PATH_WRITES` along with the exact
-directory each publishes. An undeclared write is an offender; a declared one publishing something
-else is an offender; and a separate cell asserts no declared path ends in `/bin`, which is the
-shape of a venv interpreter directory.
+**All four workflow files are read.** The previous guards were keyed by `(filename, job)` while only
+ever being handed `plugin-ci.yml`, so three of the four workflows were governed by nothing.
 
-**This cell could not fail for its own defect, and mutation testing is what found that.** The
-first version of the declaration check asked whether the declared path appeared anywhere in the
-step. It does — the shipped step names `pinned-mypy-bin` on its `ln -sf` and `--version` lines —
-so switching the published directory back to the venv's `bin`, the exact P1, left the cell green.
-It now reads the **operand of the append**. Six mutants redden six cells, including that one.
+**The two steps that manipulate `$PATH`, and the two that run the suite, are frozen by digest.**
+Every remaining evasion was a different way to spell the same step — `>` for `>>`, `tee -a`,
+`printf`, `echo -n`, a second append chained on one line, a comment carrying `/bin/python`,
+`|| true` swallowing the exit code. Freezing the bytes closes all of them at once and forces any
+future edit through a re-declaration, which is the review checkpoint a PATH-manipulating step
+should have. It is the pattern COREDEV-2804 already uses for `.trunk/trunk.yaml`.
 
-**Declared boundary, and this one is meant to stay.** The supported syntax is a literal mention.
-What is out of scope is a step that names the suite directory through a value it never spells —
-constructed by `printf`, decoded from base64, or assembled at runtime. Those are not shapes a
-contributor writes by accident, and chasing them is what produced three rounds of parser.
+**And it makes the remaining parsing safe.** The cells that read those bodies parse bytes that
+cannot change without the digest failing first, so "the parser missed a spelling" stops being a
+route past them.
+
+**Structural properties are read from the YAML, not from text:** no suite step may carry an `if:`
+or a step-level `continue-on-error`, no pin-installing job may be advisory, and any job that is
+advisory must be declared.
+
+**Vacuity controls, because the previous cells had none.** `_unclassified_jobs() == []` is satisfied
+by a workflow nobody matches and by a declaration that exempts everything. So the suite also asserts
+*which* jobs install the pin, that at least four workflow files are read, that no declaration names
+a job that no longer exists, and that no declared job installs the pin after all.
 
 ## §3 — Forward plan: the rollout that is still owed
 
@@ -382,39 +392,51 @@ not be self-authorised. M4a observes mergeability **read-only**; the merge endpo
 
 ## §5 — Testing
 
-The local gate mirrors CI's checks and now runs the scripts suite **twice** — once with `CI` unset
-and once with `CI=1` — because the 3.9-floor cell's behaviour differs between them and a commit
-passed all thirteen locally and went red on CI for exactly that reason.
+The local gate mirrors CI's checks and runs the scripts suite **twice** — once with `CI` unset and
+once with `CI=1` — because the 3.9-floor cell's behaviour differs between them, and a commit passed
+all thirteen locally then went red on CI for exactly that reason.
 
-Cells covering §2, after the reversal:
+**Stated precisely, because the first revision overclaimed it (PR #85 audit): that gate is a
+maintainer-side script (`~/.claude/handoffs/coredev-2780-gate.sh`), NOT a file in this repository.**
+Nothing in the repo runs the suite under `CI=1`, so a contributor without that script gets no
+warning of the class it exists to catch. Treating it as a repository control would be wrong; it is
+a personal harness, and closing that gap properly is COREDEV-2817.
 
-- `TheMentionTriggerCatchesEverySpelling` — **all 22 evasions from three rounds in one table**,
-  each asserted to be caught. That table is the argument for the reversal: every row defeated some
-  encoding of a tokenising census, several defeated two, and one check now catches all of them.
-  It also carries the complements — a job that never mentions the suite is not flagged, a pin
-  installed after the suite still is, and the exemption dict works and is empty.
-- `TheGithubPathAllowlistRefusesUndeclaredWrites` — an undeclared write is an offender; a declared
-  job publishing something other than its declared directory is an offender; and **a read of
-  `$GITHUB_PATH` is not a write**, which also covers the append test itself.
-- `ThePinIsInstalledInAFormPEP668Accepts` — a bare install is an offender, a venv that does not
-  perform the install is an offender, and both surviving forms are accepted.
+Cells covering §2, after the declaration rewrite:
+
+- `EveryJobIsClassified` — every job in every workflow installs the pin or is declared; the
+  declaration still describes reality (no name that has been renamed away, no declared job that
+  installs the pin after all); **and the vacuity controls the previous cells lacked** — *which*
+  jobs install the pin is asserted by name, at least four workflow files must be read, and the
+  census is shown able to fail on a synthetic undeclared job.
+- `TheStepsThatChangePathAreFrozen` — every step in the repository that mentions `$GITHUB_PATH`
+  anywhere in its YAML (not only in `run:`) must match the frozen digest; exactly two do; the
+  frozen body publishes one directory and it is not inside a venv created by that step.
+- `TheSuiteStepCannotSwallowItsResult` — the suite steps are frozen, carry no `if:` and no
+  step-level `continue-on-error`; no pin-installing job is advisory; and any job that *is*
+  advisory is declared.
 - `TheVersionGuardComparesTokensNotSubstrings` — runs a real stub binary rather than mocking, so
   the property is what the resolver does with what a binary *prints*.
-- `test_no_declared_path_is_a_venv_bin` — the declaration is only worth having if something checks
-  what is declared.
 
-**Six mutants, six reddenings**, and one of them is the reason this section exists: mutating the
-real workflow to republish the venv's `bin` — the exact P1 — initially left the suite **green**,
-because the check asked whether the declared path appeared anywhere in the step rather than
-reading the operand of the append. A cell that cannot fail for its own defect is not evidence, and
-only running the mutant found it.
+**Seven mutants, seven reddenings**, and two of them are why this section was rewritten rather
+than patched:
+
+| mutant | previously |
+|---|---|
+| a new job running the suite with the path in `env:` | **passed** — the mention trigger cannot see `env:` |
+| the DRY refactor: share `$SUITE_DIR`, drop `darwin-suite`'s pin install | **passed all three guards** — the original P1, restored, undetected |
+| republish the venv `bin` | caught only after an earlier fix; now caught by the freeze |
+| `tee -a` instead of `>>` | **passed** |
+| `\|\| true` on the suite step | **passed** — nothing read the exit code |
+| `validate` made advisory | **passed** |
+| a declaration naming a renamed job | **passed** |
 
 ## §6 — Files changed
 
 | Path | Change |
 |---|---|
 | `.github/workflows/plugin-ci.yml` | pinned-mypy install moved into a venv in **both** jobs that run the scripts suite |
-| `scripts/tests/test_python39_floor.py` | quote-respecting `shlex` tokenisation; census keyed on the executable; venv targets collected job-wide; install checked per command; publication keyed on any in-venv path; six proof classes, 41 cells |
+| `scripts/tests/test_python39_floor.py` | **detection replaced by declaration**: every job in every workflow installs the pin or is declared; the two `$GITHUB_PATH` steps and the two suite steps are digest-frozen; structural `if:`/`continue-on-error` checks; vacuity controls; 26 cells |
 | `docs/planning/COREDEV-2780_GATING_FOLLOWUP_PLAN.md` | this document |
 
 ---
