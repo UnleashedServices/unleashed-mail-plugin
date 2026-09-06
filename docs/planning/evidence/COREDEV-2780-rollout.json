@@ -1,0 +1,57 @@
+{
+  "c2AndCell16RemoteHalves": {
+    "canaryWorkflowBranches": ["main", "alpha"],
+    "equalityHolds": true,
+    "note": [
+      "The RAW set is never compared directly: `~DEFAULT_BRANCH` is a dynamic alias, so a",
+      "literal comparison both reds against a correct workflow AND cannot see a default-branch",
+      "retarget, in which no string on either side changes."
+    ],
+    "rawTargetSet": {
+      "exclude": [],
+      "include": ["~DEFAULT_BRANCH", "refs/heads/alpha"]
+    },
+    "requiredWorkflowBranches": ["main", "alpha"],
+    "resolvedTargetSet": ["alpha", "main"]
+  },
+  "cell16CanaryNotRequired": {
+    "note": [
+      "A POINT-IN-TIME read. It cannot prove 'never', and claiming so would assert more than",
+      "this owner can see. M4's post-edit readback re-verifies it."
+    ],
+    "requiredContexts": [
+      "validate",
+      "py39-smoke",
+      "secret-scan",
+      "load-check",
+      "redactor-equivalence (ubuntu-latest)"
+    ],
+    "trunkCheckPushAbsent": true
+  },
+  "m4Preconditions": {
+    "integrationIds": [15368],
+    "mergeQueueRulePresent": false,
+    "note": [
+      "`integration_id` is OBTAINED from the existing contexts rather than guessed, which is",
+      "what M4 requires. A merge-queue rule would be a STOP, not a configuration tweak."
+    ],
+    "ruleTypes": ["deletion", "non_fast_forward", "required_status_checks"],
+    "strictRequiredStatusChecksPolicy": false,
+    "trunkCheckAbsentPreM4": true
+  },
+  "observedAt": "2026-09-02T15:56:32Z",
+  "ruleset": {
+    "bypassActors": [],
+    "enforcement": "active",
+    "id": 16082567,
+    "name": "Control"
+  },
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2780",
+  "why": [
+    "\u00a77's ownership rule: a cell asserting a relationship between LOCAL content and REMOTE state is a",
+    "HYBRID -- the Python owner asserts the local shape, and THIS ARTIFACT asserts equality against the",
+    "ruleset as read at rollout time. The Python suite cannot observe the ruleset: CI holds no token",
+    "that can read one, which `validate` demonstrated with `gh api ... exit status 4`."
+  ]
+}

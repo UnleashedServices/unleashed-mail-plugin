@@ -1,0 +1,298 @@
+# COREDEV-2780 M2c — the PARITY HARNESS. Non-required; emits no gating context.
+#
+# WHY IT EXISTS. Cells 1 and 5 assert things about a REAL run of the pinned action that no Python test
+# can observe — `uses:` is resolved by the Actions runner, not by unittest — and that the shipped
+# workflow cannot report either, because C8 makes the Trunk action its FINAL step, so nothing there can
+# hash the tree afterwards. This workflow is the SENSOR; `scripts/tests/test_trunk_upstream_parity.py`
+# is the JUDGE. Same shape as cells 10 and 12: a real run reports, a test decides.
+#
+# WHY IT FIRES ON REAL EVENTS, ON DEDICATED REFS. Revision 26 made it `workflow_dispatch`-only, which
+# is self-defeating: the pinned action maps `workflow_dispatch` to check-mode=all — the very reason
+# dispatch is banned from `trunk-check` — and `GITHUB_EVENT_NAME` cannot be overridden, because GitHub
+# forbids overriding `GITHUB_*`. Naming an artifact `parity-pull_request.json` does not make the action
+# take its PR path. So it fires on the real events, on refs that exist for this purpose. Branch filters
+# are safe HERE precisely because the workflow is non-required: a skipped harness leaves no context
+# pending.
+#
+# `harness-base` and `harness/**` ARE PERMANENT REPOSITORY CITIZENS, not scratch refs — every
+# Dependabot bump of the action pin must re-run this harness to re-derive the extension-point
+# enumeration, so deleting them is a change rather than tidying. Documented in CLAUDE.md.
+name: trunk-parity-harness
+
+on:
+  pull_request:
+    branches: [harness-base]
+  push:
+    branches: [harness/**]
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    # zizmor/anonymous-definition. IDENTICAL to the job id on purpose: cell 14 takes
+    # `name:` as the EFFECTIVE CHECK NAME when present, so any other value would
+    # silently rename the context a ruleset refers to.
+    name: parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    # The deliberately-fixable fixture is MEANT to make the Trunk step fail. Without this the job
+    # would stop there and the evidence would simply never be produced.
+    continue-on-error: true
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Depth 0 for the same reason as the canary: on the `push: harness/**` leg the payload's
+          # `before` is HEAD~N and a shallow fetch simply does not contain it.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # DECLARED, NOT INHERITED. The step below parses YAML, and PyYAML is not in the stdlib. It
+      # happens to be present on the current ubuntu image, which is why this has never failed — but
+      # this harness has never actually run (no `parity-*.json` exists yet), so "it works" is
+      # untested rather than established, and a runner image change would take M2c's evidence with
+      # it. Two lines, copied verbatim from plugin-ci.yml, remove the question.
+      #
+      # NOT `actions/setup-python`: that prepends a CLEAN toolcache interpreter with no PyYAML and
+      # would BREAK a harness that currently works — the obvious fix being the dangerous one.
+      - name: Install PyYAML (the extract step parses the shipped workflow)
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
+
+      - name: extract-and-bind-action-inputs
+        id: inputs
+        # THE HARNESS MUST RUN WHAT SHIPS. A harness that invokes its own non-fixing form proves only
+        # that THAT form does not mutate, while the shipped job could invoke an autofixing one and
+        # still reach cell 5 green. The inputs are therefore EXTRACTED from the shipped workflow and
+        # digest-bound to it. The digest covers the extracted `with:` block rather than the whole file,
+        # so an unrelated edit (M3 removing `continue-on-error`) does not falsely void the binding
+        # while a change to what the action is actually passed still does.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib, json, os, yaml
+          workflow = yaml.safe_load(open(".github/workflows/trunk-check.yml", encoding="utf-8"))
+          job = next(iter(workflow["jobs"].values()))
+          trunk = next(s for s in job["steps"] if "trunk-io/trunk-action" in str(s.get("uses", "")))
+          used = trunk["with"]
+          canonical = json.dumps(used, sort_keys=True, separators=(",", ":"))
+          digest = hashlib.sha256(canonical.encode()).hexdigest()
+          # READ, NOT RESTATED. The contract registry is the one authority for this digest; the
+          # judge reads the same key, so the two cannot drift apart the way a second literal would.
+          expected = yaml.safe_load(
+              open("docs/planning/COREDEV-2780-contract.yaml", encoding="utf-8")
+          )["action_inputs_digest"]
+          if digest != expected:
+              raise SystemExit(
+                  f"the shipped action inputs changed: expected {expected}, got {digest} ({canonical}).\n"
+                  "Re-run this harness and update the pin — the harness must run what ships."
+              )
+          print(f"arguments={used['arguments']}")
+          print(f"save_annotations={str(used['save-annotations']).lower()}")
+          print(f"canonical={canonical}")
+          print(f"digest={digest}")
+
+          # THE RECORDED PIN MUST BE THE ONE THIS RUN EXECUTED. Reading `uses` off the SHIPPED
+          # workflow while the harness invokes its own `uses:` records an action that this run may
+          # never have called: bump one file and the artifact keeps attesting parity for a version
+          # nothing here ran. `uses:` cannot be driven from `steps.*.outputs`, so the available form
+          # is an equality assertion plus recording the OBSERVED value.
+          #
+          # Reading the harness's own file is sound: the runner executes this workflow from the
+          # checked-out ref — the pushed ref for `push: harness/**`, the merge ref for a PR into
+          # `harness-base` — which is exactly what the default checkout above materialises.
+          harness = yaml.safe_load(
+              open(".github/workflows/trunk-parity-harness.yml", encoding="utf-8")
+          )
+          hjob = next(iter(harness["jobs"].values()))
+          # EVERY invocation, not `next(...)`. The harness now runs the action TWICE — the primary
+          # run and the autofix positive control — and validating only the first meant a pin bump
+          # that updated the shipped workflow and the primary step but missed the control would
+          # record the new pin while the control's sensitivity was established with an older action.
+          # The control's whole premise is that ONLY `--fix` differs (codex, PR #84).
+          hused = {
+              str(s["uses"])
+              for s in hjob["steps"]
+              if "trunk-io/trunk-action" in str(s.get("uses", ""))
+          }
+          if hused != {trunk["uses"]}:
+              raise SystemExit(
+                  f"the harness runs {sorted(hused)} while the shipped workflow pins "
+                  f"{trunk['uses']} — every harness invocation must be the shipped pin, or this "
+                  "evidence names an action some step did not execute."
+              )
+          # A SCALAR, deliberately: the judge compares `actionInputs.uses` for EQUALITY against the
+          # registry's one pin, and a set repr in $GITHUB_OUTPUT would never match it.
+          print("uses=" + trunk["uses"])
+          PY
+
+      - name: stage-the-deliberately-fixable-fixture
+        # Running the action over already-canonical files proves NOTHING: autofix would produce no byte
+        # change there either, so the case would REACH the wrong implementation without killing it. The
+        # fixture is mis-indented on purpose, and `git add` makes it tracked so cell 5's claim — no
+        # TRACKED file's bytes change — actually bites.
+        run: |
+          set -euo pipefail
+          mkdir -p harness-fixtures
+          printf '#!/usr/bin/env bash\nif true; then\n      echo "deliberately   mis-indented"\n   fi\n' \
+            > harness-fixtures/fixable.sh
+          git add --force harness-fixtures/fixable.sh
+          echo "fixture staged:"; sed -n '1,10p' harness-fixtures/fixable.sh
+
+      - name: hash-tracked-tree-before
+        run: |
+          set -euo pipefail
+          git ls-files -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1 > /tmp/tree.pre
+          sha256sum harness-fixtures/fixable.sh | cut -d' ' -f1 > /tmp/fixture.pre
+          cat /tmp/tree.pre
+
+      - name: resolve-the-range-with-the-shared-implementation
+        # The value cell 1 compares the captured argv against. ONE implementation: this is the same
+        # script the shipped workflow's guard invokes, so parity is a PROPERTY rather than an agreement
+        # between two things that might both be wrong.
+        # NO `env:` BLOCK, DELIBERATELY — and its absence is the point (codex, PR #84).
+        #
+        # It used to map three `github.event.*` values into the names the pinned action SYNTHESISES
+        # for its own scripts. Those names are not GitHub-provided, the shipped workflows cannot set
+        # them (C5 forbids an `env:` block there), and the resolver was rewritten to need none of
+        # them: it detects the merge ref by PATTERN and reads the event payload off `GITHUB_EVENT_PATH`.
+        #
+        # Leaving the mapping here would have made this harness resolve through the env branch while
+        # production resolves through the payload branch — so the evidence would attest a code path
+        # production never takes, and the payload fallback (added to fix a real first-PR failure)
+        # would be the one thing the parity sensor could not see. The harness now runs exactly what
+        # ships: runner-provided defaults and the payload, nothing else.
+        run: |
+          set -euo pipefail
+          bash scripts/ci/resolve-trunk-range.sh > /tmp/resolver.out
+          cat /tmp/resolver.out
+
+      - name: install-a-real-trunk-for-the-recorder-to-delegate-to
+        run: |
+          set -euo pipefail
+          curl -fsSL https://trunk.io/releases/trunk -o /tmp/real-trunk
+          chmod u+x /tmp/real-trunk
+          : > /tmp/argv.jsonl
+
+      - name: trunk
+        # ADDRESSABLE, because cell 5 requires the action's conclusion recorded SEPARATELY from the
+        # hash comparison. Without an `id:` there is no `steps.<id>.outcome` to record and the
+        # requirement is simply unimplemented.
+        id: trunk
+        uses: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa # v2.0.0
+        env:
+          PARITY_ARGV_FILE: /tmp/argv.jsonl
+          PARITY_REAL_TRUNK: /tmp/real-trunk
+        with:
+          # THE ONE LEGITIMATE USE OF `trunk-path` — §1's C4 forbids it in the shipped workflows.
+          trunk-path: scripts/ci/parity-recorder.sh
+          arguments: ${{ steps.inputs.outputs.arguments }}
+          save-annotations: ${{ steps.inputs.outputs.save_annotations }}
+
+      - name: hash-tracked-tree-after
+        if: always()
+        run: |
+          set -euo pipefail
+          git ls-files -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1 > /tmp/tree.post
+          sha256sum harness-fixtures/fixable.sh | cut -d' ' -f1 > /tmp/fixture.post
+          cat /tmp/tree.post
+
+      # ---- THE POSITIVE CONTROL cell 5 ACTUALLY WORDS -------------------------------------------
+      #
+      # "enabling autofix must change the fixture and turn this cell red". Until this step existed
+      # nothing in the repository ever ran the action, or Trunk, with autofix on: the only thing
+      # calling itself the control was a judge test that hand-set `fixturePost = "f2"` — stipulating
+      # the result it was supposed to observe. Equal pre/post hashes were therefore UNFALSIFIABLE.
+      # They are equal when autofix is off, and equally equal when the fixture was never in the
+      # linted range at all, which is the failure mode that would make cell 5 certify a blind sensor.
+      #
+      # Same pinned action, same recorder, same resolved range — only `--fix` differs, so a change in
+      # the fixture's bytes is attributable to autofix and nothing else. It records into its OWN argv
+      # file: cell 1 compares the invocation the shipped configuration produced, and a second set of
+      # argv in that stream would be evidence of a run the shipped workflow never makes.
+      #
+      # The fixture is deliberately NOT restored first — `fixturePost` is already captured above, and
+      # restoring would add a mutation this harness would then have to explain.
+      - name: autofix-positive-control
+        id: control
+        if: always()
+        continue-on-error: true
+        uses: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa # v2.0.0
+        env:
+          PARITY_ARGV_FILE: /tmp/argv-control.jsonl
+          PARITY_REAL_TRUNK: /tmp/real-trunk
+        with:
+          trunk-path: scripts/ci/parity-recorder.sh
+          arguments: ${{ steps.inputs.outputs.arguments }} --fix
+          save-annotations: false
+
+      - name: hash-the-fixture-after-the-control
+        if: always()
+        run: |
+          set -euo pipefail
+          sha256sum harness-fixtures/fixable.sh | cut -d' ' -f1 > /tmp/fixture.control
+          cat /tmp/fixture.control
+
+      - name: assemble-the-parity-artifact
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib
+          def read(path, default=""):
+              p = pathlib.Path(path)
+              return p.read_text(encoding="utf-8").strip() if p.exists() else default
+          invocations = [json.loads(line) for line in
+                         read("/tmp/argv.jsonl").splitlines() if line.strip()]
+          event = os.environ["GITHUB_EVENT_NAME"]
+          record = {
+              "schemaVersion": 1,
+              "event": event,
+              "ref": os.environ.get("GITHUB_REF_NAME", ""),
+              "sha": os.environ.get("GITHUB_SHA", ""),
+              "resolver": {"raw": read("/tmp/resolver.out")},
+              "invocations": invocations,
+              "tree": {
+                  "pre": read("/tmp/tree.pre"),
+                  "post": read("/tmp/tree.post"),
+                  "fixture": "harness-fixtures/fixable.sh",
+                  "fixturePre": read("/tmp/fixture.pre"),
+                  "fixturePost": read("/tmp/fixture.post"),
+                  "controlPost": read("/tmp/fixture.control"),
+              },
+              # RECORDED SEPARATELY FROM THE HASH COMPARISON, per cell 5. The primary run's outcome
+              # is what says the fixture was inside the linted range at all: a mis-indented staged
+              # file that Trunk saw MUST produce a finding, so `success` here means the range was
+              # empty of it and the pre/post hashes were watching nothing.
+              "action": {
+                  "outcome": os.environ.get("PARITY_TRUNK_OUTCOME", ""),
+                  "controlOutcome": os.environ.get("PARITY_CONTROL_OUTCOME", ""),
+              },
+              "actionInputs": {
+                  "canonical": os.environ.get("PARITY_INPUTS_CANONICAL", ""),
+                  "digest": os.environ.get("PARITY_INPUTS_DIGEST", ""),
+                  "uses": os.environ.get("PARITY_INPUTS_USES", ""),
+              },
+          }
+          pathlib.Path(f"parity-{event}.json").write_text(
+              json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY
+        env:
+          PARITY_INPUTS_CANONICAL: ${{ steps.inputs.outputs.canonical }}
+          PARITY_INPUTS_DIGEST: ${{ steps.inputs.outputs.digest }}
+          PARITY_INPUTS_USES: ${{ steps.inputs.outputs.uses }}
+          PARITY_TRUNK_OUTCOME: ${{ steps.trunk.outcome }}
+          PARITY_CONTROL_OUTCOME: ${{ steps.control.outcome }}
+
+      - name: upload-the-parity-artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: parity-${{ github.event_name }}
+          path: parity-*.json
+          if-no-files-found: error

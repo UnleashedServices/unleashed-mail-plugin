@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2801",
+  "milestone": "M5",
+  "experiment": "§3a — `claude plugin update` at USER scope, outside any project; re-read the record",
+  "ranAt": "2026-09-01",
+  "command": "claude plugin update unleashed-mail --scope user --yes",
+  "commandExitCode": 0,
+  "expected": {
+    "value": "2.8.3",
+    "source": "origin/main:.claude-plugin/plugin.json",
+    "unchangedAcrossObservations": true,
+    "note": [
+      "Table B row 3 requires `expected` to be identical in the before and after observations, or the",
+      "experiment compared against a moving target. It was.",
+      "VERIFIED SEPARATELY: the install comes from the `npranson-unleashed-mail-plugin` marketplace",
+      "while this checkout's origin is `UnleashedServices/unleashed-mail-plugin`. Both serve 2.8.3 at",
+      "main, so the detector's premise — that origin/main is what a consumer can pull — holds. Had",
+      "they diverged, every comparison here would have been apples to oranges."
+    ]
+  },
+  "before": { "user": "2.7.0", "project": "2.7.0" },
+  "after": { "user": "2.8.3", "project": "2.7.0" },
+  "tableBRow": 10,
+  "outcome": "THE EXPECTED SHAPE — containment established for USER SCOPE ONLY",
+  "rowsRuledOut": {
+    "1": "the command exited 0",
+    "2": "all three versions were readable, present and SemVer-comparable in BOTH observations",
+    "3": "`expected` was identical before and after",
+    "5": "`p` did not change at all — the update did NOT act on a scope it did not target",
+    "6": "no entry moved downward; no reversion was observed in this interval",
+    "7": "no entry is above `expected`",
+    "8": "`u` moved to an exactly-identical `expected`, not to an equal-precedence variant",
+    "9": "`p` is still below `expected`, so containment is not established for both",
+    "11": "`u` did not merely advance — it ARRIVED at `expected`"
+  },
+  "pending": [
+    "Table B row 4 — THE PERSISTENCE INTERVAL HAS NOT ELAPSED. Containment is established for the",
+    "moment the command ran; nothing here shows the entry STAYS advanced. The original defect was",
+    "stale entries SURVIVING a rewrite, so an immediate re-read cannot settle it. Re-observe after the",
+    "interval and record whether `u` is still 2.8.3."
+  ],
+  "rootCause": {
+    "status": "OPEN",
+    "note": [
+      "RECOVERY IS NOT ROOT CAUSE. A successful advance proves only that a user-scope update repairs",
+      "CURRENT state and that nothing reverted it immediately. It does not explain how stale entries",
+      "survived earlier rewrites. COREDEV-2801 stays open with the M6 detector as its instrument —",
+      "which is what makes a future reversion observable rather than merely reported."
+    ]
+  },
+  "incidentalFinding": [
+    "The `project`-scope entry remains at 2.7.0 and its `lastUpdated` moved during this session while",
+    "its version did not, so project scope is being touched without being advanced. That scope is the",
+    "one a session in this repository actually loads, so the drift the detector reports is still live",
+    "here. Updating it is a separate action, deliberately not taken as part of a user-scope experiment."
+  ]
+}

@@ -9,7 +9,7 @@
 # an arbitrary file, plus the destructive cleanup tool with `--apply` (deep review, P1).
 #
 # This script is the exact entrypoint that replaces both for the audit path. It hard-codes the safe
-# flags — `-s read-only` and `model_reasoning_effort=xhigh` cannot be overridden by a caller — and
+# flags — `-s read-only` and `model_reasoning_effort=ultra` cannot be overridden by a caller — and
 # ALLOCATES its own output rather than accepting one, so the grant cannot be used to write elsewhere.
 #
 # Usage:
@@ -22,7 +22,10 @@
 # Prints the audit transcript path on stdout. Exit: pty-capture's status (codex's), or 1 on bad input.
 set -uo pipefail
 
-die() { printf 'codex audit: %s\n' "$1" >&2; exit 1; }
+die() {
+	printf 'codex audit: %s\n' "$1" >&2
+	exit 1
+}
 
 [ "$#" -ge 1 ] || die "name the reviewer slash-command to run, e.g. /security-reviewer"
 
@@ -31,8 +34,8 @@ shift
 # An allowlist, not a pattern: these are the audit personas `codex-review` documents. A free-form
 # prompt here would put arbitrary text into the codex invocation this grant pre-approves.
 case "$REVIEWER" in
-    /security-reviewer|/concurrency-reviewer|/ux-perf-reviewer|/accessibility-auditor|/prompt-review) ;;
-    *) die "unknown reviewer $REVIEWER — allowed: /security-reviewer /concurrency-reviewer /ux-perf-reviewer /accessibility-auditor /prompt-review" ;;
+/security-reviewer | /concurrency-reviewer | /ux-perf-reviewer | /accessibility-auditor | /prompt-review) ;;
+*) die "unknown reviewer $REVIEWER — allowed: /security-reviewer /concurrency-reviewer /ux-perf-reviewer /accessibility-auditor /prompt-review" ;;
 esac
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
@@ -77,9 +80,9 @@ AUDIT_OUT="$(mktemp "${TMPDIR:-/tmp}/codex-audit.XXXXXX")" || die "could not all
 CONTAINED=""
 SNAP_DIR=""
 if [ "$#" -gt 0 ]; then
-    SNAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-audit-src.XXXXXX")" || die "could not allocate a snapshot dir"
-    CONTAINED="$(python3 "${SCRIPT_DIR}/snapshot-operands.py" --tool "codex audit" --dest "$SNAP_DIR" -- "$@")" \
-        || die "refusing to audit: an operand is not an in-repo file (see the message above)"
+	SNAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-audit-src.XXXXXX")" || die "could not allocate a snapshot dir"
+	CONTAINED="$(python3 "${SCRIPT_DIR}/snapshot-operands.py" --tool "codex audit" --dest "$SNAP_DIR" -- "$@")" ||
+		die "refusing to audit: an operand is not an in-repo file (see the message above)"
 fi
 cleanup() { [ -n "$SNAP_DIR" ] && rm -rf "$SNAP_DIR"; }
 trap cleanup EXIT
@@ -89,17 +92,42 @@ trap cleanup EXIT
 # characters, which is also what stops a crafted filename forging an extra operand.
 PROMPT="$REVIEWER"
 if [ -n "$CONTAINED" ]; then
-    PROMPT="$(printf '%s\n%s' "$REVIEWER" "$CONTAINED")"
+	PROMPT="$(printf '%s\n%s' "$REVIEWER" "$CONTAINED")"
 fi
 
 # The last thing before launch: the snapshots must still be the bytes that were validated.
 if [ -n "$SNAP_DIR" ]; then
-    python3 "${SCRIPT_DIR}/snapshot-operands.py" --tool "codex audit" --dest "$SNAP_DIR" --verify \
-        || die "refusing to audit: a snapshot changed after it was taken"
+	python3 "${SCRIPT_DIR}/snapshot-operands.py" --tool "codex audit" --dest "$SNAP_DIR" --verify ||
+		die "refusing to audit: a snapshot changed after it was taken"
 fi
+
+# THE REASONING TIER, AND A GUARD THE CLI DOES NOT PROVIDE. Measured on codex-cli 0.153.4:
+# `-c model_reasoning_effort=definitely-not-valid` is echoed back in the banner and the run proceeds
+# at the backend default — no error, no warning. A stale or mistyped tier is therefore a SILENT
+# downgrade of the gate, which is exactly the failure that cost this repo a review round when the
+# 5.6 upgrade reset the config to `low`.
+#
+# The ladder is read from the shipped binary's own enum, which serialises it in ascending order:
+#   minimal < low < medium < high < xhigh < max < ultra
+# `ultra` is the ceiling. `xhigh`, which this wrapper used to pass, is fifth of seven.
+#
+# NOT caller-overridable, deliberately — this file's whole contract is that the tier and `-s
+# read-only` cannot be weakened from outside. The case below guards against an editing typo here,
+# not against a caller.
+CODEX_EFFORT=ultra
+case "${CODEX_EFFORT}" in
+minimal | low | medium | high | xhigh | max | ultra) ;;
+*)
+	echo "unknown codex reasoning effort '${CODEX_EFFORT}' — the CLI accepts it silently and runs at its default" >&2
+	exit 2
+	;;
+esac
 
 printf '%s\n' "$AUDIT_OUT"
 # `exec` would drop the EXIT trap that removes the snapshot dir, so run-and-propagate instead.
-python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 1200 "$AUDIT_OUT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$PROMPT"
+# 2400s, RAISED WITH THE TIER. `xhigh` ran to ~12 min against a 1200s cap; `ultra` is two tiers
+# above it and will run longer. Exit 124 here means the WRAPPER budget is short — it is never a
+# reason to drop the tier. This figure is provisional until a full plan review is timed at ultra.
+python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 2400 "$AUDIT_OUT" -- \
+	codex exec -c "model_reasoning_effort=${CODEX_EFFORT}" -s read-only "$PROMPT"
 exit $?

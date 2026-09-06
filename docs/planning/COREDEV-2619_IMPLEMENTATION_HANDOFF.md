@@ -33,12 +33,12 @@ Decide there separately rather than by precedent.
 §7's ten steps are the buildable-alone contract. Three were **not** buildable and now are — this was
 the single most valuable outcome of the late rounds:
 
-| step | state |
-|---|---|
-| `S-INVENTORY` | **Now buildable.** Carries the closed frozen manifest with per-file counts. The locked premise is derivable rather than asserted: `5+5+5+3+2+1 = 21` rewrites, `4+1+1+1+1+1+1 = 10` quote-keeps, **31 sites across 13 files**. |
-| `S-ALLOC` | Buildable since round 52 (run-ID construction pinned: lowercase hex of ≥16 CSPRNG bytes, encoding only). |
-| `S-RELEASE` | **Now buildable.** Carries the closed 39-entry leak manifest with expected object types. |
-| the other seven | Audited against the buildable-alone bar in rounds 80–81; no further failures found. |
+| step            | state                                                                                                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `S-INVENTORY`   | **Now buildable.** Carries the closed frozen manifest with per-file counts. The locked premise is derivable rather than asserted: `5+5+5+3+2+1 = 21` rewrites, `4+1+1+1+1+1+1 = 10` quote-keeps, **31 sites across 13 files**. |
+| `S-ALLOC`       | Buildable since round 52 (run-ID construction pinned: lowercase hex of ≥16 CSPRNG bytes, encoding only).                                                                                                                       |
+| `S-RELEASE`     | **Now buildable.** Carries the closed 39-entry leak manifest with expected object types.                                                                                                                                       |
+| the other seven | Audited against the buildable-alone bar in rounds 80–81; no further failures found.                                                                                                                                            |
 
 **The one externally verified artifact.** The `S-RELEASE` leak manifest was checked **set-equal
 against the real filesystem** — 39 files in the plan, 39 on disk, nothing in either direction. It is
@@ -74,20 +74,20 @@ These are unresolved at freeze. None blocks starting; each should be settled by 
 by another review round.
 
 - **Caller-scan exemption manifest.** Identity is `(repo-relative path, FINAL physical-line number,
-  SHA-256(line payload))`, bound **only after every implementation, test, doc, inventory and caller
+SHA-256(line payload))`, bound **only after every implementation, test, doc, inventory and caller
   edit is final**. It is **deliberately not shift-stable** — any later shift or move must fail and
   demand an explicit reviewed update. **Generate it last.** Do not re-propose a shift-stable identity
   without addressing the `hooks/hooks.json:121`/`:133` collision (byte-identical candidates, identical
   neighbours — a content-only identity is not injective on this tree).
 - **`M5.15b`'s mutations must regenerate the manifest per mutation.** Round 84, `xhigh`, High — and a
   direct consequence of the round-83 shift-sensitive identity. The deletion, relocation and joined-line
-  mutations each shift *other* exempt candidates, so an unchanged manifest fails on a **manifest
+  mutations each shift _other_ exempt candidates, so an unchanged manifest fails on a **manifest
   mismatch before destination validation is even reached**. The mutation then passes for the wrong
   reason. **When implementing `M5.15b`, rebuild the exemption manifest for each mutated tree** so the
   assertion discriminates the thing it names. Verified as real on the frozen tree, not hypothetical.
 - **Stale round metadata in the plan header** (`:3`, `:10` say round 82). Round 84, `max`, Low.
   Documentation only — `max` states explicitly it does not affect implementation.
-- Anything `xhigh` raised as a *note* while approving rounds 78–80.
+- Anything `xhigh` raised as a _note_ while approving rounds 78–80.
 
 **Round 84 result, for the record:** the arms **inverted** — `max` returned `APPROVE_WITH_NOTES` with
 only the Low above, while `xhigh` returned `REQUEST_CHANGES`. Each arm has now approved at least once
@@ -100,21 +100,26 @@ gate rule "both arms at one digest" was demanding, not that the plan is unsound.
 
 All outside the worktree, in `~/.claude/review-transcripts/`:
 
-| file | purpose |
-|---|---|
-| `run-2619-dual.sh` | both codex tiers concurrently on one prompt; gate condition evaluated in-script |
-| `build-round-prompts.py` | one prompt for both arms; **derives the §6.1 invariant from the document** rather than asserting it |
-| `build-apply-prompt.py` | union of both arms' remediations, digest frozen automatically |
-| `isolated-kimi-review.sh` | Kimi K3 behind a disposable-worktree harness (K3 has **no sandbox flag**) |
-| `chk-2619-60.py` / `chk-2619-61.py` | §6.0 canonical-token and §6.1 cell/row invariants |
-| `remediation-section.md` | canonical remediation block, appended fresh each round so it cannot drift |
+| file                                | purpose                                                                                             |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `run-2619-dual.sh`                  | both codex tiers concurrently on one prompt; gate condition evaluated in-script                     |
+| `build-round-prompts.py`            | one prompt for both arms; **derives the §6.1 invariant from the document** rather than asserting it |
+| `build-apply-prompt.py`             | union of both arms' remediations, digest frozen automatically                                       |
+| `isolated-kimi-review.sh`           | Kimi K3 behind a disposable-worktree harness (K3 has **no sandbox flag**)                           |
+| `chk-2619-60.py` / `chk-2619-61.py` | §6.0 canonical-token and §6.1 cell/row invariants                                                   |
+| `remediation-section.md`            | canonical remediation block, appended fresh each round so it cannot drift                           |
 
 ---
 
 ## 6. Hard-won constraints — violating these has cost rounds
 
-- **`codex exec` must pass `-c model_reasoning_effort=max` explicitly.** The config default is
-  `xhigh` and has silently reset to `low` before. Every runner pins it.
+- **`codex exec` must pass `-c model_reasoning_effort=ultra` explicitly.** (Was `max`; updated
+  2026-09-05 when GPT-6 Astra made `ultra` the ceiling — the ladder is
+  `minimal < low < medium < high < xhigh < max < ultra`.) The config default has silently reset
+  to `low` before, and — measured on `codex-cli` 0.153.4 — **the CLI does not validate this
+  value at all**: an unknown tier is echoed in the banner and the run proceeds at the backend
+  default. So a stale token here is an invisible downgrade, not an error. Every runner pins it
+  and now asserts it against the seven known tiers.
 - **Never `pkill -f pty-capture.py`** — shared by codex, agy and Kimi. Match distinguishing args.
 - **Do not edit the worktree while a review round is in flight**, including tooling files.
 - **Transcripts must not live in `/tmp`** — macOS purged them once, and purged the checkers twice.

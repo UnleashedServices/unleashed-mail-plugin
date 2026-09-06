@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2801",
+  "milestone": "M6",
+  "experiment": "sessionstart-command-observation",
+  "ranAt": "2026-09-03T23:30:16+00:00",
+  "why": "COREDEV-2808. The detector's SessionStart behaviour was asserted from its source and from unit harnesses, and no observation of the wired command was committed. This records one.",
+  "entryPoint": {
+    "source": ".claude/settings.json",
+    "event": "SessionStart",
+    "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/detect-plugin-version-drift.sh\" \"${CLAUDE_PROJECT_DIR}\" --session-start"
+  },
+  "command": "printf '%s' \"$PAYLOAD\" | XDG_STATE_HOME=<isolated> bash scripts/detect-plugin-version-drift.sh \"$PWD\" --session-start",
+  "note": "XDG_STATE_HOME was pointed at an isolated directory so the dedup marker is observable and the run does not consume a live session's warning window. Nothing else was substituted: the script, the payload shape and the argument vector are the shipped ones.",
+  "stdinPayload": {
+    "session_id": "obs-COREDEV-2801",
+    "transcript_path": "/dev/null",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+  },
+  "observed": {
+    "run1": {
+      "commandExitCode": 0,
+      "stdout": {
+        "systemMessage": "unleashed-mail: project:unleashed-mail@npranson-unleashed-mail-plugin 2.8.3, user:unleashed-mail@npranson-unleashed-mail-plugin 2.8.3 is behind origin/main 2.8.16 — run `claude plugin update unleashed-mail` to pick up fixes already released"
+      },
+      "markerWritten": true
+    },
+    "run2": {
+      "commandExitCode": 0,
+      "stdoutBytes": 0,
+      "meaning": "same session, warm marker — the dedup suppressed the repeat"
+    }
+  },
+  "liveDriftAtObservation": {
+    "installedProjectScope": "2.8.3",
+    "installedUserScope": "2.8.3",
+    "originMain": "2.8.16",
+    "verdict": "BEHIND",
+    "note": "This is the recurring reversion the maintainer reported. The detector reports it correctly; the drift itself is tracked separately and is NOT fixed by this evidence."
+  },
+  "outcome": "PASS for the command, the protocol and the dedup. The host wiring is evidenced separately by the dispatcher-written markers above, not by the recorded run.",
+  "whatThisDoesAndDoesNotShow": {
+    "shows": "The command `.claude/settings.json` wires, run with a real SessionStart payload on stdin, emits a well-formed systemMessage envelope on the first call and zero bytes on the second in the same session — so the protocol and the per-session dedup both hold.",
+    "doesNotShow": "That Claude Code's hook DISPATCHER invokes it. The recorded run pipes the payload straight into the script, so it exercises the script and the argument vector, not the host wiring. The artifact previously described itself as an observation through the real entry point, which claimed more than it establishes (codex, PR #85).",
+    "wiringEvidenceInstead": "The dispatcher's side effect is the nearest independent evidence available: a `--session-start` run writes a dedup marker under ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/drift-warned/, this observation ran with XDG_STATE_HOME isolated, and no other caller passes that flag. The markers below therefore record some other `--session-start` invocation. That is an inference from the code paths, not a witnessed dispatcher call, and the first version of this file asserted the stronger claim without support (PR #85 adversarial pass)."
+  },
+  "dispatcherMarkersObserved": [
+    {
+      "name": "e1115b3196d39d63c2d3b1d611ec435c25931c2292d88f2e0aa5cc1eb6945e80.2956",
+      "mtime": "2026-09-02T20:59:46+00:00",
+      "note": "Provenance is INFERRED, not witnessed, and the inference is stated so it can be checked: the detector computes marker_dir only AFTER its `--session-start` mode check, so no other mode can write here; the repository's only other caller, the pre-commit hook, passes no such flag; and this observation ran with XDG_STATE_HOME pointed elsewhere. A marker in this directory therefore came from a `--session-start` invocation that was not this one. It is not proof that Claude Code's dispatcher made that invocation."
+    }
+  ]
+}

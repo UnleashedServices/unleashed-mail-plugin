@@ -33,41 +33,68 @@ set -uo pipefail
 # synthetic `.pyc` was planted. This is hygiene and defence-in-depth, not a fix for an observed void.
 export PYTHONDONTWRITEBYTECODE=1
 
-
 _sha256() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
 
-[ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <allocated-path> [timeout] [plan]" >&2; exit 1; }
+[ "$#" -ge 2 ] || {
+	echo "usage: $0 <prompt-file> <allocated-path> [timeout] [plan]" >&2
+	exit 1
+}
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "${SCRIPT_DIR}/tree-fingerprint.sh"
 PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 PROMPT_REL="$1"
 OUT="$2"
-TIMEOUT="${3:-1200}"   # matches capture-codex-review.sh; xhigh reasoning runs to ~12 min
+# THE REASONING TIER, AND A GUARD THE CLI DOES NOT PROVIDE. Measured on codex-cli 0.153.4:
+# `-c model_reasoning_effort=definitely-not-valid` is echoed back in the banner and the run proceeds
+# at the backend default — no error, no warning. A stale or mistyped tier is therefore a SILENT
+# downgrade of the gate, which is exactly the failure that cost this repo a review round when the
+# 5.6 upgrade reset the config to `low`.
+#
+# The ladder is read from the shipped binary's own enum, which serialises it in ascending order:
+#   minimal < low < medium < high < xhigh < max < ultra
+# `ultra` is the ceiling. `xhigh`, which this wrapper used to pass, is fifth of seven.
+#
+# NOT caller-overridable, deliberately — this file's whole contract is that the tier and `-s
+# read-only` cannot be weakened from outside. The case below guards against an editing typo here,
+# not against a caller.
+CODEX_EFFORT=ultra
+case "${CODEX_EFFORT}" in
+minimal | low | medium | high | xhigh | max | ultra) ;;
+*)
+	echo "unknown codex reasoning effort '${CODEX_EFFORT}' — the CLI accepts it silently and runs at its default" >&2
+	exit 2
+	;;
+esac
+
+TIMEOUT="${3:-2400}" # matches capture-codex-review.sh; raised with the tier (see CODEX_EFFORT)
 PLAN_REL="${4-}"
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="$PWD"
 CALLER_PWD="$PWD"
 cd "$REPO" || exit 1
-[ -r "$PROMPT_REL" ] || { echo "prompt not readable: $REPO/$PROMPT_REL" >&2; exit 1; }
+[ -r "$PROMPT_REL" ] || {
+	echo "prompt not readable: $REPO/$PROMPT_REL" >&2
+	exit 1
+}
 
 # Repo-relative identity of $1 against base $2, or non-zero. Same helper shape as the gemini harness:
 # an operand's meaning must not depend on where the caller stood. Only the PARENT is resolved
 # physically, so a symlinked leaf still reaches the readability check rather than being laundered.
 resolve_in_repo() {
-    local candidate="$1" base="$2" parent leaf
-    case "$candidate" in /*) ;; *) candidate="$base/$candidate" ;; esac
-    [ -e "$candidate" ] || return 1
-    parent="$(CDPATH='' cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)" || return 1
-    leaf="$parent/$(basename -- "$candidate")"
-    case "$leaf" in
-        "$REPO"/*) printf '%s\n' "${leaf#"$REPO"/}" ;;
-        *) return 1 ;;
-    esac
+	local candidate="$1" base="$2" parent leaf
+	case "$candidate" in /*) ;; *) candidate="$base/$candidate" ;; esac
+	[ -e "$candidate" ] || return 1
+	parent="$(CDPATH='' cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)" || return 1
+	leaf="$parent/$(basename -- "$candidate")"
+	case "$leaf" in
+	"$REPO"/*) printf '%s\n' "${leaf#"$REPO"/}" ;;
+	*) return 1 ;;
+	esac
 }
 
 SCR="$(mktemp -d)"
 cleanup() {
-    rm -rf "$SCR"
+	rm -rf "$SCR"
 }
 trap cleanup EXIT
 
@@ -78,51 +105,60 @@ trap cleanup EXIT
 # reach here, so the rule now lives in `tree-fingerprint.sh` and all three source it.
 BEFORE_STATUS="$(git status --porcelain)"
 if ! BEFORE="$(tree_fingerprint "$REPO")"; then
-    echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2
-    exit 3
+	echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2
+	exit 3
 fi
 
 SHA="$(git rev-parse HEAD)"
 # A PRIVATE clone, never a linked worktree — a linked worktree's `.git` points into the maintainer's
 # real repository and every git operation the reviewer runs lands there (see disposable_checkout in
 # tree-fingerprint.sh; adversarial verification, PR #67 pass 6).
-disposable_checkout "$REPO" "$SHA" "$SCR/tree" \
-    || { echo "could not create the private review checkout" >&2; exit 1; }
+disposable_checkout "$REPO" "$SHA" "$SCR/tree" ||
+	{
+		echo "could not create the private review checkout" >&2
+		exit 1
+	}
 TREE="$SCR/tree"
 
 # --- stage the bound plan into the checkout (shared, authenticated, no-follow) ----------------
 if [ -n "$PLAN_REL" ]; then
-    PLAN_OPERAND="$PLAN_REL"
-    FROM_CALLER="$(resolve_in_repo "$PLAN_OPERAND" "$CALLER_PWD")" || FROM_CALLER=""
-    FROM_ROOT="$(resolve_in_repo "$PLAN_OPERAND" "$REPO")" || FROM_ROOT=""
-    if [ -n "$FROM_CALLER" ] && [ -n "$FROM_ROOT" ] && [ "$FROM_CALLER" != "$FROM_ROOT" ]; then
-        echo "ambiguous plan operand: '$PLAN_OPERAND' names $FROM_CALLER from the caller's directory" >&2
-        echo "and $FROM_ROOT from the repository root — pass an absolute path" >&2
-        exit 1
-    fi
-    PLAN_REL="${FROM_CALLER:-$FROM_ROOT}"
-    [ -n "$PLAN_REL" ] || { echo "plan not readable, or outside the repository: $PLAN_OPERAND" >&2; exit 1; }
-    [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
-    PLAN_SNAPSHOT="${OUT}.planbytes"
-    # THE BOUND SNAPSHOT IS MANDATORY (PR #63 recheck, P1). `bind-prompt.py` writes `.planbytes` and
-    # `.plan` together, so absence is tampering, not legacy — and the fallback it used to take quietly
-    # re-read the LIVE, mutable plan. That made `rm` the cheapest attack on the strongest binding in the
-    # chain: bind plan A, delete the snapshot, point the live plan at B, and the reviewer read B while
-    # `review-verdict` (which requires `.plan` and never reads `.planbytes`) approved A.
-    #
-    # The requirement is UNCONDITIONAL. It was first scoped to captures carrying a `.launch` record, on
-    # the theory that a direct or legacy call had no binder run — but this harness only ever invokes
-    # `pty-capture --allocated`, which itself refuses a leaf whose `.launch` is absent or malformed. The
-    # scoped condition was therefore true in every run that could complete, and the live-plan fallback
-    # was unreachable: a weaker path nobody could take, waiting for an edit to re-expose it.
-    if [ ! -r "$PLAN_SNAPSHOT" ]; then
-        echo "GATE FAILED — no bound plan snapshot beside the transcript: ${PLAN_SNAPSHOT}" >&2
-        echo "(the binder writes it with .plan; absence means it was removed. Re-capture the round.)" >&2
-        exit 1
-    fi
-    EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
-        --tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" \
-        || exit 1
+	PLAN_OPERAND="$PLAN_REL"
+	FROM_CALLER="$(resolve_in_repo "$PLAN_OPERAND" "$CALLER_PWD")" || FROM_CALLER=""
+	FROM_ROOT="$(resolve_in_repo "$PLAN_OPERAND" "$REPO")" || FROM_ROOT=""
+	if [ -n "$FROM_CALLER" ] && [ -n "$FROM_ROOT" ] && [ "$FROM_CALLER" != "$FROM_ROOT" ]; then
+		echo "ambiguous plan operand: '$PLAN_OPERAND' names $FROM_CALLER from the caller's directory" >&2
+		echo "and $FROM_ROOT from the repository root — pass an absolute path" >&2
+		exit 1
+	fi
+	PLAN_REL="${FROM_CALLER:-$FROM_ROOT}"
+	[ -n "$PLAN_REL" ] || {
+		echo "plan not readable, or outside the repository: $PLAN_OPERAND" >&2
+		exit 1
+	}
+	[ -r "$PLAN_REL" ] || {
+		echo "plan not readable: $REPO/$PLAN_REL" >&2
+		exit 1
+	}
+	PLAN_SNAPSHOT="${OUT}.planbytes"
+	# THE BOUND SNAPSHOT IS MANDATORY (PR #63 recheck, P1). `bind-prompt.py` writes `.planbytes` and
+	# `.plan` together, so absence is tampering, not legacy — and the fallback it used to take quietly
+	# re-read the LIVE, mutable plan. That made `rm` the cheapest attack on the strongest binding in the
+	# chain: bind plan A, delete the snapshot, point the live plan at B, and the reviewer read B while
+	# `review-verdict` (which requires `.plan` and never reads `.planbytes`) approved A.
+	#
+	# The requirement is UNCONDITIONAL. It was first scoped to captures carrying a `.launch` record, on
+	# the theory that a direct or legacy call had no binder run — but this harness only ever invokes
+	# `pty-capture --allocated`, which itself refuses a leaf whose `.launch` is absent or malformed. The
+	# scoped condition was therefore true in every run that could complete, and the live-plan fallback
+	# was unreachable: a weaker path nobody could take, waiting for an edit to re-expose it.
+	if [ ! -r "$PLAN_SNAPSHOT" ]; then
+		echo "GATE FAILED — no bound plan snapshot beside the transcript: ${PLAN_SNAPSHOT}" >&2
+		echo "(the binder writes it with .plan; absence means it was removed. Re-capture the round.)" >&2
+		exit 1
+	fi
+	EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
+		--tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" ||
+		exit 1
 fi
 
 # --- authenticate the bound prompt, rewrite paths, stage it ------------------------------------
@@ -140,23 +176,24 @@ fi
 # `.promptsha256` together and `pty-capture --allocated` refuses a leaf without a `.launch`, so no run
 # that could complete ever needed the fallback.
 if [ ! -r "${OUT}.promptsha256" ]; then
-    echo "GATE FAILED — no prompt binding beside the transcript: ${OUT}.promptsha256" >&2
-    echo "(the binder writes it with .prompt; absence means it was removed. Re-capture the round.)" >&2
-    exit 1
+	echo "GATE FAILED — no prompt binding beside the transcript: ${OUT}.promptsha256" >&2
+	echo "(the binder writes it with .prompt; absence means it was removed. Re-capture the round.)" >&2
+	exit 1
 fi
 PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
-    --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
-    --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
+	--snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
+	--tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
 
 # The reserved leaf must be EMPTY (see the gemini harness for the shorter-second-write hazard).
 if [ -s "$OUT" ]; then
-    echo "refusing to reuse a non-empty reserved leaf: $OUT" >&2
-    exit 1
+	echo "refusing to reuse a non-empty reserved leaf: $OUT" >&2
+	exit 1
 fi
 # By CONTENT, and fail closed — not `git status`, which the reviewer controls, and not `|| true`
 # (see disposable_fingerprint; adversarial verification, PR #67 pass 6).
 if ! TREE_BASELINE="$(disposable_fingerprint "$TREE")"; then
-    echo "GATE FAILED — could not fingerprint the disposable checkout before the review" >&2; exit 1
+	echo "GATE FAILED — could not fingerprint the disposable checkout before the review" >&2
+	exit 1
 fi
 
 # --- run codex from INSIDE the checkout, so the plan it opens is the staged, authenticated one ---
@@ -179,34 +216,36 @@ fi
 # keeps its teeth; what was wrong is letting the artefact exist. Suppress it at the source rather
 # than excluding a path from the manifest — an exclusion is a blacklist a real mutation could hide
 # behind, and `scripts/__pycache__/` is exactly where it would hide.
-( cd "$TREE" && export PYTHONDONTWRITEBYTECODE=1 && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only -- "$(cat "$TREE/$PROMPT_REL")" ) >/dev/null
+(cd "$TREE" && export PYTHONDONTWRITEBYTECODE=1 && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
+	codex exec -c "model_reasoning_effort=${CODEX_EFFORT}" -s read-only -- "$(cat "$TREE/$PROMPT_REL")") >/dev/null
 RC=$?
 
 # --- basis check: the plan and prompt codex read must be unchanged; nothing new may appear -------
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
-    { echo "GATE FAILED — could not fingerprint the live checkout after the review (round"
-      echo "void). A reviewer that breaks the checkout must not pass as a clean tree."; } >&2
-    exit 3
+	{
+		echo "GATE FAILED — could not fingerprint the live checkout after the review (round"
+		echo "void). A reviewer that breaks the checkout must not pass as a clean tree."
+	} >&2
+	exit 3
 fi
 if [ "$BEFORE" != "$AFTER" ]; then
-    echo "GATE FAILED — the reviewer MUTATED the real working tree during the review:" >&2
-    # The first line of the fingerprint is the pre-run HEAD; `$'\n'`, not `\n` — inside a pattern `\n`
-    # is a literal `n` (measured: it stripped at the first `n` of the status text).
-    tree_fingerprint_report "$REPO" "$BEFORE_STATUS" "${BEFORE%%$'\n'*}"
-    exit 3
+	echo "GATE FAILED — the reviewer MUTATED the real working tree during the review:" >&2
+	# The first line of the fingerprint is the pre-run HEAD; `$'\n'`, not `\n` — inside a pattern `\n`
+	# is a literal `n` (measured: it stripped at the first `n` of the status text).
+	tree_fingerprint_report "$REPO" "$BEFORE_STATUS" "${BEFORE%%$'\n'*}"
+	exit 3
 fi
 if [ -n "$PLAN_REL" ]; then
-    ACTUAL_PLAN_SHA="$(_sha256 "$TREE/$PLAN_REL" 2>/dev/null)" || ACTUAL_PLAN_SHA="unreadable"
-    if [ "$ACTUAL_PLAN_SHA" != "$EXPECTED_PLAN_SHA" ]; then
-        echo "GATE FAILED — the STAGED PLAN was modified during the review (round void)" >&2
-        exit 3
-    fi
+	ACTUAL_PLAN_SHA="$(_sha256 "$TREE/$PLAN_REL" 2>/dev/null)" || ACTUAL_PLAN_SHA="unreadable"
+	if [ "$ACTUAL_PLAN_SHA" != "$EXPECTED_PLAN_SHA" ]; then
+		echo "GATE FAILED — the STAGED PLAN was modified during the review (round void)" >&2
+		exit 3
+	fi
 fi
 ACTUAL_PROMPT_SHA="$(_sha256 "$TREE/$PROMPT_REL" 2>/dev/null)" || ACTUAL_PROMPT_SHA="unreadable"
 if [ "$ACTUAL_PROMPT_SHA" != "$PROMPT_TREE_SHA" ]; then
-    echo "GATE FAILED — the assembled PROMPT was modified during the review (round void)" >&2
-    exit 3
+	echo "GATE FAILED — the assembled PROMPT was modified during the review (round void)" >&2
+	exit 3
 fi
 # A FAILED STATUS IS NOT A CLEAN TREE (PR #63 recheck, P2). `|| true` turned a `git status` failure
 # into an EMPTY string, and comparing empty against the non-empty baseline yields an empty `DIRTY` —
@@ -214,17 +253,21 @@ fi
 # detector meant to catch it and the round returned 0 with `VERDICT: APPROVE`. The basis files can be
 # byte-identical throughout, so nothing else notices. Any non-zero status here VOIDS the round.
 if ! TREE_AFTER="$(disposable_fingerprint "$TREE")"; then
-    { echo "GATE FAILED — could not re-read the disposable checkout after the review (round"
-      echo "void). A reviewer that breaks the checkout must not pass as a clean tree."; } >&2
-    exit 3
+	{
+		echo "GATE FAILED — could not re-read the disposable checkout after the review (round"
+		echo "void). A reviewer that breaks the checkout must not pass as a clean tree."
+	} >&2
+	exit 3
 fi
 if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
-    { echo "GATE FAILED — the reviewer left edits inside the disposable checkout (round void):"
-      printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' || :; } >&2
-    exit 3
+	{
+		echo "GATE FAILED — the reviewer left edits inside the disposable checkout (round void):"
+		printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' || :
+	} >&2
+	exit 3
 fi
 
-BYTES_OUT="$(wc -c 2>/dev/null < "$OUT" | tr -d ' ')"
+BYTES_OUT="$(wc -c 2>/dev/null <"$OUT" | tr -d ' ')"
 VERDICT="$(grep -aE '^VERDICT: (APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)[[:space:]]*$' "$OUT" 2>/dev/null | tail -1)"
 echo "EXIT=$RC BYTES=${BYTES_OUT:-0} TREE=clean VERDICT=${VERDICT:-<none — FAILED REVIEW>}"
 exit "$RC"

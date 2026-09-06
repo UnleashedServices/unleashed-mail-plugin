@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2780",
+  "milestone": "M5a",
+  "why": [
+    "M5a's FIRST step is to measure a representative upper envelope, because the only datum behind",
+    "revision 23's proposed 120 was a single 7-second one-file run — which says nothing about a cold",
+    "linter-cache bootstrap or a large staged changeset. This hook BLOCKS, so a false timeout changes",
+    "shipped behaviour.",
+    "The constant is the measured envelope PLUS EXPLICIT HEADROOM: the envelope is measured on one",
+    "developer Mac while the constant is asserted in CI across a Linux leg and different Darwin",
+    "hardware, so a value fitted tightly to this measurement would make cell 13's clean slow-path case",
+    "fail against a CORRECT implementation on a slower runner or a slower network."
+  ],
+  "measuredOn": {
+    "date": "2026-09-01",
+    "platform": "darwin/arm64",
+    "trunkVersion": "1.25.0",
+    "note": "fast Apple Silicon laptop on a fast network — the OPTIMISTIC end of the range"
+  },
+  "measurements": [
+    { "case": "warm cache, 1 staged file", "seconds": 1.9 },
+    { "case": "warm cache, 60 staged files", "seconds": 7.3 },
+    {
+      "case": "COLD cache bootstrap + 40 staged files",
+      "seconds": 30.8,
+      "note": "downloads every enabled linter; produced a 1.4 GB cache. This is the envelope driver."
+    }
+  ],
+  "envelopeSeconds": 30.8,
+  "headroomFactor": 5.8,
+  "constantSeconds": 180,
+  "constantRationale": [
+    "The normal path is 2-7 seconds warm; the cold bootstrap is a once-per-machine 30.8 seconds here.",
+    "180 gives ~6x headroom over the measured cold envelope, which covers a slower network, a slower",
+    "runner and a colder cache without the ceiling ever being reached on a healthy run. The timeout",
+    "exists to bound a HANG, not to police the normal path.",
+    "Revision 23's 120 was not wrong as a number — it was unjustified. This records the justification."
+  ],
+  "limits": [
+    "The cold measurement used an isolated TRUNK_CACHE rather than wiping the developer's real cache,",
+    "so it is a true cold bootstrap but on this machine's network only.",
+    "No Linux measurement was taken: the pre-commit hook does not run in CI, so the Linux leg only",
+    "asserts the CONSTANT, never the envelope."
+  ]
+}

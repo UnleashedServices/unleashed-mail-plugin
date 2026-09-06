@@ -11,4 +11,23 @@
 #     template-injection:
 #       ignore:
 #         - plugin-ci.yml:503:25   # matrix.os is workflow-controlled, not attacker input
-rules: {}
+rules:
+  # THE ONLY SUPPRESSION IN THIS FILE, AND IT IS A GENUINE CONTRACT CONFLICT.
+  #
+  # zizmor wants a `concurrency:` setting on these workflows. COREDEV-2780 §1's clause C0 PROHIBITS
+  # `concurrency` at workflow AND job level, for a correctness reason that outranks the hygiene one:
+  # a constant concurrency group makes GitHub CANCEL the in-flight run when a new one starts, and a
+  # CANCELLED REQUIRED CHECK IS NOT A PASSING ONE. A rapid second push would leave `trunk-check`
+  # cancelled or pending on the very SHA a merge is waiting on -- against a base with
+  # `bypass_actors: []`, that is an unmergeable branch with no override.
+  #
+  # `trunk-check` is the required context (or will be at M4); the canary and the harness carry the
+  # same prohibition so the invariant does not hold for only one of three shipped workflows.
+  #
+  # Scoped BY FILE, not by line:col. Line pins in this repository rot -- that is COREDEV-2798's whole
+  # thesis, and pinning a line here would silently stop suppressing the moment a comment is added.
+  concurrency-limits:
+    ignore:
+      - trunk-check.yml
+      - trunk-check-push.yml
+      - trunk-parity-harness.yml

@@ -1,0 +1,30 @@
+{
+  "$comment": [
+    "COREDEV-2801 §3b — the SessionStart surface of the plugin-version drift detector.",
+    "This is the surface that fires WHEN THE STALE CODE BEGINS RUNNING, which is the defect as it was",
+    "actually reported: a session bound to a version no source serves. The pre-commit surface catches",
+    "the other case, where hooks are disabled in the session but not in git.",
+    "MATCHERS ARE startup AND resume ONLY. SessionStart also fires on `clear` and `compact`, and a",
+    "warning at those moments is noise about a condition the human already saw at startup.",
+    "TIMEOUT 5, AS A LITERAL. The key alone would accept the 600-second default this contract exists to",
+    "override; the detector does two small JSON reads and one `git show`, so anything slower is broken",
+    "and failing fast is the right answer.",
+    "THE REPOSITORY ROOT IS PASSED EXPLICITLY. The detector never reads CLAUDE_PROJECT_DIR itself —",
+    "git does not set it for the other caller, and a value inherited from a different project would",
+    "silently compare against a foreign manifest."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/detect-plugin-version-drift.sh\" \"${CLAUDE_PROJECT_DIR}\" --session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
