@@ -1,0 +1,41 @@
+{
+  "action": {
+    "controlOutcome": "success",
+    "outcome": "failure"
+  },
+  "actionInputs": {
+    "canonical": "{\"arguments\":\"--filter=-markdown-link-check\",\"save-annotations\":true}",
+    "digest": "cc125ae649d85ba092aa5a92fe187df6d4d235e896a8b17a267b7f1e6a77cd36",
+    "uses": "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
+  },
+  "event": "pull_request",
+  "invocations": [
+    ["version"],
+    [
+      "check",
+      "--ci",
+      "--upstream",
+      "c17c73084aef2943bd1ffa1a1d0538fa7755a281",
+      "--github-commit",
+      "439f4cf87b405f9586ddf8fdb29c3937a6cbeb9f",
+      "--github-label",
+      "",
+      "--github-annotate-file=/tmp/tmp.H4DWUTZ6tp/annotations.bin",
+      "--filter=-markdown-link-check"
+    ]
+  ],
+  "ref": "89/merge",
+  "resolver": {
+    "raw": "upstream=c17c73084aef2943bd1ffa1a1d0538fa7755a281"
+  },
+  "schemaVersion": 1,
+  "sha": "241d67fdd17e2c74e42d17e15d73c5a5099351b5",
+  "tree": {
+    "controlPost": "7e32ebfa83c65c86a1f18e58828559a421672182ae3cc02083a97e4fb69449ba",
+    "fixture": "harness-fixtures/fixable.sh",
+    "fixturePost": "c2ff8748b2a77b4f4c8884d58625ac3ba042776632b185beb1e6bb73e69bab24",
+    "fixturePre": "c2ff8748b2a77b4f4c8884d58625ac3ba042776632b185beb1e6bb73e69bab24",
+    "post": "9acc1b1803ac26896306058395b82059d119f2c3a48524d2470b2caeed4a9fa9",
+    "pre": "9acc1b1803ac26896306058395b82059d119f2c3a48524d2470b2caeed4a9fa9"
+  }
+}

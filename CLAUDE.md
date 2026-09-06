@@ -107,6 +107,16 @@ Linux-friendly plugin repo — no Xcode).
 - **Context7 (mandatory)** for any library/framework/API/CLI lookup (Swift, SwiftUI, GRDB, MSAL, Gmail/Graph,
   Claude Code docs) — do not rely on training data.
 - **Parallel tool calls** for independent work.
+- **`harness-base` and `harness/**` are PERMANENT branches, not scratch refs.**
+  `.github/workflows/trunk-parity-harness.yml` fires on `pull_request: [harness-base]` and
+  `push: ['harness/**']`. Those are REAL events deliberately: the pinned Trunk action maps
+  `workflow_dispatch` to `check-mode=all` — the mode banned from `trunk-check` — and
+  `GITHUB_EVENT_NAME` cannot be overridden, so a dispatch-driven harness measures a mode the gate
+  never runs. Deleting these branches is a change, not tidying: they are needed again at every
+  Dependabot bump of the action pin, to re-derive the extension-point enumeration cells 1 and 5
+  depend on. **A branch-CREATING push measures nothing** — GitHub sends an all-zero `before` and
+  `resolve-trunk-range.sh` fails closed — so the push observation needs a second push to an
+  already-existing `harness/**` branch.
 
 ## Repository conventions
 
