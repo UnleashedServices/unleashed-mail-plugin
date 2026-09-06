@@ -6,11 +6,11 @@
   "observedAt": "2026-09-06T19:20:00Z",
   "why": [
     "A GREEN run cannot prove the gate is strict. With no findings, advisory and strict both",
-    "conclude success — they are indistinguishable. Only a RED run discriminates:",
+    "conclude success \u2014 they are indistinguishable. Only a RED run discriminates:",
     "  advisory  Trunk fails -> job failure -> WORKFLOW RUN SUCCEEDS",
     "  strict    Trunk fails -> job failure -> WORKFLOW RUN FAILS",
     "That is why M3 requires both per base, and why revision 1 of the plan was wrong to accept a",
-    "context observed only while failures were suppressed — one that had never been able to fail."
+    "context observed only while failures were suppressed \u2014 one that had never been able to fail."
   ],
   "strictGreen": {
     "pr": 91,
@@ -59,7 +59,7 @@
     ]
   },
   "howTheRedCommitWasMade": [
-    "The local pre-commit trunk gate BLOCKED the lint-failing commit, correctly — stopping new",
+    "The local pre-commit trunk gate BLOCKED the lint-failing commit, correctly \u2014 stopping new",
     "findings is its purpose. Producing red-run evidence therefore requires --no-verify, which is",
     "inherent to the observation rather than a shortcut, and is recorded here so it is not mistaken",
     "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
@@ -67,9 +67,56 @@
   ],
   "stillOpenForM3": [
     "The same pair on `alpha`. Both bases are required: Control targets main AND alpha, so a",
-    "context satisfiable on only one of them is COREDEV-2767 aimed at the other base.",
-    "Cell 10's annotation observation — a non-fork PR exercising --github-annotate-file and",
-    "producing a trunk-annotations artifact. The M2c harness run already produced one; whether that",
-    "satisfies cell 10 or whether it must come from trunk-check itself is unresolved here."
-  ]
+    "context satisfiable on only one of them is COREDEV-2767 aimed at the other base."
+  ],
+  "cell10Annotations": {
+    "resolves": "Cell 10's annotation observation, which the follow-up plan scheduled under M3 and which this artifact previously listed as unresolved.",
+    "contract": [
+      "The original contract requires three things together: a NON-FORK PR (so there is no 403),",
+      "exercise of the `--github-annotate-file` branch, and a produced `trunk-annotations` artifact.",
+      "It assigns that observation to the committed rollout artifact \u2014 an uncommitted tuple leaves",
+      "the cell skipping, which is why it is recorded here rather than only observed."
+    ],
+    "nonFork": {
+      "green": {
+        "pr": 91,
+        "headRef": "feat/COREDEV-2780-m3-strict-main"
+      },
+      "red": {
+        "pr": 92,
+        "headRef": "evidence/COREDEV-2780-m3-red-main"
+      },
+      "why": "Both heads are branches of this repository, not forks, so `contents: read` suffices and no 403 arises."
+    },
+    "annotateFileBranchExercised": {
+      "mechanism": "`save-annotations: true` in .github/workflows/trunk-check.yml",
+      "effect": "The action writes an annotation artifact INSTEAD of posting annotations, which is why `contents: read` stands (\u00a76.1 option (b)).",
+      "corroboration": "The M2c parity artifact records the resulting invocation carrying `--github-annotate-file=<tmpdir>/annotations.bin` on the pull_request event, and NOT on push."
+    },
+    "artifactProduced": {
+      "name": "trunk-annotations",
+      "green": {
+        "workflowRunId": 34060576498,
+        "artifactId": 9997331764,
+        "sizeBytes": 1468
+      },
+      "red": {
+        "workflowRunId": 34060585595,
+        "artifactId": 9997333826,
+        "sizeBytes": 1874
+      },
+      "note": "Produced by trunk-check ITSELF on both halves \u2014 not only by the M2c parity harness. That is what the artifact previously left unresolved."
+    },
+    "boundToTheProbe": {
+      "member": "annotations.bin",
+      "uncompressedBytes": 8825,
+      "names": [
+        "harness-fixtures/m3-red-probe.sh",
+        "shellcheck",
+        "SC2086",
+        "SC2250"
+      ],
+      "why": "A non-empty artifact is not by itself evidence: an empty or unrelated payload would also be 'produced'. Its content names the probe file and both linters, so the annotation payload is bound to the same diagnostic as the red conclusion."
+    }
+  }
 }
