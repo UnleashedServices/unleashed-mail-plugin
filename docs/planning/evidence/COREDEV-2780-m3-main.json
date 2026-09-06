@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2780",
+  "milestone": "M3",
+  "base": "main",
+  "observedAt": "2026-09-06T19:20:00Z",
+  "why": [
+    "A GREEN run cannot prove the gate is strict. With no findings, advisory and strict both",
+    "conclude success — they are indistinguishable. Only a RED run discriminates:",
+    "  advisory  Trunk fails -> job failure -> WORKFLOW RUN SUCCEEDS",
+    "  strict    Trunk fails -> job failure -> WORKFLOW RUN FAILS",
+    "That is why M3 requires both per base, and why revision 1 of the plan was wrong to accept a",
+    "context observed only while failures were suppressed — one that had never been able to fail."
+  ],
+  "strictGreen": {
+    "pr": 91,
+    "headSha": "e692e19",
+    "workflowPath": ".github/workflows/trunk-check.yml",
+    "workflowRunId": 34060576498,
+    "checkRunId": 101560257395,
+    "event": "pull_request",
+    "effectiveCheckName": "trunk-check",
+    "workflowRunConclusion": "success",
+    "checkRunConclusion": "success",
+    "appId": 15368,
+    "appSlug": "github-actions",
+    "note": [
+      "Meaningful as STRICT green only because the red observation below establishes that this",
+      "workflow version has no continue-on-error. PR #92 is branched from #91, so both ran the",
+      "same strict workflow via the pull_request merge ref."
+    ]
+  },
+  "deliberateRed": {
+    "pr": 92,
+    "headSha": "de88d32",
+    "workflowPath": ".github/workflows/trunk-check.yml",
+    "workflowRunId": 34060585595,
+    "checkRunId": 101560280950,
+    "event": "pull_request",
+    "effectiveCheckName": "trunk-check",
+    "workflowRunConclusion": "failure",
+    "checkRunConclusion": "failure",
+    "appId": 15368,
+    "appSlug": "github-actions",
+    "boundDiagnostic": {
+      "path": "harness-fixtures/m3-red-probe.sh",
+      "line": 13,
+      "column": 6,
+      "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+      "newIssues": 2,
+      "why": "A setup, checkout or network failure would also fail the run while Trunk never reached lint evaluation. This names the linter, file, line and column, so the failure is bound to lint rather than to infrastructure."
+    },
+    "note": [
+      "THE WORKFLOW RUN CONCLUSION IS THE WHOLE OBSERVATION. Under M2's advisory exemption this",
+      "would read `success` with the job still `failure`. It reads `failure`, so the job-scoped",
+      "continue-on-error is genuinely gone.",
+      "The PR is never merged: Control has an empty bypass_actors, so a lint-failing commit cannot",
+      "reach a protected base directly."
+    ]
+  },
+  "howTheRedCommitWasMade": [
+    "The local pre-commit trunk gate BLOCKED the lint-failing commit, correctly — stopping new",
+    "findings is its purpose. Producing red-run evidence therefore requires --no-verify, which is",
+    "inherent to the observation rather than a shortcut, and is recorded here so it is not mistaken",
+    "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
+    "change (no leaks), version-sync, plugin assembly, hooks manifest."
+  ],
+  "stillOpenForM3": [
+    "The same pair on `alpha`. Both bases are required: Control targets main AND alpha, so a",
+    "context satisfiable on only one of them is COREDEV-2767 aimed at the other base.",
+    "Cell 10's annotation observation — a non-fork PR exercising --github-annotate-file and",
+    "producing a trunk-annotations artifact. The M2c harness run already produced one; whether that",
+    "satisfies cell 10 or whether it must come from trunk-check itself is unresolved here."
+  ]
+}
