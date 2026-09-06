@@ -201,15 +201,37 @@ def _recorded_remote_halves():
     skipped and the stale evidence unchallenged — and once the context is required, that is a
     protected branch with no producer, or the gate running on the wrong branches.
 
-    Returns None only when the artifact is genuinely unusable, so a missing file still skips rather
-    than inventing a pass.
+    FAILS CLOSED, and the earlier fail-open is the reason. The artifact is a COMMITTED repository
+    file, so its absence or corruption is a repository defect, never an environment condition. In CI
+    `_resolve_target_set()` is ALWAYS None (no authenticated `gh`), so this recorded path is the ONLY
+    path there — returning None on a read error therefore disarmed C2 and C16 into silent skips at
+    exactly the point where they are load-bearing. Deleting the artifact must RED the suite, not
+    quiet it.
+
+    The live ruleset being unreadable is a genuine environment condition and still skips; that is
+    `_REMOTE_HALF_SKIP`, and it is a different question from this one. Conflating the two is what
+    let a missing artifact borrow the excuse belonging to a missing token.
     """
     try:
-        return json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))[
-            "c2AndCell16RemoteHalves"
-        ]
-    except (OSError, KeyError, ValueError):
-        return None
+        document = json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} is missing or unreadable. It is committed evidence that §7 "
+            "assigns the remote halves of C2 and cell 16; without it those cells cannot be "
+            "evaluated, and skipping them would accept the workflows unchecked."
+        ) from error
+    except ValueError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} does not parse as JSON, so the recorded remote halves cannot "
+            "be read. Corrupt evidence must fail, not skip."
+        ) from error
+    try:
+        return document["c2AndCell16RemoteHalves"]
+    except KeyError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} has no `c2AndCell16RemoteHalves` key. Renaming or dropping it "
+            "would otherwise silently disarm C2 and cell 16."
+        ) from error
 
 
 def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set:
@@ -222,9 +244,9 @@ def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set
     resolved = _resolve_target_set()
     if resolved is not None:
         return resolved
+    # No `is None` branch: the reader now fails closed, so a missing or corrupt artifact raises
+    # here instead of turning this cell into a skip.
     recorded = _recorded_remote_halves()
-    if recorded is None:
-        test.skipTest(_REMOTE_HALF_SKIP)
     test.assertEqual(
         set(recorded[recorded_key]),
         shipped_branches,
