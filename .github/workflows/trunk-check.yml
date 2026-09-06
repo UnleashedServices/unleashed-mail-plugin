@@ -122,11 +122,12 @@ jobs:
           # a rename in a future trunk release, then fails closed by default instead of walking
           # straight through.
           #
-          # KNOWN AND DELIBERATELY OUT OF SCOPE: `.trunk/configs/**` is allowed, and its contents are
-          # a real lever on this gate — a permissive `ruff.toml` weakens linting without tripping
-          # anything here, because cell 4 freezes `.trunk/trunk.yaml`'s lint block and nothing else.
-          # Closing that needs a frozen digest per config file; it is a separate change and is
-          # tracked, not silently tolerated.
+          # `.trunk/configs/**` is allowed here, and its contents are a real lever on this gate —
+          # a permissive `ruff.toml` weakens linting without tripping anything in THIS guard. That
+          # lever is no longer open: cell 4 freezes `.trunk/trunk.yaml` (which linters run) and
+          # cell 4b freezes a digest over the whole config tree (what they tolerate), including
+          # untracked files planted in the directory, since trunk reads those identically
+          # (COREDEV-2811).
           # THE FILESYSTEM IS THE ORACLE, NOT THE INDEX. A first draft asked `git ls-files`, which
           # sees only TRACKED paths — and the existing per-path cases immediately caught that an
           # untracked `.trunk/user.yaml` then walked straight through. Checkout materialises only

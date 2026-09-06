@@ -32,6 +32,12 @@ rule: every entry must FAIL; a passing entry means an obligation has been lost
 
 survivors:
   - id: survivor/workflow-dispatch-if-guard
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C1.single-event/add-workflow-dispatch
+      - C3.nothing-skips-or-masks/job-if
     found_in_round: r5
     survived_formulation: >-
       Revision 4 replaced the job-level `on:` with `if: github.event_name != 'workflow_dispatch'`, and
@@ -45,6 +51,13 @@ survivors:
     must_fail_because: C1 permits no `workflow_dispatch` trigger and C3 permits no job-level `if:`.
 
   - id: survivor/repository-supplied-launcher
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C6.no-repository-supplied-launcher/trunk-bin
+      - C6.no-repository-supplied-launcher/tools-trunk
+      - C6.no-repository-supplied-launcher/dot-trunk
     found_in_round: r8
     survived_formulation: >-
       The r7 allowlist constrained what the CALLER passes, and stopped there.
@@ -56,6 +69,11 @@ survivors:
     must_fail_because: C6's guard step, last before the action, fails on any of the six paths.
 
   - id: survivor/setup-ci-as-bare-executable
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C6.no-repository-supplied-launcher/setup-ci
     found_in_round: r9
     survived_formulation: >-
       The C6 fixture was specified as a no-op executable at `.trunk/setup-ci`.
@@ -67,6 +85,11 @@ survivors:
     must_fail_because: the fixture is a VALID composite action that exits green, so only C6 can red it.
 
   - id: survivor/env-trunk-path-workflow-scope
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C5.no-env-any-scope/workflow
     found_in_round: r10
     survived_formulation: Revision 10's C5 named only JOB and STEP scope.
     mutant: "workflow-level `env: {TRUNK_PATH: /bin/true}`"
@@ -76,6 +99,11 @@ survivors:
     must_fail_because: C5 forbids `env:` at ALL THREE scopes.
 
   - id: survivor/c6-guard-after-empty-diff-step
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C8.step-sequence-allowlist/guard-moved
     found_in_round: r10
     survived_formulation: >-
       C6 required its guard IMMEDIATELY before the action while C8 placed the empty-diff guard between
@@ -89,6 +117,11 @@ survivors:
       C6's guard is LAST before the action, and C8 freezes each permitted run body by its own digest.
 
   - id: survivor/github-path-write
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C8.run-bodies-frozen/github-path
     found_in_round: r11
     survived_formulation: >-
       C8 PROHIBITED writing to `$GITHUB_PATH` and mutated it NOWHERE for two revisions.
@@ -100,6 +133,11 @@ survivors:
     must_fail_because: C8 carries a dedicated `$GITHUB_PATH` case per run step, not a generic byte edit.
 
   - id: survivor/if-false-on-a-guard-step
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C3.nothing-skips-or-masks/job-if
     found_in_round: r12
     survived_formulation: >-
       Revision 12's C3 named only the JOB and the TRUNK STEP.
@@ -110,6 +148,11 @@ survivors:
     must_fail_because: C3 forbids `if:` on the job and on ANY of the five steps.
 
   - id: survivor/checkout-filter-input
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C8.checkout-inputs-allowlist/filter
     found_in_round: r12
     survived_formulation: >-
       `filter` was NAMED in the checkout-input prose and never mutated.
@@ -120,6 +163,11 @@ survivors:
     must_fail_because: C8's checkout-input allowlist admits only fetch-depth, lfs and persist-credentials.
 
   - id: survivor/post-annotations-false
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C4.save-annotations-required/false
     found_in_round: r19
     survived_formulation: >-
       The blacklist wording said `post-annotations` must be "absent or false", while cell 11 treated
@@ -131,6 +179,11 @@ survivors:
     must_fail_because: C4 is an allowlist and admits no unlisted key, valued or not.
 
   - id: survivor/timeout-minutes-360
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C3.job-mapping-allowlist/arbitrary-key
     found_in_round: r21
     survived_formulation: >-
       Cell 15 required only that `timeout-minutes` EXIST.
@@ -141,6 +194,12 @@ survivors:
     must_fail_because: C3 pins the concrete value 15, asserted and mutated as an operand.
 
   - id: survivor/job-level-permissions-write-all
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C3.permissions-pinned-at-job/write-all
+      - C0.permissions-pinned-at-root/write-all
     found_in_round: r25
     survived_formulation: >-
       Revision 24 pinned `permissions` BY VALUE at the root and left the key unconstrained at job scope.
@@ -152,6 +211,11 @@ survivors:
     must_fail_because: C3 pins the value at job scope as C0 does at the root.
 
   - id: survivor/cross-event-range-substitution
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C1.single-event/add-push
     found_in_round: r20
     survived_formulation: >-
       One workflow emitted the SAME `trunk-check` context for `pull_request` and `push`.
@@ -165,6 +229,11 @@ survivors:
       deliberately unrequired context named `trunk-check-push`.
 
   - id: survivor/exclude-blind-target-resolver
+    # NO CONTRACT CLAUSE BACKS THIS ONE: its protection is an executing TEST FAMILY (every
+    # form on both sides), not a clause, so the binding check has no obligation to resolve.
+    # Declared out loud because an absence meaning "deliberately different" and an absence
+    # meaning "nobody ever bound it" look identical, and only one of them is fine.
+    backed_by: test-family
     found_in_round: r35
     survived_formulation: >-
       Revision 32's resolution rule expanded `conditions.ref_name.include` and ignored `exclude`.
@@ -178,6 +247,10 @@ survivors:
       resolve() is include MINUS exclude, and the (side, form) family runs every form on BOTH sides.
 
   - id: survivor/two-currently-correct-private-resolvers
+    # NOTHING EXECUTES HERE BY CONSTRUCTION: the shape was REMOVED rather than asserted
+    # about, so the construct is inexpressible and there is no mutant left to run. That is
+    # the strongest form a survivor can take, and precisely why it must be stated.
+    backed_by: shape-removed
     found_in_round: r38
     survived_formulation: >-
       Cell 15 asserted that a spy on `resolve()` was REACHED from both entry points, then that an

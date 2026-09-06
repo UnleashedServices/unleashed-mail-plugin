@@ -37,15 +37,18 @@ TICKET="${1-}"
 ROUND="${2-}"
 PROMPT="${3-}"
 PLAN="${4-}"
-TIMEOUT="${5-1200}"   # xhigh reasoning survives this; 600 SIGTERMs it mid-review
+TIMEOUT="${5-2400}" # ultra runs longer than xhigh's ~12 min; 600 SIGTERMs it mid-review
 
-die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
+die() {
+	printf 'codex review: %s\n' "$1" >&2
+	exit 1
+}
 
 # Operands first, and BEFORE allocation: a round that cannot run must not consume a reserved leaf.
 [ -n "$TICKET" ] || die "bind TICKET to the --ticket operand"
-[ -n "$ROUND" ]  || die "bind ROUND to the --round operand"
+[ -n "$ROUND" ] || die "bind ROUND to the --round operand"
 [ -n "$PROMPT" ] || die "name the PER-ROUND prompt file — there is no shared default"
-[ -n "$PLAN" ]   || die "name the plan this round reviews — the transcript is bound to it"
+[ -n "$PLAN" ] || die "name the plan this round reviews — the transcript is bound to it"
 # Parity with the other arm, which has always checked this (`isolated-agy-review.sh`). `$(cat …)` on a
 # missing file expands EMPTY, so without this codex would be handed an empty prompt and would review
 # nothing — and whatever it said about nothing would be parsed for a verdict.
@@ -65,9 +68,9 @@ die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
 # fast-fail on the obviously-oversized case; the AUTHORITATIVE check is `--max-bytes` in
 # `isolated-codex-review.sh`, which measures the assembled bytes. A prompt that passes here and
 # fails there costs one allocation — that is the residual, not an `execvp` dying with E2BIG.
-PROMPT_BYTES="$(wc -c < "$PROMPT" | tr -d ' ')"
+PROMPT_BYTES="$(wc -c <"$PROMPT" | tr -d ' ')"
 if [ "$PROMPT_BYTES" -gt 122880 ]; then
-    die "prompt is ${PROMPT_BYTES} bytes; codex receives it as ONE argument and Linux caps that at
+	die "prompt is ${PROMPT_BYTES} bytes; codex receives it as ONE argument and Linux caps that at
 128 KiB, so the reviewer would fail to start after allocating a leaf. Shorten the prompt or point it
 at files instead of inlining them: $PROMPT"
 fi
@@ -84,14 +87,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 # satisfy both halves of the gate. Being compiled into a committed script rather than written in a
 # skill body is strictly stronger than where it used to live.
 if TRANSCRIPT_MARKER="$(bash "${SCRIPT_DIR}/allocate-transcript.sh" "$TICKET" "$ROUND" codex)"; then
-    :
+	:
 else
-    status="$?"
-    exit "$status"
+	status="$?"
+	exit "$status"
 fi
 case "$TRANSCRIPT_MARKER" in
-    UNLEASHED_TRANSCRIPT=?*) ;;
-    *) die "allocator returned an invalid marker" ;;
+UNLEASHED_TRANSCRIPT=?*) ;;
+*) die "allocator returned an invalid marker" ;;
 esac
 CODEX_TRANSCRIPT="${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}"
 printf '%s\n' "$TRANSCRIPT_MARKER"
@@ -102,8 +105,8 @@ printf '%s\n' "$TRANSCRIPT_MARKER"
 # (deep review, P1). It writes both sidecars with O_NOFOLLOW|O_EXCL, which the shell redirect it
 # replaced did not. A failed binding aborts here, before the reviewer launches.
 python3 "${SCRIPT_DIR}/bind-prompt.py" \
-    --prompt "$PROMPT" --transcript "${CODEX_TRANSCRIPT}" --plan "$PLAN" \
-    || die "refusing to review: the prompt/plan binding could not be established"
+	--prompt "$PROMPT" --transcript "${CODEX_TRANSCRIPT}" --plan "$PLAN" ||
+	die "refusing to review: the prompt/plan binding could not be established"
 #
 # ISOLATE LIKE THE GEMINI ARM (PR #63 recheck, P1). codex used to run `-s read-only` in the LIVE tree,
 # so the plan file it opened was the mutable working-tree one: an A->B->A swap during codex's read
@@ -113,4 +116,4 @@ python3 "${SCRIPT_DIR}/bind-prompt.py" \
 # `stage-bound-plan.py` — the same isolation and the same staging the gemini arm uses, so the two arms
 # cannot drift again. It feeds the prompt SNAPSHOT (the O_EXCL `.prompt`), never the caller's path.
 exec bash "${SCRIPT_DIR}/isolated-codex-review.sh" \
-    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"
+	"${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"

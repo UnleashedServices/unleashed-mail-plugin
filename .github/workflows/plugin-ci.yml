@@ -98,6 +98,44 @@ jobs:
           python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
             python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
 
+      # The 3.9-floor cell interrogates the PINNED mypy, and it used to skipTest when the binary
+      # was absent — which is every run of this job, since nothing here materialises trunk's tools.
+      # The only guard on the mypy half of that floor therefore gated nothing exactly where it was
+      # supposed to gate (codex, PR #85). The cell now FAILS rather than skips when CI is set, so
+      # the pin has to be present: installed here, and READ FROM .trunk/trunk.yaml so the two
+      # cannot drift apart.
+      - name: Install the pinned mypy (the 3.9-floor cell refuses to skip on CI)
+        id: pinned_mypy
+        # A VENV, NOT A pip INSTALL INTO THE INTERPRETER. `darwin-suite` has no setup-python
+        # step, so its `python3` is the runner's system interpreter: PEP 668 externally-managed,
+        # which REFUSES a plain `pip install` outright. That is exactly why the PyYAML step above
+        # carries `--break-system-packages` (codex, PR #85). That flag is still the wrong
+        # instrument here: PyYAML only has to be IMPORTABLE, whereas the 3.9-floor cell resolves
+        # the mypy BINARY through `shutil.which`, and a fallback install can land the console
+        # script in a directory that is not on PATH. A venv is externally-managed on no platform
+        # and puts the script at a path we compute, so both halves stop depending on the runner.
+        run: |
+          set -euo pipefail
+          version="$(python3 -c '
+          import yaml
+          config = yaml.safe_load(open(".trunk/trunk.yaml", encoding="utf-8"))
+          print(next(str(e).partition("@")[2] for e in config["lint"]["enabled"] if str(e).startswith("mypy@")))
+          ')"
+          echo "pinned mypy: ${version}"
+          python3 -m venv "${RUNNER_TEMP}/pinned-mypy"
+          "${RUNNER_TEMP}/pinned-mypy/bin/python" -m pip install --disable-pip-version-check "mypy==${version}"
+          # PUBLISH THE BINARY, NEVER THE INTERPRETER. `$GITHUB_PATH` PREPENDS, so putting the
+          # venv's whole `bin` on it makes the NEXT step's `python3` the venv's python — which has
+          # mypy and NOT PyYAML, while every module in the suite opens with `import yaml`. Both
+          # jobs would have gone red; reproduced as ModuleNotFoundError (codex, PR #85). A
+          # directory holding only a `mypy` symlink gives `shutil.which` the pin and leaves the
+          # suite's interpreter exactly as the steps above set it up.
+          mkdir -p "${RUNNER_TEMP}/pinned-mypy-bin"
+          ln -sf "${RUNNER_TEMP}/pinned-mypy/bin/mypy" "${RUNNER_TEMP}/pinned-mypy-bin/mypy"
+          # $GITHUB_PATH takes effect in LATER steps, so verify through the absolute path here.
+          "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
+          echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
+
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
@@ -621,6 +659,44 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
             python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
+
+      # The 3.9-floor cell interrogates the PINNED mypy, and it used to skipTest when the binary
+      # was absent — which is every run of this job, since nothing here materialises trunk's tools.
+      # The only guard on the mypy half of that floor therefore gated nothing exactly where it was
+      # supposed to gate (codex, PR #85). The cell now FAILS rather than skips when CI is set, so
+      # the pin has to be present: installed here, and READ FROM .trunk/trunk.yaml so the two
+      # cannot drift apart.
+      - name: Install the pinned mypy (the 3.9-floor cell refuses to skip on CI)
+        id: pinned_mypy
+        # A VENV, NOT A pip INSTALL INTO THE INTERPRETER. `darwin-suite` has no setup-python
+        # step, so its `python3` is the runner's system interpreter: PEP 668 externally-managed,
+        # which REFUSES a plain `pip install` outright. That is exactly why the PyYAML step above
+        # carries `--break-system-packages` (codex, PR #85). That flag is still the wrong
+        # instrument here: PyYAML only has to be IMPORTABLE, whereas the 3.9-floor cell resolves
+        # the mypy BINARY through `shutil.which`, and a fallback install can land the console
+        # script in a directory that is not on PATH. A venv is externally-managed on no platform
+        # and puts the script at a path we compute, so both halves stop depending on the runner.
+        run: |
+          set -euo pipefail
+          version="$(python3 -c '
+          import yaml
+          config = yaml.safe_load(open(".trunk/trunk.yaml", encoding="utf-8"))
+          print(next(str(e).partition("@")[2] for e in config["lint"]["enabled"] if str(e).startswith("mypy@")))
+          ')"
+          echo "pinned mypy: ${version}"
+          python3 -m venv "${RUNNER_TEMP}/pinned-mypy"
+          "${RUNNER_TEMP}/pinned-mypy/bin/python" -m pip install --disable-pip-version-check "mypy==${version}"
+          # PUBLISH THE BINARY, NEVER THE INTERPRETER. `$GITHUB_PATH` PREPENDS, so putting the
+          # venv's whole `bin` on it makes the NEXT step's `python3` the venv's python — which has
+          # mypy and NOT PyYAML, while every module in the suite opens with `import yaml`. Both
+          # jobs would have gone red; reproduced as ModuleNotFoundError (codex, PR #85). A
+          # directory holding only a `mypy` symlink gives `shutil.which` the pin and leaves the
+          # suite's interpreter exactly as the steps above set it up.
+          mkdir -p "${RUNNER_TEMP}/pinned-mypy-bin"
+          ln -sf "${RUNNER_TEMP}/pinned-mypy/bin/mypy" "${RUNNER_TEMP}/pinned-mypy-bin/mypy"
+          # $GITHUB_PATH takes effect in LATER steps, so verify through the absolute path here.
+          "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
+          echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
 
       - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
         run: python3 -m unittest discover -s scripts/tests -v
