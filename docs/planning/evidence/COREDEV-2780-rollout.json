@@ -378,25 +378,38 @@
     "dualBaseSatisfied": [
       "`basesRecorded` now equals `basesRequired`. Row 12 asks for DUAL-base provenance-bound check",
       "runs and both bases are recorded, each with a strict green and a deliberate red bound to a named",
-      "lint diagnostic.",
-      "THAT IS NOT THE SAME AS M3 BEING COMPLETE, and an earlier draft of this key wrongly implied it",
-      "was by saying the only remaining work was landing a PR. `stillOpenForM3` above lists what is",
-      "genuinely outstanding, and it is EVIDENCE, not just merges: a real PR-RETARGET observation and",
-      "cells 3(a)/3(b)'s clean-file and historically-dirty-file controls. Promoting the required context",
-      "before those are observed would certify range-resolution and backlog behaviour nobody has seen.",
-      "Landing PR #96 is additionally required, so alpha's CHECKED-IN workflow is strict rather than only",
-      "its merge ref. Discriminator, which prints line 49 while that is open and nothing once it lands:",
-      "  git show origin/alpha:.github/workflows/trunk-check.yml | grep -n continue-on-error"
+      "lint diagnostic. Both bases' checked-in workflows are strict \u2014 see `bothBasesCheckedInStrict`,",
+      "which carries a command rather than a claim.",
+      "THAT IS STILL NOT M3 COMPLETE. `stillOpenForM3` above lists what genuinely remains, and it is",
+      "EVIDENCE, not merges: a real PR-RETARGET observation and cells 3(a)/3(b)'s clean-file and",
+      "historically-dirty-file controls. Promoting the required context at M4 before those are observed",
+      "would certify range-resolution and backlog behaviour nobody has seen."
     ],
     "closedSinceLastRevision": [
       {
         "what": "The strict-green + deliberate-red pair on `alpha`.",
-        "closedBy": "This revision \u2014 see `alpha` above (PRs #96 and #97)."
+        "closedBy": "This artifact \u2014 see `alpha` above (PRs #96 and #97)."
       },
       {
-        "what": "Landing the `continue-on-error` removal on `main`.",
-        "closedBy": "PR #91, MERGED. `origin/main` now carries no job-scoped `continue-on-error`."
+        "what": "Removing `continue-on-error` on `main`.",
+        "closedBy": "PR #91, merged."
+      },
+      {
+        "what": "Removing `continue-on-error` on `alpha`.",
+        "closedBy": "PR #96, merged. Verify with the discriminator above rather than with this sentence."
       }
-    ]
+    ],
+    "bothBasesCheckedInStrict": {
+      "property": "Neither base's CHECKED-IN workflow carries a job-scoped `continue-on-error`.",
+      "discriminator": "git show origin/<base>:.github/workflows/trunk-check.yml | grep -c continue-on-error",
+      "expected": "0 for both `main` and `alpha`; any other value means that base is still advisory.",
+      "whyStatedThisWay": [
+        "Earlier revisions of this key stated PR STATE \u2014 'PR #91 is MERGEABLE but NOT MERGED',",
+        "'Landing PR #96 is additionally required'. Both went stale within hours of being written,",
+        "and one of them was written in the very commit that fixed the previous staleness. PR state",
+        "is mutable; the property is not. A reader runs the discriminator and learns the truth",
+        "rather than trusting a sentence that was true when it was typed."
+      ]
+    }
   }
 }
