@@ -177,6 +177,10 @@ jobs:
           curl -fsSL https://trunk.io/releases/trunk -o /tmp/real-trunk
           chmod u+x /tmp/real-trunk
           : > /tmp/argv.jsonl
+          # Truncated for the same reason argv.jsonl is: a log surviving from an earlier attempt
+          # would let the assembler read a diagnostic THIS run never emitted.
+          : > /tmp/primary.log
+          : > /tmp/control.log
 
       - name: trunk
         # ADDRESSABLE, because cell 5 requires the action's conclusion recorded SEPARATELY from the
@@ -187,6 +191,7 @@ jobs:
         env:
           PARITY_ARGV_FILE: /tmp/argv.jsonl
           PARITY_REAL_TRUNK: /tmp/real-trunk
+          PARITY_PRIMARY_LOG: /tmp/primary.log
         with:
           # THE ONE LEGITIMATE USE OF `trunk-path` — §1's C4 forbids it in the shipped workflows.
           trunk-path: scripts/ci/parity-recorder.sh
@@ -225,6 +230,10 @@ jobs:
         env:
           PARITY_ARGV_FILE: /tmp/argv-control.jsonl
           PARITY_REAL_TRUNK: /tmp/real-trunk
+          # DELIBERATELY NOT /tmp/primary.log. The control runs with `--fix` and `if: always()`; if it
+          # wrote to the primary's log the assembler could read the control's finding as the primary's,
+          # certifying exactly the world this field exists to exclude.
+          PARITY_PRIMARY_LOG: /tmp/control.log
         with:
           trunk-path: scripts/ci/parity-recorder.sh
           arguments: ${{ steps.inputs.outputs.arguments }} --fix
@@ -242,10 +251,30 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, pathlib
+          import json, os, pathlib, re
+          FIXTURE = "harness-fixtures/fixable.sh"
           def read(path, default=""):
               p = pathlib.Path(path)
               return p.read_text(encoding="utf-8").strip() if p.exists() else default
+
+          def primary_diagnostic():
+              """The FIXTURE's own `path:line:column` from the primary run's output, or None.
+
+              `action.outcome` is `failure` both when Trunk linted the fixture and found it
+              mis-indented AND when Trunk aborted after emitting its `check` argv while the
+              `if: always()` control still succeeded. Only the first world names the fixture with a
+              position, so that is what is recorded. Trunk colours its output, so ANSI is stripped
+              before matching; returning None rather than a placeholder keeps "absent" unforgeable.
+              """
+              text = re.sub(r"\x1b\[[0-9;]*m", "", read("/tmp/primary.log"))
+              found = re.search(re.escape(FIXTURE) + r":(\d+):(\d+)", text)
+              if found is None:
+                  return None
+              return {
+                  "path": FIXTURE,
+                  "line": int(found.group(1)),
+                  "column": int(found.group(2)),
+              }
           invocations = [json.loads(line) for line in
                          read("/tmp/argv.jsonl").splitlines() if line.strip()]
           event = os.environ["GITHUB_EVENT_NAME"]
@@ -259,7 +288,7 @@ jobs:
               "tree": {
                   "pre": read("/tmp/tree.pre"),
                   "post": read("/tmp/tree.post"),
-                  "fixture": "harness-fixtures/fixable.sh",
+                  "fixture": FIXTURE,
                   "fixturePre": read("/tmp/fixture.pre"),
                   "fixturePost": read("/tmp/fixture.post"),
                   "controlPost": read("/tmp/fixture.control"),
@@ -271,6 +300,7 @@ jobs:
               "action": {
                   "outcome": os.environ.get("PARITY_TRUNK_OUTCOME", ""),
                   "controlOutcome": os.environ.get("PARITY_CONTROL_OUTCOME", ""),
+                  "primaryDiagnostic": primary_diagnostic(),
               },
               "actionInputs": {
                   "canonical": os.environ.get("PARITY_INPUTS_CANONICAL", ""),
