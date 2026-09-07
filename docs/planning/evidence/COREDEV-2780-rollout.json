@@ -296,15 +296,6 @@
     ],
     "stillOpenForM3": [
       {
-        "what": "The same strict-green + deliberate-red pair on `alpha`.",
-        "why": "Both bases are required: Control targets main AND alpha, so a context satisfiable on only one of them is COREDEV-2767 aimed at the other base."
-      },
-      {
-        "what": "Landing the `continue-on-error` removal on `main` itself. PR #91 is MERGEABLE but NOT MERGED.",
-        "why": "`base` above names the branch this pair TARGETS, not a branch that is already strict. Both observations were made on pull_request merge refs carrying the strict workflow; `origin/main` still carries the job-scoped `continue-on-error: true`. Reading this artifact as `main is strict` is the benign half of an observation consistent with two worlds.",
-        "discriminator": "git show origin/main:.github/workflows/trunk-check.yml | grep -n continue-on-error \u2014 prints line 49 while this is open, and returns nothing once #91 has landed."
-      },
-      {
         "what": "A real PR-RETARGET observation. Follow-up plan M3: `Include a real RETARGET case`; original plan cell 2: `also from M3 \u2014 a real RETARGET case`.",
         "why": "The `types:` widening is a STATIC clause assertion; nothing yet observes that it works. It requires opening a PR against one base, letting `trunk-check` land, retargeting it to the other base, and asserting that the context satisfying the rule is a NEW run against the NEW base range rather than the earlier same-SHA result. Neither #91 nor #92 was ever retargeted, so the condition that actually breaks range resolution is unobserved."
       },
@@ -334,6 +325,7 @@
         "trunkStepName": "trunk",
         "trunkStepConclusion": "success",
         "appId": 15368,
+        "appSlug": "github-actions",
         "trunkAnnotationsArtifactId": 10024652854
       },
       "deliberateRed": {
@@ -350,6 +342,7 @@
         "trunkStepName": "trunk",
         "trunkStepConclusion": "failure",
         "appId": 15368,
+        "appSlug": "github-actions",
         "trunkAnnotationsArtifactId": 10024688366,
         "boundDiagnostic": {
           "path": "harness-fixtures/m3-red-probe-alpha.sh",
@@ -368,22 +361,42 @@
         "why": "Checked in the merge refs THEMSELVES rather than inferred from the PR description. Both observations ran a workflow with no job-scoped `continue-on-error`, which is what makes the red run's `failure` mean strict rather than advisory."
       },
       "theRoute": [
-        "`Control` protects main AND alpha with an empty bypass_actors, so a lint-failing commit",
-        "cannot be pushed to either. The red evidence therefore comes from a PR TARGETING alpha whose",
-        "head is deliberately red and is NEVER MERGED \u2014 the check runs on the PR head, so no broken",
-        "commit ever lands. Push-event red evidence would belong to the non-required canary instead.",
-        "PR #97 is never merged, BY INSTRUCTION: pre-M4 that is DISCIPLINE, not enforcement, because",
-        "`trunk-check` is not yet one of Control's five required contexts."
+        "The red evidence comes from a PR TARGETING alpha whose head is deliberately red and is NEVER",
+        "MERGED \u2014 the check runs on the PR head, so no broken commit ever lands. Push-event red evidence",
+        "would belong to the non-required canary instead.",
+        "WHY IT IS NEVER MERGED, STATED CORRECTLY. Pre-M4 this is DISCIPLINE, not enforcement.",
+        "`trunk-check` is NOT one of Control's five required contexts (validate, py39-smoke, secret-scan,",
+        "load-check, redactor-equivalence (ubuntu-latest)), so a commit failing only `trunk-check` can",
+        "still satisfy every rule the ruleset enforces. Control's empty bypass_actors guarantees only that",
+        "those five cannot be WAIVED; it cannot make a non-rule block anything. Its other rules, `deletion`",
+        "and `non_fast_forward`, do not stop a fast-forward either. So NO ruleset route is closed on this",
+        "SHA \u2014 the same conclusion the `main` record above reaches, and this key previously contradicted.",
+        "What holds PR #97 off `alpha` is the never-merge instruction plus the local pre-commit gate, which",
+        "is itself bypassable. M4 is what turns this into enforcement."
       ]
     },
     "dualBaseSatisfied": [
       "`basesRecorded` now equals `basesRequired`. Row 12 asks for DUAL-base provenance-bound check",
       "runs and both bases are recorded, each with a strict green and a deliberate red bound to a named",
       "lint diagnostic.",
-      "What remains for M3 is NOT evidence: PR #96 must LAND so alpha's checked-in workflow is strict,",
-      "not merely its merge ref. Discriminator, which prints line 49 while this is open and nothing once",
-      "#96 has landed:",
+      "THAT IS NOT THE SAME AS M3 BEING COMPLETE, and an earlier draft of this key wrongly implied it",
+      "was by saying the only remaining work was landing a PR. `stillOpenForM3` above lists what is",
+      "genuinely outstanding, and it is EVIDENCE, not just merges: a real PR-RETARGET observation and",
+      "cells 3(a)/3(b)'s clean-file and historically-dirty-file controls. Promoting the required context",
+      "before those are observed would certify range-resolution and backlog behaviour nobody has seen.",
+      "Landing PR #96 is additionally required, so alpha's CHECKED-IN workflow is strict rather than only",
+      "its merge ref. Discriminator, which prints line 49 while that is open and nothing once it lands:",
       "  git show origin/alpha:.github/workflows/trunk-check.yml | grep -n continue-on-error"
+    ],
+    "closedSinceLastRevision": [
+      {
+        "what": "The strict-green + deliberate-red pair on `alpha`.",
+        "closedBy": "This revision \u2014 see `alpha` above (PRs #96 and #97)."
+      },
+      {
+        "what": "Landing the `continue-on-error` removal on `main`.",
+        "closedBy": "PR #91, MERGED. `origin/main` now carries no job-scoped `continue-on-error`."
+      }
     ]
   }
 }
