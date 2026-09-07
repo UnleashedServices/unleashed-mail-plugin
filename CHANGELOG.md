@@ -13,6 +13,40 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.26] — 2026-09-07
+
+### Fixed
+
+- **`keychain-security` (COREDEV-2851): the skill documented only one of `KeychainManager`'s two
+  save paths, and an agent nearly changed credential code because of it.** Working from the skill,
+  an agent in another session read the app source, found writes that add/update without ever
+  deleting a live credential, correctly concluded that could not be the same path the skill
+  described — and announced it would "resolve it at source", i.e. modify credential storage.
+  Nothing was wrong with the app. `selectSaveStrategy` picks per call (COREDEV-2514): `.legacy`,
+  **the default**, is delete-then-add; `.primitive`, flag-gated, never deletes a live item. The
+  skill was accurate about the default and silent about the other path, and that silence is what
+  pointed an agent at credential code.
+- **The rewrite was verified against the app source rather than trusted.** An adversarial pass
+  (independent derivation, three review lenses, synthesis) returned **16 edits, 5 high-risk** —
+  including a factual error in the first draft, which had claimed an absent kill-switch flag
+  resolves to `.legacy`. It does not: enable flags and the kill switch both fail closed but with
+  **opposite polarity**, and `absent` on the kill switch means _inactive_, which permits.
+- **The verification surfaced hazards more serious than the original gap**, now all documented:
+  - `.legacy` has a real destruction window — the `SecItemDelete` status is discarded, the delete
+    sits inside the retried closure, and a failed `SecItemAdd` leaves the credential **permanently
+    gone**, with no rollback and no read-back.
+  - `isProtectionTransition:` is **caller-supplied and defaults to the unsafe value**. A write that
+    removes a `kSecAttrAccessControl` must pass `true`, or the primitive can report success while
+    leaving user-presence protection installed after the user turned it off.
+  - `.rotationHot` covers only `accessToken` / `tokenExpiry`, so **`refreshToken` never takes the
+    safe path** — deliberate, and now stated.
+  - Token-refresh atomicity is the **caller's** job; `KeychainManager` has no transaction, and a
+    failed write leaves the item _absent_, not unchanged. The old security rule claimed the reverse.
+- The skill grew 79 → 241 lines and now carries an explicit **do not unify the paths, flip the
+  default, or delete the legacy path** instruction, plus the sentence that would have prevented the
+  incident: _"it does delete-then-add" and "it never deletes a live credential" are each correct,
+  about a different strategy._
+
 ## [2.8.25] — 2026-09-06
 
 ### Changed
