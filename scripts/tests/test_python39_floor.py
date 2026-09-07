@@ -396,7 +396,7 @@ _JOB_DIGESTS = {
         "ff1a0d7c665fd7225415a63cdba73dc8108bbb2e85c7c76c79f281bf56f875a8"
     ),
     ("trunk-parity-harness.yml", "parity"): (
-        "ece6b83e5b9d8307d9115158a9818bce9da4e1288016a3a846795883ac505095"
+        "fa30839bbfa5dfb15601672a62775660573c07807021e2b33275fe295bd135e4"
     ),
 }
 
