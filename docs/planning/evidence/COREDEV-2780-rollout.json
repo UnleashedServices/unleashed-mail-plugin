@@ -205,7 +205,7 @@
     "milestone": "M3",
     "base": "main",
     "observedAt": "2026-09-06T19:20:00Z",
-    "basesRecorded": ["main"],
+    "basesRecorded": ["main", "alpha"],
     "basesRequired": ["main", "alpha"],
     "why": [
       "A GREEN run cannot prove the gate is strict. With no findings, advisory and strict both",
@@ -296,15 +296,6 @@
     ],
     "stillOpenForM3": [
       {
-        "what": "The same strict-green + deliberate-red pair on `alpha`.",
-        "why": "Both bases are required: Control targets main AND alpha, so a context satisfiable on only one of them is COREDEV-2767 aimed at the other base."
-      },
-      {
-        "what": "Landing the `continue-on-error` removal on `main` itself. PR #91 is MERGEABLE but NOT MERGED.",
-        "why": "`base` above names the branch this pair TARGETS, not a branch that is already strict. Both observations were made on pull_request merge refs carrying the strict workflow; `origin/main` still carries the job-scoped `continue-on-error: true`. Reading this artifact as `main is strict` is the benign half of an observation consistent with two worlds.",
-        "discriminator": "git show origin/main:.github/workflows/trunk-check.yml | grep -n continue-on-error \u2014 prints line 49 while this is open, and returns nothing once #91 has landed."
-      },
-      {
         "what": "A real PR-RETARGET observation. Follow-up plan M3: `Include a real RETARGET case`; original plan cell 2: `also from M3 \u2014 a real RETARGET case`.",
         "why": "The `types:` widening is a STATIC clause assertion; nothing yet observes that it works. It requires opening a PR against one base, letting `trunk-check` land, retargeting it to the other base, and asserting that the context satisfying the rule is a NEW run against the NEW base range rather than the earlier same-SHA result. Neither #91 nor #92 was ever retargeted, so the condition that actually breaks range resolution is unobserved."
       },
@@ -317,11 +308,108 @@
         "why": "That is exactly the state cell 10 was in until the revision that added `cell10Annotations`: observed, unwritten, and therefore leaving its cell skipping."
       }
     ],
-    "dualBaseIsNotYETSATISFIED": [
-      "Row 12 says DUAL-base. Only `main` is recorded here. `basesRecorded` and `basesRequired`",
-      "are both present and unequal ON PURPOSE, so this record states its own incompleteness",
-      "rather than leaving a reader to infer it from an absence \u2014 an absence never appears in a",
-      "diff. Alpha's pair joins this key when it lands."
-    ]
+    "alpha": {
+      "base": "alpha",
+      "observedAt": "2026-09-07T15:21:00Z",
+      "strictGreen": {
+        "pr": 96,
+        "headSha": "1dc21f7d2c8e11debfcf1a2de9ee34a398d109bc",
+        "workflowPath": ".github/workflows/trunk-check.yml",
+        "workflowRunId": 34137722172,
+        "checkRunId": 101792470154,
+        "event": "pull_request",
+        "effectiveCheckName": "trunk-check",
+        "workflowRunConclusion": "success",
+        "checkRunConclusion": "success",
+        "trunkStepNumber": 6,
+        "trunkStepName": "trunk",
+        "trunkStepConclusion": "success",
+        "appId": 15368,
+        "appSlug": "github-actions",
+        "trunkAnnotationsArtifactId": 10024652854
+      },
+      "deliberateRed": {
+        "pr": 97,
+        "headSha": "9b42ad8f35b355c4219528125cfb6e5e62ebf8c5",
+        "workflowPath": ".github/workflows/trunk-check.yml",
+        "workflowRunId": 34137816785,
+        "checkRunId": 101792769099,
+        "event": "pull_request",
+        "effectiveCheckName": "trunk-check",
+        "workflowRunConclusion": "failure",
+        "checkRunConclusion": "failure",
+        "trunkStepNumber": 6,
+        "trunkStepName": "trunk",
+        "trunkStepConclusion": "failure",
+        "appId": 15368,
+        "appSlug": "github-actions",
+        "trunkAnnotationsArtifactId": 10024688366,
+        "boundDiagnostic": {
+          "path": "harness-fixtures/m3-red-probe-alpha.sh",
+          "line": 10,
+          "column": 6,
+          "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+          "newIssues": 2,
+          "filesChecked": 16,
+          "why": "A setup, checkout or network failure fails the run while Trunk never reaches lint evaluation. `trunk` (step 6) is the ONLY failing step \u2014 steps 1-5, set-up, checkout and the three guards, all concluded `success` \u2014 so the failure is located AT lint evaluation, by observation rather than inference."
+        }
+      },
+      "observedWorkflowWasStrict": {
+        "greenMergeRef": "refs/pull/96/merge",
+        "redMergeRef": "refs/pull/97/merge",
+        "continueOnErrorCount": 0,
+        "why": "Checked in the merge refs THEMSELVES rather than inferred from the PR description. Both observations ran a workflow with no job-scoped `continue-on-error`, which is what makes the red run's `failure` mean strict rather than advisory."
+      },
+      "theRoute": [
+        "The red evidence comes from a PR TARGETING alpha whose head is deliberately red and is NEVER",
+        "MERGED \u2014 the check runs on the PR head, so no broken commit ever lands. Push-event red evidence",
+        "would belong to the non-required canary instead.",
+        "WHY IT IS NEVER MERGED, STATED CORRECTLY. Pre-M4 this is DISCIPLINE, not enforcement.",
+        "`trunk-check` is NOT one of Control's five required contexts (validate, py39-smoke, secret-scan,",
+        "load-check, redactor-equivalence (ubuntu-latest)), so a commit failing only `trunk-check` can",
+        "still satisfy every rule the ruleset enforces. Control's empty bypass_actors guarantees only that",
+        "those five cannot be WAIVED; it cannot make a non-rule block anything. Its other rules, `deletion`",
+        "and `non_fast_forward`, do not stop a fast-forward either. So NO ruleset route is closed on this",
+        "SHA \u2014 the same conclusion the `main` record above reaches, and this key previously contradicted.",
+        "What holds PR #97 off `alpha` is the never-merge instruction plus the local pre-commit gate, which",
+        "is itself bypassable. M4 is what turns this into enforcement."
+      ]
+    },
+    "dualBaseSatisfied": [
+      "`basesRecorded` now equals `basesRequired`. Row 12 asks for DUAL-base provenance-bound check",
+      "runs and both bases are recorded, each with a strict green and a deliberate red bound to a named",
+      "lint diagnostic. Both bases' checked-in workflows are strict \u2014 see `bothBasesCheckedInStrict`,",
+      "which carries a command rather than a claim.",
+      "THAT IS STILL NOT M3 COMPLETE. `stillOpenForM3` above lists what genuinely remains, and it is",
+      "EVIDENCE, not merges: a real PR-RETARGET observation and cells 3(a)/3(b)'s clean-file and",
+      "historically-dirty-file controls. Promoting the required context at M4 before those are observed",
+      "would certify range-resolution and backlog behaviour nobody has seen."
+    ],
+    "closedSinceLastRevision": [
+      {
+        "what": "The strict-green + deliberate-red pair on `alpha`.",
+        "closedBy": "This artifact \u2014 see `alpha` above (PRs #96 and #97)."
+      },
+      {
+        "what": "Removing `continue-on-error` on `main`.",
+        "closedBy": "PR #91, merged."
+      },
+      {
+        "what": "Removing `continue-on-error` on `alpha`.",
+        "closedBy": "PR #96, merged. Verify with the discriminator above rather than with this sentence."
+      }
+    ],
+    "bothBasesCheckedInStrict": {
+      "property": "Neither base's CHECKED-IN workflow carries a job-scoped `continue-on-error`.",
+      "discriminator": "git show origin/<base>:.github/workflows/trunk-check.yml | grep -c continue-on-error",
+      "expected": "0 for both `main` and `alpha`; any other value means that base is still advisory.",
+      "whyStatedThisWay": [
+        "Earlier revisions of this key stated PR STATE \u2014 'PR #91 is MERGEABLE but NOT MERGED',",
+        "'Landing PR #96 is additionally required'. Both went stale within hours of being written,",
+        "and one of them was written in the very commit that fixed the previous staleness. PR state",
+        "is mutable; the property is not. A reader runs the discriminator and learns the truth",
+        "rather than trusting a sentence that was true when it was typed."
+      ]
+    }
   }
 }
