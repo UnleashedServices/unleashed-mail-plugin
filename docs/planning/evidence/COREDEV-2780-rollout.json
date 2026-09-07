@@ -312,6 +312,21 @@
         "resolvesAt": "M4",
         "discriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' \u2014 this item can only be closed once that list contains `trunk-check`.",
         "resolvesAtMeans": "An M4 acceptance item, not an M3 gap that further M3 work can close. It must be observed as part of promoting the context \u2014 not assumed by it. REVISION NOTE: `resolvesAt` first held this whole sentence, which made the discriminator below print a paragraph instead of the token it claimed. The field is now the machine-readable value and the prose lives here."
+      },
+      {
+        "what": "Cell 3(b) / cell 3 as a whole: the gate DOES over-reach. Formatters report pre-existing formatting debt as NEW, so any edit to an unformatted file fails the gate.",
+        "why": [
+          "REOPENED BY REVIEW (codex, PR #101, P1). The observations recorded in `cell3DiffScopeControls`",
+          "are real and stand -- but they establish the property only for LINT findings on a Markdown",
+          "fixture. For the configured FORMATTERS the property is FALSE, and this artifact contains the",
+          "measurement proving it. See `cell3DiffScopeControls.theGateDOESOverReach`.",
+          "16 of 22 sampled tracked files are unformatted (73%), so this is the common case, not an edge."
+        ],
+        "whatISObserved": "cell 3(a): a one-clean-file range passes with the backlog present. cell 3(b): for LINT findings, pre-existing are held and newly-introduced fail.",
+        "whatIsNOTObserved": "That the gate does not over-reach, which is what cell 3 is named for. The opposite is observed, for formatters.",
+        "resolvesAt": "COREDEV-2850",
+        "resolvesAtMeans": "Closed when the over-reach is remedied, OR when cell 3's governing criterion is explicitly narrowed to lint findings AND the operational consequence is accepted in writing. Not closable by further M3 observation.",
+        "discriminator": "Append a comment to any unformatted tracked file and run `trunk check --no-fix --ci --upstream=$(git rev-parse origin/main)`. While this item is open the run is RED on an `isort`/`black`/`prettier` fmt row the edit did not introduce."
       }
     ],
     "alpha": {
@@ -424,19 +439,18 @@
     },
     "m3EvidenceClosedOut": {
       "observedAt": "2026-09-07T17:10:00Z",
-      "what": "The three items this key listed are now OBSERVED, with one qualification: cell 2's criterion has a rule-satisfaction half that is structurally unobservable before M4, and that half is REOPENED above rather than carried as closed.",
+      "what": "The three items this key listed were OBSERVED, but TWO residuals remain open above and neither is closable by further M3 observation: cell 2's rule-satisfaction half (M4), and cell 3's over-reach counterexample (COREDEV-2850).",
       "where": {
         "retarget": "cell2RetargetObservation",
         "cell3a": "cell3DiffScopeControls.cell3a",
         "cell3b": "cell3DiffScopeControls.cell3b"
       },
-      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), s[0]['resolvesAt'] if s else None, 'cell2RetargetObservation' in d, 'cell3DiffScopeControls' in d)\" \u2014 prints \"1 M4 True True\". REVISION NOTE: this command previously asserted \"0 True True\". A discriminator that encodes an over-claim is worse than none, because it makes the over-claim look machine-checked.",
+      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"2 ['COREDEV-2850', 'M4']\".",
       "whatIsStillNotClaimed": [
-        "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in",
-        "ruleset Control needs explicit maintainer instruction, and COREDEV-2804 is still tagged",
-        "BLOCKER for M4.",
-        "The EVIDENCE half of M3 is complete for everything observable at M3. The one residual item above",
-        "is an M4 acceptance criterion that M3 cannot discharge."
+        "M4 remains OUT OF SCOPE and unstarted, and now has TWO blockers: COREDEV-2804 (the trunk.yaml",
+        "freeze covers only the `lint:` key) and COREDEV-2850 (the gate over-reaches on formatters).",
+        "The OBSERVATIONS are complete for everything observable at M3. What is not complete is cell 3's",
+        "PROPERTY, which is contradicted rather than merely unobserved."
       ],
       "postLandingRepairs": [
         "These observations were recorded, then a nine-lens adversarial pass was run over the RECORD.",
@@ -799,14 +813,55 @@
       "Neither half says anything about a REQUIRED context; that is M4.",
       "Cell 3(b) is observed for markdownlint on a Markdown file. It is not a claim that every linter in the",
       "configured set scopes to new findings the same way \u2014 and the rejected validate-hooks.py candidate is",
-      "direct evidence that at least one CLASS behaves differently: FORMATTERS (isort/black/prettier) report",
       "on any modified file regardless of whether the finding pre-existed. That asymmetry is a real property",
       "of the gate, discovered here, and it is NOT covered by cell 3(b) as written.",
       "The backlog figure is a measured lower bound over five files, not a re-derivation of 9027.",
       "It does not separate per-ISSUE novelty from per-touched-LINE scoping \u2014 see `cell3b.aTHIRDWORLDTHISCANNOTSEPARATE`. Both produce identical evidence on this fixture.",
-      "Cell 3(a)'s cleanliness is positive-controlled for SHELLCHECK ONLY, not for every linter applicable to a .sh file \u2014 see `cell3a.thePositiveControlLIFTSONLYSHELLCHECK`."
+      "Cell 3(a)'s cleanliness is positive-controlled for SHELLCHECK ONLY, not for every linter applicable to a .sh file \u2014 see `cell3a.thePositiveControlLIFTSONLYSHELLCHECK`.",
+      "It does not establish cell 3's NAMED PROPERTY ('the gate does not over-reach'). For the configured formatters that property is observed to be FALSE -- see `theGateDOESOverReach` and COREDEV-2850. This key records instances (a) and (b) for LINT findings only."
     ],
     "observedAtMeans": "Harvest time, as in cell 2. It first read `17:07:00Z`, which precedes the red half's run (created 17:07:24Z). Codex flagged only cell 2; this cell carried the SAME defect and is fixed with it rather than left for a later round to re-find.",
-    "lastUnderlyingEventAt": "2026-09-07T17:07:24Z"
+    "lastUnderlyingEventAt": "2026-09-07T17:07:24Z",
+    "theGateDOESOverReach": {
+      "severity": "COUNTEREXAMPLE to cell 3's stated property. Not a scope note.",
+      "ticket": "COREDEV-2850 \u2014 BLOCKER for M4",
+      "raisedBy": "codex, PR #101, P1",
+      "theProperty": "Cell 3 is titled 'The gate does not over-reach'. (a) and (b) are INSTANCES of that property, not a definition of it.",
+      "theCounterexample": [
+        "Under `--upstream`, the two families of finding are scoped DIFFERENTLY:",
+        "  linters    (shellcheck, markdownlint, ruff, mypy) -- pre-existing findings on a touched file",
+        "             are reported as `N existing issues` and SUPPRESSED. Correct.",
+        "  formatters (isort, black, prettier) -- evaluated WHOLE-FILE and reported as NEW on any",
+        "             modified file, whether or not the file was already unformatted.",
+        "So an otherwise clean edit to an already-misformatted file FAILS THE GATE FOR DEBT IT DID NOT",
+        "INTRODUCE. That is the behaviour cell 3 exists to forbid."
+      ],
+      "reproduction": {
+        "file": "scripts/validate-hooks.py",
+        "edit": "append a comment block; introduce nothing",
+        "result": [
+          "-:-  fmt  Incorrect formatting  isort",
+          "-:-  fmt  Incorrect formatting  black",
+          "Checked 1 modified file / 55 existing issues / 1 unformatted file -> RED"
+        ],
+        "control": "The same edit to CHANGELOG.md -- dirty in LINT, clean in FORMATTING -- is GREEN (`2 existing issues / No new issues`). The two families differ, not the two files."
+      },
+      "scale": {
+        "method": "bounded sample of 22 tracked .py/.sh/.md/.json/.yaml files; `trunk check --all` is prohibited",
+        "unformatted": 16,
+        "sampled": 22,
+        "share": "73%",
+        "corroboration": "`trunk fmt --all` rewrote 191 files (COREDEV-2771) -- i.e. ~191 tracked files are currently unformatted and would red the gate on any edit."
+      },
+      "whyThisIsAnM4BLOCKER": "Promoting `trunk-check` to a required context with this behaviour would block MOST PRs in this repository for pre-existing formatting debt. Recording it as a limitation while marking the cell satisfied would let M4 promote a context that blocks unrelated edits.",
+      "whatIWrongLYDidWithIt": [
+        "The previous revision DISCOVERED this and filed it under `doesNotEstablish` -- a scope note",
+        "saying cell 3(b) 'does not cover' formatters -- and then marked the cell's evidence satisfied on",
+        "a Markdown fixture where the property happens to hold.",
+        "That understates it. This is not a gap in coverage; it is an OBSERVED COUNTEREXAMPLE to the",
+        "property the cell is named for. Finding the counterexample and filing it as a footnote is the",
+        "same defect as closing an item on the half where it holds."
+      ]
+    }
   }
 }
