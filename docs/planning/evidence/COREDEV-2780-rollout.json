@@ -294,20 +294,7 @@
       "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
       "change (no leaks), version-sync, plugin assembly, hooks manifest."
     ],
-    "stillOpenForM3": [
-      {
-        "what": "A real PR-RETARGET observation. Follow-up plan M3: `Include a real RETARGET case`; original plan cell 2: `also from M3 \u2014 a real RETARGET case`.",
-        "why": "The `types:` widening is a STATIC clause assertion; nothing yet observes that it works. It requires opening a PR against one base, letting `trunk-check` land, retargeting it to the other base, and asserting that the context satisfying the rule is a NEW run against the NEW base range rather than the earlier same-SHA result. Neither #91 nor #92 was ever retargeted, so the condition that actually breaks range resolution is unobserved."
-      },
-      {
-        "what": "Cell 3(b), the historically-dirty-file control: a PR touching a historically dirty file passes for its pre-existing findings while still failing for newly introduced ones.",
-        "why": "#92 adds a BRAND-NEW file, `harness-fixtures/m3-red-probe.sh`. It therefore shows only `fails on new findings`, never the pre-existing-versus-new discrimination against the 9027-issue backlog."
-      },
-      {
-        "what": "Cell 3(a) \u2014 a PR touching one clean file passes with the 9027-issue backlog present \u2014 is arguably satisfied by #91 green, but is RECORDED NOWHERE.",
-        "why": "That is exactly the state cell 10 was in until the revision that added `cell10Annotations`: observed, unwritten, and therefore leaving its cell skipping."
-      }
-    ],
+    "stillOpenForM3": [],
     "alpha": {
       "base": "alpha",
       "observedAt": "2026-09-07T15:21:00Z",
@@ -410,6 +397,262 @@
         "is mutable; the property is not. A reader runs the discriminator and learns the truth",
         "rather than trusting a sentence that was true when it was typed."
       ]
+    },
+    "m3EvidenceClosedOut": {
+      "observedAt": "2026-09-07T17:10:00Z",
+      "what": "The three items this key listed as still open are now observed and recorded.",
+      "where": {
+        "retarget": "cell2RetargetObservation",
+        "cell3a": "cell3DiffScopeControls.cell3a",
+        "cell3b": "cell3DiffScopeControls.cell3b"
+      },
+      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));print(len(d['cell12DualBaseCheckRuns']['stillOpenForM3']), 'cell2RetargetObservation' in d, 'cell3DiffScopeControls' in d)\" \u2014 prints '0 True True' once this is landed.",
+      "whatIsStillNotClaimed": [
+        "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in ruleset",
+        "Control needs explicit maintainer instruction, and COREDEV-2804 is still tagged BLOCKER for M4.",
+        "These three observations remove the reason M3's evidence was incomplete; they are not an M4 go-ahead."
+      ]
     }
+  },
+  "cell2RetargetObservation": {
+    "what": "\u00a77 cell 2's RETARGET case: the `edited` activity type fires on a base change, and the range `trunk check` receives is re-resolved against the NEW base.",
+    "milestone": "M3",
+    "observedAt": "2026-09-07T17:00:00Z",
+    "pr": 99,
+    "headSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+    "why": [
+      "`.github/workflows/trunk-check.yml` carries `types: [opened, synchronize, reopened, edited]`.",
+      "`edited` is the activity type a RETARGET fires; without it a retargeted PR keeps a green check",
+      "computed against the OLD base. That widening was a STATIC clause assertion \u2014 cell 2 records that",
+      "'nothing yet observes that it works'. This key is that observation, made for the first time."
+    ],
+    "directionIsLoadBearing": {
+      "why": [
+        "`main` and `alpha` differ in exactly ONE file, docs/planning/evidence/COREDEV-2780-rollout.json,",
+        "and main's copy is strictly newer (alpha's is an ancestor version). That asymmetry decides",
+        "whether the experiment can discriminate at all, so the direction was MEASURED with",
+        "`git merge-tree --write-tree` against the real SHAs before the PR was opened, not reasoned about."
+      ],
+      "measured": [
+        "cut from main,  retargeted main -> alpha : range 1 file -> 2 files   DISCRIMINATES",
+        "cut from alpha, retargeted alpha -> main : range 1 file -> 1 file    DOES NOT"
+      ],
+      "whyTheOtherDirectionFails": "Cutting from alpha, the merge against main resolves rollout.json to main's newer copy, so the range is identical before and after. The observation would then look the same whether the range was re-resolved or carried over \u2014 an observation consistent with two worlds, which is the shape this project has repeatedly recorded as the benign one."
+    },
+    "theDiscriminator": "docs/planning/evidence/COREDEV-2780-rollout.json can appear in the resolved range ONLY if the upstream was `alpha`: relative to `main` that file is unchanged, so it cannot enter diff(main_tip, merge). The changed-file list therefore IDENTIFIES the base directly rather than inferring it from run timestamps.",
+    "howTheRangeIsObserved": "The `guard-empty-diff` step prints the resolved range to stderr as `  changed: <path>` lines. Retrieved with `gh run view <runId> --log`. The upstream SHA itself is not echoed by that step, so the file list is the observable, which is why the fixture was designed to make the file list differ.",
+    "allRunsOnThisHeadSha": [
+      {
+        "workflowRunId": 34145664830,
+        "createdAt": "2026-09-07T16:59:03Z",
+        "baseAtRunTime": "main",
+        "rangeFileCount": 1,
+        "range": ["harness-fixtures/m3-retarget-probe.sh"],
+        "conclusion": "success"
+      },
+      {
+        "workflowRunId": 34145674160,
+        "createdAt": "2026-09-07T16:59:11Z",
+        "baseAtRunTime": "main",
+        "rangeFileCount": 1,
+        "range": ["harness-fixtures/m3-retarget-probe.sh"],
+        "conclusion": "success",
+        "checkRunId": 101817085629,
+        "trunkAnnotationsArtifactId": 10027559424
+      },
+      {
+        "workflowRunId": 34145753546,
+        "createdAt": "2026-09-07T17:00:20Z",
+        "baseAtRunTime": "alpha",
+        "rangeFileCount": 2,
+        "range": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "conclusion": "success",
+        "checkRunId": 101817325885,
+        "trunkAnnotationsArtifactId": 10027591289
+      },
+      {
+        "workflowRunId": 34145799940,
+        "createdAt": "2026-09-07T17:00:56Z",
+        "baseAtRunTime": "alpha",
+        "rangeFileCount": 2,
+        "range": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "conclusion": "success",
+        "checkRunId": 101817459742
+      }
+    ],
+    "retargetedAt": "2026-09-07T17:00:16Z",
+    "theResult": [
+      "FOUR runs exist on the one head SHA fd60453, and they partition EXACTLY at the retarget:",
+      "  before 17:00:16 \u2014 two runs, range 1 file,  computed against main",
+      "  after  17:00:16 \u2014 two runs, range 2 files, computed against alpha",
+      "All four are recorded above rather than the two that make the cleanest pair, because a selective",
+      "record of a four-run population is not evidence. The new run appeared 4 SECONDS after the base",
+      "change, so `edited` fired; and its range contains rollout.json, so it was resolved against alpha.",
+      "The head SHA never changed, which is the whole point: the same commit, ranged against two bases."
+    ],
+    "observedWorkflowWasStrict": {
+      "mergeRef": "refs/pull/99/merge",
+      "continueOnErrorCount": 0,
+      "why": "Checked in the merge ref ITSELF, not inferred from the PR description."
+    },
+    "doesNotEstablish": [
+      "It does not establish anything about a REQUIRED context. `trunk-check` is not one of Control's five",
+      "required contexts until M4, so this observes range RE-RESOLUTION, not rule satisfaction. The cell's",
+      "phrase 'the context that satisfies the rule' cannot be observed before M4 and is not claimed here.",
+      "It does not establish the AUTOMATED-retarget case. \u00a71 records that a workflow-token retarget fires",
+      "`edited` without producing a run; no workflow in this repository retargets PRs, and this observation",
+      "was a human/CLI retarget via `gh pr edit --base`.",
+      "It does not measure a race between the base change and GitHub recomputing refs/pull/99/merge. Both",
+      "post-retarget runs happened to resolve the new range; a run that fired before the merge ref settled",
+      "would be a distinct hazard, unobserved here."
+    ]
+  },
+  "cell3DiffScopeControls": {
+    "what": "\u00a77 cell 3: the gate does not over-reach. (a) a PR touching one clean file passes with the backlog present; (b) a PR touching a historically dirty file passes for its pre-existing findings while still failing for newly introduced ones.",
+    "milestone": "M3",
+    "observedAt": "2026-09-07T17:07:00Z",
+    "backlogWasPresent": {
+      "why": [
+        "The cell says 'with the 9027-issue backlog present', so the record must show the backlog EXISTED",
+        "at observation time rather than citing a number from an older document. `trunk check --all` is",
+        "prohibited by \u00a71 (it is the 9027-finding whole-tree run the gate exists to avoid), so the backlog",
+        "is evidenced as a MEASURED LOWER BOUND from scoped per-file checks at origin/main = 4d15c34."
+      ],
+      "method": "trunk check --no-progress --no-fix --show-existing <file>, one file at a time",
+      "measuredLowerBound": {
+        "scripts/lib/hook-io.sh": 83,
+        "mcp/review-synthesizer/synthesize.py": 58,
+        "scripts/validate-hooks.py": 55,
+        "README.md": 2,
+        "CHANGELOG.md": 2,
+        "totalOverTheseFiveFilesOnly": 200
+      },
+      "claim": "AT LEAST 200 pre-existing findings across five files at the observed SHA. This is a lower bound, deliberately: it is not a re-derivation of 9027 and must not be read as one."
+    },
+    "cell3a": {
+      "property": "A PR whose resolved range is exactly one CLEAN file passes, with the backlog present.",
+      "pr": 99,
+      "workflowRunId": 34145674160,
+      "checkRunId": 101817085629,
+      "headSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+      "range": ["harness-fixtures/m3-retarget-probe.sh"],
+      "rangeFileCount": 1,
+      "conclusion": "success",
+      "trunkStepNumber": 6,
+      "trunkStepConclusion": "success",
+      "trunkSummary": "Checked 1 file / No issues",
+      "theFileIsCleanByPOSITIVECONTROL": [
+        "A green run on a file nothing lints would satisfy this cell while proving nothing \u2014 'Found no",
+        "applicable linters' also exits 0. So the fixture's cleanliness was positive-controlled locally:",
+        "  unmutated                      -> Checked 1 file / No issues",
+        "  mutated to `target=$1; echo $target` -> harness-fixtures/m3-retarget-probe.sh:18:6",
+        "                                    shellcheck/SC2086 + shellcheck/SC2250, 2 new lint issues",
+        "shellcheck is therefore LIVE on harness-fixtures/*.sh, so the green means CHECKED AND CLEAN."
+      ],
+      "thisRunIsSHAREDWithCell2": [
+        "This is the same run as cell2RetargetObservation's first pre-retarget observation, and that is",
+        "stated rather than hidden. The two cells assert INDEPENDENT properties of it: cell 3(a) asserts",
+        "that a one-clean-file range passes with the backlog present; cell 2 asserts that the range later",
+        "changed when the base did. Neither claim depends on the other.",
+        "A dedicated PR was considered and rejected as a literal duplicate: every CLEAN file already in the",
+        "tree is either digest-frozen (scripts/ci/resolve-trunk-range.sh by C6a, .trunk/configs/** by cell",
+        "4b) or is itself an evidence record, so a dedicated fixture could only have been a newly-added",
+        "clean file \u2014 which is exactly what this run already is."
+      ]
+    },
+    "cell3b": {
+      "property": "A PR touching a HISTORICALLY DIRTY file passes for its pre-existing findings while still failing for newly introduced ones.",
+      "pr": 100,
+      "whyItWasStillOpen": "#92 and #97 both added a BRAND-NEW file, so they showed only 'fails on new findings' and never the pre-existing-versus-new discrimination.",
+      "fixture": {
+        "file": "CHANGELOG.md",
+        "preExistingFindings": [
+          {
+            "path": "CHANGELOG.md",
+            "line": 2692,
+            "column": 0,
+            "linter": "markdownlint/MD038"
+          },
+          {
+            "path": "CHANGELOG.md",
+            "line": 3018,
+            "column": 0,
+            "linter": "markdownlint/MD038"
+          }
+        ],
+        "whyThisFile": [
+          "It is dirty, it is already correctly FORMATTED, and validate-version-sync.sh asserts only that",
+          "a `## [x.y.z]` heading is PRESENT \u2014 appending at EOF cannot disturb that."
+        ],
+        "candidatesRejectedAndWhy": [
+          "scripts/validate-hooks.py (55 pre-existing findings) CANNOT HAVE A GREEN HALF. Touching it",
+          "surfaces its pre-existing isort/black formatting as NEW: formatting is evaluated whole-file and",
+          "is not suppressed the way lint findings are. Measured locally before any CI round was spent \u2014",
+          "this is the single most useful thing the local rehearsal caught.",
+          "README.md works but is load-bearing for validate-version-sync.sh (H1, What's-New, asset counts).",
+          "mcp/review-synthesizer/synthesize.py is byte-anchored by a mutation test",
+          "(mcp/review-synthesizer/tests/test_synthesize.py:31 does `src.replace(old, new)`)."
+        ]
+      },
+      "theControl": "ONE PR, ONE base, ONE file, TWO commits. The only variable between the two runs is whether a finding is NEWLY INTRODUCED. Two separate PRs would have varied the head, the range and the run identity as well.",
+      "greenHalf": {
+        "commit": "15b0f6c677156785924bfc458ce707738baa7358",
+        "workflowRunId": 34146115875,
+        "checkRunId": 101818404323,
+        "range": ["CHANGELOG.md"],
+        "workflowRunConclusion": "success",
+        "trunkStepNumber": 6,
+        "trunkStepConclusion": "success",
+        "trunkSummary": "Checked 1 modified file / 2 existing issues / No new issues",
+        "trunkAnnotationsArtifactId": 10027712569,
+        "whyThisGreenIsNotVACUOUS": "The run reports `2 existing issues` ALONGSIDE `No new issues`. Trunk therefore read the file and SAW its pre-existing findings, and withheld them deliberately. That is the positive evidence separating 'passed' from 'checked nothing' \u2014 without it a green here would be the weakest possible signal."
+      },
+      "redHalf": {
+        "commit": "191e1df9befa686a83a260918e7ccb468e05e7fd",
+        "workflowRunId": 34146268825,
+        "checkRunId": 101818867930,
+        "range": ["CHANGELOG.md"],
+        "workflowRunConclusion": "failure",
+        "trunkStepNumber": 6,
+        "trunkStepConclusion": "failure",
+        "trunkSummary": "Checked 1 modified file / 2 existing issues / 1 new lint issue",
+        "trunkAnnotationsArtifactId": 10027761365,
+        "boundDiagnostic": {
+          "path": "CHANGELOG.md",
+          "line": 3046,
+          "column": 0,
+          "linters": ["markdownlint/MD040"],
+          "newIssues": 1,
+          "why": "Steps 1-5 (set-up, checkout and the three guards) all concluded `success` and only step 6 `trunk` failed, so the failure is located AT lint evaluation rather than upstream of it. Naming the linter, file, line and column is what separates 'lint rejected this' from 'the job broke'."
+        },
+        "anEarlierCandidateWasDISCARDED": "A first red-half candidate went red on a bare `prettier` fmt complaint reported as `-:-` with no line or column. It would have failed the run, but a fmt finding with no position is a materially weaker binding than cell 12's standard, so it was discarded rather than recorded."
+      },
+      "theDiscrimination": [
+        "Same file. Same base. Same PR. The two pre-existing MD038 findings at 2692 and 3018 stayed",
+        "SUPPRESSED IN BOTH RUNS \u2014 `2 existing issues` appears in the green half and in the red half alike.",
+        "What changed is one newly-introduced MD040 at 3046, and that alone moved the run from success to",
+        "failure. The gate scopes to NEWLY INTRODUCED FINDINGS, not to changed FILES."
+      ]
+    },
+    "observedWorkflowWasStrict": {
+      "mergeRefs": ["refs/pull/99/merge", "refs/pull/100/merge"],
+      "continueOnErrorCount": 0,
+      "why": "Both observations ran a workflow with no job-scoped `continue-on-error`, checked in the merge refs themselves. Without that, the red half's `failure` would not distinguish strict from advisory."
+    },
+    "doesNotEstablish": [
+      "Neither half says anything about a REQUIRED context; that is M4.",
+      "Cell 3(b) is observed for markdownlint on a Markdown file. It is not a claim that every linter in the",
+      "configured set scopes to new findings the same way \u2014 and the rejected validate-hooks.py candidate is",
+      "direct evidence that at least one CLASS behaves differently: FORMATTERS (isort/black/prettier) report",
+      "on any modified file regardless of whether the finding pre-existed. That asymmetry is a real property",
+      "of the gate, discovered here, and it is NOT covered by cell 3(b) as written.",
+      "The backlog figure is a measured lower bound over five files, not a re-derivation of 9027."
+    ]
   }
 }
