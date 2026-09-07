@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.25
+# UnleashedMail — Claude Code Plugin v2.8.26
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,20 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.26
+
+**The `keychain-security` skill described only one of two Keychain write paths, and an agent nearly
+changed credential code because of it.** It stated flatly that `KeychainManager` does
+delete-then-add. True of the `.legacy` path — still the shipped default — but the app also ships a
+flag-gated `.primitive` path that never deletes a live credential. An agent found the second path,
+concluded the skill contradicted the code, and was about to "resolve it at source".
+
+The rewrite was verified against the app source by an adversarial pass, which returned 16 edits and
+caught a factual error in the first draft. It also surfaced worse hazards than the original gap: the
+default path can destroy a credential if its add fails after its delete, `isProtectionTransition:`
+is caller-supplied and defaults unsafe, and `refreshToken` never takes the safe path. All are now
+documented, with an explicit instruction not to unify the paths.
 
 ### v2.8.25
 
