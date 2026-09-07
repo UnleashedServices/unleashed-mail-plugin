@@ -1,7 +1,13 @@
 {
   "action": {
     "controlOutcome": "success",
-    "outcome": "failure"
+    "outcome": "failure",
+    "primaryDiagnostic": {
+      "column": null,
+      "line": null,
+      "linter": "shfmt",
+      "path": "harness-fixtures/fixable.sh"
+    }
   },
   "actionInputs": {
     "canonical": "{\"arguments\":\"--filter=-markdown-link-check\",\"save-annotations\":true}",
@@ -17,10 +23,10 @@
       "--upstream",
       "c17c73084aef2943bd1ffa1a1d0538fa7755a281",
       "--github-commit",
-      "439f4cf87b405f9586ddf8fdb29c3937a6cbeb9f",
+      "78b0a4e425da9c75d813d83e27ce4215cc71c6fb",
       "--github-label",
       "",
-      "--github-annotate-file=/tmp/tmp.H4DWUTZ6tp/annotations.bin",
+      "--github-annotate-file=/tmp/tmp.Nu9grZSyWb/annotations.bin",
       "--filter=-markdown-link-check"
     ]
   ],
@@ -29,13 +35,13 @@
     "raw": "upstream=c17c73084aef2943bd1ffa1a1d0538fa7755a281"
   },
   "schemaVersion": 1,
-  "sha": "241d67fdd17e2c74e42d17e15d73c5a5099351b5",
+  "sha": "61adcf9cd00025e44115d1a4dad7f3e8ef1f3e0c",
   "tree": {
     "controlPost": "7e32ebfa83c65c86a1f18e58828559a421672182ae3cc02083a97e4fb69449ba",
     "fixture": "harness-fixtures/fixable.sh",
     "fixturePost": "c2ff8748b2a77b4f4c8884d58625ac3ba042776632b185beb1e6bb73e69bab24",
     "fixturePre": "c2ff8748b2a77b4f4c8884d58625ac3ba042776632b185beb1e6bb73e69bab24",
-    "post": "9acc1b1803ac26896306058395b82059d119f2c3a48524d2470b2caeed4a9fa9",
-    "pre": "9acc1b1803ac26896306058395b82059d119f2c3a48524d2470b2caeed4a9fa9"
+    "post": "e370e6eb25a3bcc48a0634a1c7d8eab7925ede78c547de349d3bb599211616b3",
+    "pre": "e370e6eb25a3bcc48a0634a1c7d8eab7925ede78c547de349d3bb599211616b3"
   }
 }
