@@ -28,6 +28,181 @@
     ],
     "trunkCheckPushAbsent": true
   },
+  "cell10AnnotationArtifact": {
+    "what": "\u00a77 row 10's annotation-artifact observation.",
+    "resolves": "Cell 10's annotation observation, which the follow-up plan scheduled under M3 and which this artifact previously listed as unresolved.",
+    "contract": [
+      "The original contract requires three things together: a NON-FORK PR (so there is no 403),",
+      "exercise of the `--github-annotate-file` branch, and a produced `trunk-annotations` artifact.",
+      "It assigns that observation to the committed rollout artifact \u2014 an uncommitted tuple leaves",
+      "the cell skipping, which is why it is recorded here rather than only observed."
+    ],
+    "nonFork": {
+      "green": {
+        "pr": 91,
+        "headRef": "feat/COREDEV-2780-m3-strict-main"
+      },
+      "red": {
+        "pr": 92,
+        "headRef": "evidence/COREDEV-2780-m3-red-main"
+      },
+      "why": "Both heads are branches of this repository, not forks, so `contents: read` suffices and no 403 arises."
+    },
+    "annotateFileBranchExercised": {
+      "mechanism": "`save-annotations: true` in .github/workflows/trunk-check.yml",
+      "effect": "The action writes an annotation artifact INSTEAD of posting annotations, which is why `contents: read` stands (\u00a76.1 option (b)).",
+      "corroboration": "The M2c parity artifact records the resulting invocation carrying `--github-annotate-file=<tmpdir>/annotations.bin` on the pull_request event, and NOT on push."
+    },
+    "artifactProduced": {
+      "name": "trunk-annotations",
+      "green": {
+        "workflowRunId": 34060576498,
+        "artifactId": 9997331764,
+        "sizeBytes": 1468
+      },
+      "red": {
+        "workflowRunId": 34060585595,
+        "artifactId": 9997333826,
+        "sizeBytes": 1874
+      },
+      "note": "Produced by trunk-check ITSELF on both halves \u2014 not only by the M2c parity harness. That is what the artifact previously left unresolved."
+    },
+    "boundToTheProbe": {
+      "member": "annotations.bin",
+      "uncompressedBytes": 8825,
+      "names": [
+        "harness-fixtures/m3-red-probe.sh",
+        "shellcheck",
+        "SC2086",
+        "SC2250"
+      ],
+      "why": "A non-empty artifact is not by itself evidence: an empty or unrelated payload would also be 'produced'. Its content names the probe file and both linters, so the annotation payload is bound to the same diagnostic as the red conclusion."
+    }
+  },
+  "cell12DualBaseCheckRuns": {
+    "what": "\u00a77 row 12's dual-base provenance-bound check runs, and the strict/advisory discrimination they carry.",
+    "milestone": "M3",
+    "base": "main",
+    "observedAt": "2026-09-06T19:20:00Z",
+    "basesRecorded": ["main"],
+    "basesRequired": ["main", "alpha"],
+    "why": [
+      "A GREEN run cannot prove the gate is strict. With no findings, advisory and strict both",
+      "conclude success \u2014 they are indistinguishable. Only a RED run discriminates:",
+      "  advisory  Trunk fails -> job failure -> WORKFLOW RUN SUCCEEDS",
+      "  strict    Trunk fails -> job failure -> WORKFLOW RUN FAILS",
+      "That is why M3 requires both per base, and why revision 1 of the plan was wrong to accept a",
+      "context observed only while failures were suppressed \u2014 one that had never been able to fail."
+    ],
+    "stepScope": {
+      "why": [
+        "A check run describes the JOB, so `checkRunConclusion` cannot by itself name which step",
+        "failed. M3's checklist binds the TRUNK STEP's API-reported `conclusion`, so each half below",
+        "records it as `trunkStepConclusion`, read from the workflow-jobs record."
+      ],
+      "source": "GET /repos/{owner}/{repo}/actions/runs/{workflowRunId}/jobs",
+      "jobIdIsCheckRunId": "That endpoint returns the job id, and on both runs below it equals the `checkRunId` already recorded (101560257395, 101560280950), so the step record is addressable from what is here with no second identifier to drift."
+    },
+    "strictGreen": {
+      "pr": 91,
+      "headSha": "e692e1966b46c3e378652037daeba68cfee6a0b2",
+      "workflowPath": ".github/workflows/trunk-check.yml",
+      "workflowRunId": 34060576498,
+      "checkRunId": 101560257395,
+      "event": "pull_request",
+      "effectiveCheckName": "trunk-check",
+      "workflowRunConclusion": "success",
+      "checkRunConclusion": "success",
+      "trunkStepNumber": 6,
+      "trunkStepName": "trunk",
+      "trunkStepConclusion": "success",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "note": [
+        "Meaningful as STRICT green only because the red observation below establishes that this",
+        "workflow version has no continue-on-error. PR #92 is branched from #91, so both ran the",
+        "same strict workflow via the pull_request merge ref."
+      ]
+    },
+    "deliberateRed": {
+      "pr": 92,
+      "headSha": "de88d32094251c64a90294ae34040e190cf61436",
+      "workflowPath": ".github/workflows/trunk-check.yml",
+      "workflowRunId": 34060585595,
+      "checkRunId": 101560280950,
+      "event": "pull_request",
+      "effectiveCheckName": "trunk-check",
+      "workflowRunConclusion": "failure",
+      "checkRunConclusion": "failure",
+      "trunkStepNumber": 6,
+      "trunkStepName": "trunk",
+      "trunkStepConclusion": "failure",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "boundDiagnostic": {
+        "path": "harness-fixtures/m3-red-probe.sh",
+        "line": 13,
+        "column": 6,
+        "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+        "newIssues": 2,
+        "why": "A setup, checkout or network failure would also fail the run while Trunk never reached lint evaluation. This names the linter, file, line and column, so the failure is bound to lint rather than to infrastructure."
+      },
+      "note": [
+        "THE WORKFLOW RUN CONCLUSION IS WHAT DISCRIMINATES STRICT FROM ADVISORY. Under M2's advisory",
+        "exemption this would read `success` with the job still `failure`. It reads `failure`, so the",
+        "job-scoped continue-on-error is genuinely gone.",
+        "The step conclusion is a SEPARATE requirement, not that inference: `trunk` (step 6) is the only",
+        "step that failed \u2014 steps 1-5, set-up, checkout and the three guards, all concluded `success` \u2014",
+        "so the failure is located at lint evaluation, not upstream of it.",
+        "The PR is never merged, BY INSTRUCTION. Pre-M4 that is DISCIPLINE, not enforcement:",
+        "`trunk-check` is not one of Control's five required contexts (rollout.json records",
+        "`trunkCheckAbsentPreM4: true`), on de88d32 all five required contexts are `success` with only",
+        "`trunk-check` `failure`, and GitHub therefore reports PR #92 `mergeable: MERGEABLE`,",
+        "`mergeStateStatus: UNSTABLE` \u2014 its name for `mergeable, with a non-required check failing`.",
+        "Control's empty bypass_actors guarantees only that those five cannot be WAIVED; it cannot make",
+        "a non-rule block a merge. Its other rules, `deletion` and `non_fast_forward`, do not stop a",
+        "fast-forward push either, so no ruleset route is closed on this SHA (derived from the rules; no",
+        "push was attempted). What holds this commit off `main` is the never-merge instruction plus the",
+        "local pre-commit gate recorded below \u2014 which is itself bypassable. M4 makes this enforcement."
+      ]
+    },
+    "howTheRedCommitWasMade": [
+      "The local pre-commit trunk gate BLOCKED the lint-failing commit, correctly \u2014 stopping new",
+      "findings is its purpose. Producing red-run evidence therefore requires --no-verify, which is",
+      "inherent to the observation rather than a shortcut, and is recorded here so it is not mistaken",
+      "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
+      "change (no leaks), version-sync, plugin assembly, hooks manifest."
+    ],
+    "stillOpenForM3": [
+      {
+        "what": "The same strict-green + deliberate-red pair on `alpha`.",
+        "why": "Both bases are required: Control targets main AND alpha, so a context satisfiable on only one of them is COREDEV-2767 aimed at the other base."
+      },
+      {
+        "what": "Landing the `continue-on-error` removal on `main` itself. PR #91 is MERGEABLE but NOT MERGED.",
+        "why": "`base` above names the branch this pair TARGETS, not a branch that is already strict. Both observations were made on pull_request merge refs carrying the strict workflow; `origin/main` still carries the job-scoped `continue-on-error: true`. Reading this artifact as `main is strict` is the benign half of an observation consistent with two worlds.",
+        "discriminator": "git show origin/main:.github/workflows/trunk-check.yml | grep -n continue-on-error \u2014 prints line 49 while this is open, and returns nothing once #91 has landed."
+      },
+      {
+        "what": "A real PR-RETARGET observation. Follow-up plan M3: `Include a real RETARGET case`; original plan cell 2: `also from M3 \u2014 a real RETARGET case`.",
+        "why": "The `types:` widening is a STATIC clause assertion; nothing yet observes that it works. It requires opening a PR against one base, letting `trunk-check` land, retargeting it to the other base, and asserting that the context satisfying the rule is a NEW run against the NEW base range rather than the earlier same-SHA result. Neither #91 nor #92 was ever retargeted, so the condition that actually breaks range resolution is unobserved."
+      },
+      {
+        "what": "Cell 3(b), the historically-dirty-file control: a PR touching a historically dirty file passes for its pre-existing findings while still failing for newly introduced ones.",
+        "why": "#92 adds a BRAND-NEW file, `harness-fixtures/m3-red-probe.sh`. It therefore shows only `fails on new findings`, never the pre-existing-versus-new discrimination against the 9027-issue backlog."
+      },
+      {
+        "what": "Cell 3(a) \u2014 a PR touching one clean file passes with the 9027-issue backlog present \u2014 is arguably satisfied by #91 green, but is RECORDED NOWHERE.",
+        "why": "That is exactly the state cell 10 was in until the revision that added `cell10Annotations`: observed, unwritten, and therefore leaving its cell skipping."
+      }
+    ],
+    "dualBaseIsNotYETSATISFIED": [
+      "Row 12 says DUAL-base. Only `main` is recorded here. `basesRecorded` and `basesRequired`",
+      "are both present and unequal ON PURPOSE, so this record states its own incompleteness",
+      "rather than leaving a reader to infer it from an absence \u2014 an absence never appears in a",
+      "diff. Alpha's pair joins this key when it lands."
+    ]
+  },
   "m4Preconditions": {
     "integrationIds": [15368],
     "mergeQueueRulePresent": false,
