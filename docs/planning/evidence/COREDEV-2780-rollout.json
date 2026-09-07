@@ -294,7 +294,26 @@
       "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
       "change (no leaks), version-sync, plugin assembly, hooks manifest."
     ],
-    "stillOpenForM3": [],
+    "stillOpenForM3": [
+      {
+        "what": "Cell 2's RULE-SATISFACTION half: 'assert THE CONTEXT THAT SATISFIES THE RULE is a new run against the new base's range'. The range half is observed (`cell2RetargetObservation`); the rule half is NOT.",
+        "why": [
+          "`trunk-check` is not one of ruleset Control's required contexts until M4, so pre-M4 NO rule is",
+          "satisfied by it and there is no 'context that satisfies the rule' to observe. The criterion as",
+          "written cannot be fully met at M3 \u2014 it is over-specified for the milestone it sits in.",
+          "REOPENED BY REVIEW (codex, PR #101). The previous revision emptied this list while",
+          "`cell2RetargetObservation.doesNotEstablish` simultaneously conceded that rule satisfaction was",
+          "NOT observed. Those two statements contradict each other, and the list is the one a later agent",
+          "reads for M4 readiness \u2014 so the contradiction resolved in favour of 'done' exactly where it is",
+          "most costly. Closing the observable half and calling the item closed is the defect."
+        ],
+        "whatISObserved": "cell2RetargetObservation: the `edited` clause fires, and the range is re-resolved against the new base \u2014 by the action's own upstream SHA, not by inference.",
+        "whatIsNOTObserved": "That a retarget causes the RULE to be satisfied by the new run rather than by the earlier same-SHA result. Structurally unobservable until trunk-check is a required context.",
+        "resolvesAt": "M4",
+        "discriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' \u2014 this item can only be closed once that list contains `trunk-check`.",
+        "resolvesAtMeans": "An M4 acceptance item, not an M3 gap that further M3 work can close. It must be observed as part of promoting the context \u2014 not assumed by it. REVISION NOTE: `resolvesAt` first held this whole sentence, which made the discriminator below print a paragraph instead of the token it claimed. The field is now the machine-readable value and the prose lives here."
+      }
+    ],
     "alpha": {
       "base": "alpha",
       "observedAt": "2026-09-07T15:21:00Z",
@@ -367,10 +386,15 @@
       "runs and both bases are recorded, each with a strict green and a deliberate red bound to a named",
       "lint diagnostic. Both bases' checked-in workflows are strict \u2014 see `bothBasesCheckedInStrict`,",
       "which carries a command rather than a claim.",
-      "THAT IS STILL NOT M3 COMPLETE. `stillOpenForM3` above lists what genuinely remains, and it is",
-      "EVIDENCE, not merges: a real PR-RETARGET observation and cells 3(a)/3(b)'s clean-file and",
-      "historically-dirty-file controls. Promoting the required context at M4 before those are observed",
-      "would certify range-resolution and backlog behaviour nobody has seen."
+      "THAT ALONE WAS NOT M3 COMPLETE, and this paragraph used to stop there \u2014 naming a",
+      "PR-RETARGET observation and cells 3(a)/3(b) as what genuinely remained. ALL THREE ARE NOW",
+      "OBSERVED: see `cell2RetargetObservation` and `cell3DiffScopeControls`. What remains is the",
+      "single residual in `stillOpenForM3` above \u2014 cell 2's rule-satisfaction half, which only M4",
+      "can discharge.",
+      "REVISION NOTE (codex, PR #101): the superseded sentence was left standing next to the new",
+      "closure key, so the artifact said both 'these remain outstanding' and 'these are closed'.",
+      "The rule is rewritten here rather than annotated, because a correction note beside a stale",
+      "normative sentence leaves the stale sentence normative."
     ],
     "closedSinceLastRevision": [
       {
@@ -400,17 +424,19 @@
     },
     "m3EvidenceClosedOut": {
       "observedAt": "2026-09-07T17:10:00Z",
-      "what": "The three items this key listed as still open are now observed and recorded.",
+      "what": "The three items this key listed are now OBSERVED, with one qualification: cell 2's criterion has a rule-satisfaction half that is structurally unobservable before M4, and that half is REOPENED above rather than carried as closed.",
       "where": {
         "retarget": "cell2RetargetObservation",
         "cell3a": "cell3DiffScopeControls.cell3a",
         "cell3b": "cell3DiffScopeControls.cell3b"
       },
-      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));print(len(d['cell12DualBaseCheckRuns']['stillOpenForM3']), 'cell2RetargetObservation' in d, 'cell3DiffScopeControls' in d)\" \u2014 prints '0 True True' once this is landed.",
+      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), s[0]['resolvesAt'] if s else None, 'cell2RetargetObservation' in d, 'cell3DiffScopeControls' in d)\" \u2014 prints \"1 M4 True True\". REVISION NOTE: this command previously asserted \"0 True True\". A discriminator that encodes an over-claim is worse than none, because it makes the over-claim look machine-checked.",
       "whatIsStillNotClaimed": [
-        "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in ruleset",
-        "Control needs explicit maintainer instruction, and COREDEV-2804 is still tagged BLOCKER for M4.",
-        "These three observations remove the reason M3's evidence was incomplete; they are not an M4 go-ahead."
+        "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in",
+        "ruleset Control needs explicit maintainer instruction, and COREDEV-2804 is still tagged",
+        "BLOCKER for M4.",
+        "The EVIDENCE half of M3 is complete for everything observable at M3. The one residual item above",
+        "is an M4 acceptance criterion that M3 cannot discharge."
       ],
       "postLandingRepairs": [
         "These observations were recorded, then a nine-lens adversarial pass was run over the RECORD.",
@@ -429,7 +455,7 @@
   "cell2RetargetObservation": {
     "what": "\u00a77 cell 2's RETARGET case: the `edited` activity type fires on a base change, and the range `trunk check` receives is re-resolved against the NEW base.",
     "milestone": "M3",
-    "observedAt": "2026-09-07T17:00:00Z",
+    "observedAt": "2026-09-07T17:10:00Z",
     "pr": 99,
     "headSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
     "why": [
@@ -597,12 +623,14 @@
       "run ids and SHAs above; it is NOT a recipe that can be replayed later without first re-measuring the",
       "main/alpha delta. The action-upstream binding above does not have this dependency and is the",
       "durable half."
-    ]
+    ],
+    "observedAtMeans": "The time the EVIDENCE WAS HARVESTED \u2014 after every run below had completed and its log had been read. It is NOT the time of the underlying events, which are carried per-run by `createdAt` and by `retargetedAt`. REVISION NOTE (codex, PR #101): this field first read `17:00:00Z`, which is BEFORE the retarget at 17:00:16Z and before the two post-retarget runs at 17:00:20Z and 17:00:56Z \u2014 the artifact claimed the observation was made before the evidence existed. An impossible chronology in an audit record is a defect even when every other value is right.",
+    "lastUnderlyingEventAt": "2026-09-07T17:00:56Z"
   },
   "cell3DiffScopeControls": {
     "what": "\u00a77 cell 3: the gate does not over-reach. (a) a PR touching one clean file passes with the backlog present; (b) a PR touching a historically dirty file passes for its pre-existing findings while still failing for newly introduced ones.",
     "milestone": "M3",
-    "observedAt": "2026-09-07T17:07:00Z",
+    "observedAt": "2026-09-07T17:10:00Z",
     "backlogWasPresent": {
       "why": [
         "The cell says 'with the 9027-issue backlog present', so the record must show the backlog EXISTED",
@@ -777,6 +805,8 @@
       "The backlog figure is a measured lower bound over five files, not a re-derivation of 9027.",
       "It does not separate per-ISSUE novelty from per-touched-LINE scoping \u2014 see `cell3b.aTHIRDWORLDTHISCANNOTSEPARATE`. Both produce identical evidence on this fixture.",
       "Cell 3(a)'s cleanliness is positive-controlled for SHELLCHECK ONLY, not for every linter applicable to a .sh file \u2014 see `cell3a.thePositiveControlLIFTSONLYSHELLCHECK`."
-    ]
+    ],
+    "observedAtMeans": "Harvest time, as in cell 2. It first read `17:07:00Z`, which precedes the red half's run (created 17:07:24Z). Codex flagged only cell 2; this cell carried the SAME defect and is fixed with it rather than left for a later round to re-find.",
+    "lastUnderlyingEventAt": "2026-09-07T17:07:24Z"
   }
 }
