@@ -3042,3 +3042,7 @@ This block touches a file that already carries markdownlint/MD038 findings (line
 and introduces none of its own. A green run here shows the gate scopes to NEWLY INTRODUCED
 findings, not to changed FILES.
 -->
+
+```
+trunk check --ci
+```
