@@ -411,6 +411,18 @@
         "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in ruleset",
         "Control needs explicit maintainer instruction, and COREDEV-2804 is still tagged BLOCKER for M4.",
         "These three observations remove the reason M3's evidence was incomplete; they are not an M4 go-ahead."
+      ],
+      "postLandingRepairs": [
+        "These observations were recorded, then a nine-lens adversarial pass was run over the RECORD.",
+        "It found four real defects in the recording \u2014 none in the observations themselves:",
+        "  1. strictness bound to merge refs that GitHub drops on close (now API-bound, both cells)",
+        "  2. the ACTION's own upstream never recorded, only the guard's file list (now recorded; the",
+        "     claim that it 'is not echoed' was simply false, and the action's own count independently",
+        "     confirms guard/action parity per run)",
+        "  3. cell 3(b) cannot separate per-ISSUE from per-LINE scoping (now stated)",
+        "  4. cell 3(a)'s positive control lifts only shellcheck (now scoped)",
+        "The repairs are POST-GATE by construction and are declared as such rather than presented as",
+        "though they had been reviewed."
       ]
     }
   },
@@ -448,7 +460,13 @@
         "baseAtRunTime": "main",
         "rangeFileCount": 1,
         "range": ["harness-fixtures/m3-retarget-probe.sh"],
-        "conclusion": "success"
+        "conclusion": "success",
+        "guardResolvedRange": ["harness-fixtures/m3-retarget-probe.sh"],
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 1,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 1 modified file", "No issues"]
       },
       {
         "workflowRunId": 34145674160,
@@ -458,7 +476,13 @@
         "range": ["harness-fixtures/m3-retarget-probe.sh"],
         "conclusion": "success",
         "checkRunId": 101817085629,
-        "trunkAnnotationsArtifactId": 10027559424
+        "trunkAnnotationsArtifactId": 10027559424,
+        "guardResolvedRange": ["harness-fixtures/m3-retarget-probe.sh"],
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 1,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 1 modified file", "No issues"]
       },
       {
         "workflowRunId": 34145753546,
@@ -471,7 +495,16 @@
         ],
         "conclusion": "success",
         "checkRunId": 101817325885,
-        "trunkAnnotationsArtifactId": 10027591289
+        "trunkAnnotationsArtifactId": 10027591289,
+        "guardResolvedRange": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "actionResolvedUpstreamSha": "7ed1a6ed8afd42be6a79300f488d86fdeef74164",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 2,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 2 modified files", "No issues"]
       },
       {
         "workflowRunId": 34145799940,
@@ -483,7 +516,16 @@
           "harness-fixtures/m3-retarget-probe.sh"
         ],
         "conclusion": "success",
-        "checkRunId": 101817459742
+        "checkRunId": 101817459742,
+        "guardResolvedRange": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "actionResolvedUpstreamSha": "7ed1a6ed8afd42be6a79300f488d86fdeef74164",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 2,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 2 modified files", "No issues"]
       }
     ],
     "retargetedAt": "2026-09-07T17:00:16Z",
@@ -497,9 +539,20 @@
       "The head SHA never changed, which is the whole point: the same commit, ranged against two bases."
     ],
     "observedWorkflowWasStrict": {
-      "mergeRef": "refs/pull/99/merge",
-      "continueOnErrorCount": 0,
-      "why": "Checked in the merge ref ITSELF, not inferred from the PR description."
+      "whyTheEarlierBindingFAILED": [
+        "REVISION NOTE. This key first bound strictness to `refs/pull/99/merge`. That ref NO LONGER",
+        "RESOLVES \u2014 `git fetch origin refs/pull/99/merge` returns `fatal: couldn't find remote ref`,",
+        "measured after PR #99 was closed. GitHub drops the merge ref when a PR closes, so the original",
+        "sentence became SELF-ATTESTED: true when written, unverifiable by any later reader.",
+        "Every other observation in this artifact binds API-persistent fields. This one now does too."
+      ],
+      "boundTo": "GET /repos/{owner}/{repo}/contents/.github/workflows/trunk-check.yml?ref=<sha>",
+      "continueOnErrorCountAtSha": {
+        "fd60453820fe5a7f0ed939ac823af04476f7cb68 (PR #99 head)": 0,
+        "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd (origin/main, the first base)": 0,
+        "7ed1a6ed8afd42be6a79300f488d86fdeef74164 (origin/alpha, the base after retarget)": 0
+      },
+      "whyThisIsEQUIVALENT": "The runs executed `refs/pull/99/merge`, a merge of the head and the base. Neither side MODIFIES `.github/workflows/trunk-check.yml` relative to the other \u2014 the file is identical at all three SHAs \u2014 so the merge necessarily carried the same file. Binding all three commits is therefore a durable statement of what ran, and unlike the merge ref it is still checkable today."
     },
     "doesNotEstablish": [
       "It does not establish anything about a REQUIRED context. `trunk-check` is not one of Control's five",
@@ -511,6 +564,39 @@
       "It does not measure a race between the base change and GitHub recomputing refs/pull/99/merge. Both",
       "post-retarget runs happened to resolve the new range; a run that fired before the merge ref settled",
       "would be a distinct hazard, unobserved here."
+    ],
+    "theActionsOwnUpstreamIsRECORDED": {
+      "why": [
+        "REVISION NOTE \u2014 the first revision of this key recorded only the GUARD's resolved file list, and",
+        "said the upstream SHA 'is not echoed'. THAT WAS FALSE. The pinned action prints its own resolution:",
+        "  Detected merge commit, using HEAD^1 (<sha>) as upstream and HEAD^2 (<sha>) as head",
+        "As first recorded, the evidence would have been byte-identical in a world where the ACTION's",
+        "scoping diverged from the GUARD's \u2014 the guard is a transcription of the action's logic, not the",
+        "action itself, and cell 1 exists precisely because two independently-correct-looking resolvers drift."
+      ],
+      "whatIsNowBound": [
+        "Per run, the ACTION's OWN `HEAD^1` upstream, read from its own log line, and its OWN",
+        "`Checked N modified file(s)` count \u2014 alongside the guard's file list."
+      ],
+      "theResult": [
+        "The action's upstream is EXACTLY the base tip in every run, by SHA equality and not by inference:",
+        "  34145664830  upstream 4d15c34 == origin/main   1 file",
+        "  34145674160  upstream 4d15c34 == origin/main   1 file",
+        "  34145753546  upstream 7ed1a6e == origin/alpha  2 files",
+        "  34145799940  upstream 7ed1a6e == origin/alpha  2 files",
+        "The action's checked-file count equals the guard's range size in all four runs (1,1,2,2), so the",
+        "guard and the action agreed on the range PER RUN \u2014 cell 1's parity claim, observed here rather",
+        "than assumed. This is a stronger binding than the file list alone: it is the resolver's own output."
+      ],
+      "howRetrieved": "gh run view <runId> --log | grep -o 'using HEAD\\^1 ([0-9a-f]\\{40\\})'"
+    },
+    "retargetDiscriminatorIsTIMEBOUND": [
+      "The file-list half of this observation depends on `main` and `alpha` differing in exactly one file,",
+      "with main's copy newer, AT THE TIME OF OBSERVATION. That delta changes as the branches move \u2014 this",
+      "very artifact is the file in question. The observation stands as a historical record bound to the",
+      "run ids and SHAs above; it is NOT a recipe that can be replayed later without first re-measuring the",
+      "main/alpha delta. The action-upstream binding above does not have this dependency and is the",
+      "durable half."
     ]
   },
   "cell3DiffScopeControls": {
@@ -546,7 +632,7 @@
       "conclusion": "success",
       "trunkStepNumber": 6,
       "trunkStepConclusion": "success",
-      "trunkSummary": "Checked 1 file / No issues",
+      "trunkSummary": "Checked 1 modified file / No issues",
       "theFileIsCleanByPOSITIVECONTROL": [
         "A green run on a file nothing lints would satisfy this cell while proving nothing \u2014 'Found no",
         "applicable linters' also exits 0. So the fixture's cleanliness was positive-controlled locally:",
@@ -564,7 +650,12 @@
         "tree is either digest-frozen (scripts/ci/resolve-trunk-range.sh by C6a, .trunk/configs/** by cell",
         "4b) or is itself an evidence record, so a dedicated fixture could only have been a newly-added",
         "clean file \u2014 which is exactly what this run already is."
-      ]
+      ],
+      "trunkSummaryNote": "REVISION NOTE: first recorded as `Checked 1 file / No issues`, which is the LOCAL (unscoped) string. CI prints `Checked 1 modified file` \u2014 and the word `modified` is itself the diff-scope evidence, so dropping it discarded the very thing the cell is about.",
+      "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+      "actionCheckedFileCount": 1,
+      "guardResolvedRange": ["harness-fixtures/m3-retarget-probe.sh"],
+      "thePositiveControlLIFTSONLYSHELLCHECK": "SCOPE OF THE CLEANLINESS CLAIM. The mutation control introduced SC2086+SC2250 and observed them reported, which proves SHELLCHECK is live on `harness-fixtures/*.sh`. It does NOT prove every linter applicable to a `.sh` file is live. The claim this cell supports is therefore `the file was checked and is clean under at least shellcheck`, not `zero findings of any kind under the full frozen linter set`. Recorded narrow rather than allowed to read as the wider claim."
     },
     "cell3b": {
       "property": "A PR touching a HISTORICALLY DIRTY file passes for its pre-existing findings while still failing for newly introduced ones.",
@@ -611,7 +702,14 @@
         "trunkStepConclusion": "success",
         "trunkSummary": "Checked 1 modified file / 2 existing issues / No new issues",
         "trunkAnnotationsArtifactId": 10027712569,
-        "whyThisGreenIsNotVACUOUS": "The run reports `2 existing issues` ALONGSIDE `No new issues`. Trunk therefore read the file and SAW its pre-existing findings, and withheld them deliberately. That is the positive evidence separating 'passed' from 'checked nothing' \u2014 without it a green here would be the weakest possible signal."
+        "whyThisGreenIsNotVACUOUS": "The run reports `2 existing issues` ALONGSIDE `No new issues`. Trunk therefore read the file and SAW its pre-existing findings, and withheld them deliberately. That is the positive evidence separating 'passed' from 'checked nothing' \u2014 without it a green here would be the weakest possible signal.",
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionCheckedFileCount": 1,
+        "trunkVerdictVerbatim": [
+          "Checked 1 modified file",
+          "2 existing issues (use --show-existing to see them)",
+          "No new issues"
+        ]
       },
       "redHalf": {
         "commit": "191e1df9befa686a83a260918e7ccb468e05e7fd",
@@ -631,19 +729,43 @@
           "newIssues": 1,
           "why": "Steps 1-5 (set-up, checkout and the three guards) all concluded `success` and only step 6 `trunk` failed, so the failure is located AT lint evaluation rather than upstream of it. Naming the linter, file, line and column is what separates 'lint rejected this' from 'the job broke'."
         },
-        "anEarlierCandidateWasDISCARDED": "A first red-half candidate went red on a bare `prettier` fmt complaint reported as `-:-` with no line or column. It would have failed the run, but a fmt finding with no position is a materially weaker binding than cell 12's standard, so it was discarded rather than recorded."
+        "anEarlierCandidateWasDISCARDED": "A first red-half candidate went red on a bare `prettier` fmt complaint reported as `-:-` with no line or column. It would have failed the run, but a fmt finding with no position is a materially weaker binding than cell 12's standard, so it was discarded rather than recorded.",
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionCheckedFileCount": 1,
+        "trunkVerdictVerbatim": [
+          "Checked 1 modified file",
+          "2 existing issues (use --show-existing to see them)",
+          "1 new lint issue",
+          " 3046:0  low  Fenced code blocks should have a language specified  markdownlint/MD040"
+        ]
       },
       "theDiscrimination": [
         "Same file. Same base. Same PR. The two pre-existing MD038 findings at 2692 and 3018 stayed",
         "SUPPRESSED IN BOTH RUNS \u2014 `2 existing issues` appears in the green half and in the red half alike.",
         "What changed is one newly-introduced MD040 at 3046, and that alone moved the run from success to",
         "failure. The gate scopes to NEWLY INTRODUCED FINDINGS, not to changed FILES."
-      ]
+      ],
+      "aTHIRDWORLDTHISCANNOTSEPARATE": {
+        "what": "Per-ISSUE novelty versus per-touched-LINE scoping.",
+        "why": [
+          "The two held findings (MD038) sit at lines 2692 and 3018, which this PR does not touch. The",
+          "reported finding (MD040) sits at 3046, which it does. So two mechanisms produce IDENTICAL evidence:",
+          "  (i)  the gate holds findings that are not NEW            <- what the cell claims",
+          "  (ii) the gate holds findings on lines that did not CHANGE <- indistinguishable here",
+          "The recorded observation does not separate them, and the fixture as built never could: both edits",
+          "are appends at EOF, so every pre-existing finding is necessarily on an untouched line."
+        ],
+        "whatWouldSeparateThem": "A third commit that MODIFIES a line already carrying a pre-existing finding without introducing a new one. Under (i) it stays green; under (ii) it goes red. Not performed.",
+        "statedRatherThanImplied": "Recorded because the cell's wording ('passes for its pre-existing findings') reads as claim (i), and an unqualified record would let a later reader take (i) as observed when only the conjunction of (i)-or-(ii) is."
+      }
     },
     "observedWorkflowWasStrict": {
-      "mergeRefs": ["refs/pull/99/merge", "refs/pull/100/merge"],
-      "continueOnErrorCount": 0,
-      "why": "Both observations ran a workflow with no job-scoped `continue-on-error`, checked in the merge refs themselves. Without that, the red half's `failure` would not distinguish strict from advisory."
+      "whyTheEarlierBindingFAILED": "As with cell 2: `refs/pull/100/merge` no longer resolves once the PR is closed (`fatal: couldn't find remote ref`, measured). Re-bound to API-persistent commits.",
+      "boundTo": "GET /repos/{owner}/{repo}/contents/.github/workflows/trunk-check.yml?ref=<sha>",
+      "continueOnErrorCountAtSha": {
+        "191e1df9befa686a83a260918e7ccb468e05e7fd (PR #100 red head)": 0,
+        "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd (origin/main, the base)": 0
+      }
     },
     "doesNotEstablish": [
       "Neither half says anything about a REQUIRED context; that is M4.",
@@ -652,7 +774,9 @@
       "direct evidence that at least one CLASS behaves differently: FORMATTERS (isort/black/prettier) report",
       "on any modified file regardless of whether the finding pre-existed. That asymmetry is a real property",
       "of the gate, discovered here, and it is NOT covered by cell 3(b) as written.",
-      "The backlog figure is a measured lower bound over five files, not a re-derivation of 9027."
+      "The backlog figure is a measured lower bound over five files, not a re-derivation of 9027.",
+      "It does not separate per-ISSUE novelty from per-touched-LINE scoping \u2014 see `cell3b.aTHIRDWORLDTHISCANNOTSEPARATE`. Both produce identical evidence on this fixture.",
+      "Cell 3(a)'s cleanliness is positive-controlled for SHELLCHECK ONLY, not for every linter applicable to a .sh file \u2014 see `cell3a.thePositiveControlLIFTSONLYSHELLCHECK`."
     ]
   }
 }
