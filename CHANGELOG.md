@@ -13,6 +13,22 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.25] — 2026-09-06
+
+### Changed
+
+- **M3 (`main`): `trunk-check` is strict.** Removed the job-scoped `continue-on-error: true` that
+  M2 shipped deliberately, so a Trunk finding fails the job rather than being advisory. Cell 11's
+  C3 assertions were written at M2 and are ENABLED here — the shipped-workflow contract cell now
+  asserts at `milestone="M3"`.
+- The cells that asserted the exemption EXISTS were inverted rather than deleted, so they keep
+  their teeth: re-adding `continue-on-error` at either scope is now what must be caught, and the
+  mutant registry case that previously mutated nothing re-adds the key. That let the runner's
+  milestone carve-out — "one M3 case mutates nothing by design" — be removed, so every mutant must
+  now really change the workflow.
+- The context is still **not required** by ruleset `Control`. Making it required is M4, which needs
+  explicit maintainer instruction and evidence on both bases.
+
 ## [2.8.24] — 2026-09-05
 
 ### Changed
