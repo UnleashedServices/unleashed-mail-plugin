@@ -3035,3 +3035,10 @@ finding · evidence · fix`) instead of a prose/markdown table; `swift-reviewer`
 - Shared PTY capture wrapper (`scripts/pty-capture.py`) so the `codex-review` and
   `gemini-review` CLIs render reliably from non-TTY contexts; surfaced in the README
   skills table.
+
+<!--
+COREDEV-2780 §7 cell 3(b) — the historically-dirty-file control, GREEN half.
+This block touches a file that already carries markdownlint/MD038 findings (lines 2692 and 3018)
+and introduces none of its own. A green run here shows the gate scopes to NEWLY INTRODUCED
+findings, not to changed FILES.
+-->
