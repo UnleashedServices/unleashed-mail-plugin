@@ -201,15 +201,37 @@ def _recorded_remote_halves():
     skipped and the stale evidence unchallenged — and once the context is required, that is a
     protected branch with no producer, or the gate running on the wrong branches.
 
-    Returns None only when the artifact is genuinely unusable, so a missing file still skips rather
-    than inventing a pass.
+    FAILS CLOSED, and the earlier fail-open is the reason. The artifact is a COMMITTED repository
+    file, so its absence or corruption is a repository defect, never an environment condition. In CI
+    `_resolve_target_set()` is ALWAYS None (no authenticated `gh`), so this recorded path is the ONLY
+    path there — returning None on a read error therefore disarmed C2 and C16 into silent skips at
+    exactly the point where they are load-bearing. Deleting the artifact must RED the suite, not
+    quiet it.
+
+    The live ruleset being unreadable is a genuine environment condition and still skips; that is
+    `_REMOTE_HALF_SKIP`, and it is a different question from this one. Conflating the two is what
+    let a missing artifact borrow the excuse belonging to a missing token.
     """
     try:
-        return json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))[
-            "c2AndCell16RemoteHalves"
-        ]
-    except (OSError, KeyError, ValueError):
-        return None
+        document = json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} is missing or unreadable. It is committed evidence that §7 "
+            "assigns the remote halves of C2 and cell 16; without it those cells cannot be "
+            "evaluated, and skipping them would accept the workflows unchecked."
+        ) from error
+    except ValueError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} does not parse as JSON, so the recorded remote halves cannot "
+            "be read. Corrupt evidence must fail, not skip."
+        ) from error
+    try:
+        return document["c2AndCell16RemoteHalves"]
+    except KeyError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} has no `c2AndCell16RemoteHalves` key. Renaming or dropping it "
+            "would otherwise silently disarm C2 and cell 16."
+        ) from error
 
 
 def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set:
@@ -222,9 +244,9 @@ def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set
     resolved = _resolve_target_set()
     if resolved is not None:
         return resolved
+    # No `is None` branch: the reader now fails closed, so a missing or corrupt artifact raises
+    # here instead of turning this cell into a skip.
     recorded = _recorded_remote_halves()
-    if recorded is None:
-        test.skipTest(_REMOTE_HALF_SKIP)
     test.assertEqual(
         set(recorded[recorded_key]),
         shipped_branches,
@@ -847,28 +869,43 @@ class Cell9_TheShippedWorkflowMeetsItsContract(unittest.TestCase):
     def setUpClass(cls):
         cls.workflow = _load_workflow()
 
-    def test_shipped_workflow_has_no_contract_problems_at_m2(self):
-        self.assertEqual([], contract_problems(self.workflow, milestone="M2"))
+    def test_shipped_workflow_has_no_contract_problems_at_m3(self):
+        """M3: the advisory exemption is GONE and the workflow is clean at the strict milestone.
 
-    def test_the_only_m3_problem_is_the_declared_advisory_exemption(self):
-        """M2's exemption is real and SCOPED: removing that ONE key makes the workflow M3-clean.
-
-        The clauses OVERLAP by design — `continue-on-error` violates both C3's job-mapping allowlist
-        and C3's explicit prohibition — so the honest assertion is not "exactly one diagnostic" but
-        "every M3 diagnostic names this key, and deleting it leaves none". Demanding non-overlap would
-        make most mutants unconstructible.
+        This assertion was `milestone="M2"` until M3 landed. The milestone parameter is the switch
+        C3 was written around: M2 deliberately shipped `continue-on-error: true`, so asserting C3
+        any earlier would have made the suite intentionally red (codex, r8).
         """
-        problems = contract_problems(self.workflow, milestone="M3")
-        self.assertNotEqual([], problems)
+        self.assertEqual([], contract_problems(self.workflow, milestone="M3"))
+
+    def test_readding_the_advisory_exemption_is_CAUGHT_at_m3(self):
+        """The inverse of the cell this replaces, and it must keep the same teeth.
+
+        Before M3 this asserted that the exemption was the ONLY M3 problem — which proved the gate
+        could see it. With the key removed that formulation is vacuous, so the discrimination is
+        preserved by re-adding the key and requiring every diagnostic to name it. A cell that only
+        checked the current shape would pass just as happily against a checker that had stopped
+        looking.
+        """
+        regressed = copy.deepcopy(self.workflow)
+        regressed["jobs"][EXPECTED_CONTEXT]["continue-on-error"] = True
+        problems = contract_problems(regressed, milestone="M3")
+        self.assertNotEqual(
+            [], problems, "re-adding the advisory exemption must be rejected"
+        )
         for problem in problems:
             self.assertIn("continue-on-error", problem)
-        at_m3 = copy.deepcopy(self.workflow)
-        at_m3["jobs"][EXPECTED_CONTEXT].pop("continue-on-error")
-        self.assertEqual([], contract_problems(at_m3, milestone="M3"))
 
-    def test_advisory_exemption_is_job_scoped_not_step_scoped(self):
-        """Step scope would rewrite the Trunk step's conclusion to success and make cell 2 blind."""
-        self.assertIs(True, _job(self.workflow).get("continue-on-error"))
+    def test_the_exemption_is_absent_at_BOTH_scopes(self):
+        """Job scope AND step scope. Step scope would rewrite the Trunk step's conclusion to
+        `success` and leave only the in-job `outcome`, which the REST API never exposes — so cell 2
+        would be blind and nothing could carry its claim.
+        """
+        self.assertNotIn(
+            "continue-on-error",
+            _job(self.workflow),
+            "M3 removes the job-scoped advisory exemption",
+        )
         for step in _steps(self.workflow):
             self.assertNotIn("continue-on-error", step, f"step {step.get('name')!r}")
 
@@ -1734,11 +1771,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 at_event("paths-ignore", ["docs/**"]),
                 "pull_request options: `paths-ignore` narrows reachability",
             ),
-            # Only a violation once M2's advisory exemption lapses at M3 — which is the point of
-            # writing the case at M2 and ENABLING it at M3.
+            # M3 REMOVED the advisory exemption, so this case now RE-ADDS it. Until M3 the shipped
+            # workflow carried the key and the case mutated nothing by design — at M3 that
+            # formulation is vacuous, because the unmutated workflow is clean and a checker that had
+            # stopped looking would pass it just as happily.
             (
                 "C3.nothing-skips-or-masks/job-continue-on-error",
-                lambda w: None,
+                lambda w: w["jobs"][EXPECTED_CONTEXT].update(
+                    {"continue-on-error": True}
+                ),
                 "job: `continue-on-error:` is prohibited",
                 "M3",
             ),
@@ -1871,7 +1912,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
     def test_the_shipped_workflow_is_a_passing_positive_control(self):
         """Every mutant below starts from a GREEN baseline, or it proves nothing."""
         self.assertEqual(
-            [], contract_problems(copy.deepcopy(self.workflow), milestone="M2")
+            [], contract_problems(copy.deepcopy(self.workflow), milestone="M3")
         )
 
     def test_every_generated_mutant_fails_with_its_own_diagnostic(self):
@@ -1881,14 +1922,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             with self.subTest(case=case_id):
                 mutant = copy.deepcopy(self.workflow)
                 mutate(mutant)
-                if milestone == "M2":
-                    # At M3 one case asserts that the SHIPPED advisory key is itself the violation,
-                    # so it mutates nothing by design; every other case must really change the file.
-                    self.assertNotEqual(
-                        yaml.safe_dump(self.workflow, sort_keys=True),
-                        yaml.safe_dump(mutant, sort_keys=True),
-                        "the mutant must actually change the workflow",
-                    )
+                # EVERY mutant, no milestone carve-out. The exemption existed because one M3 case
+                # mutated nothing while M2's shipped workflow carried the advisory key; M3 removed
+                # the key and that case now re-adds it, so the carve-out has no remaining subject.
+                # A mutant that changes nothing cannot prove a checker sees anything.
+                self.assertNotEqual(
+                    yaml.safe_dump(self.workflow, sort_keys=True),
+                    yaml.safe_dump(mutant, sort_keys=True),
+                    "the mutant must actually change the workflow",
+                )
                 problems = contract_problems(mutant, milestone=milestone)
                 self.assertIn(
                     diagnostic,

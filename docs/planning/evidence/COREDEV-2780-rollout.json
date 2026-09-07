@@ -53,5 +53,275 @@
     "HYBRID -- the Python owner asserts the local shape, and THIS ARTIFACT asserts equality against the",
     "ruleset as read at rollout time. The Python suite cannot observe the ruleset: CI holds no token",
     "that can read one, which `validate` demonstrated with `gh api ... exit status 4`."
-  ]
+  ],
+  "cell16CanaryRuntimeControl": {
+    "what": "\u00a77 row 16's second runtime half: the control proving the Trunk step stays observably failed while the canary job stays non-blocking.",
+    "milestone": "M2b",
+    "observedAt": "2026-09-06T18:35:00Z",
+    "tuple": {
+      "trunkStepOutcome": "failure",
+      "trunkStepConclusion": "failure",
+      "canaryJobConclusion": "failure",
+      "workflowRunConclusion": "success",
+      "note": [
+        "This is the tuple M2b requires, and the shape matters: job-level `continue-on-error` does",
+        "NOT make the job conclude success. It stops the job's failure from failing the WORKFLOW RUN.",
+        "Revision 28 of the plan asked for step-failure with job-success, which that scope cannot",
+        "produce. The canary can never block because its context is NOT REQUIRED \u2014 not because its",
+        "job concludes green."
+      ]
+    },
+    "boundToLintDiagnostic": {
+      "linter": "shellcheck/SC2250",
+      "severity": "low",
+      "path": ".githooks/pre-commit",
+      "line": 64,
+      "column": 46,
+      "message": "Prefer putting braces around variable references even when not strictly required.",
+      "filesChecked": 44,
+      "existingIssues": 382,
+      "newIssues": 1,
+      "why": [
+        "A checkout, setup, download or fetch failure yields the SAME three conclusions while Trunk",
+        "never reached lint evaluation, so an unbound observation certifies a canary that never linted",
+        "anything. This one is bound: Trunk reported a specific linter, file, line and column, and",
+        "reports having checked 44 modified files against 382 existing issues."
+      ]
+    },
+    "provenance": {
+      "base": "alpha",
+      "headSha": "6f5f9de",
+      "workflowPath": ".github/workflows/trunk-check-push.yml",
+      "workflowRunId": 34052149035,
+      "checkRunId": 101537555248,
+      "effectiveCheckName": "trunk-check-push",
+      "effectiveCheckNameNote": "the `name:` value, NOT the YAML job id \u2014 the plan is explicit that a required context matches the effective check name",
+      "event": "push",
+      "trunkCheckMode": "push",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "isRequiredContext": false,
+      "requiredContextsOnAlpha": [
+        "validate",
+        "py39-smoke",
+        "secret-scan",
+        "load-check",
+        "redactor-equivalence (ubuntu-latest)"
+      ]
+    },
+    "howTheStimulusArose": [
+      "STATED PLAINLY BECAUSE IT DIFFERS FROM THE PLAN'S PRESCRIPTION.",
+      "M2b prescribes a provenance-bound disposable fork as the stimulus, and its stated reason is",
+      "that no lint-failing commit can otherwise reach a branch the canary watches: `push.branches` is",
+      "exactly [main, alpha], both are protected by ruleset Control with an empty bypass_actors, and",
+      "no additional in-repo branch can match.",
+      "",
+      "The M2a catch-up merge falsified that assumption. Merging main into alpha (PR #86, 92 commits)",
+      "carried a PRE-EXISTING SC2250 in .githooks/pre-commit that is `new` relative to alpha's older",
+      "baseline but baseline relative to main. The commit reached alpha legitimately, through the PR",
+      "process and its five required checks, and the canary then fired on the push.",
+      "",
+      "The outcome was PREDICTED BEFORE THE MERGE, not rationalised after: the same single SC2250 was",
+      "identified on PR #86's advisory trunk-check run and reported to the maintainer, who elected to",
+      "accept it rather than fix it first. So the diagnostic was known in advance and then observed.",
+      "",
+      "WHAT THIS DOES NOT ESTABLISH: it is not a fork-based stimulus, and it was incidental rather",
+      "than deliberately induced. A reviewer who reads M2b's prescription as normative rather than as",
+      "one means to the end should treat M2b's runtime half as still open and run the fork exercise.",
+      "The argument for accepting it: the requirement is to CAUSE a controlled canary failure and",
+      "record the tuple bound to a lint diagnostic, and this observation is on production",
+      "infrastructure rather than a fork \u2014 the path that actually matters."
+    ],
+    "whatRemainsForM2b": [
+      "If the fork-based stimulus is judged necessary, it still needs: a provenance-bound disposable",
+      "fork whose default branch is named `main`, carrying the same canary workflow at the same SHA",
+      "pins, with GitHub Actions ENABLED in that fork (they are disabled on forks by default, and",
+      "without enabling them the stimulus silently produces nothing and this half is unfalsifiable)."
+    ],
+    "whyItLivesHere": [
+      "It was first written to a standalone `COREDEV-2780-m2b-canary.json`, which the contract has",
+      "never heard of and nothing reads. \u00a77's inventory and its ownership table both already assign",
+      "this observation to THIS file: `cell 16's ruleset read and its canary runtime control`, and",
+      "`the control proving the Trunk step stays observably failed while the job stays non-blocking`.",
+      "The repo has paid for that shape once already \u2014 `_recorded_remote_halves()`'s docstring",
+      "records rollout.json being named as owner in prose and parsed by nothing (codex, PR #84).",
+      "Conforming the evidence to the contract is cheaper and truer than amending the contract to",
+      "match where the evidence happened to land."
+    ]
+  },
+  "cell10AnnotationArtifact": {
+    "what": "\u00a77 row 10's annotation-artifact observation.",
+    "resolves": "Cell 10's annotation observation, which the follow-up plan scheduled under M3 and which this artifact previously listed as unresolved.",
+    "contract": [
+      "The original contract requires three things together: a NON-FORK PR (so there is no 403),",
+      "exercise of the `--github-annotate-file` branch, and a produced `trunk-annotations` artifact.",
+      "It assigns that observation to the committed rollout artifact \u2014 an uncommitted tuple leaves",
+      "the cell skipping, which is why it is recorded here rather than only observed."
+    ],
+    "nonFork": {
+      "green": {
+        "pr": 91,
+        "headRef": "feat/COREDEV-2780-m3-strict-main"
+      },
+      "red": {
+        "pr": 92,
+        "headRef": "evidence/COREDEV-2780-m3-red-main"
+      },
+      "why": "Both heads are branches of this repository, not forks, so `contents: read` suffices and no 403 arises."
+    },
+    "annotateFileBranchExercised": {
+      "mechanism": "`save-annotations: true` in .github/workflows/trunk-check.yml",
+      "effect": "The action writes an annotation artifact INSTEAD of posting annotations, which is why `contents: read` stands (\u00a76.1 option (b)).",
+      "corroboration": "The M2c parity artifact records the resulting invocation carrying `--github-annotate-file=<tmpdir>/annotations.bin` on the pull_request event, and NOT on push."
+    },
+    "artifactProduced": {
+      "name": "trunk-annotations",
+      "green": {
+        "workflowRunId": 34060576498,
+        "artifactId": 9997331764,
+        "sizeBytes": 1468
+      },
+      "red": {
+        "workflowRunId": 34060585595,
+        "artifactId": 9997333826,
+        "sizeBytes": 1874
+      },
+      "note": "Produced by trunk-check ITSELF on both halves \u2014 not only by the M2c parity harness. That is what the artifact previously left unresolved."
+    },
+    "boundToTheProbe": {
+      "member": "annotations.bin",
+      "uncompressedBytes": 8825,
+      "names": [
+        "harness-fixtures/m3-red-probe.sh",
+        "shellcheck",
+        "SC2086",
+        "SC2250"
+      ],
+      "why": "A non-empty artifact is not by itself evidence: an empty or unrelated payload would also be 'produced'. Its content names the probe file and both linters, so the annotation payload is bound to the same diagnostic as the red conclusion."
+    }
+  },
+  "cell12DualBaseCheckRuns": {
+    "what": "\u00a77 row 12's dual-base provenance-bound check runs, and the strict/advisory discrimination they carry.",
+    "milestone": "M3",
+    "base": "main",
+    "observedAt": "2026-09-06T19:20:00Z",
+    "basesRecorded": ["main"],
+    "basesRequired": ["main", "alpha"],
+    "why": [
+      "A GREEN run cannot prove the gate is strict. With no findings, advisory and strict both",
+      "conclude success \u2014 they are indistinguishable. Only a RED run discriminates:",
+      "  advisory  Trunk fails -> job failure -> WORKFLOW RUN SUCCEEDS",
+      "  strict    Trunk fails -> job failure -> WORKFLOW RUN FAILS",
+      "That is why M3 requires both per base, and why revision 1 of the plan was wrong to accept a",
+      "context observed only while failures were suppressed \u2014 one that had never been able to fail."
+    ],
+    "stepScope": {
+      "why": [
+        "A check run describes the JOB, so `checkRunConclusion` cannot by itself name which step",
+        "failed. M3's checklist binds the TRUNK STEP's API-reported `conclusion`, so each half below",
+        "records it as `trunkStepConclusion`, read from the workflow-jobs record."
+      ],
+      "source": "GET /repos/{owner}/{repo}/actions/runs/{workflowRunId}/jobs",
+      "jobIdIsCheckRunId": "That endpoint returns the job id, and on both runs below it equals the `checkRunId` already recorded (101560257395, 101560280950), so the step record is addressable from what is here with no second identifier to drift."
+    },
+    "strictGreen": {
+      "pr": 91,
+      "headSha": "e692e1966b46c3e378652037daeba68cfee6a0b2",
+      "workflowPath": ".github/workflows/trunk-check.yml",
+      "workflowRunId": 34060576498,
+      "checkRunId": 101560257395,
+      "event": "pull_request",
+      "effectiveCheckName": "trunk-check",
+      "workflowRunConclusion": "success",
+      "checkRunConclusion": "success",
+      "trunkStepNumber": 6,
+      "trunkStepName": "trunk",
+      "trunkStepConclusion": "success",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "note": [
+        "Meaningful as STRICT green only because the red observation below establishes that this",
+        "workflow version has no continue-on-error. PR #92 is branched from #91, so both ran the",
+        "same strict workflow via the pull_request merge ref."
+      ]
+    },
+    "deliberateRed": {
+      "pr": 92,
+      "headSha": "de88d32094251c64a90294ae34040e190cf61436",
+      "workflowPath": ".github/workflows/trunk-check.yml",
+      "workflowRunId": 34060585595,
+      "checkRunId": 101560280950,
+      "event": "pull_request",
+      "effectiveCheckName": "trunk-check",
+      "workflowRunConclusion": "failure",
+      "checkRunConclusion": "failure",
+      "trunkStepNumber": 6,
+      "trunkStepName": "trunk",
+      "trunkStepConclusion": "failure",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "boundDiagnostic": {
+        "path": "harness-fixtures/m3-red-probe.sh",
+        "line": 13,
+        "column": 6,
+        "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+        "newIssues": 2,
+        "why": "A setup, checkout or network failure would also fail the run while Trunk never reached lint evaluation. This names the linter, file, line and column, so the failure is bound to lint rather than to infrastructure."
+      },
+      "note": [
+        "THE WORKFLOW RUN CONCLUSION IS WHAT DISCRIMINATES STRICT FROM ADVISORY. Under M2's advisory",
+        "exemption this would read `success` with the job still `failure`. It reads `failure`, so the",
+        "job-scoped continue-on-error is genuinely gone.",
+        "The step conclusion is a SEPARATE requirement, not that inference: `trunk` (step 6) is the only",
+        "step that failed \u2014 steps 1-5, set-up, checkout and the three guards, all concluded `success` \u2014",
+        "so the failure is located at lint evaluation, not upstream of it.",
+        "The PR is never merged, BY INSTRUCTION. Pre-M4 that is DISCIPLINE, not enforcement:",
+        "`trunk-check` is not one of Control's five required contexts (rollout.json records",
+        "`trunkCheckAbsentPreM4: true`), on de88d32 all five required contexts are `success` with only",
+        "`trunk-check` `failure`, and GitHub therefore reports PR #92 `mergeable: MERGEABLE`,",
+        "`mergeStateStatus: UNSTABLE` \u2014 its name for `mergeable, with a non-required check failing`.",
+        "Control's empty bypass_actors guarantees only that those five cannot be WAIVED; it cannot make",
+        "a non-rule block a merge. Its other rules, `deletion` and `non_fast_forward`, do not stop a",
+        "fast-forward push either, so no ruleset route is closed on this SHA (derived from the rules; no",
+        "push was attempted). What holds this commit off `main` is the never-merge instruction plus the",
+        "local pre-commit gate recorded below \u2014 which is itself bypassable. M4 makes this enforcement."
+      ]
+    },
+    "howTheRedCommitWasMade": [
+      "The local pre-commit trunk gate BLOCKED the lint-failing commit, correctly \u2014 stopping new",
+      "findings is its purpose. Producing red-run evidence therefore requires --no-verify, which is",
+      "inherent to the observation rather than a shortcut, and is recorded here so it is not mistaken",
+      "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
+      "change (no leaks), version-sync, plugin assembly, hooks manifest."
+    ],
+    "stillOpenForM3": [
+      {
+        "what": "The same strict-green + deliberate-red pair on `alpha`.",
+        "why": "Both bases are required: Control targets main AND alpha, so a context satisfiable on only one of them is COREDEV-2767 aimed at the other base."
+      },
+      {
+        "what": "Landing the `continue-on-error` removal on `main` itself. PR #91 is MERGEABLE but NOT MERGED.",
+        "why": "`base` above names the branch this pair TARGETS, not a branch that is already strict. Both observations were made on pull_request merge refs carrying the strict workflow; `origin/main` still carries the job-scoped `continue-on-error: true`. Reading this artifact as `main is strict` is the benign half of an observation consistent with two worlds.",
+        "discriminator": "git show origin/main:.github/workflows/trunk-check.yml | grep -n continue-on-error \u2014 prints line 49 while this is open, and returns nothing once #91 has landed."
+      },
+      {
+        "what": "A real PR-RETARGET observation. Follow-up plan M3: `Include a real RETARGET case`; original plan cell 2: `also from M3 \u2014 a real RETARGET case`.",
+        "why": "The `types:` widening is a STATIC clause assertion; nothing yet observes that it works. It requires opening a PR against one base, letting `trunk-check` land, retargeting it to the other base, and asserting that the context satisfying the rule is a NEW run against the NEW base range rather than the earlier same-SHA result. Neither #91 nor #92 was ever retargeted, so the condition that actually breaks range resolution is unobserved."
+      },
+      {
+        "what": "Cell 3(b), the historically-dirty-file control: a PR touching a historically dirty file passes for its pre-existing findings while still failing for newly introduced ones.",
+        "why": "#92 adds a BRAND-NEW file, `harness-fixtures/m3-red-probe.sh`. It therefore shows only `fails on new findings`, never the pre-existing-versus-new discrimination against the 9027-issue backlog."
+      },
+      {
+        "what": "Cell 3(a) \u2014 a PR touching one clean file passes with the 9027-issue backlog present \u2014 is arguably satisfied by #91 green, but is RECORDED NOWHERE.",
+        "why": "That is exactly the state cell 10 was in until the revision that added `cell10Annotations`: observed, unwritten, and therefore leaving its cell skipping."
+      }
+    ],
+    "dualBaseIsNotYETSATISFIED": [
+      "Row 12 says DUAL-base. Only `main` is recorded here. `basesRecorded` and `basesRequired`",
+      "are both present and unequal ON PURPOSE, so this record states its own incompleteness",
+      "rather than leaving a reader to infer it from an absence \u2014 an absence never appears in a",
+      "diff. Alpha's pair joins this key when it lands."
+    ]
+  }
 }

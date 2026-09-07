@@ -177,6 +177,10 @@ jobs:
           curl -fsSL https://trunk.io/releases/trunk -o /tmp/real-trunk
           chmod u+x /tmp/real-trunk
           : > /tmp/argv.jsonl
+          # Truncated for the same reason argv.jsonl is: a log surviving from an earlier attempt
+          # would let the assembler read a diagnostic THIS run never emitted.
+          : > /tmp/primary.log
+          : > /tmp/control.log
 
       - name: trunk
         # ADDRESSABLE, because cell 5 requires the action's conclusion recorded SEPARATELY from the
@@ -187,6 +191,7 @@ jobs:
         env:
           PARITY_ARGV_FILE: /tmp/argv.jsonl
           PARITY_REAL_TRUNK: /tmp/real-trunk
+          PARITY_PRIMARY_LOG: /tmp/primary.log
         with:
           # THE ONE LEGITIMATE USE OF `trunk-path` — §1's C4 forbids it in the shipped workflows.
           trunk-path: scripts/ci/parity-recorder.sh
@@ -225,6 +230,10 @@ jobs:
         env:
           PARITY_ARGV_FILE: /tmp/argv-control.jsonl
           PARITY_REAL_TRUNK: /tmp/real-trunk
+          # DELIBERATELY NOT /tmp/primary.log. The control runs with `--fix` and `if: always()`; if it
+          # wrote to the primary's log the assembler could read the control's finding as the primary's,
+          # certifying exactly the world this field exists to exclude.
+          PARITY_PRIMARY_LOG: /tmp/control.log
         with:
           trunk-path: scripts/ci/parity-recorder.sh
           arguments: ${{ steps.inputs.outputs.arguments }} --fix
@@ -242,10 +251,57 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, pathlib
+          import json, os, pathlib, re
+          FIXTURE = "harness-fixtures/fixable.sh"
           def read(path, default=""):
               p = pathlib.Path(path)
               return p.read_text(encoding="utf-8").strip() if p.exists() else default
+
+          def primary_diagnostic():
+              """The FIXTURE's own finding from the primary run's output, or None.
+
+              `action.outcome` is `failure` both when Trunk linted the fixture and when Trunk
+              aborted after emitting its `check` argv while the `if: always()` control still
+              succeeded. Only lint evaluation names THIS FILE together with the LINTER that
+              judged it, so that pair is what is recorded.
+
+              The position is deliberately optional. The fixture is mis-indented, which shfmt
+              reports as a whole-file `fmt` finding printed as `-:-` — it has no line or column.
+              Requiring integers here would make the field unsatisfiable for the very fixture the
+              harness stages, which is how the first attempt at this returned null on a run that
+              had in fact linted the file. Trunk renders as:
+
+                  harness-fixtures/fixable.sh
+                   -:-  fmt  Incorrect formatting, autoformat by running 'trunk fmt'  shfmt
+
+              and, for a positional linter:
+
+                  harness-fixtures/probe.sh:13:6
+                   13:6  low  Double quote to prevent ...  shellcheck/SC2086
+              """
+              text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", read("/tmp/primary.log"))
+              lines = [line.rstrip() for line in text.splitlines()]
+              header = re.compile(r"^" + re.escape(FIXTURE) + r"(?::(\d+):(\d+))?$")
+              row = re.compile(r"^(-|\d+):(-|\d+)\s+\S+\s+.*?\s(\S+)$")
+              for index, line in enumerate(lines):
+                  head = header.match(line.strip())
+                  if head is None:
+                      continue
+                  for follower in lines[index + 1 : index + 5]:
+                      found = row.match(follower.strip())
+                      if found is None:
+                          continue
+                      def position(from_header, from_row):
+                          value = from_header or (from_row if from_row != "-" else None)
+                          return int(value) if value is not None else None
+                      return {
+                          "path": FIXTURE,
+                          "linter": found.group(3),
+                          "line": position(head.group(1), found.group(1)),
+                          "column": position(head.group(2), found.group(2)),
+                      }
+              return None
+
           invocations = [json.loads(line) for line in
                          read("/tmp/argv.jsonl").splitlines() if line.strip()]
           event = os.environ["GITHUB_EVENT_NAME"]
@@ -259,7 +315,7 @@ jobs:
               "tree": {
                   "pre": read("/tmp/tree.pre"),
                   "post": read("/tmp/tree.post"),
-                  "fixture": "harness-fixtures/fixable.sh",
+                  "fixture": FIXTURE,
                   "fixturePre": read("/tmp/fixture.pre"),
                   "fixturePost": read("/tmp/fixture.post"),
                   "controlPost": read("/tmp/fixture.control"),
@@ -271,6 +327,7 @@ jobs:
               "action": {
                   "outcome": os.environ.get("PARITY_TRUNK_OUTCOME", ""),
                   "controlOutcome": os.environ.get("PARITY_CONTROL_OUTCOME", ""),
+                  "primaryDiagnostic": primary_diagnostic(),
               },
               "actionInputs": {
                   "canonical": os.environ.get("PARITY_INPUTS_CANONICAL", ""),
@@ -291,7 +348,7 @@ jobs:
 
       - name: upload-the-parity-artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: parity-${{ github.event_name }}
           path: parity-*.json
