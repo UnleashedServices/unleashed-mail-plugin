@@ -170,13 +170,26 @@ def parity_problems(record: dict) -> list[str]:
                 f"cell 5: the primary diagnostic names {diagnostic.get('path')!r}, not the fixture "
                 f"{fixture!r} — a finding elsewhere does not show the fixture was linted"
             )
+        if not diagnostic.get("linter"):
+            problems.append(
+                "cell 5: the primary diagnostic names no linter — the file being mentioned is not "
+                "the same claim as a linter having judged it"
+            )
+        # The POSITION IS OPTIONAL, and that is measured rather than lenient. The staged fixture is
+        # mis-indented, which shfmt reports as a whole-file `fmt` finding printed as `-:-`; a real
+        # run of this harness therefore carries no line or column. Requiring integers made the field
+        # unsatisfiable for the very fixture the harness stages, and the first re-run returned null
+        # on a run that HAD linted the file. When a position is present it must still be a genuine
+        # integer — `isinstance(True, int)` is True, so booleans are excluded explicitly, or a JSON
+        # `true` would forge one.
         for axis in ("line", "column"):
             value = diagnostic.get(axis)
-            # `isinstance(True, int)` is True, so booleans are excluded explicitly: a JSON `true`
-            # here would otherwise satisfy an int check and forge a position.
+            if value is None:
+                continue
             if not isinstance(value, int) or isinstance(value, bool):
                 problems.append(
-                    f"cell 5: the primary diagnostic's `{axis}` is not an integer position"
+                    f"cell 5: the primary diagnostic's `{axis}` is present but is not an integer "
+                    "position"
                 )
 
     control_post = tree.get("controlPost")
@@ -255,10 +268,15 @@ def _clean_record(event: str = "pull_request") -> dict:
             "controlOutcome": "success",
             # The position the shipped fixture actually produces: `printf` writes the mis-indented
             # `echo` on line 3, and shfmt reports its first offending column.
+            # THE SHAPE A REAL RUN PRODUCES, copied from run 34073353787 rather than imagined:
+            # shfmt reports the mis-indented fixture as a whole-file `fmt` finding, so there is no
+            # line or column. An invented `line: 3, column: 7` here would have made every
+            # discrimination test below pass against a record no run of this harness can emit.
             "primaryDiagnostic": {
                 "path": "harness-fixtures/fixable.sh",
-                "line": 3,
-                "column": 7,
+                "linter": "shfmt",
+                "line": None,
+                "column": None,
             },
         },
         "actionInputs": {
@@ -305,9 +323,24 @@ class TheJudgeDiscriminates(unittest.TestCase):
         record = _clean_record()
         record["action"]["primaryDiagnostic"]["line"] = True
         self.assertIn(
-            "cell 5: the primary diagnostic's `line` is not an integer position",
+            "cell 5: the primary diagnostic's `line` is present but is not an integer position",
             parity_problems(record),
         )
+
+    def test_a_diagnostic_without_a_linter_is_rejected(self):
+        """Mentioning the file is not the same claim as a linter having judged it."""
+        record = _clean_record()
+        del record["action"]["primaryDiagnostic"]["linter"]
+        self.assertTrue(
+            any("names no linter" in problem for problem in parity_problems(record)),
+            "a diagnostic with no linter must not certify that the fixture was linted",
+        )
+
+    def test_an_absent_position_is_accepted_because_shfmt_reports_none(self):
+        """The POSITIVE control for the optionality — asserted, so nobody 'tightens' it back."""
+        record = _clean_record()
+        self.assertIsNone(record["action"]["primaryDiagnostic"]["line"])
+        self.assertEqual([], parity_problems(record))
 
     def test_a_range_mismatch_is_the_cell_1_failure(self):
         """The guard checking a different range than the action lints is the whole point."""

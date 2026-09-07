@@ -258,25 +258,50 @@ jobs:
               return p.read_text(encoding="utf-8").strip() if p.exists() else default
 
           def primary_diagnostic():
-              """The FIXTURE's own `path:line:column` from the primary run's output, or None.
+              """The FIXTURE's own finding from the primary run's output, or None.
 
-              `action.outcome` is `failure` both when Trunk linted the fixture and found it
-              mis-indented AND when Trunk aborted after emitting its `check` argv while the
-              `if: always()` control still succeeded. Only the first world names the fixture with a
-              position, so that is what is recorded. Trunk colours its output, so ANSI is stripped
-              before matching; returning None rather than a placeholder keeps "absent" unforgeable.
+              `action.outcome` is `failure` both when Trunk linted the fixture and when Trunk
+              aborted after emitting its `check` argv while the `if: always()` control still
+              succeeded. Only lint evaluation names THIS FILE together with the LINTER that
+              judged it, so that pair is what is recorded.
+
+              The position is deliberately optional. The fixture is mis-indented, which shfmt
+              reports as a whole-file `fmt` finding printed as `-:-` — it has no line or column.
+              Requiring integers here would make the field unsatisfiable for the very fixture the
+              harness stages, which is how the first attempt at this returned null on a run that
+              had in fact linted the file. Trunk renders as:
+
+                  harness-fixtures/fixable.sh
+                   -:-  fmt  Incorrect formatting, autoformat by running 'trunk fmt'  shfmt
+
+              and, for a positional linter:
+
+                  harness-fixtures/probe.sh:13:6
+                   13:6  low  Double quote to prevent ...  shellcheck/SC2086
               """
-              text = re.sub(r"\x1b\[[0-9;]*m", "", read("/tmp/primary.log"))
-              found = re.search(re.escape(FIXTURE) + r":(\d+):(\d+)", text)
-              if found is None:
-                  return None
-              return {
-                  "path": FIXTURE,
-                  "line": int(found.group(1)),
-                  "column": int(found.group(2)),
-              }
-          invocations = [json.loads(line) for line in
-                         read("/tmp/argv.jsonl").splitlines() if line.strip()]
+              text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", read("/tmp/primary.log"))
+              lines = [line.rstrip() for line in text.splitlines()]
+              header = re.compile(r"^" + re.escape(FIXTURE) + r"(?::(\d+):(\d+))?$")
+              row = re.compile(r"^(-|\d+):(-|\d+)\s+\S+\s+.*?\s(\S+)$")
+              for index, line in enumerate(lines):
+                  head = header.match(line.strip())
+                  if head is None:
+                      continue
+                  for follower in lines[index + 1 : index + 5]:
+                      found = row.match(follower.strip())
+                      if found is None:
+                          continue
+                      def position(from_header, from_row):
+                          value = from_header or (from_row if from_row != "-" else None)
+                          return int(value) if value is not None else None
+                      return {
+                          "path": FIXTURE,
+                          "linter": found.group(3),
+                          "line": position(head.group(1), found.group(1)),
+                          "column": position(head.group(2), found.group(2)),
+                      }
+              return None
+
           event = os.environ["GITHUB_EVENT_NAME"]
           record = {
               "schemaVersion": 1,
