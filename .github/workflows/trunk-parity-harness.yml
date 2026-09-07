@@ -302,6 +302,8 @@ jobs:
                       }
               return None
 
+          invocations = [json.loads(line) for line in
+                         read("/tmp/argv.jsonl").splitlines() if line.strip()]
           event = os.environ["GITHUB_EVENT_NAME"]
           record = {
               "schemaVersion": 1,
