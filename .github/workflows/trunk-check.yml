@@ -40,13 +40,6 @@ jobs:
     # job-level widening satisfies both allowlists while widening the effective token.
     permissions:
       contents: read
-    # M2 ONLY, AND AT JOB SCOPE ONLY — REMOVED AT M3.
-    # C3 forbids this key. M2 is deliberately exempt so cell 2's M2 half is observable: at job scope
-    # the Trunk step's own `conclusion` still reports `failure` in the workflow-jobs record, which
-    # the rollout evidence can bind to. STEP scope would rewrite that conclusion to `success` and
-    # leave only the in-job `outcome`, which the REST API never exposes — nothing could carry the
-    # claim. Cell 11's C3 assertions are written at M2 and ENABLED at M3.
-    continue-on-error: true
     # C8: the step sequence is an allowlist, IN ORDER, and exactly these five. The two guards are
     # separate because their correct positions differ — C6a's must precede the step that EXECUTES the
     # resolver, and C6's must be the LAST thing before the action so nothing can create a launcher

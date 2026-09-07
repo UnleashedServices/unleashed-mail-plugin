@@ -28,6 +28,127 @@
     ],
     "trunkCheckPushAbsent": true
   },
+  "m4Preconditions": {
+    "integrationIds": [15368],
+    "mergeQueueRulePresent": false,
+    "note": [
+      "`integration_id` is OBTAINED from the existing contexts rather than guessed, which is",
+      "what M4 requires. A merge-queue rule would be a STOP, not a configuration tweak."
+    ],
+    "ruleTypes": ["deletion", "non_fast_forward", "required_status_checks"],
+    "strictRequiredStatusChecksPolicy": false,
+    "trunkCheckAbsentPreM4": true
+  },
+  "observedAt": "2026-09-02T15:56:32Z",
+  "ruleset": {
+    "bypassActors": [],
+    "enforcement": "active",
+    "id": 16082567,
+    "name": "Control"
+  },
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2780",
+  "why": [
+    "\u00a77's ownership rule: a cell asserting a relationship between LOCAL content and REMOTE state is a",
+    "HYBRID -- the Python owner asserts the local shape, and THIS ARTIFACT asserts equality against the",
+    "ruleset as read at rollout time. The Python suite cannot observe the ruleset: CI holds no token",
+    "that can read one, which `validate` demonstrated with `gh api ... exit status 4`."
+  ],
+  "cell16CanaryRuntimeControl": {
+    "what": "\u00a77 row 16's second runtime half: the control proving the Trunk step stays observably failed while the canary job stays non-blocking.",
+    "milestone": "M2b",
+    "observedAt": "2026-09-06T18:35:00Z",
+    "tuple": {
+      "trunkStepOutcome": "failure",
+      "trunkStepConclusion": "failure",
+      "canaryJobConclusion": "failure",
+      "workflowRunConclusion": "success",
+      "note": [
+        "This is the tuple M2b requires, and the shape matters: job-level `continue-on-error` does",
+        "NOT make the job conclude success. It stops the job's failure from failing the WORKFLOW RUN.",
+        "Revision 28 of the plan asked for step-failure with job-success, which that scope cannot",
+        "produce. The canary can never block because its context is NOT REQUIRED \u2014 not because its",
+        "job concludes green."
+      ]
+    },
+    "boundToLintDiagnostic": {
+      "linter": "shellcheck/SC2250",
+      "severity": "low",
+      "path": ".githooks/pre-commit",
+      "line": 64,
+      "column": 46,
+      "message": "Prefer putting braces around variable references even when not strictly required.",
+      "filesChecked": 44,
+      "existingIssues": 382,
+      "newIssues": 1,
+      "why": [
+        "A checkout, setup, download or fetch failure yields the SAME three conclusions while Trunk",
+        "never reached lint evaluation, so an unbound observation certifies a canary that never linted",
+        "anything. This one is bound: Trunk reported a specific linter, file, line and column, and",
+        "reports having checked 44 modified files against 382 existing issues."
+      ]
+    },
+    "provenance": {
+      "base": "alpha",
+      "headSha": "6f5f9de",
+      "workflowPath": ".github/workflows/trunk-check-push.yml",
+      "workflowRunId": 34052149035,
+      "checkRunId": 101537555248,
+      "effectiveCheckName": "trunk-check-push",
+      "effectiveCheckNameNote": "the `name:` value, NOT the YAML job id \u2014 the plan is explicit that a required context matches the effective check name",
+      "event": "push",
+      "trunkCheckMode": "push",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "isRequiredContext": false,
+      "requiredContextsOnAlpha": [
+        "validate",
+        "py39-smoke",
+        "secret-scan",
+        "load-check",
+        "redactor-equivalence (ubuntu-latest)"
+      ]
+    },
+    "howTheStimulusArose": [
+      "STATED PLAINLY BECAUSE IT DIFFERS FROM THE PLAN'S PRESCRIPTION.",
+      "M2b prescribes a provenance-bound disposable fork as the stimulus, and its stated reason is",
+      "that no lint-failing commit can otherwise reach a branch the canary watches: `push.branches` is",
+      "exactly [main, alpha], both are protected by ruleset Control with an empty bypass_actors, and",
+      "no additional in-repo branch can match.",
+      "",
+      "The M2a catch-up merge falsified that assumption. Merging main into alpha (PR #86, 92 commits)",
+      "carried a PRE-EXISTING SC2250 in .githooks/pre-commit that is `new` relative to alpha's older",
+      "baseline but baseline relative to main. The commit reached alpha legitimately, through the PR",
+      "process and its five required checks, and the canary then fired on the push.",
+      "",
+      "The outcome was PREDICTED BEFORE THE MERGE, not rationalised after: the same single SC2250 was",
+      "identified on PR #86's advisory trunk-check run and reported to the maintainer, who elected to",
+      "accept it rather than fix it first. So the diagnostic was known in advance and then observed.",
+      "",
+      "WHAT THIS DOES NOT ESTABLISH: it is not a fork-based stimulus, and it was incidental rather",
+      "than deliberately induced. A reviewer who reads M2b's prescription as normative rather than as",
+      "one means to the end should treat M2b's runtime half as still open and run the fork exercise.",
+      "The argument for accepting it: the requirement is to CAUSE a controlled canary failure and",
+      "record the tuple bound to a lint diagnostic, and this observation is on production",
+      "infrastructure rather than a fork \u2014 the path that actually matters."
+    ],
+    "whatRemainsForM2b": [
+      "If the fork-based stimulus is judged necessary, it still needs: a provenance-bound disposable",
+      "fork whose default branch is named `main`, carrying the same canary workflow at the same SHA",
+      "pins, with GitHub Actions ENABLED in that fork (they are disabled on forks by default, and",
+      "without enabling them the stimulus silently produces nothing and this half is unfalsifiable)."
+    ],
+    "whyItLivesHere": [
+      "It was first written to a standalone `COREDEV-2780-m2b-canary.json`, which the contract has",
+      "never heard of and nothing reads. \u00a77's inventory and its ownership table both already assign",
+      "this observation to THIS file: `cell 16's ruleset read and its canary runtime control`, and",
+      "`the control proving the Trunk step stays observably failed while the job stays non-blocking`.",
+      "The repo has paid for that shape once already \u2014 `_recorded_remote_halves()`'s docstring",
+      "records rollout.json being named as owner in prose and parsed by nothing (codex, PR #84).",
+      "Conforming the evidence to the contract is cheaper and truer than amending the contract to",
+      "match where the evidence happened to land."
+    ]
+  },
   "cell10AnnotationArtifact": {
     "what": "\u00a77 row 10's annotation-artifact observation.",
     "resolves": "Cell 10's annotation observation, which the follow-up plan scheduled under M3 and which this artifact previously listed as unresolved.",
@@ -202,31 +323,5 @@
       "rather than leaving a reader to infer it from an absence \u2014 an absence never appears in a",
       "diff. Alpha's pair joins this key when it lands."
     ]
-  },
-  "m4Preconditions": {
-    "integrationIds": [15368],
-    "mergeQueueRulePresent": false,
-    "note": [
-      "`integration_id` is OBTAINED from the existing contexts rather than guessed, which is",
-      "what M4 requires. A merge-queue rule would be a STOP, not a configuration tweak."
-    ],
-    "ruleTypes": ["deletion", "non_fast_forward", "required_status_checks"],
-    "strictRequiredStatusChecksPolicy": false,
-    "trunkCheckAbsentPreM4": true
-  },
-  "observedAt": "2026-09-02T15:56:32Z",
-  "ruleset": {
-    "bypassActors": [],
-    "enforcement": "active",
-    "id": 16082567,
-    "name": "Control"
-  },
-  "schemaVersion": 1,
-  "ticket": "COREDEV-2780",
-  "why": [
-    "\u00a77's ownership rule: a cell asserting a relationship between LOCAL content and REMOTE state is a",
-    "HYBRID -- the Python owner asserts the local shape, and THIS ARTIFACT asserts equality against the",
-    "ruleset as read at rollout time. The Python suite cannot observe the ruleset: CI holds no token",
-    "that can read one, which `validate` demonstrated with `gh api ... exit status 4`."
-  ]
+  }
 }
