@@ -404,9 +404,12 @@
       "THAT ALONE WAS NOT M3 COMPLETE, and this paragraph used to stop there \u2014 naming a",
       "PR-RETARGET observation and cells 3(a)/3(b) as what genuinely remained. ALL THREE ARE NOW",
       "OBSERVED: see `cell2RetargetObservation` and `cell3DiffScopeControls`. What remains is the",
-      "single residual in `stillOpenForM3` above \u2014 cell 2's rule-satisfaction half, which only M4",
-      "can discharge.",
-      "REVISION NOTE (codex, PR #101): the superseded sentence was left standing next to the new",
+      "TWO residuals remain in `stillOpenForM3` above, and NEITHER is closable by further M3",
+      "observation: cell 2's rule-satisfaction half (only M4 can discharge it) and cell 3's",
+      "over-reach counterexample (COREDEV-2850). This sentence said `the single residual` and named",
+      "only the first \u2014 written when there WAS one, and left standing when the second was added in",
+      "the very next revision. Third instance in this PR of a derived value going stale beside its",
+      "own update; the count is now stated once, here, and nowhere else.",
       "closure key, so the artifact said both 'these remain outstanding' and 'these are closed'.",
       "The rule is rewritten here rather than annotated, because a correction note beside a stale",
       "normative sentence leaves the stale sentence normative."
@@ -447,8 +450,9 @@
       },
       "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"2 ['COREDEV-2850', 'M4']\".",
       "whatIsStillNotClaimed": [
-        "M4 remains OUT OF SCOPE and unstarted, and now has TWO blockers: COREDEV-2804 (the trunk.yaml",
-        "freeze covers only the `lint:` key) and COREDEV-2850 (the gate over-reaches on formatters).",
+        "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in",
+        "ruleset Control needs explicit maintainer instruction.",
+        "ITS ONLY LIVE BLOCKER IS COREDEV-2850 (the gate over-reaches on formatters).",
         "The OBSERVATIONS are complete for everything observable at M3. What is not complete is cell 3's",
         "PROPERTY, which is contradicted rather than merely unobserved."
       ],
@@ -463,7 +467,25 @@
         "  4. cell 3(a)'s positive control lifts only shellcheck (now scoped)",
         "The repairs are POST-GATE by construction and are declared as such rather than presented as",
         "though they had been reviewed."
-      ]
+      ],
+      "coredev2804IsNOTAblocker": {
+        "raisedBy": "codex, PR #101, P2 \u2014 correctly.",
+        "whatThisArtifactSAID": "That COREDEV-2804 blocks M4 because the `.trunk/trunk.yaml` freeze covers only the `lint:` key. That is FALSE and was carried in from a session handoff without being verified.",
+        "whatIsTRUE": [
+          "The defect is REMEDIATED. `_normalised_trunk_config` hashes `yaml.safe_dump` of the WHOLE parsed",
+          "document, normalising only `cli.version` and `plugins.sources[].ref`, and only when they hold a",
+          "canonical version. `plugins.sources[].uri` never normalises.",
+          "The followup plan states it too: `Status: implementation complete for COREDEV-2804 \u2026 2811`."
+        ],
+        "provenByEXECUTION": {
+          "why": "The docstring claiming the fix is not the fix, and a plan's status line is not the code. The ticket's own founding reproduction was re-run against the shipped implementation.",
+          "method": "Load `.trunk/trunk.yaml`, repoint `plugins.sources[0].uri` from trunk-io/plugins to attacker/plugins, and compare `_normalised_trunk_config` of both.",
+          "result": "The digest DIFFERS. Under the original defect it was byte-identical \u2014 that byte-identity is what the ticket was filed on.",
+          "command": "python3 -c \"import importlib.util,pathlib;s=importlib.util.spec_from_file_location('t','scripts/tests/test_trunk_check_workflow.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);o=pathlib.Path('.trunk/trunk.yaml').read_text();print(m._normalised_trunk_config(o)!=m._normalised_trunk_config(o.replace('trunk-io/plugins','attacker/plugins')))\" \u2014 prints True while remediated."
+        },
+        "whatIsSTILLOpenOnIt": "Only the Jira record. COREDEV-2804 is `In Review` and its SUMMARY still carries `[BLOCKER for M4]`. A stale ticket, not a live blocker \u2014 it needs closing, not clearing.",
+        "theLesson": "Neither review arm checks implementation status, and a handoff brief is not evidence. This artifact repeated a blocker claim across four places \u2014 itself, the Jira comment on COREDEV-2780, the session brief and the memory index \u2014 none of which had been checked against the code."
+      }
     }
   },
   "cell2RetargetObservation": {
@@ -785,7 +807,7 @@
         "Same file. Same base. Same PR. The two pre-existing MD038 findings at 2692 and 3018 stayed",
         "SUPPRESSED IN BOTH RUNS \u2014 `2 existing issues` appears in the green half and in the red half alike.",
         "What changed is one newly-introduced MD040 at 3046, and that alone moved the run from success to",
-        "failure. The gate scopes to NEWLY INTRODUCED FINDINGS, not to changed FILES."
+        "failure. The gate scopes to something FINER THAN THE CHANGED FILE \u2014 the file was checked, its two pre-existing findings were seen, and only the new one failed the run. Whether that finer unit is the FINDING'S NOVELTY or merely the TOUCHED LINE is NOT settled by this evidence; see `aTHIRDWORLDTHISCANNOTSEPARATE` immediately below. The previous revision concluded `newly introduced findings, not changed files`, which asserts the novelty reading the adjacent key says is unproven (codex, PR #101)."
       ],
       "aTHIRDWORLDTHISCANNOTSEPARATE": {
         "what": "Per-ISSUE novelty versus per-touched-LINE scoping.",
