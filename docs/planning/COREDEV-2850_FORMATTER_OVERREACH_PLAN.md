@@ -16,10 +16,11 @@ They are the same property from opposite sides:
 | **under-enforcement** | 2860 | two security linters read configs nothing freezes |
 
 **The overlap is measured, not asserted.** COREDEV-2860 touches **exactly one file**, and it is one
-of COREDEV-2850's nine: `scripts/tests/test_trunk_check_workflow.py`. (Part A's file count is nine
-changed plus one deliberately unchanged — see §A5; the earlier "five" was measured before the
-canary split, the two frozen digests, the two parity artifacts, §6.4 and the harness fixture were
-found.) Within it, 2850 edits
+of COREDEV-2850's: `scripts/tests/test_trunk_check_workflow.py`. **§A5's table is the single
+authority for Part A's file set — this section deliberately states no count** (gemini, r2: §0 said
+"nine changed plus one unchanged" while §A5 listed eleven plus one, and a count duplicated across two
+sections is a derived value that goes stale, which this repository has been bitten by three times in
+one PR). Within it, 2850 edits
 `ARGUMENTS_LITERAL` and 2860 edits `TRUNK_CONFIG_DIR` / `_config_tree_digest` /
 `EXPECTED_CONFIG_TREE_DIGEST`.
 
@@ -187,8 +188,12 @@ them identical again is what fails the test — otherwise a future reader "fixes
 obvious one. A surviving diagnostic alone does NOT preserve COREDEV-2780 cell 5 (codex, r1): the
 harness's `autofix-positive-control` step must be able to CHANGE the fixture using the same shipped
 inputs plus `--fix`. So the replacement must be (i) reported under the six-name literal — the harness
-already contemplates a positional linter, `harness-fixtures/probe.sh:13:6 shellcheck/SC2086` — AND
-(ii) **autofixable by that same invocation**. A diagnostic that survives the filter but cannot be
+already contemplates a positional linter — AND (ii) **autofixable by that same invocation**.
+**`shellcheck/SC2086` satisfies (i) and FAILS (ii)** (gemini, r2): trunk does not autofix unquoted
+expansions, so choosing the harness's existing example would red `autofix-positive-control`. Pick a
+rule from an enabled non-formatter linter that trunk CAN autofix — `codespell`, or an autofixable
+`ruff` rule — and verify the choice by running the shipped inputs plus `--fix` against the candidate
+fixture BEFORE committing it. A diagnostic that survives the filter but cannot be
 autofixed leaves the control unable to move the file. This currently fails CLOSED — `parity_problems()`
 rejects an unchanged control — so the omission would surface as a confusing judge refusal rather than
 a silent pass, but it must be designed for, not discovered.
@@ -343,10 +348,26 @@ The union is hashed per MEMBER KIND, by a new `_digest_of_member(path)`:
 
 | kind | contribution |
 |---|---|
-| directory | `_digest_of_tree(path)` — unchanged, for `.trunk/configs/**` |
+| directory | `_digest_of_tree(path)`, **with its symlink branch changed to REFUSE** — see below |
 | symlink | **REFUSED** — see below |
 | regular file | `f"{rel}:{sha256(path.read_bytes())}"` |
 | missing | `f"{rel}:missing"` — a DISTINCT marker, never the empty-tree constant |
+
+**`_digest_of_tree` MUST ALSO REFUSE SYMLINKS — refusing only at `_digest_of_member` leaves the
+bypass open one directory down** (gemini, r2 BLOCKER). `_digest_of_tree` hashes a symlink as
+`b"symlink:" + link_target`, i.e. by SPELLING, and the table above delegates `.trunk/configs/**` to
+it "unchanged". So a symlink at `.trunk/configs/ruff.toml` pointing outside the tree is still hashed
+by spelling, and mutating its target leaves the digest unmoved — the exact defect the member-level
+refusal was added to close, surviving inside the one member that was left alone. The refusal belongs
+in `_digest_of_tree` as well, and the target-only mutation control must be run for a symlink planted
+INSIDE `.trunk/configs/**`, not only for a top-level member.
+
+**A member of ANY kind that is not a regular file, a directory, or missing is REFUSED.** The table
+enumerates three kinds; a derived or declared candidate that is a DIRECTORY outside
+`.trunk/configs/**` (e.g. `.config/checkov/`) would otherwise fall through to the regular-file branch
+and raise `IsADirectoryError` at test time (gemini, r2). Directories are hashed with
+`_digest_of_tree`; anything else — socket, fifo, symlink — is refused with a diagnostic naming the
+path and its kind.
 
 **Symlinked config members are REFUSED, not hashed** (codex, r1 P1). Hashing `os.readlink(path)`
 freezes the link's SPELLING and leaves the TARGET's contents unfrozen. The attack needs no forgery:
@@ -379,10 +400,19 @@ exist to close. So:
 | **required occupied** | exists in the shipped tree and is load-bearing today — `.gitleaks.toml`, `.github/zizmor.yml`, `.trunk/configs/**` | MUST exist, be tracked, be non-empty, digest `!= sha256(b"")` |
 | **optional candidate** | a declared `direct_configs` path holding nothing today — e.g. `.gitleaksignore`, `zizmor.yaml`, `.checkov.yml` | MUST contribute a `missing` marker; CREATING it must move the digest; it is NOT required to exist |
 
-Both classes are verified THROUGH the aggregate digest, not beside it. A member's class is fixed by
-the shipped tree at pin time, and a candidate that becomes occupied is a reviewed re-pin — the cell's
-diagnostic must say which class it found and which it expected, so a promotion is legible rather than
-a mysterious digest move.
+Both classes are verified THROUGH the aggregate digest, not beside it. The two sets are frozen
+constants in `test_trunk_check_workflow.py` — `REQUIRED_OCCUPIED_MEMBERS` and
+`OPTIONAL_CANDIDATE_MEMBERS`, both `frozenset` — so a class change is a reviewed source edit rather
+than an emergent property of the tree (gemini, r2).
+
+**Both directions of class change are reviewed edits, and DEMOTION was missing** (gemini, r2).
+PROMOTION — a candidate becomes occupied — is a re-pin plus moving the path between the two
+constants. DEMOTION — a required occupied member is deleted — is NOT resolvable by re-pinning the
+digest alone: the anti-truncation guard ("must exist, be tracked, be non-empty") still fails, and an
+engineer who only re-pins is left with a red suite and no instruction. Deleting a required member
+therefore requires moving it into `OPTIONAL_CANDIDATE_MEMBERS` **in the same commit** as the re-pin,
+which is the reviewed statement "this config is no longer load-bearing". The cell's diagnostic must
+say which class it found, which it expected, and which of the two edits is missing.
 
 ---
 
@@ -460,15 +490,36 @@ meant.
    so "as cell 4b already does" cannot be followed for the two new ones. The mutant paths stay
    independent literals, not read from the declared list, or the cell stops holding the line the
    moment someone "de-duplicates" it.
-8. **The derivation cannot silently empty — and cannot be hard-coded.** See §B3(1): the stub-to-`[]`
-   case is the floor; the discriminating cases are a synthetic second reference appearing and the
-   `GITLEAKS_CONFIG` entry removed shrinking the result.
+8. **The DERIVED contribution reaches the PRODUCTION aggregate digest** — an end-to-end control, not
+   a parse test (gemini, r2 BLOCKER: revision 2 repaired §B3(1)'s prose and left this cell stating
+   the superseded, insufficient version. An implementation computing
+   `hash(DECLARED + .trunk/configs/**)` while keeping a separate, correct `parse_derived_paths()`
+   passed the old wording).
+   a. In a synthetic workspace, place a config at a path outside DECLARED **and** outside
+      `.trunk/configs/**`, reference it from a synthetic `trunk.yaml`, and assert the **production
+      aggregate digest** changes on CREATE, on EDIT of its bytes, and on DELETE.
+   b. NEGATIVE MUTANT: an implementation whose union omits the DERIVED contribution entirely must
+      FAIL this cell. Without (b), (a) is satisfiable by a digest that happens to cover the path
+      through another source.
+   c. Parse-level checks — stub-to-`[]`, a synthetic second reference appearing, `GITLEAKS_CONFIG`
+      removed shrinking the result — remain as a FLOOR beneath (a) and (b), never as the cell.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
    set equals a literal set. A renamed or untracked declared path reds.
 10. **Deleting a frozen config moves the digest.** Without this, absence and emptiness are the same
     value (§B4).
+11b. **The RAW plugin provenance is pinned** (gemini, r2 BLOCKER: §B3(2) mandates
+    `EXPECTED_PLUGIN_PROVENANCE` and §4 asserted it nowhere, so an implementer building cells 7-11
+    from this section would never create it and an upstream `ref` change would go undetected).
+    Assert the RAW, un-normalised `plugins.sources[].uri` + `ref` (and `cli.version` where native
+    discovery supplies candidates) equals `EXPECTED_PLUGIN_PROVENANCE`. Read it from the RAW
+    document — **not** through `_normalised_trunk_config`, which erases exactly the canonical `ref`
+    this cell exists to catch. Mutants: bump `ref` to another canonical version (must red — this is
+    the case the lint digest deliberately tolerates); repoint `uri`; bump `cli.version`. The
+    diagnostic must say **re-enumerate the declared candidate set**, not merely "re-pin", because
+    "re-pin the digest" is the instruction that produced this defect class twice already.
+
 11. **A config planted UNTRACKED at a CANDIDATE path moves the digest** — for the directory member
     (the existing cell 4b test) and, crucially, at candidate paths that hold nothing today
     (`.gitleaksignore`, `.gitleaks.config`, `zizmor.yml`, `.github/zizmor.yaml`). "Planted at a
@@ -554,6 +605,10 @@ meant.
       §A5 applies: prefer superseding it from the contract yaml / evidence record over editing the
       gated `*_PLAN.md` bytes, and if the bytes must change, re-gate that plan rather than pretending
       its recorded verdict still covers them.
+      **Name the schema addition explicitly** (gemini, r2): add a `superseded_by: COREDEV-2850` key
+      to cell 3's entry in `COREDEV-2780-contract.yaml`, and confirm the contract loader tolerates an
+      unknown key before relying on it — an unvalidated field that nothing reads is the
+      `backed_by` residue found on COREDEV-2811, repeated.
 5. Version bump (four sync points + CHANGELOG).
 6. **LAND ATOMICALLY** (codex, r1). Step 2 orders IMPLEMENTATION A→B; it did not order MERGES.
    Part A, Part B, §4's cells and the accepted evidence land together, in one PR. **If they are ever
