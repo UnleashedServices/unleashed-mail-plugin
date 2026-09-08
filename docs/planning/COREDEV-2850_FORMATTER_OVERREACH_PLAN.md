@@ -183,10 +183,21 @@ them identical again is what fails the test — otherwise a future reader "fixes
    the pinned action fail"; "the primary run named no diagnostic on the fixture"), so COREDEV-2780's
    cells 1 and 5 become structurally unprovable — the sensor cannot emit acceptable evidence at all.
 
-**The fix:** replace the shfmt fixture with one whose finding survives the filter — the harness
-already contemplates a positional linter (`harness-fixtures/probe.sh:13:6 shellcheck/SC2086`). The
-judge's `test_an_absent_position_is_accepted_because_shfmt_reports_none` and its `-:-` rationale
-then become stale in the OPPOSITE direction and need re-wording, not deletion.
+**The fix:** replace the shfmt fixture with one that satisfies BOTH properties, not just the
+obvious one. A surviving diagnostic alone does NOT preserve COREDEV-2780 cell 5 (codex, r1): the
+harness's `autofix-positive-control` step must be able to CHANGE the fixture using the same shipped
+inputs plus `--fix`. So the replacement must be (i) reported under the six-name literal — the harness
+already contemplates a positional linter, `harness-fixtures/probe.sh:13:6 shellcheck/SC2086` — AND
+(ii) **autofixable by that same invocation**. A diagnostic that survives the filter but cannot be
+autofixed leaves the control unable to move the file. This currently fails CLOSED — `parity_problems()`
+rejects an unchanged control — so the omission would surface as a confusing judge refusal rather than
+a silent pass, but it must be designed for, not discovered.
+
+The judge's `test_an_absent_position_is_accepted_because_shfmt_reports_none` and its `-:-` rationale
+become stale in the OPPOSITE direction and need re-wording, not deletion. **`ARGUMENTS_LITERAL` and
+the diagnostic parsing in `test_trunk_upstream_parity.py` move in the SAME COMMIT as the fixture and
+the harness** (gemini, r1) — split across commits, the judge validates a fixture that no longer
+matches the literal it is parsing for.
 
 **Sequence in §6, before the version bump:** harness fixture change → `action_inputs_digest`
 re-pin → re-run the harness on its permanent refs (`pull_request` to `harness-base`, `push` to
@@ -253,18 +264,51 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
    `environment[].value`, or a `${workspace}`-rooted token inside `commands[].run`, that resolves
    inside the workspace and is **not** the workspace root itself (a bare `${workspace}` would make
    the entire repository the frozen census).
-   Guard: "non-empty AND contains the known-derivable member" is not enough — the derivation over
-   the shipped `trunk.yaml` yields exactly ONE path, so those two assertions are the same assertion
-   and a HARD-CODED `['.gitleaks.toml']` satisfies both, i.e. the guard cannot tell a real parse
-   from the hard-coding derivation is supposed to replace. Make it discriminate on the PARSE: run
-   the derivation against a synthetic `trunk.yaml` carrying a SECOND in-workspace config reference
-   and assert it appears, and against one with the `GITLEAKS_CONFIG` entry removed and assert the
-   derivation SHRINKS. The emptiness check is then a floor rather than the whole test.
+   Guard: **the derivation must be proven to reach the DIGEST, not merely to parse** (codex, r1 P1).
+   Two separate premises were wrong. (a) "The derivation yields exactly ONE path" is false —
+   `.trunk/trunk.yaml`'s `markdown-link-check` command also references
+   `${workspace}/.trunk/configs/markdown-link-check.json`, which is already directory-covered. (b)
+   Every currently-derived path is ALSO covered by another source: `.gitleaks.toml` is DECLARED, and
+   the markdown-link-check config is under `.trunk/configs/**`. **So an implementation that parses
+   DERIVED perfectly and then hashes only DECLARED + `.trunk/configs/**` passes every parse-level
+   assertion, and no shipped input can expose it.** A guard on the parse certifies a fix that is not
+   wired up.
+   The guard is therefore an END-TO-END digest control, run against a synthetic workspace: place a
+   config at a path that is outside DECLARED **and** outside `.trunk/configs/**`, reference it from a
+   synthetic `trunk.yaml`, and assert the **production aggregate digest** changes when that target is
+   CREATED, when its bytes are EDITED, and when it is DELETED. Then assert the negative: a mutant
+   whose union discards the DERIVED contribution entirely must FAIL this cell. Parse-level checks
+   (a second reference appears; removing `GITLEAKS_CONFIG` shrinks the result) remain as a floor,
+   never as the whole test.
 2. **Declared** — the `direct_configs` CANDIDATE PATHS of the enabled security linters, taken from
    trunk's own plugin definitions at the pinned `plugins.sources.ref` and then PINNED as a frozen
-   literal set. Today that is, at minimum:
+   literal set.
+
+   **The declared set MUST be bound to the RAW plugin provenance, not the normalised one** (codex,
+   r1 P1). `_normalised_trunk_config` deliberately erases a canonical `plugins.sources[].ref` so a
+   routine `trunk upgrade` does not red the gate. That erasure is correct for its own purpose and
+   catastrophic here: **a permitted upgrade can change which `direct_configs` a linter declares while
+   both frozen digests stay byte-identical.** Cell 9 would go on approving yesterday's candidate set,
+   cell 8 cannot see references that live inside the plugin, and a config planted at a
+   newly-supported path escapes the census entirely.
+   So a THIRD pin is required — `EXPECTED_PLUGIN_PROVENANCE`, over the RAW, UN-NORMALISED
+   `plugins.sources[].uri` + `ref` (and `cli.version` where native discovery supplies candidates).
+   When it moves, the declared enumeration must be re-derived and re-pinned in the same commit; the
+   cell's diagnostic must say that, because "re-pin the digest" is the instruction that produced this
+   class of defect twice already. This coexists with the version-normalisation policy rather than
+   reversing it: normalisation governs what reds the LINT config digest, this pin governs when the
+   candidate ENUMERATION is stale.
+
+   Today the declared set is, at minimum:
    `.gitleaks.config`, `.gitleaks.toml`, `.gitleaksignore`, `zizmor.yml`, `zizmor.yaml`,
-   `.github/zizmor.yml`, `.github/zizmor.yaml`.
+   `.github/zizmor.yml`, `.github/zizmor.yaml`, `.checkov.yml`, `.checkov.yaml`, `.bandit`.
+   **Those ten are a MINIMUM, not the enumeration** (codex, r1). The first seven were what one
+   linter pair declared; the cached pinned definitions at `v1.11.0` also declare Checkov's
+   `.checkov.yml` / `.checkov.yaml` and Bandit's `.bandit`. The rule is "every `direct_configs`
+   candidate of every ENABLED security linter, enumerated from the pinned definitions" — and the
+   derivation controls must exercise EVERY declared reference SHAPE (`direct_config`,
+   `direct_configs`, `environment[].value`, a `${workspace}` token inside `commands[].run`), not
+   just the one shape that happens to be live.
    Hand-listing one path per linter is what produced the hole this bullet exists to close:
    **`.gitleaksignore` is a live suppression lever that BOTH sources miss.** It is not referenced
    from `trunk.yaml` (so B3(1) misses it), is not `.github/zizmor.yml` (so a one-member declared
@@ -300,15 +344,45 @@ The union is hashed per MEMBER KIND, by a new `_digest_of_member(path)`:
 | kind | contribution |
 |---|---|
 | directory | `_digest_of_tree(path)` — unchanged, for `.trunk/configs/**` |
-| symlink | `f"{rel}:link:{sha256(os.readlink(path))}"` |
+| symlink | **REFUSED** — see below |
 | regular file | `f"{rel}:{sha256(path.read_bytes())}"` |
 | missing | `f"{rel}:missing"` — a DISTINCT marker, never the empty-tree constant |
+
+**Symlinked config members are REFUSED, not hashed** (codex, r1 P1). Hashing `os.readlink(path)`
+freezes the link's SPELLING and leaves the TARGET's contents unfrozen. The attack needs no forgery:
+a reviewed relocation of `.github/zizmor.yml` to a symlink at `policy/zizmor.yml`, with the
+prescribed re-pin, is legitimate — and a LATER target-only blanket-ignore edit then changes what
+zizmor reads while **neither frozen digest moves and no re-pin is required at all**. That is strictly
+worse than §B2's acknowledged coordinated-re-pin limitation, which at least demands a reviewed commit.
+Resolving targets transitively instead was considered and rejected for this change: it needs escape
+and cycle handling, and an incomplete resolver fails OPEN. Refusal fails CLOSED, and every config
+member is a regular file today, so the refusal is inert until someone introduces the shape — at which
+point they get a diagnostic instead of a silent hole. A target-only mutation control accompanies it:
+plant a symlink member, mutate ONLY its target, and assert the census REFUSES rather than passing.
 
 and cell 4b's own anti-truncation guard,
 `test_the_census_covers_every_config_the_repository_ships` — whose docstring is "A digest over an
 empty or truncated census is a digest that cannot fail" — is extended from `TRUNK_CONFIG_DIR` to
-EVERY union member: each exists, is non-empty, and contributes a digest `!= sha256(b"")`. Leaving
-that guard scoped to the one member that did not need it is how this fails silently.
+every REQUIRED OCCUPIED member: each exists, is tracked, is non-empty, and contributes a digest
+`!= sha256(b"")`. Leaving that guard scoped to the one member that did not need it is how this fails
+silently.
+
+**REQUIRED OCCUPIED and OPTIONAL CANDIDATE are different member classes, and conflating them makes
+the census permanently red** (codex, r1 P2). §B3(2)(ii) deliberately admits candidate paths that hold
+nothing today — that is what makes CREATING one move the digest — while an unqualified "every union
+member exists and is non-empty" contradicts it directly. Following both literally reds the shipped
+tree; deleting the absent candidates to recover green reopens the planting bypass the candidates
+exist to close. So:
+
+| class | membership | anti-truncation guard |
+|---|---|---|
+| **required occupied** | exists in the shipped tree and is load-bearing today — `.gitleaks.toml`, `.github/zizmor.yml`, `.trunk/configs/**` | MUST exist, be tracked, be non-empty, digest `!= sha256(b"")` |
+| **optional candidate** | a declared `direct_configs` path holding nothing today — e.g. `.gitleaksignore`, `zizmor.yaml`, `.checkov.yml` | MUST contribute a `missing` marker; CREATING it must move the digest; it is NOT required to exist |
+
+Both classes are verified THROUGH the aggregate digest, not beside it. A member's class is fixed by
+the shipped tree at pin time, and a candidate that becomes occupied is a reviewed re-pin — the cell's
+diagnostic must say which class it found and which it expected, so a promotion is legible rather than
+a mysterious digest move.
 
 ---
 
@@ -321,6 +395,11 @@ that guard scoped to the one member that did not need it is how this fails silen
    pre-existing formatter finding, so green cannot mean "already formatted".
 2. **A new LINT finding still reds it** — arm C, as a CI observation, bound to a named diagnostic
    with file/line/column.
+2b. **ARM D — the accepted loss, observed in both directions.** A file that is formatter-CLEAN at
+   base, into which the PR introduces a format-only defect, goes GREEN on the required job and RED
+   on the hook. Its canary half is bound by cell 6's stimulus constraint — without a controlled push
+   environment the canary side of arm D is deferred, not observed. Without arm D the trade is
+   evidenced only on the side that helps.
 3. **A new SECURITY finding still reds it.** Formatters are excluded; `gitleaks`, `trufflehog`,
    `zizmor`, `bandit`, `checkov` are not. Without this, the exclusion list could be wider than
    intended and nothing would say so.
@@ -346,11 +425,26 @@ that guard scoped to the one member that did not need it is how this fails silen
       flag** (bandit, checkov, trufflehog and zizmor do), and gitleaks findings are counted as
       "lint issues", so both an `is_security`-derived guard and an oracle bound to the word
       "security" miss the one exclusion that disarms `secret-scan`.
-   e. Mutants, each with its own diagnostic: a seventh entry; a formatter name dropped; a security
-      name added; a code-scoped entry added; the two entries' literals swapped.
+   e. Assert all SIX excluded names are present in `lint.enabled` (gemini, r1). `--filter` validates
+      names against the enabled set and aborts with **EXIT 2 — an argument error, not a lint
+      failure** — when an excluded name is not enabled. Today one name carries that coupling; Part A
+      makes it six, and dropping one of the five from `lint.enabled` is a plausible follow-up edit
+      *precisely because* they no longer run in the required job.
+   f. Mutants, each with its own diagnostic: a seventh entry; a formatter name dropped; a security
+      name added; a code-scoped entry added; the two entries' literals swapped; an excluded name
+      removed from `lint.enabled`.
 5. **The pre-commit hook still blocks an unformatted staged file** — executed, not asserted. The
    whole of A4 rests on formatting still being caught somewhere.
-6. **The canary still reports formatter findings.**
+6. **The canary still reports formatter findings — and needs a REACHABLE stimulus** (codex, r1).
+   `trunk-check-push.yml` fires on `push` to `[main, alpha]` only, so a **never-merged probe PR
+   cannot trigger it at all**; the check-runs API supplies an oracle, not an execution path. This
+   cell therefore needs an explicit controlled push environment — the provenance-bound disposable
+   fork already described in the rollout record (default branch named `main`, same workflow at the
+   same SHA pins, **GitHub Actions explicitly ENABLED** — they are off by default on forks, and
+   without enabling them the stimulus silently produces nothing and the cell is unfalsifiable).
+   If that environment is not stood up, this cell is NOT satisfiable and must be recorded as
+   deferred rather than quietly closed on the API oracle. The same constraint governs arm D's
+   canary half (§5).
 
 **Part B**
 
@@ -396,11 +490,6 @@ meant.
   a hybrid: it takes route 1 for the first conjunct and performs route 2's narrowing on the second.
   This bullet is that acceptance; §6 step 4 must say so rather than record a clean route-1 closure.
 
-and in §4, Part A, after cell 2:
-
-2b. **ARM D — the accepted loss, observed in both directions.** A file that is formatter-CLEAN at
-    base, into which the PR introduces a format-only defect, goes GREEN on the required job and RED
-    on the canary and the hook. Without arm D the trade is evidenced only on the side that helps.
 - Does **not** address `.trunk/configs/**` *tolerance* beyond freezing it (already done), nor the
   `backed_by` free-text residue found on COREDEV-2811.
 - Does **not** close COREDEV-2826 (the `defaults: run: shell:` suppression) — different mechanism.
@@ -449,9 +538,28 @@ and in §4, Part A, after cell 2:
       check over the surface that actually changed: read `arguments:` out of
       `.github/workflows/trunk-check.yml` and assert the five formatter names are excluded, or run
       the same `trunk check` WITH the shipped literal spliced in from the workflow.
+      **Prefer the behavioural form** (codex, r1). Checking that five names appear in `arguments:`
+      proves the MECHANISM is present, not that the named edit now passes — the property the item
+      actually claims. Retain the runtime alternative (splice the shipped literal, run it against the
+      recorded probe file, assert green) or consume cell 1's bound observation directly. A presence
+      check is acceptable only as a companion to one of those, never as the whole discriminator.
    b. Say which of the record's two closure routes is being taken. The honest answer is a hybrid
       (see §5), and the record requires the narrowing half to be accepted in writing.
    c. Re-word `whatIsNOTObserved`, which after Part A describes formatter behaviour that no longer
       occurs on that surface.
+   d. **Update or explicitly supersede COREDEV-2780's ORIGINAL cell 3 text**, not only the evidence
+      record (codex, r1). §5 accepts losing newly-introduced formatting detection, and the rollout
+      contract permits a written narrowing — but a narrowing recorded only in the evidence artifact
+      leaves the governing cell still claiming the wider property. The same digest-binding caution as
+      §A5 applies: prefer superseding it from the contract yaml / evidence record over editing the
+      gated `*_PLAN.md` bytes, and if the bytes must change, re-gate that plan rather than pretending
+      its recorded verdict still covers them.
 5. Version bump (four sync points + CHANGELOG).
-6. Only then is M4 unblocked, and M4 still needs its own maintainer decisions.
+6. **LAND ATOMICALLY** (codex, r1). Step 2 orders IMPLEMENTATION A→B; it did not order MERGES.
+   Part A, Part B, §4's cells and the accepted evidence land together, in one PR. **If they are ever
+   split, Part B goes FIRST** — landing A first removes formatter and TOML-lint enforcement from the
+   required gate while the unfrozen security-config hole is still open, which is the one ordering
+   that makes the gate weaker in both directions simultaneously. The maintainer asked for this work
+   bundled; this step is what makes "bundled" mean something at merge time rather than only in the
+   plan document.
+7. Only then is M4 unblocked, and M4 still needs its own maintainer decisions.
