@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 38
+**Status:** Planning, revision 39
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -126,6 +126,26 @@
 > PART: its first conjunct becomes true for formatters and its second becomes FALSE for them by design,
 > recorded as the written-narrowing closure, not as a fix. §6.4 gains the second losing cost. Revision 37's
 > sharing-enforcement fix (r38's one open item) is re-reviewed in the same round.
+> **r39** `39139a3` (revisions 37 + 38), **both arms, concurrently**, `TREE=clean`: codex
+> `REQUEST_CHANGES` (1 blocker), agy `REQUEST_CHANGES` (2). **Both confirmed revision 37 closes the
+> dispatch shape**, and both confirmed byte-for-byte that the two declared literals match the workflow,
+> canary, hook and test. codex's blocker: **`-taplo` removes TOML LINTING, not only TOML formatting.**
+> `--filter` denies by linter NAME, and taplo's v1.11.0 definition carries a non-formatter `taplo lint`
+> command, so cell 3(b)'s "for LINT findings both conjuncts hold unchanged" was false for TOML.
+> COREDEV-2850's plan §A4 had already accepted that loss, and this plan did not inherit it.
+> **Concordant (both arms):** §7 still said "the `arguments:` literal" twice, once wrapped across a line
+> break, so revision 38's sweep keyed on "§6.4's literal" missed it. *The same shape r37 recorded: a grep
+> for one phrasing is not a sweep of the concept.* agy also misread §6.4's "COREDEV-2850's cell 4" as this
+> plan's cell 4, a real ambiguity, and this plan's cell 4 said "the exclusion list grows" without
+> saying which list. codex also found that cell 5's formatter fixture is no stimulus under the REQUIRED
+> literal, and that cells 2-3 still said job-scope `continue-on-error` makes the job green, which
+> contradicts cell 16's r30 correction.
+> **Revision 39** narrows cell 3(b) to the lint commands the REQUIRED literal retains, and records the TOML
+> lint loss in §6.4, with what limits it: COREDEV-2860 freezes both tracked `.toml` files. It qualifies
+> every remaining literal reference, including §6.4's own heading, says WHICH cell 4, defines the 19 as
+> CONFIGURED membership, rebinds cell 5 to a finding the REQUIRED literal keeps (ShellCheck SC2250), and
+> corrects cells 2-3's premise. The sweep now runs on whitespace-joined text and was tested against a
+> re-inserted wrapped residue.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -827,7 +847,9 @@ authoritative over the assertion meant to detect it**, which is the primary haza
 to close. §1 is the declared authority, so an implementer following this paragraph built exactly the
 blind oracle. Cell 4 instead carries **the 19 expected linter names as frozen literals plus a digest
 over the `lint:` block with version specifiers normalised out**, and fails if a name is missing, an
-unlisted linter appears, the exclusion list grows, or the block changes other than by a version pin.
+unlisted linter appears, either §6.4 literal's excluded set grows, or the block changes other than by a
+version pin. The 19 are CONFIGURED membership: since COREDEV-2850, five of them do not run in the
+REQUIRED job (cell 4).
 
 ## §2 — COREDEV-2798: identity is CLASS-SPECIFIC
 
@@ -1464,8 +1486,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    plan — codex, r10.)*
 2. **The gate bites — asserted at the level each milestone can actually deliver** (codex, r11). A
    deliberately bad changed file must produce a failure. But at **M2** the job ships
-   `continue-on-error: true`, so the *job* still concludes green: an unqualified "fails the job" is a
-   cell that **cannot pass at M2**, and revision 11 exempted only cell 11 from that window. So:
+   `continue-on-error: true`. Revision 11 reasoned that the *job* therefore concludes green, so that an
+   unqualified "fails the job" could not pass at M2. **That premise was wrong** (codex, r39). Job-scope
+   `continue-on-error` stops the job's failure from failing the *workflow run*; it does not rewrite the
+   job's conclusion. Cell 16 already records this correction (codex, r30). The two branches below stand
+   on their own: each binds a conclusion it names to the expected diagnostic. Revision 11 exempted only
+   cell 11 from that window. So:
    * **at M2** — assert the Trunk step's **API-reported `conclusion`** is `failure` in the
      workflow-jobs record **and that the failure carries the expected lint diagnostic for the
      deliberately bad file**. Conclusion alone is not causation (codex, r24): a checkout, launcher or
@@ -1484,9 +1510,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      land, then **retarget it to the other base** and assert the context that satisfies the rule is a
      **new run against the new base's range** — not the earlier same-SHA result. Without `edited` in
      the set the old run persists and this case fails, which is the discrimination the clause needs.
-3. **The gate does not over-reach** — *asserted from M3, when the job can actually fail*. At M2 the
-   job ships `continue-on-error: true`, so its "passes" halves cannot fail and its "still failing"
-   half cannot pass; like cell 2, this cell is milestone-qualified rather than unqualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
+3. **The gate does not over-reach** — *asserted from M3*, the milestone at which the job ships without
+   `continue-on-error`. Revision 11's reason for the qualification — that M2's `continue-on-error: true`
+   made the job conclude green — rests on the premise cell 2 now corrects (codex, r39). Asserting from
+   M3 is conservative, never vacuous, so like cell 2 this cell stays milestone-qualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
    backlog present. (b) A PR touching a **historically dirty** file passes for its pre-existing
    findings while still failing for newly introduced ones.
 
@@ -1497,7 +1524,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    formatters, and makes the SECOND conjunct — "still failing for newly introduced ones" — FALSE for the
    formatter family BY DESIGN: a newly introduced formatting defect no longer fails the required gate.
    The pre-commit hook and the push canary still report it. For LINT findings both conjuncts hold
-   unchanged. This is the rollout record's written-narrowing closure route, accepted in COREDEV-2850's
+   unchanged **for every lint command the REQUIRED literal retains — which is not all of them** (codex,
+   r39). `-taplo` removes taplo's non-formatter `taplo lint` command along with its formatter (§6.4), so
+   a newly introduced TOML lint finding no longer fails the required gate either. This is the rollout record's written-narrowing closure route, accepted in COREDEV-2850's
    plan §5, which the maintainer approved for implementation; this cell must not be read as "fixed".
 4. **The configured linter set MEMBERSHIP is frozen in the test, not derived from the configuration
    under test**
@@ -1506,9 +1535,17 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    over the assertion meant to detect it**, the exact shape this plan's Overview names. The cell
    instead carries **the 19 expected linter names as literals** (20 enabled, minus
    `markdown-link-check`) **and a frozen digest over the `lint:` block with VERSION SPECIFIERS
-   NORMALISED OUT**. Fails if any of the 19 is missing, if an unlisted linter appears, if the
-   exclusion list grows, or if the block changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
+   NORMALISED OUT**. Fails if any of the 19 is missing, if an unlisted linter appears, if either
+   §6.4 literal's excluded set grows, or if the block changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
    could not.
+
+   **Since COREDEV-2850 (revision 38) the 19 are CONFIGURED membership, not the REQUIRED job's run set**
+   (gemini, r39). The five formatters stay enabled in `.trunk/trunk.yaml` but are filtered from the
+   REQUIRED job, which therefore runs fourteen; the hook and the canary run all nineteen. "Either §6.4
+   literal's excluded set grows" means past its §6.4 declaration: six entries for REQUIRED, one for
+   HOOK/CANARY. The frozen six-entry set, the exactly-five difference between the two literals, and
+   disjointness from the security linters belong to cell 4 of COREDEV-2850's plan. They are asserted in
+   the same test class as this cell, and this cell does not restate them.
 
    **Names alone were not enough (both arms, r9).** A PR can keep all 19 names and still disable
    every linter by overriding `lint.definitions[].commands[].run` to `exit 0`, widening
@@ -1543,8 +1580,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
    **The fixture must be deliberately fixable (codex, r10).** Running the job over already-canonical
    files proves nothing — autofix would produce no byte change there either, so the cell *reaches* the
-   wrong implementation without killing it. The case therefore stages a file a formatter would
-   certainly rewrite (mis-indented, unsorted imports) and asserts it is **byte-identical afterwards**.
+   wrong implementation without killing it. The case therefore stages a file carrying a finding
+   that **a linter the REQUIRED literal retains** would certainly autofix, and asserts it is
+   **byte-identical afterwards**. **Since revision 38 that cannot be a formatter finding** (codex, r39).
+   The REQUIRED job filters all five formatters, so a mis-indented or unsorted-imports fixture is no
+   stimulus there: autofix would leave it unchanged too, and the positive control below could never
+   turn the cell red. The shipped `trunk-parity-harness.yml` fixture is a ShellCheck SC2250 finding,
+   which trunk autofixes and the REQUIRED literal keeps.
 
    **This is a hybrid under §7's rule, and its runtime half needs a SENSOR, not a sink** (codex, r14
    then r18). The claim is about what the real run did, which a Python test cannot observe — but the
@@ -2175,7 +2217,7 @@ Revision 2's recommendation contradicted §1. Under §1's corrected rule (no *un
 resolution is a **declared, enumerated, cell-enforced exclusion**: `markdown-link-check` is excluded
 from the required job and runs in the scheduled advisory job (COREDEV-2778).
 
-**THE DECLARED LITERAL — stated here once, and referenced everywhere else** (codex + agy, r5: §1 and
+**THE DECLARED LITERALS — each stated here once, and referenced everywhere else** (codex + agy, r5: §1 and
 cell 9 both demanded a whole-string match against a value no section ever defined, so the cell was
 unexecutable):
 
@@ -2193,7 +2235,8 @@ The **HOOK** and **CANARY** literal — `.githooks/pre-commit` and `trunk-check-
 --filter=-markdown-link-check
 ```
 
-Each scalar is the whole permitted value of its own surface's `arguments:`. §1, C4, M5a and cells 9, 11
+Each scalar is the whole permitted filter value on its own surface — the `arguments:` input in each
+workflow, the `trunk check` argument in the hook. §1, C4, M5a and cells 9, 11
 and 13 point at this declaration, naming WHICH literal, rather than restating either — a derived value
 stated twice goes stale, and two stale copies agree with each other.
 
@@ -2202,8 +2245,9 @@ stated twice goes stale, and two stale copies agree with each other.
 formatting debt as NEW on any touched file, so the required gate failed a clean edit to any of the ~73%
 of tracked files that were already unformatted. That is cell 3's over-reach. The **hook** keeps them:
 it runs over the author's own staged diff, where formatting the files you touched is exactly what is
-wanted. The **canary** keeps them so their findings are still OBSERVED rather than lost. COREDEV-2850's
-cell 4 is what makes the two literals becoming identical again fail.
+wanted. The **canary** keeps them so their findings are still OBSERVED rather than lost. Cell 4 of
+COREDEV-2850's plan — not this plan's cell 4, which owns CONFIGURED membership — is what makes the two
+literals becoming identical again fail.
 
 **The local pre-commit check (§6.3) excludes it too**, for the same reason and one more: a network
 round-trip per commit, failing on someone else's outage, is exactly the "gate red by default" trap
@@ -2212,7 +2256,7 @@ round-trip per commit, failing on someone else's outage, is exactly the "gate re
 **And it is ENFORCED on every surface, not only the CI one.** Cell 9 asserts the workflow's
 `arguments:` equals the REQUIRED literal as a whole string; **cell 13 asserts the HOOK literal in the
 pre-commit invocation**, with the same whole-string match and the same mutants (appended flag, absent
-argument); and COREDEV-2850's cell 4 asserts the canary's literal and that the two differ by EXACTLY
+argument); and cell 4 of COREDEV-2850's plan asserts the canary's literal and that the two differ by EXACTLY
 the five formatters, in both directions. A literal that is required in two places and checked in one is
 a declaration, not a control — and two literals that must differ, checked only for equality to
 themselves, can quietly become one.
@@ -2225,6 +2269,16 @@ required gate that fails on someone else's outage is worse — but it is a real 
 formatting defects.** Accepted — cell 3(b) records the narrowing — because a required gate that fails
 for debt the author did not introduce blocks most PRs in this repository. The pre-commit hook still
 formats-checks the author's staged files, and the push canary still reports formatter findings.
+
+**And `-taplo` costs TOML LINTING, not only TOML formatting** (codex, r39). `--filter` denies by linter
+NAME, and taplo's pinned v1.11.0 definition carries two commands: `format` (`formatter: true`) and
+`lint` (`taplo lint ${target}`, no formatter flag). The REQUIRED job therefore runs neither. Of the five
+excluded names, only taplo has a second, non-formatter command. COREDEV-2850's plan §A4 accepts and
+names this loss. It is narrower than it sounds: both tracked `.toml` files are frozen byte-for-byte by
+COREDEV-2860 — `.gitleaks.toml` as a declared member, `.trunk/configs/ruff.toml` inside the frozen
+`.trunk/configs` tree — so neither can change without a reviewed oracle update. What is actually lost
+is required-gate TOML linting of a NEW `.toml` file, and of a reviewed edit to either frozen one. The
+hook and the canary still run `taplo lint`.
 
 ## §7 — Files Changed
 
@@ -2258,7 +2312,7 @@ formats-checks the author's staged files, and the push canary still reports form
   repository-supplied-launcher guard, the merge-queue stop, the frozen step sequence and run-body
   digests, and the action's exact SHA pin — **eleven clauses, C0 through C9 plus C6a** — the shared resolver's own
   `content_digest` obligation; the gloss said nine before C0 existed and ten before C6a did, and a
-  count that trails the contract is how a clause ends up unenforced (codex, r28). Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's `arguments:`
+  count that trails the contract is how a clause ends up unenforced (codex, r28). Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's REQUIRED `arguments:`
   literal, and the **five-step sequence** (checkout, the C6a resolver-digest guard, the empty-diff
   guard, the C6 launcher-path guard, the action). **Values are stated in §1 and §6, never here** — this
   is a file inventory, and revision 9's copy of the contract into this entry is exactly the
@@ -2291,7 +2345,7 @@ formats-checks the author's staged files, and the push canary still reports form
   that fires while a stale install is actually running (§3b)
 * **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11, 14 **and 15** (workflow parsing, the
   frozen membership set (cell 4 holds the names and the count — this list does not restate them),
-  the `arguments:` literal, the producer census, **cell 10's static `permissions` assertion**,
+  the REQUIRED and CANARY `arguments:` literals, the producer census, **cell 10's static `permissions` assertion**,
   **cell 16's canary-shape assertions**, cell 15's runner/timeout and its registry-vs-rendered
   comparison, and the **generated** mutant set)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
