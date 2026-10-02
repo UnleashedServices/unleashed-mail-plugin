@@ -674,16 +674,28 @@ meant.
       (codex, r8: twice a draft observation stricter than the spec hid a gap the spec left open).
       - **Baseline first.** The aggregate over the background alone must SUCCEED. Without it, an unrelated
         refusal satisfies every REFUSE row vacuously.
-      - **REFUSE** means the aggregate raises the freeze's DEDICATED refusal exception — one named
-        exception class, raised deliberately — AND that exception names THIS row's operand. **An
+      - **REFUSE** means the aggregate raises **`ConfigFreezeRefusal`** — ONE named class, a subclass of
+        `Exception` and deliberately NOT of `OSError`, so no `OSError` can ever be mistaken for it — raised by
+        adjudication, `_digest_of_member` and `_digest_of_tree` alike. It carries two structured fields, and
+        the row asserts BOTH: `operand` is THIS row's operand, and `reason` is the row's stated reason —
+        `symlink`, `dotdot`, `lstat-error` or `unsupported-kind` (codex, r12: §B4 requires the diagnostic to
+        name the KIND as well as the path). Structured fields, never message matching — matching the message
+        is exactly what failed in revision 11. **An
         incidental exception never counts, even when its message names the path** (codex, r11).
         `read_bytes()` on a Unix socket raises `OSError: [Errno 102] Operation not supported on socket:
         '<path>'`, and a propagated `lstat` error carries its filename the same way, so revision 11's
         rule ("raises, and the diagnostic names the operand") passed the fall-through mutant on row 22 and
         a propagated `EIO` on row 16. Both were measured passing under that rule.
-      - **Rows 21 and 22 additionally SPY on reads, and any read of the probe path is a failure.** "Refuse
-        before any read" (§B4) is the property; an implementation that catches the read's `OSError` and
-        re-raises it AS the dedicated exception satisfies a type check while having read the member.
+      - **EVERY REFUSE row spies on reads, and a read of anything but a background member is a failure**
+        (codex and gemini, r12 — concordant). Revision 12 spied on rows 21-22 only, so an implementation that
+        READ the operand first and refused afterwards passed rows 1-5, 16 and 18; measured, it was caught on
+        NONE of them under that rule and on ALL of them under this one. Reading before refusing is not
+        harmless on a symlink row: a link can point at a FIFO, and reading through it hangs — the very hazard
+        row 21 exists for. The same spy applies to cell 11c's nested refusals.
+      - **Each mutant changes EXACTLY ONE decision** (codex, r12). Two of revision 12's operators were impure
+        — `startswith` and `refuse-dot-component` also skipped step (i)'s relative join, so their row-15
+        "failures" measured a second change. An impure operator's failure set measures nothing; the table
+        below states each operator precisely, and the shipped battery must implement them as stated.
       - **MEMBER** means the probe path is in aggregate membership — nothing else.
         So rows 9 and 11 prove the absent member is ADMITTED; that its contribution is the distinct
         `missing` marker is row 19's to prove (codex, r9).
@@ -708,11 +720,11 @@ meant.
 
       | # | adjacent to | reference | required outcome |
       |---|---|---|---|
-      | 1 | symlink refusal (leaf) | `${workspace}/policy/security.toml`, itself a link into `outside/` | REFUSE |
-      | 2 | symlink refusal (ancestor) | `${workspace}/sym_dir/config.toml`, `sym_dir` a link to `outside/` | REFUSE |
-      | 3 | `..` after a symlink | `${workspace}/plink/../security.toml`, `plink` a link to `outside/child/` | REFUSE |
-      | 4 | `..` refusal | `${workspace}/real_dir/../security.toml`, no link anywhere | REFUSE |
-      | 5 | `..` above the anchor | `${workspace}/../outside.toml` | REFUSE |
+      | 1 | symlink refusal (leaf) | `${workspace}/policy/security.toml`, itself a link into `outside/` | REFUSE, `reason="symlink"` |
+      | 2 | symlink refusal (ancestor) | `${workspace}/sym_dir/config.toml`, `sym_dir` a link to `outside/` | REFUSE, `reason="symlink"` |
+      | 3 | `..` after a symlink | `${workspace}/plink/../security.toml`, `plink` a link to `outside/child/` | REFUSE, `reason="dotdot"` |
+      | 4 | `..` refusal | `${workspace}/real_dir/../security.toml`, no link anywhere | REFUSE, `reason="dotdot"` |
+      | 5 | `..` above the anchor | `${workspace}/../outside.toml` | REFUSE, `reason="dotdot"` |
       | 6 | root exclusion | `${workspace}/.` | not a member, no record |
       | 7 | containment | `${workspace}_extra/x.toml`, a spelling-prefix sibling | OUT OF SCOPE, recorded |
       | 8 | symlink refusal | `${workspace}/policy/plain.toml`, a regular file at depth two | MEMBER |
@@ -723,15 +735,19 @@ meant.
       | 13 | root exclusion, dotfiles | `${workspace}/.hidden.toml` — the shipped `.gitleaks.toml` shape | MEMBER |
       | 14 | `.` dropping | `${workspace}/./policy/other.toml` | MEMBER, as `policy/other.toml` |
       | 15 | anchor-relative operand | `direct_config: policy/rel.toml` — no `${workspace}` token | MEMBER, and the digest moves on CREATE, EDIT and DELETE |
-      | 16 | other `lstat` errors refuse | `${workspace}/locked/inner.toml`, `os.lstat` patched to raise `EIO` on that component | REFUSE |
+      | 16 | other `lstat` errors refuse | `${workspace}/locked/inner.toml`, `os.lstat` patched to raise `EIO` on that component | REFUSE, `reason="lstat-error"` |
       | 17 | directory dispatch | `${workspace}/policy_dir`, a DERIVED-only DIRECTORY | MEMBER, and the digest moves on a descendant's CREATE, EDIT and DELETE |
-      | 18 | symlink refusal, DANGLING | `${workspace}/dangle/x.toml`, `dangle` a link to a path that does not exist | REFUSE |
+      | 18 | symlink refusal, DANGLING | `${workspace}/dangle/x.toml`, `dangle` a link to a path that does not exist | REFUSE, `reason="symlink"` |
       | 19 | missing is not empty | `${workspace}/maybe_dir`, absent, then an EMPTY directory | the aggregate digest differs between the two |
       | 20 | directory contribution carries `rel` | `${workspace}/dirA` vs `${workspace}/dirB`, identical contents | the aggregate digest differs between the two |
-      | 21 | member-level kind refusal | `${workspace}/pipe`, a FIFO | REFUSE — run in a SUBPROCESS under a timeout |
-      | 22 | member-level kind refusal | `${workspace}/sock`, a Unix-domain socket | REFUSE |
+      | 21 | member-level kind refusal | `${workspace}/pipe`, a FIFO | REFUSE, `reason="unsupported-kind"` — run in a SUBPROCESS under a timeout |
+      | 22 | member-level kind refusal | `${workspace}/sock`, a Unix-domain socket | REFUSE, `reason="unsupported-kind"` |
       | 23 | records unforgeable ACROSS kinds | two pairs: directory `coll_a` vs FILE `coll_a:tree` holding a line-format tree input, and directory `coll_b` vs FILE `coll_b:tree` holding a JSON-record tree input | within each pair, the aggregate digests differ |
       | 24 | records unforgeable WITHIN a tree | ONE reference `${workspace}/forge`, in two states: files `a`, `b`; then one file named `a:<sha256 of a>\nb` with `b`'s bytes | the aggregate digest differs between the two states |
+      | 25 | member-level kind refusal is an ALLOWLIST | `${workspace}/devnode`, `os.lstat` patched to report `S_IFCHR` | REFUSE, `reason="unsupported-kind"` |
+      | 26 | every FILE record carries `rel` | `${workspace}/fa.toml` vs `${workspace}/fb.toml`, identical bytes | the aggregate digest differs between the two |
+      | 27 | every MISSING record carries `rel` | `${workspace}/gone_a.toml` vs `${workspace}/gone_b.toml`, both absent | the aggregate digest differs between the two |
+      | 28 | other `lstat` errors refuse, a second errno | `${workspace}/locked2/inner.toml`, `os.lstat` patched to raise `EACCES` | REFUSE, `reason="lstat-error"` |
 
       **Row 10 is codex's r8 blocker.** Rows 8 and 9 sit at depth two, so an implementation that excluded
       the root AND every direct child (`if len(rel.parts) < 2: continue`) passed all nine revision-8 rows.
@@ -740,7 +756,7 @@ meant.
       (codex, r7): a DECLARED probe is supplied by DECLARED whether or not derivation found it.
       **MUTANTS — EXECUTED, not reasoned** (2026-10-02, macOS, anchor beneath a `/var -> /private/var`
       alias, through `DECLARED | DERIVED`, each row observed exactly as written above). The correct
-      procedure passes the baseline and all twenty-four rows, and each of the twenty-four mutants below fails at
+      procedure passes the baseline and all twenty-eight rows, and each of the thirty mutants below fails at
       least one. Each mutant must fail EXACTLY the rows named.
       **Every set below comes from ONE harness running every mutant against every row** (codex, r10):
       revision 10 measured rows 15-20 against only its six new mutants, never the twelve older ones, and
@@ -748,27 +764,33 @@ meant.
 
       | mutant | fails on |
       |---|---|
-      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | 1-5, 16, 18 |
-      | containment by `Path.resolve()`, operand only | 1-6, 8-24 — the WRONG reason; see below |
-      | `..` collapsed by `os.path.normpath` before adjudication | 3, 4, 5 |
-      | LEAF-only `Path.is_symlink()` | 2, 16, 18 |
-      | `str.startswith` containment | 7, 15 |
-      | unconditional `os.lstat` on the row's own walk | 9, 10, 11, 15, 16, 19 |
-      | unconditional `os.lstat` on EVERY member, DECLARED included | the BASELINE (the absent candidate) |
-      | discard direct children, `len(rel.parts) < 2` | 10, 12, 13, 17, 19-24 |
-      | `ENOENT` handled, `ENOTDIR` refused | 11 |
-      | `..` tested as a SUBSTRING | 12 |
+      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | 1-5, 16, 18, 28 |
+      | containment by `Path.resolve()`, operand only | 1-6, 8-28 — the WRONG reason; see below |
+      | `..` collapsed by `os.path.normpath` before adjudication | 3-5 |
+      | the walk adjudicates errors at every component but link-tests the FINAL component only | 2, 18 |
+      | containment by `str.startswith` (relative operands still joined first) | 7 |
+      | no handling of ANY `lstat` error on the row's own walk | 9-11, 15, 16, 19, 27, 28 |
+      | no handling of any `lstat` error on EVERY member, DECLARED included | the BASELINE (an absent optional candidate) |
+      | discard direct children, `len(rel.parts) < 2` | 10, 12, 13, 17, 19-27 |
+      | `ENOENT` handled as absent, `ENOTDIR` refused | 11 |
+      | `EACCES` handled as absent alongside `ENOENT`/`ENOTDIR` | 28 |
+      | `..` tested as a SUBSTRING of a component | 12 |
       | skip any component starting with `.` | 13 |
-      | refuse a `.` component as if it were `..` | 6, 14, 15 |
+      | refuse a `.` component as if it were `..` (relative operands still joined first) | 6, 14 |
       | drop operands lacking `${workspace}` | 15 |
-      | treat ANY `lstat` error as absent (`except OSError: break`) | 16 |
+      | treat ANY `lstat` error as absent (`except OSError: break`) | 16, 28 |
+      | let a non-`ENOENT`/`ENOTDIR` `lstat` error propagate instead of refusing | 16, 28 |
       | omit DERIVED directories | 17, 20, 24 |
       | `exists()` before walking — it follows links, so a dangling one reads as missing | 18 |
       | a missing member contributes the empty-tree digest | 19 |
-      | directory contribution without its `rel` | 20 |
-      | fall through to `read_bytes()` for an unsupported kind | 21 (by timeout), 22 |
-      | read first, then re-raise the read's `OSError` AS the dedicated refusal | 21 (by timeout), 22 (by the read spy) |
-      | let a non-`ENOENT`/`ENOTDIR` `lstat` error propagate instead of refusing | 16 |
+      | directory record without its `rel` | 20 |
+      | file record without its `rel` | 26 |
+      | missing record without its `rel` | 27 |
+      | fall through to `read_bytes()` for an unsupported kind | 21 (by timeout), 22, 25 |
+      | read first, then re-raise the read's `OSError` AS the dedicated refusal | 21 (by timeout), 22, 25 |
+      | refuse only FIFOs and sockets — a BLACKLIST, not the allowlist | 25 |
+      | attempt a read of the operand BEFORE adjudicating it, then adjudicate correctly | 1-5, 16, 18, 21, 22, 25, 28 |
+      | raise `ConfigFreezeRefusal` without its `reason` | 1-5, 16, 18, 21, 22, 25, 28 |
       | revision 10's encoding: `f"{rel}:..."` members over the shipped `f"{relative}:{digest}"` tree | 23, 24 |
       | `f"{rel}:..."` members over JSON-record trees | 23 |
       | JSON members over the shipped `f"{relative}:{digest}"` tree lines | 24 |
@@ -784,7 +806,10 @@ meant.
       no fixed point, since a reviewer can always construct another bug. The completeness claim is
       therefore scoped to a FINITE list: codex's r9 inventory of every rule in §B3(1)(i)-(v) and in §B4's
       member layer that excludes, refuses, drops or records an input. Every rule on that list now has a
-      control at its adjacent boundary:
+      control at its adjacent boundary. **Revision 13 swept every rule for every instance its TEXT names**
+      (r12: both reviewers found rules whose wording named more instances than the controls covered — "every
+      contribution" named three kinds and row 20 tested one; "FIFO, socket, device" named three and two
+      were tested; "refuse before any read" governs every refusal and two rows spied):
 
       | rule (§B3(1) / §B4) | rows / cell |
       |---|---|
@@ -796,13 +821,15 @@ meant.
       | exclude and RECORD a lexical outsider | 7; adjacent positives 8, 10 |
       | refuse a symlink at any component, dangling included | 1, 2, 18; adjacent positive 8 |
       | end the walk on `ENOENT`/`ENOTDIR` | 9, 11 |
-      | refuse every other `lstat` error | 16 |
+      | refuse every other `lstat` error | 16 (`EIO`), 28 (`EACCES`) |
       | dispatch the survivor by kind | 8, 10 (file); 17 (directory) |
-      | refuse symlinks and other kinds inside a tree | cell 11c's nested controls |
-      | refuse unsupported kinds at the MEMBER itself (FIFO, socket) | 21, 22 |
+      | refuse symlinks and other kinds inside a tree | cell 11c's nested controls, under the same REFUSE rule |
+      | refuse BEFORE any read | the read spy on every REFUSE row and on cell 11c's nested refusals |
+      | a refusal is `ConfigFreezeRefusal` carrying `operand` and `reason` | every REFUSE row |
+      | refuse every kind but regular file and directory — an ALLOWLIST — at the member | 21 (FIFO), 22 (socket), 25 (device) |
       | records unforgeable across kinds and within a tree | 23, 24 |
       | missing is distinct from an empty tree | 19 |
-      | every contribution carries `rel` | 20 |
+      | every contribution carries `rel` | 20 (directory), 26 (file), 27 (missing) |
       | required members exist, are tracked, non-empty | cells 9, 11c |
       | optional absence admitted; planting observed | background candidate; cell 11 |
       | classes disjoint and covering over production | cell 11c, both mutants |
@@ -836,6 +863,9 @@ meant.
     asserts refusal, because cell 8(f) exercises DERIVED references only and (iv) claims every source;
     the nested target-only mutation control; recursive kind classification with nested FIFO and socket
     controls — the nested FIFO run, like row 21, in a subprocess under a timeout that counts as failure;
+    a nested DEVICE via a patched `os.lstat`, as row 25; and every nested refusal observed under cell
+    8(f)'s REFUSE rule — `ConfigFreezeRefusal`, its `reason`, and the read spy (codex, r12: a tree walk
+    could catch the socket's `OSError` and refuse after reading);
     controls; promotion and demotion each requiring the paired constant edit plus the re-pin; and
     cell 9's guard scoped to existing members.
     **The class assertion is TWO-SIDED, and it is the control** (codex, r6). With the location rule
