@@ -433,8 +433,8 @@ and claimed the `tree:` tag kept a directory from colliding with a file. **That 
 `policy_dir:tree` whose bytes are exactly the tree's input produce the identical string — no hash
 collision needed; codex reproduced it. The same flaw is in the SHIPPED `_digest_of_tree`, which joins
 `f"{relative}:{digest}"` entries with `\n`: a filename containing a newline forges a record boundary,
-so one file named `a:<sha256(C1)>\nb` collides with the pair `a`, `b`. JSON escapes both `:` inside
-strings and `\n`, so the KIND, the `rel` and the record boundary are all unforgeable. The rule covers
+so one file named `a:<sha256(C1)>\nb` collides with the pair `a`, `b`. JSON QUOTES each field, so a `:`
+inside a `rel` is data rather than a delimiter, and it ESCAPES an embedded `\n` (codex, r11), so the KIND, the `rel` and the record boundary are all unforgeable. The rule covers
 both levels: each member contribution is `[kind, rel, digest]`, each `_digest_of_tree` entry is
 `[relative, digest]`, and the aggregate is `sha256` over the sorted records joined with `\n`.
 This changes `_digest_of_tree`'s output, which is absorbed by the `EXPECTED_CONFIG_TREE_DIGEST` re-pin
@@ -563,10 +563,10 @@ say which class it found, which it expected, and which of the two edits is missi
    pre-existing formatter finding, so green cannot mean "already formatted".
 2. **A new LINT finding still reds it** — arm C, as a CI observation, bound to a named diagnostic
    with file/line/column.
-2b. **ARM D — the accepted loss, observed in both directions.** A file that is formatter-CLEAN at
+2b. **ARM E — the accepted loss, observed in both directions.** A file that is formatter-CLEAN at
    base, into which the PR introduces a format-only defect, goes GREEN on the required job and RED
    on the hook. Its canary half is bound by cell 6's stimulus constraint — without a controlled push
-   environment the canary side of arm D is deferred, not observed. Without arm D the trade is
+   environment the canary side of arm E is deferred, not observed. Without arm E the trade is
    evidenced only on the side that helps.
 3. **A new SECURITY finding still reds it.** Formatters are excluded; `gitleaks`, `trufflehog`,
    `zizmor`, `bandit`, `checkov` are not. Without this, the exclusion list could be wider than
@@ -611,7 +611,7 @@ say which class it found, which it expected, and which of the two edits is missi
    same SHA pins, **GitHub Actions explicitly ENABLED** — they are off by default on forks, and
    without enabling them the stimulus silently produces nothing and the cell is unfalsifiable).
    If that environment is not stood up, this cell is NOT satisfiable and must be recorded as
-   deferred rather than quietly closed on the API oracle. The same constraint governs arm D's
+   deferred rather than quietly closed on the API oracle. The same constraint governs arm E's
    canary half (§5).
 
 **Part B**
@@ -674,13 +674,25 @@ meant.
       (codex, r8: twice a draft observation stricter than the spec hid a gap the spec left open).
       - **Baseline first.** The aggregate over the background alone must SUCCEED. Without it, an unrelated
         refusal satisfies every REFUSE row vacuously.
-      - **REFUSE** means the aggregate raises AND the diagnostic names THIS row's operand.
+      - **REFUSE** means the aggregate raises the freeze's DEDICATED refusal exception — one named
+        exception class, raised deliberately — AND that exception names THIS row's operand. **An
+        incidental exception never counts, even when its message names the path** (codex, r11).
+        `read_bytes()` on a Unix socket raises `OSError: [Errno 102] Operation not supported on socket:
+        '<path>'`, and a propagated `lstat` error carries its filename the same way, so revision 11's
+        rule ("raises, and the diagnostic names the operand") passed the fall-through mutant on row 22 and
+        a propagated `EIO` on row 16. Both were measured passing under that rule.
+      - **Rows 21 and 22 additionally SPY on reads, and any read of the probe path is a failure.** "Refuse
+        before any read" (§B4) is the property; an implementation that catches the read's `OSError` and
+        re-raises it AS the dedicated exception satisfies a type check while having read the member.
       - **MEMBER** means the probe path is in aggregate membership — nothing else.
         So rows 9 and 11 prove the absent member is ADMITTED; that its contribution is the distinct
         `missing` marker is row 19's to prove (codex, r9).
       - **Row 16 injects its error by patching `os.lstat` for one named component, never with
         `chmod 000`.** A root runner bypasses permission bits, so a `chmod` fixture would stop exercising
-        the branch under root while still passing.
+        the branch under root while still passing. **The injected error must carry the filename,
+        exactly as a real one does** — `OSError(errno.EIO, os.strerror(errno.EIO), path)`. An injection
+        without it makes a lax observation look strict: the first draft of this harness raised a bare
+        `OSError(EIO, "injected")`, and that hid the row-16 case of codex's r11 finding.
       - **Row 21 runs in a subprocess under a timeout, and a timeout is a FAILURE.** An implementation
         that falls through to `read_bytes()` on a FIFO blocks forever; run in-process, that hangs the
         suite instead of reddening it — a test that can hang is worse than the bug it looks for.
@@ -728,7 +740,8 @@ meant.
       (codex, r7): a DECLARED probe is supplied by DECLARED whether or not derivation found it.
       **MUTANTS — EXECUTED, not reasoned** (2026-10-02, macOS, anchor beneath a `/var -> /private/var`
       alias, through `DECLARED | DERIVED`, each row observed exactly as written above). The correct
-      procedure passes the baseline and all twenty-four rows. Each mutant must fail EXACTLY the rows named.
+      procedure passes the baseline and all twenty-four rows, and each of the twenty-four mutants below fails at
+      least one. Each mutant must fail EXACTLY the rows named.
       **Every set below comes from ONE harness running every mutant against every row** (codex, r10):
       revision 10 measured rows 15-20 against only its six new mutants, never the twelve older ones, and
       SEVEN of the previously stated sets were wrong once all rows existed.
@@ -754,6 +767,8 @@ meant.
       | a missing member contributes the empty-tree digest | 19 |
       | directory contribution without its `rel` | 20 |
       | fall through to `read_bytes()` for an unsupported kind | 21 (by timeout), 22 |
+      | read first, then re-raise the read's `OSError` AS the dedicated refusal | 21 (by timeout), 22 (by the read spy) |
+      | let a non-`ENOENT`/`ENOTDIR` `lstat` error propagate instead of refusing | 16 |
       | revision 10's encoding: `f"{rel}:..."` members over the shipped `f"{relative}:{digest}"` tree | 23, 24 |
       | `f"{rel}:..."` members over JSON-record trees | 23 |
       | JSON members over the shipped `f"{relative}:{digest}"` tree lines | 24 |
@@ -820,6 +835,7 @@ meant.
     (§B3(1)(iv)) — with a control that plants a symlinked ANCESTOR of a DECLARED member in a mirror and
     asserts refusal, because cell 8(f) exercises DERIVED references only and (iv) claims every source;
     the nested target-only mutation control; recursive kind classification with nested FIFO and socket
+    controls — the nested FIFO run, like row 21, in a subprocess under a timeout that counts as failure;
     controls; promotion and demotion each requiring the paired constant edit plus the re-pin; and
     cell 9's guard scoped to existing members.
     **The class assertion is TWO-SIDED, and it is the control** (codex, r6). With the location rule
@@ -883,7 +899,12 @@ meant.
    EXACTLY its named rows. A mutant that fails NO row is a missing row — add the row, then rerun. A
    mutant that fails MORE rows than named means the model and the implementation diverged — find out
    why before merging; do not edit the table to match. **This verifies the TESTED mutants against the
-   real code; it does not claim coverage of bugs nobody has written down** (codex, r10). Its value is
+   real code; it does not claim coverage of bugs nobody has written down** (codex, r10).
+   **The battery SHIPS as an executed test**, each mutation operator applied by patching the real
+   function, so the exact sets are reproduced by the suite itself rather than by a script outside the
+   repo (codex, r11: "preserve the exact harness and mutation operators"). COREDEV-2617's mutant table
+   became an executed suite the same way. The measurement model is NOT committed alongside the plan: a
+   planning script would duplicate the table it measured, and duplicated values go stale. Its value is
    that the model the table was measured on cannot quietly disagree with what ships.
 3. Observe the cells that need a real run on a probe PR, never merged; record under
    `docs/planning/evidence/`. Three constraints the earlier wording left implicit:
