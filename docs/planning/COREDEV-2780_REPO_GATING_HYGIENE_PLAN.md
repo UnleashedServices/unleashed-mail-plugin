@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 37
+**Status:** Planning, revision 38
 **Created:** 2026-08-28
 **Last Updated:** 2026-09-01
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -118,6 +118,14 @@
 > M4 and §7, with sharing enforcement the only item still open. *Three encodings were needed here
 > because the first two asserted something about the implementation; the third deletes the argument
 > that would let divergence be written.*
+> **Revision 38 (2026-10-02, COREDEV-2850) — NOT yet reviewed; revision 37 was never reviewed either.**
+> COREDEV-2850 split the formatter exclusion: the REQUIRED `trunk-check` job now filters the five
+> whole-file formatters as well as `markdown-link-check`, while the pre-commit hook and the push canary
+> keep them. §6.4 therefore declares TWO literals and why they differ, and every reference that named
+> "§6.4's literal" — §1's contract, C4, M5a, cells 9 and 11 — now names WHICH. Cell 3(b) is superseded IN
+> PART: its first conjunct becomes true for formatters and its second becomes FALSE for them by design,
+> recorded as the written-narrowing closure, not as a fix. §6.4 gains the second losing cost. Revision 37's
+> sharing-enforcement fix (r38's one open item) is re-reviewed in the same round.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -646,7 +654,8 @@ own non-required context.
   `defaults.run`**, which can redirect `shell` or `working-directory` for every step at once. Exactly
   one unconditional Trunk invocation.
 
-  **C4 — the action's `with:` inputs are an allowlist.** Only `arguments` (§6.4's literal),
+  **C4 — the action's `with:` inputs are an allowlist.** Only `arguments` (§6.4's REQUIRED literal;
+  the push canary carries §6.4's CANARY literal),
   `save-annotations` (§6.1), and optionally `cache`/`cache-key`. Everything else absent — notably
   **`trunk-path`** (it names the executed launcher) and **`post-init`** (the action's own docs:
   "caller-controlled escape hatch").
@@ -785,11 +794,13 @@ own non-required context.
   `pull_request.sh` and `push.sh`, so §6.4's exclusion necessarily travels through this input.
   Revision 5 governed the input but left two holes codex found: it permitted `arguments:` to be
   **absent**, which after §6.4 was decided is no longer an authorised implementation (absent means
-  `markdown-link-check` *runs* in the required job); and §6.4 never declared the literal bytes cell 9
+  `markdown-link-check` — and, since COREDEV-2850, the five whole-file formatters — *run* in the required
+  job); and §6.4 never declared the literal bytes cell 9
   was told to match, so **the cell could not be executed as written**.
 
-  **The contract:** `arguments:` **must be present and must equal §6.4's declared literal** — whose
-  bytes are stated *only* in §6.4, so this section does not restate them (a derived value written
+  **The contract:** `arguments:` **must be present and must equal §6.4's declared REQUIRED literal**
+  (the push canary: §6.4's CANARY literal) — whose bytes are stated *only* in §6.4, so this section does
+  not restate them (a derived value written
   twice goes stale, and two stale copies agree with each other). Asserted by cell 9 as a whole-string
   match — never a substring or a "contains `--filter`" test, both of which an appended argument would
   still satisfy. **Absence is a failure**, not a permitted variant.
@@ -1358,7 +1369,8 @@ alternative turned out to be complementary rather than competing.
         movement is another actor's — an incident, not a footnote.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
-      (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
+      (the staged content, not the worktree), **`--no-fix`**, §6.4's HOOK literal (which KEEPS the
+      formatters — COREDEV-2850), a
       a macOS-portable timeout whose **constant is fixed by MEASUREMENT, and measured FIRST**. The
       only datum behind revision 23's `120` was a single 7s one-file run, which says nothing about a
       cold linter-cache bootstrap or a large staged changeset — and this hook **blocks**, so a false
@@ -1477,6 +1489,16 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    half cannot pass; like cell 2, this cell is milestone-qualified rather than unqualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
    backlog present. (b) A PR touching a **historically dirty** file passes for its pre-existing
    findings while still failing for newly introduced ones.
+
+   **(b) is SUPERSEDED IN PART by COREDEV-2850 (revision 38) — narrowed, not fixed.** Trunk evaluates its
+   five `formatter: true` linters WHOLE-FILE, so before COREDEV-2850 a clean edit to an already
+   unformatted file failed (b)'s FIRST conjunct for debt the PR did not introduce — about 73% of tracked
+   files. The required job now filters those five (§6.4). That makes the first conjunct TRUE for
+   formatters, and makes the SECOND conjunct — "still failing for newly introduced ones" — FALSE for the
+   formatter family BY DESIGN: a newly introduced formatting defect no longer fails the required gate.
+   The pre-commit hook and the push canary still report it. For LINT findings both conjuncts hold
+   unchanged. This is the rollout record's written-narrowing closure route, accepted in COREDEV-2850's
+   plan §5, which the maintainer approved for implementation; this cell must not be read as "fixed".
 4. **The configured linter set MEMBERSHIP is frozen in the test, not derived from the configuration
    under test**
    (codex, r5). Revision 5 said "the configured set minus the declared exclusions", which reads the
@@ -1632,7 +1654,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    **absent** (not "absent-or-false": C4 is an allowlist, and `post-annotations: false` is an unlisted
    key *present* in `with:`, which cell 11's arbitrary-unlisted-key mutant reds — the two cells
    disagreed while the blacklist wording stood), no custom `--upstream`, no `--fix`, `actions/checkout` SHA-pinned — and
-   **`arguments:` PRESENT and equal to §6.4's declared literal as a whole string** (§1) — absence is
+   **`arguments:` PRESENT and equal to §6.4's declared REQUIRED literal as a whole string** (§1) — absence is
    a failure, not a permitted variant (codex, r5), and an appended argument cannot pass a substring
    test — **and `trunk-io/trunk-action` is pinned to the exact SHA of §1's C9**, with tag-reference
    and different-SHA mutants. Revision 9 asserted only that `actions/checkout` was pinned, so a
@@ -1769,8 +1791,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
     * **C4** — each of `trunk-path` and `post-init`; one arbitrary unlisted key; **`arguments:`
-      absent** (its failure mode is omission, not addition — absent means `markdown-link-check` runs
-      in the required job); **and `save-annotations` absent, and set `false`** — §6.1 chose option
+      absent** (its failure mode is omission, not addition — absent means `markdown-link-check` and,
+      since COREDEV-2850, the five whole-file formatters run in the required job); **and `save-annotations` absent, and set `false`** — §6.1 chose option
       (b), so its value is *required-present*, and absent means the action falls back to
       `--github-annotate` and 403s under `contents: read`.
     * **REQUIRED-PRESENT obligations need OMISSION cases, which revision 20 had none of (sweep).**
@@ -2147,7 +2169,7 @@ consequences follow, and both are now settled rather than open:
 datum, not the envelope** — M5a measures the cold-cache and large-changeset upper bound before the
 timeout constant is fixed, and the accepted per-commit cost is restated there from the measurement.
 
-### 6.4 — `markdown-link-check` — RESOLVED as a declared exclusion
+### 6.4 — `markdown-link-check` and the whole-file formatters — RESOLVED as declared exclusions
 
 Revision 2's recommendation contradicted §1. Under §1's corrected rule (no *undeclared* filter), the
 resolution is a **declared, enumerated, cell-enforced exclusion**: `markdown-link-check` is excluded
@@ -2157,27 +2179,52 @@ from the required job and runs in the scheduled advisory job (COREDEV-2778).
 cell 9 both demanded a whole-string match against a value no section ever defined, so the cell was
 unexecutable):
 
+**Revision 38 (COREDEV-2850): there are now TWO literals, and they differ BY DESIGN.**
+
+The **REQUIRED** literal — the `trunk-check` job's `arguments:`:
+
+```
+--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo
+```
+
+The **HOOK** and **CANARY** literal — `.githooks/pre-commit` and `trunk-check-push.yml`:
+
 ```
 --filter=-markdown-link-check
 ```
 
-That exact scalar is the whole permitted value of the job's `arguments:` input. §1 and cell 9 point
-at this declaration rather than restating it — a derived value stated twice goes stale, and two stale
-copies agree with each other.
+Each scalar is the whole permitted value of its own surface's `arguments:`. §1, C4, M5a and cells 9, 11
+and 13 point at this declaration, naming WHICH literal, rather than restating either — a derived value
+stated twice goes stale, and two stale copies agree with each other.
+
+**Why the required literal also excludes the formatters (COREDEV-2850).** Trunk evaluates its five
+`formatter: true` linters — black, isort, prettier, shfmt, taplo — WHOLE-FILE and reports pre-existing
+formatting debt as NEW on any touched file, so the required gate failed a clean edit to any of the ~73%
+of tracked files that were already unformatted. That is cell 3's over-reach. The **hook** keeps them:
+it runs over the author's own staged diff, where formatting the files you touched is exactly what is
+wanted. The **canary** keeps them so their findings are still OBSERVED rather than lost. COREDEV-2850's
+cell 4 is what makes the two literals becoming identical again fail.
 
 **The local pre-commit check (§6.3) excludes it too**, for the same reason and one more: a network
 round-trip per commit, failing on someone else's outage, is exactly the "gate red by default" trap
 §1 rejects. Link-checking stays in the scheduled job on both surfaces.
 
-**And it is ENFORCED on both surfaces, not only the CI one.** Cell 9 asserts the workflow's
-`arguments:` equals this literal as a whole string; **cell 13 asserts the same literal in the
+**And it is ENFORCED on every surface, not only the CI one.** Cell 9 asserts the workflow's
+`arguments:` equals the REQUIRED literal as a whole string; **cell 13 asserts the HOOK literal in the
 pre-commit invocation**, with the same whole-string match and the same mutants (appended flag, absent
-argument). A literal that is required in two places and checked in one is a declaration, not a
-control.
+argument); and COREDEV-2850's cell 4 asserts the canary's literal and that the two differ by EXACTLY
+the five formatters, in both directions. A literal that is required in two places and checked in one is
+a declaration, not a control — and two literals that must differ, checked only for equality to
+themselves, can quietly become one.
 
 **Losing cost, previously unstated (codex, r2): no merge-time detection of newly broken links.** A
 PR may introduce a dead link and merge; the scheduled job reports it afterwards. Accepted, because a
 required gate that fails on someone else's outage is worse — but it is a real loss, not a free win.
+
+**A second losing cost, from revision 38 (COREDEV-2850): no required-gate detection of NEWLY INTRODUCED
+formatting defects.** Accepted — cell 3(b) records the narrowing — because a required gate that fails
+for debt the author did not introduce blocks most PRs in this repository. The pre-commit hook still
+formats-checks the author's staged files, and the push canary still reports formatter findings.
 
 ## §7 — Files Changed
 
