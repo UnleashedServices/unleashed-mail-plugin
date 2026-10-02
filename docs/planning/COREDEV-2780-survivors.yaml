@@ -267,3 +267,64 @@ survivors:
       `resolve(ref_name, default_branch)` is ENTRY-AGNOSTIC — it takes no entry id and no
       entry-derived argument, so there is nothing to dispatch on and the per-entry private resolver
       CANNOT BE WRITTEN. The shape is removed rather than asserted about.
+
+  - id: survivor/activity-set-subset
+    covered_by:
+      - C2.types-required/not-the-exact-set
+    found_in_round: r44
+    survived_formulation: >-
+      The checker tested only that `types:` CONTAINED `edited`, while C2 states the exact set.
+    mutant: "`types: [edited]`, or `[opened, reopened, edited]`"
+    would_have_shipped: >-
+      A gate that never re-runs on a new commit, because `synchronize` is gone. A required context then
+      stays pending on every pushed update, or a green result computed for an older head is relied on.
+    must_fail_because: C2 requires exactly `opened, synchronize, reopened, edited`.
+
+  - id: survivor/sibling-step-key
+    covered_by:
+      - C8.step-sequence-allowlist/sibling-key
+    found_in_round: r44
+    survived_formulation: >-
+      Step keys were checked against a six-key BLACKLIST, while C8 freezes the complete step mapping.
+    mutant: "`timeout-minutes: 1` added to `guard-empty-diff`"
+    would_have_shipped: >-
+      Any key nobody thought to forbid, on any of the five steps, with the run body still hashing clean.
+    must_fail_because: C8 freezes the COMPLETE step mapping, an allowlist per step kind.
+
+  - id: survivor/checkout-by-tag
+    covered_by:
+      - C8.checkout-sha-pinned/tag
+    found_in_round: r44
+    survived_formulation: >-
+      Checkout's INPUTS were allowlisted, and its `uses:` was never checked at all.
+    mutant: "`uses: actions/checkout@v4`"
+    would_have_shipped: >-
+      A mutable tag in the one step that decides which tree every later step inspects.
+    must_fail_because: C8 requires `actions/checkout` pinned by a full commit SHA.
+
+  - id: survivor/duplicate-known-step
+    covered_by:
+      - C8.step-sequence-allowlist/duplicate-checkout
+      - C8.step-sequence-allowlist/duplicate-guard-empty-diff
+    found_in_round: r45
+    survived_formulation: >-
+      The sequence check diagnosed missing, unknown and reordered names. A duplicate KNOWN name matched
+      none of the three, and the per-step checks read only the first occurrence.
+    mutant: a second `actions/checkout@v4` with `ref main`, inserted after the guards
+    would_have_shipped: >-
+      A tree replaced AFTER the empty-diff and launcher guards had inspected it, with Trunk then linting
+      a tree no guard had seen.
+    must_fail_because: C8 requires exactly the five declared steps, in order; anything else is a problem.
+
+  - id: survivor/context-named-validate
+    covered_by:
+      - C3.effective-context-pinned/canary-named-validate
+      - C3.effective-context-pinned/required-named-validate
+    found_in_round: r46
+    survived_formulation: >-
+      The canary's job ID was checked, and its `name:` was not. `name:` decides the emitted context.
+    mutant: "the canary's `name: trunk-check-push` changed to `name: validate`"
+    would_have_shipped: >-
+      A passing canary satisfying the REQUIRED `validate` context on its SHA, with the contract suites
+      that `validate` exists to run never run.
+    must_fail_because: each entry's effective context must equal its declared context (C3).

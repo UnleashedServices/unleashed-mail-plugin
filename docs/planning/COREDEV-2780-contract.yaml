@@ -485,6 +485,46 @@ obligations:
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
         diagnostic: "step `trunk`: `if:` is prohibited"
 
+  - id: C3.effective-context-pinned
+    clause: C3
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      Each entry's EFFECTIVE context, its job `name` or else its job ID, equals its declared context:
+      `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
+      the status context a job emits. Checking only the job ID let a canary renamed `validate` emit a
+      REQUIRED context without running the contract suites (codex, r46).
+    target: $.jobs.<job>.name
+    cases:
+      - id: C3.effective-context-pinned/required-named-validate
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: validate
+        validity: the required job would stop emitting `trunk-check` and would emit `validate` instead
+        diagnostic: "job: effective context `validate` is not `trunk-check`"
+      - id: C3.effective-context-pinned/required-named-as-canary
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: trunk-check-push
+        validity: the two entries would emit the same context
+        diagnostic: "job: effective context `trunk-check-push` is not `trunk-check`"
+      - id: C3.effective-context-pinned/canary-named-validate
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: validate
+        validity: a passing canary would satisfy the REQUIRED `validate` context on its SHA
+        diagnostic: "job: effective context `validate` is not `trunk-check-push`"
+      - id: C3.effective-context-pinned/canary-named-as-required
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: trunk-check
+        validity: a second producer of the required `trunk-check` context
+        diagnostic: "job: effective context `trunk-check` is not `trunk-check-push`"
+
   - id: C3.no-defaults-run
     clause: C3
     kind: yaml

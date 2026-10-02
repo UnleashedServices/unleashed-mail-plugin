@@ -37,9 +37,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
   pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **A duplicate
   step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
-  the tree they had inspected. Any sequence unequal to the declared five is now a problem. Cell 11's
+  the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
+  `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
+  have emitted a REQUIRED context. Each entry's effective context is now pinned. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
-  and `continue-on-error` on every step) is now declared in the registry and executed: 32 new cases,
+  and `continue-on-error` on every step) is now declared in the registry and executed: 36 new cases,
   all valid workflows.
 - **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
   Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry

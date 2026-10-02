@@ -1968,6 +1968,16 @@ def contract_problems(
                     "types: the activity set is not exactly `opened, synchronize, reopened, edited`"
                 )
 
+    # C3 — the EFFECTIVE context is pinned. `name:` decides which status context a job emits, so an
+    # unconstrained `name` let the canary emit the REQUIRED `validate` context while its job ID, the
+    # only thing checked, stayed `trunk-check-push` (codex, r46).
+    expected_context = CANARY_CONTEXT if is_canary else EXPECTED_CONTEXT
+    effective_context = str(job.get("name") or _job_id(workflow))
+    if effective_context != expected_context:
+        problems.append(
+            f"job: effective context `{effective_context}` is not `{expected_context}`"
+        )
+
     # C3 — the JOB mapping is an allowlist, and nothing skips or masks.
     allowed_job = {"runs-on", "timeout-minutes", "permissions", "steps", "name"}
     if is_canary or milestone == "M2":
@@ -3378,6 +3388,17 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA",
             ),
             *per_step(),
+            # ---- the EFFECTIVE context (codex, r46): `name:` decides what context a job emits ------
+            (
+                "C3.effective-context-pinned/required-named-validate",
+                lambda w: _job(w).update({"name": "validate"}),
+                "job: effective context `validate` is not `trunk-check`",
+            ),
+            (
+                "C3.effective-context-pinned/required-named-as-canary",
+                lambda w: _job(w).update({"name": CANARY_CONTEXT}),
+                "job: effective context `trunk-check-push` is not `trunk-check`",
+            ),
         ]
 
     def _canary_mutants(self):
@@ -3409,6 +3430,18 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                     "arguments", CANARY_ARGUMENTS_LITERAL + " --fix"
                 ),
                 "action inputs: `arguments` does not equal the declared literal",
+            ),
+            (
+                # A passing canary named `validate` would emit a REQUIRED context without running the
+                # contract suites (codex, r46). The job ID never changed, so the ID check passed.
+                "C3.effective-context-pinned/canary-named-validate",
+                lambda w: _job(w).update({"name": "validate"}),
+                "job: effective context `validate` is not `trunk-check-push`",
+            ),
+            (
+                "C3.effective-context-pinned/canary-named-as-required",
+                lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
+                "job: effective context `trunk-check` is not `trunk-check-push`",
             ),
         ]
 

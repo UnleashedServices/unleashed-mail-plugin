@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 44
+**Status:** Planning, revision 45
 **Implementation status:** shipped through M3 (v2.8.26). The plan was respecified AFTER M3 landed, and
 the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
 * cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
@@ -28,13 +28,15 @@ the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracke
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-44, not outstanding** (codex, r44 and r45): four checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-45, not outstanding** (codex, r44 to r46): five checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
-`actions/checkout` after the guards could replace the tree they had inspected (revision 44). Cell 11's
-per-step minimum is now declared in the registry and executed: 32 cases added in revisions 43-44, every
-one actionlint-clean apart from the permitted `if-cond` notes. Its `TRUNK_PATH` cases now write that
+`actions/checkout` after the guards could replace the tree they had inspected (revision 44); and only
+the job ID was checked, never the job `name` that decides the emitted context, so a canary named
+`validate` passed (revision 45). Cell 11's per-step minimum is now declared in the registry and executed:
+36 cases added in revisions 43-45, every one actionlint-clean apart from the permitted `if-cond` notes.
+The survivor corpus now records all five forms, as §1 requires; it is still not EXECUTED (above). Its `TRUNK_PATH` cases now write that
 assignment; until revision 44 all three appended `echo X`.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
@@ -247,6 +249,18 @@ assignment; until revision 44 all three appended `echo X`.
 > the unfixed checker), corrects the three payloads, and extends the status block.
 > *Each round since r43 has found a real shipped-checker gap that the plan's text already prohibited:
 > the plan was right, and the implementation had not been held to it.*
+> **r46** `2b9fb78` (revision 44), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1). codex confirmed all
+> 32 additions agree between registry and suite, and that the r45 repairs held across 181 forbidden
+> probes. **P1, a fifth survivor, reproduced here on both entries**: `name:` decides a job's emitted
+> context, but only the job ID was checked, so the canary renamed `validate` returned no problems. The
+> shipped producer census guards `trunk-check` alone, so nothing guarded `validate`, a REQUIRED context. A
+> passing canary could have satisfied it without the contract suites running. codex also found the
+> survivor corpus missing all four recent survivor forms, which §1's maintenance rule requires.
+> **Revision 45** pins each entry's effective context, adds four collision cases (all failed against the
+> unfixed checker), and records five survivors in the corpus. agy's round-46 "surviving mutants"
+> (`branches:` values, any 40-hex checkout SHA, `fetch-depth`'s value) are by design. C2's target set is
+> enforced on the shipped file by cell 15's resolved-set comparison, the checkout SHA's VALUE is
+> Dependabot's, and `fetch-depth` is allowlisted without a value constraint.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -760,7 +774,11 @@ own non-required context.
 
   **C3 — the JOB mapping is an allowlist, and nothing skips or masks on any step.** The job's own
   keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name` (cell 14's
-  effective check name, which takes precedence over the job id when present) — and nothing else, **with
+  effective check name, which takes precedence over the job id when present) — and nothing else.
+  **The EFFECTIVE context is pinned per entry** (codex, r46): the job `name`, or else the job ID, must
+  equal `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
+  which status context a job emits. Checking only the job ID let a canary renamed `validate` emit a
+  REQUIRED context, satisfying it on its SHA without the contract suites ever running. **With
   `permissions:` pinned to exactly `contents: read` here as well as at the root**. GitHub calculates
   the token workflow-level *then* job-level, so a job-level `permissions: write-all` widens the
   effective token while satisfying both allowlists — revision 24 pinned the value at C0 and left the
