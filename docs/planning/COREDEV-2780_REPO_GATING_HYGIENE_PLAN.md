@@ -2,7 +2,7 @@
 
 **Status:** Planning, revision 38
 **Created:** 2026-08-28
-**Last Updated:** 2026-09-01
+**Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
 
 > **r1** `04048c7`: codex + agy both `REQUEST_CHANGES`. Concordant: §2's fix was wrong for
