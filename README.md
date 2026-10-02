@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.24
+# UnleashedMail — Claude Code Plugin v2.8.27
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,41 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.27
+
+**The required `trunk-check` gate no longer fails clean edits to already-unformatted files.** Trunk
+evaluates its five formatters (black, isort, prettier, shfmt, taplo) whole-file, so any edit to one
+of the ~73% of tracked files with pre-existing formatting debt went red for debt the author did not
+introduce. The required job now filters them; the push canary still runs them, so their findings are
+observed rather than lost. New lint defects are still caught.
+
+**The secret-scanning configs are now frozen, and a blanket allowlist is refused outright.** gitleaks
+and zizmor read configs outside the frozen tree, so a blanket `.*` allowlist in `.gitleaks.toml`
+disarmed both `trunk-check` and the separate `secret-scan` required check with the suite green. The
+freeze now covers every config a security linter reads — including `.gitleaksignore`, which nothing
+caught — and content checks reject any blanket suppression rather than only noticing it changed.
+
+### v2.8.26
+
+**The `keychain-security` skill described only one of two Keychain write paths, and an agent nearly
+changed credential code because of it.** It stated flatly that `KeychainManager` does
+delete-then-add. True of the `.legacy` path — still the shipped default — but the app also ships a
+flag-gated `.primitive` path that never deletes a live credential. An agent found the second path,
+concluded the skill contradicted the code, and was about to "resolve it at source".
+
+The rewrite was verified against the app source by an adversarial pass, which returned 16 edits and
+caught a factual error in the first draft. It also surfaced worse hazards than the original gap: the
+default path can destroy a credential if its add fails after its delete, `isProtectionTransition:`
+is caller-supplied and defaults unsafe, and `refreshToken` never takes the safe path. All are now
+documented, with an explicit instruction not to unify the paths.
+
+### v2.8.25
+
+**M3 — the trunk-check gate is STRICT on `main`.** `continue-on-error` is removed, so a Trunk
+finding now fails the job instead of being advisory. The context is still NOT required by ruleset
+`Control` — making it required is M4, and it needs strict green _and_ deliberately red evidence on
+both bases first.
 
 ### v2.8.24
 

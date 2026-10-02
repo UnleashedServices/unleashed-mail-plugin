@@ -34,7 +34,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 EVIDENCE_DIR = REPO / "docs/planning/evidence"
-ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
+ARGUMENTS_LITERAL = (
+    "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
+)
 
 # READ FROM THE REGISTRY, NOT RESTATED HERE. The pin already appears in three workflows and the
 # contract; a fourth copy in this file is a fourth thing to forget on a bump, and two stale copies
@@ -152,6 +154,46 @@ def parity_problems(record: dict) -> list[str]:
             f"(outcome {outcome!r}) — it was never in the linted range, so the pre/post hashes "
             f"are blind"
         )
+    # `outcome == "failure"` is STILL consistent with two worlds. Trunk reaches its `check` argv,
+    # then aborts — a linter download, a cache fetch — and the step concludes `failure` having linted
+    # nothing, while the `if: always()` control succeeds and rewrites the fixture. Both discriminators
+    # above are satisfied in that world. Only a diagnostic NAMING THE FIXTURE with a position can be
+    # produced by lint evaluation alone, so the harness records one and this judge requires it.
+    diagnostic = action.get("primaryDiagnostic")
+    if not diagnostic:
+        problems.append(
+            "cell 5: the primary run named no diagnostic on the fixture — `failure` alone cannot "
+            "distinguish a lint finding from an abort after the `check` argv was emitted"
+        )
+    else:
+        fixture = tree.get("fixture")
+        if diagnostic.get("path") != fixture:
+            problems.append(
+                f"cell 5: the primary diagnostic names {diagnostic.get('path')!r}, not the fixture "
+                f"{fixture!r} — a finding elsewhere does not show the fixture was linted"
+            )
+        if not diagnostic.get("linter"):
+            problems.append(
+                "cell 5: the primary diagnostic names no linter — the file being mentioned is not "
+                "the same claim as a linter having judged it"
+            )
+        # The POSITION IS OPTIONAL, and that is measured rather than lenient. A whole-file finding —
+        # a formatter's `fmt`, printed as `-:-` — carries no line or column; the ORIGINAL fixture was
+        # mis-indented and produced exactly that, and requiring integers made the field unsatisfiable,
+        # so the first re-run returned null on a run that HAD linted the file. COREDEV-2850's fixture is
+        # positional (`shellcheck/SC2250` at 3:7), but trunk emits both shapes, so both stay valid. When a position is present it must still be a genuine
+        # integer — `isinstance(True, int)` is True, so booleans are excluded explicitly, or a JSON
+        # `true` would forge one.
+        for axis in ("line", "column"):
+            value = diagnostic.get(axis)
+            if value is None:
+                continue
+            if not isinstance(value, int) or isinstance(value, bool):
+                problems.append(
+                    f"cell 5: the primary diagnostic's `{axis}` is present but is not an integer "
+                    "position"
+                )
+
     control_post = tree.get("controlPost")
     if not control_post:
         problems.append("cell 5: the autofix positive control did not run")
@@ -223,7 +265,23 @@ def _clean_record(event: str = "pull_request") -> dict:
             # equal `fixturePre`/`fixturePost` above meaningful rather than vacuous.
             "controlPost": "f-autofixed",
         },
-        "action": {"outcome": "failure", "controlOutcome": "success"},
+        "action": {
+            "outcome": "failure",
+            "controlOutcome": "success",
+            # THE SHAPE A REAL RUN PRODUCES — measured, never imagined. COREDEV-2850 replaced the
+            # mis-indented fixture (shfmt's whole-file `fmt`, no position; run 34073353787) because the
+            # required job now filters shfmt out. This shape was MEASURED by running the harness's own
+            # `primary_diagnostic()` over a `trunk check --ci --upstream` of the staged fixture under the
+            # six-name filter: `shellcheck/SC2250` at line 3, column 7. It must be re-confirmed against
+            # the first CI harness run's recorded `parity-*.json`; if that artifact disagrees, the
+            # artifact wins and this record changes — never the reverse.
+            "primaryDiagnostic": {
+                "path": "harness-fixtures/fixable.sh",
+                "linter": "shellcheck/SC2250",
+                "line": 3,
+                "column": 7,
+            },
+        },
         "actionInputs": {
             # THE REAL RECORDED SHAPE. This was `{"canonical": "{}", "digest": "d"*64}` — internally
             # inconsistent by construction, which no genuine artifact ever is, and which meant the
@@ -240,6 +298,63 @@ class TheJudgeDiscriminates(unittest.TestCase):
     """Every wrong implementation the harness exists to catch, and its own diagnostic."""
 
     def test_a_clean_record_is_a_passing_positive_control(self):
+        self.assertEqual([], parity_problems(_clean_record()))
+
+    def test_an_aborted_primary_is_rejected_despite_a_failure_outcome(self):
+        """THE WORLD THIS FIELD EXISTS FOR. Outcome `failure`, control rewrote the fixture, hashes
+        equal — every other discriminator satisfied — yet Trunk never linted the fixture.
+        """
+        record = _clean_record()
+        del record["action"]["primaryDiagnostic"]
+        problems = parity_problems(record)
+        self.assertIn(
+            "cell 5: the primary run named no diagnostic on the fixture — `failure` alone cannot "
+            "distinguish a lint finding from an abort after the `check` argv was emitted",
+            problems,
+        )
+
+    def test_a_diagnostic_naming_another_file_is_rejected(self):
+        record = _clean_record()
+        record["action"]["primaryDiagnostic"]["path"] = "scripts/ci/parity-recorder.sh"
+        self.assertTrue(
+            any("not the fixture" in problem for problem in parity_problems(record)),
+            "a finding on a different file must not certify that the fixture was linted",
+        )
+
+    def test_a_boolean_position_cannot_forge_a_diagnostic(self):
+        """`isinstance(True, int)` is True, so this is the mutant a naive int check survives."""
+        record = _clean_record()
+        record["action"]["primaryDiagnostic"]["line"] = True
+        self.assertIn(
+            "cell 5: the primary diagnostic's `line` is present but is not an integer position",
+            parity_problems(record),
+        )
+
+    def test_a_diagnostic_without_a_linter_is_rejected(self):
+        """Mentioning the file is not the same claim as a linter having judged it."""
+        record = _clean_record()
+        del record["action"]["primaryDiagnostic"]["linter"]
+        self.assertTrue(
+            any("names no linter" in problem for problem in parity_problems(record)),
+            "a diagnostic with no linter must not certify that the fixture was linted",
+        )
+
+    def test_an_absent_position_is_still_accepted_for_a_whole_file_finding(self):
+        """The POSITIVE control for the optionality — asserted, so nobody 'tightens' it back.
+
+        COREDEV-2850 made the shipped fixture positional, which made this test stale in the OPPOSITE
+        direction: it used to read the null position straight off the clean record. A whole-file
+        finding (`-:-`) is still a shape trunk emits, so the optionality is kept and exercised
+        explicitly here rather than inherited from whatever the fixture happens to produce.
+        """
+        record = _clean_record()
+        record["action"]["primaryDiagnostic"].update(line=None, column=None)
+        self.assertEqual([], parity_problems(record))
+
+    def test_the_shipped_fixture_s_position_is_a_genuine_integer_pair(self):
+        """The positional half: the measured 3:7 must be accepted AS integers, not merely tolerated."""
+        diagnostic = _clean_record()["action"]["primaryDiagnostic"]
+        self.assertEqual((3, 7), (diagnostic["line"], diagnostic["column"]))
         self.assertEqual([], parity_problems(_clean_record()))
 
     def test_a_range_mismatch_is_the_cell_1_failure(self):

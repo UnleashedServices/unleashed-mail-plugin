@@ -13,6 +13,96 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.27] — 2026-10-02
+
+### Fixed
+
+- **`trunk-check` over-reach (COREDEV-2850): the required gate failed clean edits to files that were
+  already unformatted.** Trunk evaluates its five `formatter: true` linters (black, isort, prettier,
+  shfmt, taplo) whole-file and reports pre-existing formatting debt as NEW on any touched file, so an
+  edit to one of the ~73% of tracked files with such debt went red for debt the author did not
+  introduce. The required job now passes
+  `--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo`; the push canary keeps the
+  formatters, so their findings are still observed. Measured: a genuine new lint defect is still
+  caught under the new filter.
+- **Cell 4 is genuinely strict.** It replaced a substring test — which a seven-name literal, a security
+  exclusion and an issue-code suppression all passed — with a frozen exclusion SET, an exact
+  required-versus-canary difference in both directions, and rejection of issue codes and security
+  linters, each mutant asserted to fail with its own diagnostic.
+- **The parity harness's fixture was replaced by measurement, not by the plan's guess.** The old
+  fixture's only finding was shfmt's, which the new filter silences. `codespell` — the first
+  suggestion — is reported but not autofixed by trunk; an unbraced variable reference
+  (`shellcheck/SC2250`) is both, and leaves the file clean.
+
+### Security
+
+- **Security-linter configs outside the frozen tree (COREDEV-2860).** gitleaks reads `.gitleaks.toml`
+  and zizmor reads `.github/zizmor.yml`, neither of which was frozen, so a blanket allowlist appended to
+  `.gitleaks.toml` disarmed both `trunk-check` and the separate `secret-scan` required context with the
+  test suite green. The freeze now covers the union of every config `.trunk/trunk.yaml` references and
+  every `direct_configs` candidate of every enabled security linter — ten paths, including
+  `.gitleaksignore`, a suppression lever nothing else caught.
+- **References are adjudicated, never resolved.** `..` is refused rather than collapsed, containment is
+  component-wise, and a symlink at ANY path component is refused; every config is recorded as
+  canonical JSON so neither its kind nor a record boundary can be forged, and anything but a regular
+  file or directory is refused before it is read.
+- **Content checks close the hole against intent, not only accident.** A digest only makes a weakening
+  visible — it can be re-pinned in the same commit. A blanket gitleaks allowlist (global, legacy or
+  per-rule; `.*`, `.+`, `\S` and the like, judged behaviourally), `useDefault = false`, `disabledRules`,
+  a disabled zizmor audit, or an ignore covering every workflow is now refused outright.
+- **A mutant battery runs against the real code**: 29 single-decision operators over 30 rows, each
+  failing exactly its recorded rows, proven to discriminate by weakening the production allowlist.
+
+## [2.8.26] — 2026-09-07
+
+### Fixed
+
+- **`keychain-security` (COREDEV-2851): the skill documented only one of `KeychainManager`'s two
+  save paths, and an agent nearly changed credential code because of it.** Working from the skill,
+  an agent in another session read the app source, found writes that add/update without ever
+  deleting a live credential, correctly concluded that could not be the same path the skill
+  described — and announced it would "resolve it at source", i.e. modify credential storage.
+  Nothing was wrong with the app. `selectSaveStrategy` picks per call (COREDEV-2514): `.legacy`,
+  **the default**, is delete-then-add; `.primitive`, flag-gated, never deletes a live item. The
+  skill was accurate about the default and silent about the other path, and that silence is what
+  pointed an agent at credential code.
+- **The rewrite was verified against the app source rather than trusted.** An adversarial pass
+  (independent derivation, three review lenses, synthesis) returned **16 edits, 5 high-risk** —
+  including a factual error in the first draft, which had claimed an absent kill-switch flag
+  resolves to `.legacy`. It does not: enable flags and the kill switch both fail closed but with
+  **opposite polarity**, and `absent` on the kill switch means _inactive_, which permits.
+- **The verification surfaced hazards more serious than the original gap**, now all documented:
+  - `.legacy` has a real destruction window — the `SecItemDelete` status is discarded, the delete
+    sits inside the retried closure, and a failed `SecItemAdd` leaves the credential **permanently
+    gone**, with no rollback and no read-back.
+  - `isProtectionTransition:` is **caller-supplied and defaults to the unsafe value**. A write that
+    removes a `kSecAttrAccessControl` must pass `true`, or the primitive can report success while
+    leaving user-presence protection installed after the user turned it off.
+  - `.rotationHot` covers only `accessToken` / `tokenExpiry`, so **`refreshToken` never takes the
+    safe path** — deliberate, and now stated.
+  - Token-refresh atomicity is the **caller's** job; `KeychainManager` has no transaction, and a
+    failed write leaves the item _absent_, not unchanged. The old security rule claimed the reverse.
+- The skill grew 79 → 241 lines and now carries an explicit **do not unify the paths, flip the
+  default, or delete the legacy path** instruction, plus the sentence that would have prevented the
+  incident: _"it does delete-then-add" and "it never deletes a live credential" are each correct,
+  about a different strategy._
+
+## [2.8.25] — 2026-09-06
+
+### Changed
+
+- **M3 (`main`): `trunk-check` is strict.** Removed the job-scoped `continue-on-error: true` that
+  M2 shipped deliberately, so a Trunk finding fails the job rather than being advisory. Cell 11's
+  C3 assertions were written at M2 and are ENABLED here — the shipped-workflow contract cell now
+  asserts at `milestone="M3"`.
+- The cells that asserted the exemption EXISTS were inverted rather than deleted, so they keep
+  their teeth: re-adding `continue-on-error` at either scope is now what must be caught, and the
+  mutant registry case that previously mutated nothing re-adds the key. That let the runner's
+  milestone carve-out — "one M3 case mutates nothing by design" — be removed, so every mutant must
+  now really change the workflow.
+- The context is still **not required** by ruleset `Control`. Making it required is M4, which needs
+  explicit maintainer instruction and evidence on both bases.
+
 ## [2.8.24] — 2026-09-05
 
 ### Changed
