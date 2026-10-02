@@ -307,9 +307,16 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
    r7). An absolute operand that reaches the workspace by another spelling, `/var/...` against an anchor
    spelled `/private/var/...`, is recorded OUT OF SCOPE although `samefile()` is true. That is the
    accepted price of never resolving. It is recorded rather than dropped, and introducing such an
-   operand is itself an edit to `.trunk/trunk.yaml`, whose WHOLE document is frozen — only canonical
-   version specifiers normalise (`_normalised_trunk_config`) — so it moves that digest and needs a
-   reviewed re-pin.
+   operand is itself an edit to `.trunk/trunk.yaml`, which moves that file's frozen digest and needs a
+   reviewed re-pin (codex measured the `/var` versus `/private/var` change: the digest moves).
+   **That freeze has one more blind spot, disclosed here because revision 8 denied it** (codex, r8 —
+   reproduced). `_normalised_trunk_config` does NOT normalise only version fields: line 488 runs
+   `re.sub(r"@\d+[\w.\-+]*", "@<version>", ...)` over the WHOLE dumped document, so a reference
+   repointed from `${workspace}/policy/plain@1.toml` to `plain@2.toml` normalises identically and the
+   `trunk.yaml` digest does not move. Part B's aggregate closes it for config references: the member
+   contribution is `f"{rel}:..."`, so the relative path is folded in and that repoint moves the
+   aggregate. Narrowing the regex to actual version fields changes shipped normaliser code and is OUT of
+   this plan's scope — it is ticketed as **COREDEV-2867** rather than folded in.
    **None of (ii)-(iv) reds the shipped tree** (verified 2026-10-02): its only two live references,
    `${workspace}/.gitleaks.toml` (`.trunk/trunk.yaml:67`) and
    `${workspace}/.trunk/configs/markdown-link-check.json` (`:77`), contain no `..`, and no member, no
@@ -619,53 +626,76 @@ meant.
       confirmed r6). (e) proves admissibility and nothing more. It does not prove — and this plan no
       longer asks anything to prove — WHERE class validation lives; §B4 explains why that rule was
       withdrawn rather than verified.
-   f. **AGGREGATE-LEVEL ADJUDICATION controls, DERIVED-ONLY — one row per step of §B3(1)'s procedure**
-      (codex, r5 P1 and r6 P1; gemini, r6). Fixture: ONE temporary outer directory holding sibling
-      `workspace/` and `outside/` directories, both alive for the whole assertion (codex, r6 —
-      `symlink_to` already runs on both suite platforms at `scripts/tests/test_trunk_check_workflow.py:2295`,
-      and `plugin-ci.yml` runs the scripts suite on Ubuntu and macOS). Each reference appears ONLY in
-      the synthetic `trunk.yaml` — not at a DECLARED path, not under `.trunk/configs/**` — and every
-      outcome is asserted on the PRODUCTION aggregate:
+   f. **AGGREGATE-LEVEL ADJUDICATION controls, DERIVED-ONLY — and every exclusion rule in §B3(1) has a
+      positive control at its ADJACENT boundary** (codex, r5-r8; gemini, r6). Rounds 7 and 8 each found
+      one missing boundary row; revision 9 enumerates the CLASS instead. For every rule that excludes or
+      refuses — root exclusion, `..` refusal, `.` dropping, symlink refusal, absent-component handling,
+      containment — the nearest input that must NOT be excluded is a row.
+      **Fixture.** ONE temporary outer directory holding sibling `workspace/` and `outside/` directories,
+      both alive for the whole assertion (`symlink_to` already runs on both suite platforms at
+      `scripts/tests/test_trunk_check_workflow.py:2295`, and `plugin-ci.yml` runs the scripts suite on
+      Ubuntu and macOS). Each row's reference appears ONLY in the synthetic `trunk.yaml` — not at a
+      DECLARED path, not under `.trunk/configs/**` — and every outcome is observed on the PRODUCTION
+      aggregate, `DECLARED | DERIVED`. The background DECLARED set includes one PRESENT member and one
+      ABSENT optional candidate, because step (iv) walks every member.
+      **Observation rules — a row's observation is exactly what is written here, no stricter and no looser**
+      (codex, r8: twice a draft observation stricter than the spec hid a gap the spec left open).
+      - **Baseline first.** The aggregate over the background alone must SUCCEED. Without it, an unrelated
+        refusal satisfies every REFUSE row vacuously.
+      - **REFUSE** means the aggregate raises AND the diagnostic names THIS row's operand.
+      - **MEMBER** means the probe path is in aggregate membership — nothing else.
+      - **not a member, no record** (row 6) means the probe is absent from membership AND nothing was
+        recorded out of scope. Recording the root as out of scope is a failure.
+      - **OUT OF SCOPE, recorded** (row 7) means the probe is absent from membership AND the out-of-scope
+        record is exactly this row's operand.
 
-      | # | shape | reference | required outcome |
+      | # | adjacent to | reference | required outcome |
       |---|---|---|---|
-      | 1 | leaf symlink, outside target | `${workspace}/policy/security.toml`, itself a link into `outside/` | REFUSE |
-      | 2 | ANCESTOR symlink, no `..` | `${workspace}/sym_dir/config.toml`, `sym_dir` a link to `outside/` | REFUSE |
-      | 3 | ANCESTOR symlink, then `..` | `${workspace}/policy/../security.toml`, `policy` a link to `outside/child/` | REFUSE |
-      | 4 | `..`, no symlink anywhere | `${workspace}/real_dir/../security.toml` | REFUSE |
-      | 5 | climbs above the anchor | `${workspace}/../outside.toml` | REFUSE |
-      | 6 | the workspace root | `${workspace}/.` | not a member |
-      | 7 | spelling-prefix sibling | `${workspace}_extra/x.toml` | OUT OF SCOPE, recorded |
-      | 8 | ordinary DERIVED-only reference | `${workspace}/policy/plain.toml`, a regular file, not DECLARED | MEMBER |
-      | 9 | ABSENT ancestor | `${workspace}/no_such_dir/absent.toml`, nothing at either component | MEMBER (`missing` marker) |
+      | 1 | symlink refusal (leaf) | `${workspace}/policy/security.toml`, itself a link into `outside/` | REFUSE |
+      | 2 | symlink refusal (ancestor) | `${workspace}/sym_dir/config.toml`, `sym_dir` a link to `outside/` | REFUSE |
+      | 3 | `..` after a symlink | `${workspace}/plink/../security.toml`, `plink` a link to `outside/child/` | REFUSE |
+      | 4 | `..` refusal | `${workspace}/real_dir/../security.toml`, no link anywhere | REFUSE |
+      | 5 | `..` above the anchor | `${workspace}/../outside.toml` | REFUSE |
+      | 6 | root exclusion | `${workspace}/.` | not a member, no record |
+      | 7 | containment | `${workspace}_extra/x.toml`, a spelling-prefix sibling | OUT OF SCOPE, recorded |
+      | 8 | symlink refusal | `${workspace}/policy/plain.toml`, a regular file at depth two | MEMBER |
+      | 9 | absent component (`ENOENT`) | `${workspace}/no_such_dir/absent.toml` | MEMBER (`missing`) |
+      | 10 | **root exclusion** | `${workspace}/ordinary.toml`, a DIRECT child | MEMBER, and the aggregate digest moves on CREATE, EDIT and DELETE |
+      | 11 | absent component (`ENOTDIR`) | `${workspace}/plain_file/x.toml`, `plain_file` a regular file | MEMBER (`missing`) |
+      | 12 | `..` refusal | `${workspace}/a..b.toml` — `..` inside a NAME, not a component | MEMBER |
+      | 13 | root exclusion, dotfiles | `${workspace}/.hidden.toml` — the shipped `.gitleaks.toml` shape | MEMBER |
+      | 14 | `.` dropping | `${workspace}/./policy/other.toml` | MEMBER, as `policy/other.toml` |
 
-      **Rows 8 and 9 are the positive controls, and the table is two-sided because of them.** Rows 1-7
-      are all refusals or exclusions, so without a MEMBER row an implementation that refuses EVERY
-      internal member passes the table while redding the shipped tree.
-      **Row 8 must be DERIVED-ONLY — revision 7 got this wrong** (codex, r7). It used `.gitleaks.toml`,
-      which is DECLARED, breaking this cell's own rule above. Through the aggregate, DECLARED supplies
-      that path whether or not derivation found it, so `DECLARED | DERIVED` contains it under the correct
-      procedure AND under one that discarded the reference: the row could not tell them apart. The
-      revision-7 table was executed against the adjudication function in isolation, which is why it missed
-      this — the row sets below are measured through the AGGREGATE, observed exactly as each row
-      specifies (a MEMBER row observes aggregate membership and nothing else).
-      MUTANTS — each must fail this cell on EXACTLY the rows named. EXECUTED, not reasoned (2026-10-02,
-      macOS, with the anchor beneath a `/var -> /private/var` alias, through `DECLARED | DERIVED`); the
-      correct procedure passes all nine rows there.
+      **Row 10 is codex's r8 blocker.** Rows 8 and 9 sit at depth two, so an implementation that excluded
+      the root AND every direct child (`if len(rel.parts) < 2: continue`) passed all nine revision-8 rows.
+      That is not hypothetical: the shipped `GITLEAKS_CONFIG=${workspace}/.gitleaks.toml` IS a direct-child
+      DERIVED reference, and its loss would be masked by DECLARED. **Row 8 must stay DERIVED-only**
+      (codex, r7): a DECLARED probe is supplied by DECLARED whether or not derivation found it.
+      **MUTANTS — EXECUTED, not reasoned** (2026-10-02, macOS, anchor beneath a `/var -> /private/var`
+      alias, through `DECLARED | DERIVED`, each row observed exactly as written above). The correct
+      procedure passes the baseline and all fourteen rows. Each mutant must fail EXACTLY the rows named:
 
       | mutant | fails on |
       |---|---|
-      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | rows 1-5 — silently DISCARDS 1, 2, 3 and 5; ADMITS 4 as a member |
-      | `..` collapsed by `os.path.normpath` before adjudication | rows 3, 4, 5 |
-      | LEAF-only `Path.is_symlink()` check | row 2 only |
-      | `str.startswith` containment | row 7 only |
-      | unconditional `os.lstat` walk, no absent-component handling | row 9 only — it RAISES `ENOENT` |
+      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | 1-5 |
+      | containment by `Path.resolve()`, operand only | 1-6, 8-14 — the WRONG reason; see below |
+      | `..` collapsed by `os.path.normpath` before adjudication | 3, 4, 5 |
+      | LEAF-only `Path.is_symlink()` | 2 |
+      | `str.startswith` containment | 7 |
+      | unconditional `os.lstat` on the row's own walk | 9, 10, 11 |
+      | unconditional `os.lstat` on EVERY member, DECLARED included | the BASELINE (the absent candidate) |
+      | discard direct children, `len(rel.parts) < 2` | 10, 12, 13 |
+      | `ENOENT` handled, `ENOTDIR` refused | 11 |
+      | `..` tested as a SUBSTRING | 12 |
+      | skip any component starting with `.` | 13 |
+      | refuse a `.` component as if it were `..` | 6, 14 |
 
-      **The `Path.resolve()` mutant must resolve both sides alike** (codex, r6). Resolving the operand
-      alone discards every reference on macOS — rows 1-6, 8 AND 9 — so it fails for the WRONG reason.
-      Row 8 is what tells the two apart: the alike mutant keeps it, the one-sided one discards it. Row 4
-      is refused although harmless: refusing every `..` is what removes the ambiguity, and the shipped
-      tree contains none.
+      **The `Path.resolve()` mutant must resolve both sides alike** (codex, r6). Resolving the operand alone
+      discards every reference on macOS, ordinary ones included, so it fails for the WRONG reason; rows
+      8-14 are what tell the two apart. Row 4 is refused although harmless: refusing every `..` is what
+      removes the ambiguity, and the shipped tree contains none. The unconditional-`lstat` mutant has TWO
+      scopes because codex (r8) showed the scope decides the failure set: applied to every member, it
+      fails at the baseline before any row runs.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
