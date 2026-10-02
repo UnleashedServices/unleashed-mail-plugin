@@ -69,7 +69,7 @@ and separately rotted 9 of 38 plan citations. Its own project, with its own gate
 ships a gate that blocks unrelated edits.
 **Option 1 — exclude formatters from the REQUIRED job only.** Chosen.
 
-### Validated by measurement, three arms
+### Validated by measurement, four arms
 
 Same finding-neutral edit to `scripts/validate-hooks.py` (55 pre-existing findings, unformatted):
 
@@ -214,8 +214,8 @@ regressing M2c.
 
 ## B1 — The defect
 
-Cell 4b freezes `.trunk/configs/**`. But `.trunk/trunk.yaml` wires two `is_security` linters to
-configs **outside** that tree:
+Cell 4b freezes `.trunk/configs/**`. But `.trunk/trunk.yaml` wires two security linters to configs
+**outside** that tree (only zizmor carries trunk's `is_security` flag; gitleaks does not — cell 4(d)):
 
 - `gitleaks` — `environment: GITLEAKS_CONFIG = ${workspace}/.gitleaks.toml`
 - `zizmor` — `.github/zizmor.yml`, found **by convention** (see B3)
@@ -313,10 +313,18 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
    reproduced). `_normalised_trunk_config` does NOT normalise only version fields: line 488 runs
    `re.sub(r"@\d+[\w.\-+]*", "@<version>", ...)` over the WHOLE dumped document, so a reference
    repointed from `${workspace}/policy/plain@1.toml` to `plain@2.toml` normalises identically and the
-   `trunk.yaml` digest does not move. Part B's aggregate closes it for config references: the member
-   contribution is `f"{rel}:..."`, so the relative path is folded in and that repoint moves the
-   aggregate. Narrowing the regex to actual version fields changes shipped normaliser code and is OUT of
-   this plan's scope — it is ticketed as **COREDEV-2867** rather than folded in.
+   `trunk.yaml` digest does not move. **Part B closes this only PARTLY — revision 9 overstated it**
+   (codex, r9). Because every member contribution carries its `rel` (§B4), a repoint that CHANGES THE
+   UNION moves the aggregate. Two cases stay unfrozen until COREDEV-2867 lands:
+   - **switching between references that are ALL already enumerated** — e.g. `direct_configs` lists both
+     `policy/plain@1.toml` and `policy/plain@2.toml`, and `environment[].value` moves from the first to
+     the second. The union, every member contribution and the normalised `trunk.yaml` are all identical,
+     yet the linter now reads a different policy. Member-path labels cannot see a SELECTION change;
+     only freezing the raw reference selection can, and that is COREDEV-2867's fix, not this plan's;
+   - **an out-of-scope reference** contributes no member at all, so its `@1` → `@2` repoint is invisible.
+   Both need a config path containing `@<digit>`, which no shipped reference has. Narrowing the regex to
+   actual version fields changes shipped normaliser code and is OUT of this plan's scope — it is
+   ticketed as **COREDEV-2867** rather than folded in.
    **None of (ii)-(iv) reds the shipped tree** (verified 2026-10-02): its only two live references,
    `${workspace}/.gitleaks.toml` (`.trunk/trunk.yaml:67`) and
    `${workspace}/.trunk/configs/markdown-link-check.json` (`:77`), contain no `..`, and no member, no
@@ -406,10 +414,17 @@ The union is hashed per MEMBER KIND, by a new `_digest_of_member(path)`:
 
 | kind | contribution |
 |---|---|
-| directory | `_digest_of_tree(path)`, **with its symlink branch changed to REFUSE** — see below |
+| directory | `f"{rel}:tree:{_digest_of_tree(path)}"`, **with the tree's symlink branch changed to REFUSE** — see below |
 | symlink | **REFUSED** — see below |
 | regular file | `f"{rel}:{sha256(path.read_bytes())}"` |
 | missing | `f"{rel}:missing"` — a DISTINCT marker, never the empty-tree constant |
+
+**Every contribution carries the member's `rel`, directories included** (codex, r9). `_digest_of_tree`
+labels descendants relative to the DIRECTORY's own root, so revision 9's bare `_digest_of_tree(path)`
+gave two equal-content directories the same contribution, and repointing a reference from one to the
+other moved nothing. The `tree:` tag also keeps a directory's contribution from colliding with a
+regular file's. Cell 8(f) rows 17, 19 and 20 verify the directory member, the missing-versus-empty
+distinction, and the repoint.
 
 **`_digest_of_tree` MUST ALSO REFUSE SYMLINKS — refusing only at `_digest_of_member` leaves the
 bypass open one directory down** (gemini, r2 BLOCKER). `_digest_of_tree` hashes a symlink as
@@ -644,6 +659,11 @@ meant.
         refusal satisfies every REFUSE row vacuously.
       - **REFUSE** means the aggregate raises AND the diagnostic names THIS row's operand.
       - **MEMBER** means the probe path is in aggregate membership — nothing else.
+        So rows 9 and 11 prove the absent member is ADMITTED; that its contribution is the distinct
+        `missing` marker is row 19's to prove (codex, r9).
+      - **Row 16 injects its error by patching `os.lstat` for one named component, never with
+        `chmod 000`.** A root runner bypasses permission bits, so a `chmod` fixture would stop exercising
+        the branch under root while still passing.
       - **not a member, no record** (row 6) means the probe is absent from membership AND nothing was
         recorded out of scope. Recording the root as out of scope is a failure.
       - **OUT OF SCOPE, recorded** (row 7) means the probe is absent from membership AND the out-of-scope
@@ -659,12 +679,18 @@ meant.
       | 6 | root exclusion | `${workspace}/.` | not a member, no record |
       | 7 | containment | `${workspace}_extra/x.toml`, a spelling-prefix sibling | OUT OF SCOPE, recorded |
       | 8 | symlink refusal | `${workspace}/policy/plain.toml`, a regular file at depth two | MEMBER |
-      | 9 | absent component (`ENOENT`) | `${workspace}/no_such_dir/absent.toml` | MEMBER (`missing`) |
+      | 9 | absent component (`ENOENT`) | `${workspace}/no_such_dir/absent.toml` | MEMBER |
       | 10 | **root exclusion** | `${workspace}/ordinary.toml`, a DIRECT child | MEMBER, and the aggregate digest moves on CREATE, EDIT and DELETE |
-      | 11 | absent component (`ENOTDIR`) | `${workspace}/plain_file/x.toml`, `plain_file` a regular file | MEMBER (`missing`) |
+      | 11 | absent component (`ENOTDIR`) | `${workspace}/plain_file/x.toml`, `plain_file` a regular file | MEMBER |
       | 12 | `..` refusal | `${workspace}/a..b.toml` — `..` inside a NAME, not a component | MEMBER |
       | 13 | root exclusion, dotfiles | `${workspace}/.hidden.toml` — the shipped `.gitleaks.toml` shape | MEMBER |
       | 14 | `.` dropping | `${workspace}/./policy/other.toml` | MEMBER, as `policy/other.toml` |
+      | 15 | anchor-relative operand | `direct_config: policy/rel.toml` — no `${workspace}` token | MEMBER, and the digest moves on CREATE, EDIT and DELETE |
+      | 16 | other `lstat` errors refuse | `${workspace}/locked/inner.toml`, `os.lstat` patched to raise `EIO` on that component | REFUSE |
+      | 17 | directory dispatch | `${workspace}/policy_dir`, a DERIVED-only DIRECTORY | MEMBER, and the digest moves on a descendant's CREATE, EDIT and DELETE |
+      | 18 | symlink refusal, DANGLING | `${workspace}/dangle/x.toml`, `dangle` a link to a path that does not exist | REFUSE |
+      | 19 | missing is not empty | `${workspace}/maybe_dir`, absent, then an EMPTY directory | the aggregate digest differs between the two |
+      | 20 | directory contribution carries `rel` | `${workspace}/dirA` vs `${workspace}/dirB`, identical contents | the aggregate digest differs between the two |
 
       **Row 10 is codex's r8 blocker.** Rows 8 and 9 sit at depth two, so an implementation that excluded
       the root AND every direct child (`if len(rel.parts) < 2: continue`) passed all nine revision-8 rows.
@@ -673,7 +699,7 @@ meant.
       (codex, r7): a DECLARED probe is supplied by DECLARED whether or not derivation found it.
       **MUTANTS — EXECUTED, not reasoned** (2026-10-02, macOS, anchor beneath a `/var -> /private/var`
       alias, through `DECLARED | DERIVED`, each row observed exactly as written above). The correct
-      procedure passes the baseline and all fourteen rows. Each mutant must fail EXACTLY the rows named:
+      procedure passes the baseline and all twenty rows. Each mutant must fail EXACTLY the rows named:
 
       | mutant | fails on |
       |---|---|
@@ -689,6 +715,12 @@ meant.
       | `..` tested as a SUBSTRING | 12 |
       | skip any component starting with `.` | 13 |
       | refuse a `.` component as if it were `..` | 6, 14 |
+      | drop operands lacking `${workspace}` | 15 |
+      | treat ANY `lstat` error as absent (`except OSError: break`) | 16 |
+      | omit DERIVED directories | 17, 20 |
+      | `exists()` before walking — it follows links, so a dangling one reads as missing | 18 |
+      | a missing member contributes the empty-tree digest | 19 |
+      | directory contribution without its `rel` | 20 |
 
       **The `Path.resolve()` mutant must resolve both sides alike** (codex, r6). Resolving the operand alone
       discards every reference on macOS, ordinary ones included, so it fails for the WRONG reason; rows
@@ -696,6 +728,36 @@ meant.
       removes the ambiguity, and the shipped tree contains none. The unconditional-`lstat` mutant has TWO
       scopes because codex (r8) showed the scope decides the failure set: applied to every member, it
       fails at the baseline before any row runs.
+      **What this table claims to be complete AGAINST** (revision 10). Rounds 7, 8 and 9 each found more
+      rows because each was asked whether ANY realistic implementation error survived — a question with
+      no fixed point, since a reviewer can always construct another bug. The completeness claim is
+      therefore scoped to a FINITE list: codex's r9 inventory of every rule in §B3(1)(i)-(v) and in §B4's
+      member layer that excludes, refuses, drops or records an input. Every rule on that list now has a
+      control at its adjacent boundary:
+
+      | rule (§B3(1) / §B4) | rows / cell |
+      |---|---|
+      | exclude the workspace root | 6; adjacent positives 10, 13 |
+      | anchor taken as given, never examined | the `/var`-alias execution context; baseline |
+      | join a relative operand to the anchor | 15 |
+      | refuse a `..` component | 3, 4, 5; adjacent positive 12 |
+      | drop a `.` component | 14; root-dot 6 |
+      | exclude and RECORD a lexical outsider | 7; adjacent positives 8, 10 |
+      | refuse a symlink at any component, dangling included | 1, 2, 18; adjacent positive 8 |
+      | end the walk on `ENOENT`/`ENOTDIR` | 9, 11 |
+      | refuse every other `lstat` error | 16 |
+      | dispatch the survivor by kind | 8, 10 (file); 17 (directory) |
+      | refuse symlinks and other kinds inside a tree | cell 11c's nested controls |
+      | missing is distinct from an empty tree | 19 |
+      | every contribution carries `rel` | 20 |
+      | required members exist, are tracked, non-empty | cells 9, 11c |
+      | optional absence admitted; planting observed | background candidate; cell 11 |
+      | classes disjoint and covering over production | cell 11c, both mutants |
+      | unclassified synthetic members admissible | cell 8(e) |
+      | promotion and demotion are paired edits | cell 11c |
+
+      Bugs outside this inventory are caught where every other implementation bug is caught — by
+      §6 step 2a's mutation pass over the REAL implementation, not by growing this table.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
@@ -776,6 +838,13 @@ meant.
    `python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv`,
    LAST, after every other edit. Note that committing THIS plan document already reds
    `test_callers_scan`, so the first red is expected and is not Part A's.
+2a. **Run cell 8(f)'s mutant battery against the REAL implementation**, not the model it was
+   measured on (revision 10). The row sets in that table were executed against an in-memory model of
+   the aggregate; the implementation can disagree with the model, and only running each mutant
+   against the shipped `_config_tree_digest` / `_digest_of_member` shows it. Each mutant must fail
+   EXACTLY its named rows. A mutant that fails NO row is a missing row — add the row, then rerun. A
+   mutant that fails MORE rows than named means the model and the implementation diverged — find out
+   why before merging; do not edit the table to match.
 3. Observe the cells that need a real run on a probe PR, never merged; record under
    `docs/planning/evidence/`. Three constraints the earlier wording left implicit:
    - **Name the probe file and its recorded pre-existing formatter finding** for cell 1. It cannot
