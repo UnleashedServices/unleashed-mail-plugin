@@ -29,7 +29,7 @@ action_pin: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa
 # harness binds its own extraction to this, and the parity judge requires a recorded artifact to
 # carry it — so evidence generated for DIFFERENT inputs cannot certify the current invocation.
 # ONE copy: this module already refuses a second copy of `action_pin` for the same reason.
-action_inputs_digest: cc125ae649d85ba092aa5a92fe187df6d4d235e896a8b17a267b7f1e6a77cd36
+action_inputs_digest: 2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe
 
 # ---------------------------------------------------------------------------------------------
 # The two workflows this contract governs. Cell 11 runs each obligation against the entries listed
@@ -487,10 +487,10 @@ obligations:
     kind: yaml
     entries: [required]
     statement: >-
-      `arguments:` must be PRESENT and equal §6.4's declared literal as a WHOLE STRING. Absence is a
-      failure, not a permitted variant: absent means `markdown-link-check` runs in the required job.
-      The literal's bytes are stated only in §6.4 — a derived value written twice goes stale, and two
-      stale copies agree with each other.
+      `arguments:` must be PRESENT and equal §6.4's declared REQUIRED literal as a WHOLE STRING. Absence
+      is a failure, not a permitted variant: absent means `markdown-link-check` AND the five whole-file
+      formatters run in the required job (COREDEV-2850). The literal's bytes are stated only in §6.4 — a
+      derived value written twice goes stale, and two stale copies agree with each other.
     target: $.jobs.<job>.steps[trunk].with.arguments
     literal_source: §6.4
     cases:
@@ -508,6 +508,29 @@ obligations:
         validity: >-
           An APPENDED argument still satisfies a substring or "contains --filter" test. Only a
           whole-string match kills it.
+        diagnostic: "action inputs: `arguments` does not equal the declared literal"
+
+  - id: C4.arguments-canary-literal
+    clause: C4
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The push canary's `arguments:` must be PRESENT and equal §6.4's CANARY literal as a WHOLE STRING. It
+      DIFFERS from the required literal by exactly the five formatters, by design (COREDEV-2850): the
+      required job filters them because trunk evaluates them whole-file and reports pre-existing debt as
+      new, and the canary keeps them so their findings are still observed. Cell 4 is what makes the two
+      literals becoming identical again fail.
+    target: $.jobs.<job>.steps[trunk].with.arguments
+    literal_source: §6.4
+    cases:
+      - id: C4.arguments-canary-literal/appended
+        op: append
+        side: local
+        target: .with.arguments
+        payload: " --fix"
+        validity: >-
+          The canary's own branch of the whole-string check. `contract_problems` selects the canary's
+          literal on `is_canary`; without a canary case, that branch has no mutant at all.
         diagnostic: "action inputs: `arguments` does not equal the declared literal"
 
   - id: C4.save-annotations-required

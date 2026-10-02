@@ -396,10 +396,10 @@ _JOB_DIGESTS = {
     # digest moved. The freeze caught the change, which is the point — re-declaring it is the
     # deliberate act.
     ("trunk-check.yml", "trunk-check"): (
-        "791ad3a0dd38cec342756a85e4c2e1bd85cbeeed7a989a50a743f395587cfcbc"
+        "ba363bdaf13c60d1a19c8b5cee9926f73420a495193c764c57b5ec58ec1b9194"
     ),
     ("trunk-parity-harness.yml", "parity"): (
-        "b935e43dc6789b70e9dc4ee1d9fecec0312dfd879df3aaf96086d0dfd80ad799"
+        "1c9b59e04db102a1d1b312725a178d7c4926d92879af88e0386c42994cac1a0b"
     ),
 }
 

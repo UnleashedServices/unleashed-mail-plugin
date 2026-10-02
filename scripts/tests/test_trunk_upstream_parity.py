@@ -34,7 +34,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 EVIDENCE_DIR = REPO / "docs/planning/evidence"
-ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
+ARGUMENTS_LITERAL = (
+    "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
+)
 
 # READ FROM THE REGISTRY, NOT RESTATED HERE. The pin already appears in three workflows and the
 # contract; a fourth copy in this file is a fourth thing to forget on a bump, and two stale copies
@@ -175,11 +177,11 @@ def parity_problems(record: dict) -> list[str]:
                 "cell 5: the primary diagnostic names no linter — the file being mentioned is not "
                 "the same claim as a linter having judged it"
             )
-        # The POSITION IS OPTIONAL, and that is measured rather than lenient. The staged fixture is
-        # mis-indented, which shfmt reports as a whole-file `fmt` finding printed as `-:-`; a real
-        # run of this harness therefore carries no line or column. Requiring integers made the field
-        # unsatisfiable for the very fixture the harness stages, and the first re-run returned null
-        # on a run that HAD linted the file. When a position is present it must still be a genuine
+        # The POSITION IS OPTIONAL, and that is measured rather than lenient. A whole-file finding —
+        # a formatter's `fmt`, printed as `-:-` — carries no line or column; the ORIGINAL fixture was
+        # mis-indented and produced exactly that, and requiring integers made the field unsatisfiable,
+        # so the first re-run returned null on a run that HAD linted the file. COREDEV-2850's fixture is
+        # positional (`shellcheck/SC2250` at 3:7), but trunk emits both shapes, so both stay valid. When a position is present it must still be a genuine
         # integer — `isinstance(True, int)` is True, so booleans are excluded explicitly, or a JSON
         # `true` would forge one.
         for axis in ("line", "column"):
@@ -266,17 +268,18 @@ def _clean_record(event: str = "pull_request") -> dict:
         "action": {
             "outcome": "failure",
             "controlOutcome": "success",
-            # The position the shipped fixture actually produces: `printf` writes the mis-indented
-            # `echo` on line 3, and shfmt reports its first offending column.
-            # THE SHAPE A REAL RUN PRODUCES, copied from run 34073353787 rather than imagined:
-            # shfmt reports the mis-indented fixture as a whole-file `fmt` finding, so there is no
-            # line or column. An invented `line: 3, column: 7` here would have made every
-            # discrimination test below pass against a record no run of this harness can emit.
+            # THE SHAPE A REAL RUN PRODUCES — measured, never imagined. COREDEV-2850 replaced the
+            # mis-indented fixture (shfmt's whole-file `fmt`, no position; run 34073353787) because the
+            # required job now filters shfmt out. This shape was MEASURED by running the harness's own
+            # `primary_diagnostic()` over a `trunk check --ci --upstream` of the staged fixture under the
+            # six-name filter: `shellcheck/SC2250` at line 3, column 7. It must be re-confirmed against
+            # the first CI harness run's recorded `parity-*.json`; if that artifact disagrees, the
+            # artifact wins and this record changes — never the reverse.
             "primaryDiagnostic": {
                 "path": "harness-fixtures/fixable.sh",
-                "linter": "shfmt",
-                "line": None,
-                "column": None,
+                "linter": "shellcheck/SC2250",
+                "line": 3,
+                "column": 7,
             },
         },
         "actionInputs": {
@@ -336,11 +339,23 @@ class TheJudgeDiscriminates(unittest.TestCase):
             "a diagnostic with no linter must not certify that the fixture was linted",
         )
 
-    def test_an_absent_position_is_accepted_because_shfmt_reports_none(self):
-        """The POSITIVE control for the optionality — asserted, so nobody 'tightens' it back."""
+    def test_an_absent_position_is_still_accepted_for_a_whole_file_finding(self):
+        """The POSITIVE control for the optionality — asserted, so nobody 'tightens' it back.
+
+        COREDEV-2850 made the shipped fixture positional, which made this test stale in the OPPOSITE
+        direction: it used to read the null position straight off the clean record. A whole-file
+        finding (`-:-`) is still a shape trunk emits, so the optionality is kept and exercised
+        explicitly here rather than inherited from whatever the fixture happens to produce.
+        """
         record = _clean_record()
-        self.assertIsNone(record["action"]["primaryDiagnostic"]["line"])
+        record["action"]["primaryDiagnostic"].update(line=None, column=None)
         self.assertEqual([], parity_problems(record))
+
+    def test_the_shipped_fixture_s_position_is_a_genuine_integer_pair(self):
+        """The positional half: the measured 3:7 must be accepted AS integers, not merely tolerated."""
+        diagnostic = _clean_record()["action"]["primaryDiagnostic"]
+        self.assertEqual((3, 7), (diagnostic["line"], diagnostic["column"]))
+        self.assertEqual([], parity_problems(_clean_record()))
 
     def test_a_range_mismatch_is_the_cell_1_failure(self):
         """The guard checking a different range than the action lints is the whole point."""

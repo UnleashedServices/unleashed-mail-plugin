@@ -43,9 +43,13 @@ TRUNK_CONFIG = REPO / ".trunk/trunk.yaml"
 
 # ---- frozen literals: the oracle, never derived from the artifact under test --------------------
 ACTION_PIN = "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
+# §6.4, stated once THERE and matched whole. COREDEV-2850: the REQUIRED job also excludes the five
+# `formatter: true` linters, which trunk evaluates whole-file and so reports pre-existing formatting
+# debt as NEW on any touched file. The push CANARY keeps them, so their findings are still OBSERVED.
 ARGUMENTS_LITERAL = (
-    "--filter=-markdown-link-check"  # §6.4, stated once THERE and matched whole
+    "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
 )
+CANARY_ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
 EXPECTED_RUNNER = "ubuntu-latest"
 EXPECTED_TIMEOUT_MINUTES = (
     15  # a CONCRETE ceiling; "a timeout exists" is satisfied by 360
@@ -104,8 +108,10 @@ C6_GUARDED_PATHS = (
     # linted nothing. The guard is now an allowlist, so this list is the CASE SET, not the rule.
     ".trunk/user_trunk.yaml",
 )
-# 20 enabled minus §6.4's declared exclusion. Held as literals: a membership oracle regenerated from
-# the config under test cannot detect that config being reduced.
+# 20 enabled minus §6.4's declared `markdown-link-check` exclusion. Held as literals: a membership oracle
+# regenerated from the config under test cannot detect that config being reduced. COREDEV-2850: five of
+# these nineteen — THE_FIVE_FORMATTERS — stay ENABLED but no longer RUN in the required job; the push
+# canary still runs them, so their findings are observed rather than lost.
 EXPECTED_LINTERS = frozenset(
     {
         "zizmor",
@@ -129,7 +135,14 @@ EXPECTED_LINTERS = frozenset(
         "yamllint",
     }
 )
-EXCLUDED_LINTER = "markdown-link-check"
+# COREDEV-2850 cell 4. The five `formatter: true` linters, which trunk evaluates WHOLE-FILE and so reports
+# pre-existing debt as NEW on any touched file. Filtered from the REQUIRED job only; the canary keeps them.
+THE_FIVE_FORMATTERS = frozenset({"black", "isort", "prettier", "shfmt", "taplo"})
+EXCLUDED_LINTERS = frozenset({"markdown-link-check"}) | THE_FIVE_FORMATTERS
+# Hand-listed DELIBERATELY, never derived from `is_security`: in trunk's pinned v1.11.0 definitions
+# gitleaks carries NO `is_security` flag (bandit, checkov, trufflehog and zizmor do), so a derived set
+# would miss exactly the exclusion that disarms the separate `secret-scan` required context.
+SECURITY_LINTERS = frozenset({"gitleaks", "trufflehog", "zizmor", "bandit", "checkov"})
 
 # M2 ships job-scoped `continue-on-error: true` and C3 forbids it. The exemption is JOB SCOPE ONLY and
 # ends at M3, where cell 11's C3 cases are enabled. Asserting C3 at M2 would make the suite
@@ -627,6 +640,59 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
         self.assertGreaterEqual(len(counted), 9)
 
 
+def _excluded_entries(literal: str) -> frozenset:
+    """The ENTRY SET of a `--filter=-a,-b` literal. Any other shape is refused, never coerced."""
+    prefix = "--filter="
+    if not literal.startswith(prefix) or any(c.isspace() for c in literal):
+        raise ValueError(f"{literal!r} is not a single `--filter=` argument")
+    entries = literal[len(prefix) :].split(",")
+    if not all(entry.startswith("-") and len(entry) > 1 for entry in entries):
+        raise ValueError(f"{literal!r} has an entry that is not a `-name` exclusion")
+    return frozenset(entry[1:] for entry in entries)
+
+
+def exclusion_problems(required: str, canary: str, enabled: frozenset) -> list:
+    """Cell 4 (COREDEV-2850): the required job's exclusion is a frozen SET, nothing security-bearing is
+    in it, and it differs from the canary's by EXACTLY the five formatters, in both directions.
+
+    A substring test is what this replaces: `assertIn("markdown-link-check", literal)` is satisfied
+    by a seven-name literal, by a security exclusion, and by an issue-code suppression alike.
+    """
+    try:
+        req = _excluded_entries(required)
+        can = _excluded_entries(canary)
+    except ValueError as error:
+        return [f"exclusion: malformed literal — {error}"]
+    problems = []
+    if req != EXCLUDED_LINTERS:
+        problems.append(
+            "exclusion: the required job's excluded set is not exactly the six declared entries"
+        )
+    if required == canary:
+        problems.append("exclusion: the required and canary literals are identical")
+    if req - can != THE_FIVE_FORMATTERS or can - req:
+        problems.append(
+            "exclusion: required and canary differ by something other than exactly the five "
+            "formatters"
+        )
+    # `--filter` accepts ISSUE CODES as well as names and does NOT validate codes, so
+    # `-bandit/B602` would silently suppress a security rule that a name-set check cannot see.
+    if any("/" in entry for entry in req | can):
+        problems.append(
+            "exclusion: an excluded entry is an issue code, not a linter name"
+        )
+    if (req | can) & SECURITY_LINTERS:
+        problems.append("exclusion: a security linter is excluded")
+    # `--filter` validates NAMES against `lint.enabled` and aborts with EXIT 2 — an argument error,
+    # not a lint failure — and dropping a formatter from `lint.enabled` is a plausible follow-up edit
+    # precisely because it no longer runs here.
+    if (req | can) - enabled:
+        problems.append(
+            "exclusion: an excluded name is not in `lint.enabled` (trunk aborts with EXIT 2)"
+        )
+    return problems
+
+
 def contract_problems(
     workflow: dict, *, milestone: str = "M2", entry: str = "required"
 ) -> list[str]:
@@ -831,7 +897,9 @@ def contract_problems(
             problems.append(f"action inputs: unlisted input `{key}`")  # noqa: PERF401
         if "arguments" not in used:
             problems.append("action inputs: `arguments` is absent")
-        elif used["arguments"] != ARGUMENTS_LITERAL:
+        elif used["arguments"] != (
+            CANARY_ARGUMENTS_LITERAL if is_canary else ARGUMENTS_LITERAL
+        ):
             problems.append(
                 "action inputs: `arguments` does not equal the declared literal"
             )
@@ -1150,17 +1218,88 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         self.assertEqual(set(), EXPECTED_LINTERS - self.names)
 
     def test_no_unlisted_linter_appears(self):
-        self.assertEqual(set(), self.names - EXPECTED_LINTERS - {EXCLUDED_LINTER})
+        self.assertEqual(set(), self.names - EXPECTED_LINTERS - EXCLUDED_LINTERS)
 
-    def test_the_declared_exclusion_is_configured_but_filtered_from_the_required_job(
-        self,
-    ):
-        self.assertIn(EXCLUDED_LINTER, self.names)
+    def _shipped(self):
+        required = _step(_load_workflow(), "trunk")["with"]["arguments"]
+        canary = _step(
+            yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8")), "trunk"
+        )["with"]["arguments"]
+        return required, canary
+
+    def test_the_shipped_literals_are_the_declared_ones(self):
+        """Both surfaces, whole-string: the required job's AND the canary's."""
+        self.assertEqual((ARGUMENTS_LITERAL, CANARY_ARGUMENTS_LITERAL), self._shipped())
+
+    def test_the_shipped_exclusion_passes_every_cell_4_check(self):
+        """(a)-(e) on what ships — the passing positive control for every mutant below."""
+        required, canary = self._shipped()
         self.assertEqual(
-            ARGUMENTS_LITERAL,
-            _step(_load_workflow(), "trunk")["with"]["arguments"],
+            [], exclusion_problems(required, canary, frozenset(self.names))
         )
-        self.assertIn(EXCLUDED_LINTER, ARGUMENTS_LITERAL)
+
+    def test_every_cell_4_mutant_fails_with_its_own_diagnostic(self):
+        """(f). Each mutant must produce ITS OWN diagnostic — a cell that reds for any reason is not
+        evidence that it reds for this one."""
+        names = frozenset(self.names)
+        req, can = ARGUMENTS_LITERAL, CANARY_ARGUMENTS_LITERAL
+        cases = [
+            (
+                "a seventh entry",
+                req + ",-yamllint",
+                can,
+                names,
+                "exclusion: the required job's excluded set is not exactly the six declared entries",
+            ),
+            (
+                "a formatter dropped",
+                req.replace(",-taplo", ""),
+                can,
+                names,
+                "exclusion: the required job's excluded set is not exactly the six declared entries",
+            ),
+            (
+                "a security name added",
+                req + ",-gitleaks",
+                can,
+                names,
+                "exclusion: a security linter is excluded",
+            ),
+            (
+                "a code-scoped entry added",
+                req + ",-bandit/B602",
+                can,
+                names,
+                "exclusion: an excluded entry is an issue code, not a linter name",
+            ),
+            (
+                "the two literals collapsed",
+                can,
+                can,
+                names,
+                "exclusion: the required and canary literals are identical",
+            ),
+            (
+                "the two literals swapped",
+                can,
+                req,
+                names,
+                (
+                    "exclusion: required and canary differ by something other than exactly the five "
+                    "formatters"
+                ),
+            ),
+            (
+                "an excluded name dropped from lint.enabled",
+                req,
+                can,
+                names - {"taplo"},
+                "exclusion: an excluded name is not in `lint.enabled` (trunk aborts with EXIT 2)",
+            ),
+        ]
+        for label, required, canary, enabled, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertIn(diagnostic, exclusion_problems(required, canary, enabled))
 
     def test_a_reduced_configuration_is_detected(self):
         """The revision-5 wording — "the configured set minus the exclusions" — could not do this."""
@@ -1888,6 +2027,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "C16.canary-continue-on-error-job-scope/step-scope",
                 move_to_step,
                 "step `trunk`: `continue-on-error:` is prohibited",
+            ),
+            (
+                # COREDEV-2850: `contract_problems` now selects the canary's literal on `is_canary`.
+                # Without a canary case that branch has no mutant at all.
+                "C4.arguments-canary-literal/appended",
+                lambda w: _step(w, "trunk")["with"].__setitem__(
+                    "arguments", CANARY_ARGUMENTS_LITERAL + " --fix"
+                ),
+                "action inputs: `arguments` does not equal the declared literal",
             ),
         ]
 
