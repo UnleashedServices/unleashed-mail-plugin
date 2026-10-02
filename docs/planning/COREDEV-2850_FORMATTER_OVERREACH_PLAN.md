@@ -947,6 +947,24 @@ meant.
    became an executed suite the same way. The measurement model is NOT committed alongside the plan: a
    planning script would duplicate the table it measured, and duplicated values go stale. Its value is
    that the model the table was measured on cannot quietly disagree with what ships.
+   **IMPLEMENTED — `scripts/tests/test_config_freeze_battery.py` is now the AUTHORITY for cell 8(f)'s
+   row sets; the table above is the as-designed MODEL and is deliberately NOT rewritten to mirror it** (a
+   second copy of 29 derived sets would only drift). Measured against the REAL functions: the correct
+   procedure passes the baseline and all 30 rows; each of 29 operators patches exactly ONE production
+   helper (two labelled compound) and fails exactly its recorded rows; none fails no row. The battery was
+   itself proven to discriminate: weakening the real kind ALLOWLIST into a FIFO/socket blacklist reds it on
+   exactly row 25. Where the real code differed from the model, the CAUSE was found, never the set edited:
+   - **The model's `resolve()` operators were impure** (codex, r13 confirmed): they also skipped the walk.
+     The true containment-only operator fails 1-5, 18 and the alias row 29, and not the injected-error rows.
+   - **The model's two `lstat` scopes are ONE decision here** — one `_walk` serves both sources — so there
+     are 29 operators, not 30, and that one fails at the baseline.
+   - **Two operators first measured as failing NO row**, and both were real findings: the
+     `${workspace}`-dropping mutant was a NO-OP (the shape registry holds the extractor objects captured at
+     import, so patching the module attribute changed nothing) — fixed to patch the registry; and a walk
+     treating every error as absent was MASKED at the leaf by `_digest_of_member`'s independent re-check,
+     so **row 30** was added — an error on an ANCESTOR while the leaf stats cleanly.
+   - **Row 29** (the round-13 lexical outsider) builds its own alias symlink above the anchor, because Linux
+     CI has no `/var -> /private/var` and the row must mean the same thing on every runner.
    **Carried forward from round 13 — obligations on the shipped battery** (codex, r13; none is a design
    defect, so they are closed in the test suite rather than by another plan round):
    - **Add the named lexical-outsider instance.** An absolute operand reaching the workspace by another
