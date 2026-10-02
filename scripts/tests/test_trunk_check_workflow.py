@@ -2030,6 +2030,16 @@ def contract_problems(
             problems.append(
                 "step sequence: `guard-launcher-path` is not immediately before `trunk`"
             )
+        # A DUPLICATE known name escaped all three checks above (codex, r45). `_step()` reads only the
+        # first occurrence, so a second checkout after the guards was never inspected at all.
+        problems.extend(
+            f"step sequence: `{name}` appears {names.count(name)} times"
+            for name in EXPECTED_STEPS
+            if names.count(name) > 1
+        )
+        # And whatever shape is left: ANY sequence unequal to the declared five is a problem, so no
+        # future blind spot in the specific diagnostics above can turn into a pass.
+        problems.append("step sequence: not exactly the five declared steps, in order")
 
     for step in steps:
         label = step.get("name")
@@ -2861,7 +2871,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 ),
                 (
                     "github-env-trunk-path",
-                    'echo X >> "$GITHUB_ENV"',
+                    'echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"',
                     "writes to $GITHUB_ENV",
                 ),
                 (
@@ -2925,6 +2935,23 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                             f"step `{step}`: `continue-on-error:` is prohibited",
                         )
                     )
+            # A DUPLICATE known step (codex, r45): the sequence check diagnosed missing, unknown and
+            # reordered names, so a second `checkout` (with `ref: main`) placed AFTER the guards
+            # passed, and replaced the PR tree behind them. `_step()` only ever sees the first one.
+            for step in all_steps:
+
+                def duplicate(w, step=step):
+                    extra = copy.deepcopy(_step(w, step))
+                    position = len(_steps(w)) if step == "trunk" else len(_steps(w)) - 1
+                    _steps(w).insert(position, extra)
+
+                cases.append(
+                    (
+                        f"C8.step-sequence-allowlist/duplicate-{step}",
+                        duplicate,
+                        f"step sequence: `{step}` appears 2 times",
+                    )
+                )
             return cases
 
         return [
@@ -3171,7 +3198,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _step(w, "guard-empty-diff").update(
                     {
                         "run": _step(w, "guard-empty-diff")["run"]
-                        + '\necho X >> "$GITHUB_ENV"'
+                        + '\necho TRUNK_PATH=/bin/true >> "$GITHUB_ENV"'
                     }
                 ),
                 "step `guard-empty-diff`: writes to $GITHUB_ENV",

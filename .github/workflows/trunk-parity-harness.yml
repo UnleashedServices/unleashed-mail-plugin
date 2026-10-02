@@ -143,6 +143,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p harness-fixtures
+          # The literal, unexpanded `$name` IS the fixture: its unbraced reference is the finding.
+          # shellcheck disable=SC2016
           printf '#!/usr/bin/env bash\nname="deliberately fixable"\necho "$name"\n' \
             > harness-fixtures/fixable.sh
           git add --force harness-fixtures/fixable.sh

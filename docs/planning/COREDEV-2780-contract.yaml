@@ -871,6 +871,56 @@ obligations:
         payload: 1
         validity: the COMPLETE step mapping is frozen; a six-key blacklist passed any other key (codex, r44)
         diagnostic: "step `guard-empty-diff`: unlisted key `timeout-minutes`"
+      - id: C8.step-sequence-allowlist/duplicate-checkout
+        op: duplicate
+        side: local
+        target: steps[checkout]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `checkout` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-guard-resolver-digest
+        op: duplicate
+        side: local
+        target: steps[guard-resolver-digest]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `guard-resolver-digest` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-guard-empty-diff
+        op: duplicate
+        side: local
+        target: steps[guard-empty-diff]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `guard-empty-diff` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-guard-launcher-path
+        op: duplicate
+        side: local
+        target: steps[guard-launcher-path]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `guard-launcher-path` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-trunk
+        op: duplicate
+        side: local
+        target: steps[trunk]
+        payload: at the end
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `trunk` appears 2 times"
 
   - id: C8.run-bodies-frozen
     clause: C8
@@ -970,7 +1020,7 @@ obligations:
         op: append
         side: local
         target: steps[guard-resolver-digest].run
-        payload: echo X >> "$GITHUB_ENV"
+        payload: echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"
         validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
         diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_ENV"
       - id: C8.run-bodies-frozen/github-env-bash-env-guard-resolver-digest
@@ -1012,7 +1062,7 @@ obligations:
         op: append
         side: local
         target: steps[guard-launcher-path].run
-        payload: echo X >> "$GITHUB_ENV"
+        payload: echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"
         validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
         diagnostic: "step `guard-launcher-path`: writes to $GITHUB_ENV"
       - id: C8.run-bodies-frozen/github-env-bash-env-guard-launcher-path

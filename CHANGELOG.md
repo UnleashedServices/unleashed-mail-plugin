@@ -17,6 +17,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2850: the parity harness fixture failed CI's repo-wide actionlint.** Its `printf` writes a
+  literal, unexpanded `$name`, because that unbraced reference IS the fixture's finding. ShellCheck reports
+  that as info-level SC2016, and CI's actionlint fails on any ShellCheck finding. A scoped
+  `# shellcheck disable=SC2016` states the intent. The job's frozen digest in `test_python39_floor.py`
+  is updated. Behaviour, and therefore the recorded parity evidence, is unchanged.
 - **COREDEV-2860: the config-freeze mutant battery had a macOS-only oracle.** One mutant
   (`resolve-one-side`) was measured on macOS, where `$TMPDIR` sits under the symlink
   `/var -> /private/var`. On Linux there is no such link, so resolving one side IS resolving both, and the
@@ -30,9 +35,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   requires exactly `opened, synchronize, reopened, edited`. **C8** blacklisted six step keys instead of
   freezing the complete step mapping, so a sibling key such as `timeout-minutes` passed. It is now a
   per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
-  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. Cell 11's
+  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **A duplicate
+  step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
+  the tree they had inspected. Any sequence unequal to the declared five is now a problem. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
-  and `continue-on-error` on every step) is now declared in the registry and executed: 27 new cases,
+  and `continue-on-error` on every step) is now declared in the registry and executed: 32 new cases,
   all valid workflows.
 - **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
   Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry

@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 43
+**Status:** Planning, revision 44
 **Implementation status:** shipped through M3 (v2.8.26). The plan was respecified AFTER M3 landed, and
 the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
 * cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
@@ -19,14 +19,23 @@ the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracke
 * cell 13 — its tests use an empty repository and a fake Trunk with configured exit statuses. The
   clean-index/dirty-worktree pair, the index and worktree mutation checks, and a representative clean
   slow path are not implemented. The "slow path" is a one-second fake sleep;
+* cells 3 and 5 — `scripts/tests/test_trunk_check_behaviour.py`, which §7 names as the owner of their
+  constructible fixture halves, does not exist (codex, r45);
+* cell 11 — the survivor corpus (`COREDEV-2780-survivors.yaml`) is read for metadata and registry
+  references, and its mutants are never executed independently (codex, r45);
+* cell 13 — §6.4 says cell 13 runs "the same mutants (appended flag, absent argument)" against the HOOK
+  literal. The hook suite freezes the argument vector but implements neither mutant (codex, r45);
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revision 43, not outstanding** (codex, r44): three checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-44, not outstanding** (codex, r44 and r45): four checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
-checked for a SHA pin (`@v4` passed). Cell 11's per-step minimum is now declared in the registry and
-executed: 27 cases added, every one actionlint-clean apart from the permitted `if-cond` notes.
+checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
+`actions/checkout` after the guards could replace the tree they had inspected (revision 44). Cell 11's
+per-step minimum is now declared in the registry and executed: 32 cases added in revisions 43-44, every
+one actionlint-clean apart from the permitted `if-cond` notes. Its `TRUNK_PATH` cases now write that
+assignment; until revision 44 all three appended `echo X`.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -225,6 +234,19 @@ executed: 27 cases added, every one actionlint-clean apart from the permitted `i
 > killed by it, so that gap was coverage, not enforcement), and stops giving §6.1 a recipe. It also lists codex's
 > further unimplemented items (cell 8 through Git's entry point and across a real bucket boundary;
 > cell 13's behavioural fixtures), and settles "omission" as a no-op body and cell 2's M3/M4 split.
+> **r45** `98b69cb` (revision 43), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2). codex confirmed
+> the three fixes reject the r44 survivors without rejecting either shipped workflow, and that the 27
+> cases agree between registry and suite. **P1, a fourth survivor, reproduced here on both entries**: a
+> DUPLICATE known step. The sequence check diagnosed missing, unknown and reordered names, so a second
+> `actions/checkout@v4` with `ref: main` inserted after the guards returned no problems. `_step()` reads
+> only the first occurrence, so the duplicate was never inspected at all. **P2**: cell 11 requires
+> `TRUNK_PATH=/bin/true` written to `$GITHUB_ENV`. All three executed cases appended `echo X`, and
+> revision 43's two new declarations copied it. codex also listed three more unimplemented items.
+> **Revision 44** reports every duplicate and adds a catch-all, so any sequence unequal to the declared
+> five is a problem, whatever its shape. It adds a duplicate case for each step (all five failed against
+> the unfixed checker), corrects the three payloads, and extends the status block.
+> *Each round since r43 has found a real shipped-checker gap that the plan's text already prohibited:
+> the plan was right, and the implementation had not been held to it.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
