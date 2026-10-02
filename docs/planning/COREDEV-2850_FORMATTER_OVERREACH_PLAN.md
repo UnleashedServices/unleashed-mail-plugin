@@ -139,7 +139,7 @@ replacement fixture is validated (§A6), never before. And re-pin `_JOB_DIGESTS[
 | `docs/planning/evidence/parity-pull_request.json`, `parity-push.json` | RE-RECORDED by a harness run. They carry the OLD canonical form + digest and the old literal in `invocations[1]`. Hand-editing them forges sensor output; **deleting** them is worse — the judge then SKIPS and the module reports `OK (skipped=1)`, silently regressing COREDEV-2780 M2c to "cells 1 and 5 unowned" |
 | `scripts/review/callers-scan-exemptions.tsv` | regenerated LAST in every commit (`python3 scripts/review/generate-callers-exemptions.py`) |
 | `docs/planning/evidence/COREDEV-2780-rollout.json` | cell 3's `stillOpenForM3` residual resolves to COREDEV-2850 and §6 step 4 edits it — so it belongs in this table (codex, r3) |
-| `scripts/tests/test_precommit_trunk_gate.py` | **unchanged** — asserts the HOOK's literal, which keeps formatters |
+| `scripts/tests/test_precommit_trunk_gate.py` | the ASSERTION is unchanged — it asserts the HOOK's literal, which keeps formatters — but `test_it_passes_the_declared_exclusion_literal`'s DOCSTRING must be rewritten (codex, r5): it says §6.4's literal "is required on BOTH surfaces", and after Part A the two surfaces differ BY DESIGN, so the docstring states the opposite of the property the suite now enforces. "Unchanged" was wrong about the module, not about the assertion |
 
 The whole-string match is retained; C4's mutant (`payload: " --fix"`) stays and still produces its
 own diagnostic under the six-name literal.
@@ -168,13 +168,6 @@ modules after the literal change, in OPPOSITE directions: `test_trunk_check_work
 parenthesised assignment must COLLAPSE to one line, `test_trunk_upstream_parity.py`'s one-line
 assignment must EXPAND into parens. Run `trunk fmt` on those two files only — scoped, never
 `--all` (COREDEV-2771).
-
-The whole-string match is retained; C4's mutant (`payload: " --fix"`) stays, so an appended argument
-still fails.
-
-**The literal now exists in two places with DIFFERENT values by design.** That is the hazard this
-introduces. Cell 4's contract must state **both** literals and **why they differ**, so that making
-them identical again is what fails the test — otherwise a future reader "fixes" the drift.
 
 ## A6 — The parity harness inherits the exclusion, and its fixture stops working
 
@@ -272,9 +265,20 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
 **So the frozen set is a UNION of two sources, and each needs its own guard:**
 
 1. **Derived** — every path referenced by `lint.definitions[].direct_config(s)`,
-   `environment[].value`, or a `${workspace}`-rooted token inside `commands[].run`, that resolves
-   inside the workspace and is **not** the workspace root itself (a bare `${workspace}` would make
-   the entire repository the frozen census).
+   `environment[].value`, or a `${workspace}`-rooted token inside `commands[].run`, that is
+   **LEXICALLY** inside the workspace — after `${workspace}` substitution and `.`/`..` normalisation,
+   and **never** via `realpath`/`Path.resolve()` — and is **not** the workspace root itself (a bare
+   `${workspace}` would make the entire repository the frozen census).
+   **Containment is LEXICAL, and a symlink is REFUSED rather than followed** (codex, r5 P1). Resolving
+   for containment DISCARDS `${workspace}/policy/security.toml -> /outside/security.toml`: lexically
+   inside, target outside. A discarded reference never reaches `_digest_of_member`, so §B4's symlink
+   refusal never fires; `REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS` still equals the
+   TRUNCATED enumeration, so COVERING passes; and every later edit to that target is invisible. That is
+   precisely the target-only edit §B4 rejects, re-entered one layer higher — **COVERING cannot protect a
+   path enumeration has already thrown away.** Enumeration therefore RETAINS every lexically-internal
+   reference and hands it to the member layer, which refuses it if it is a symlink. A reference that is
+   lexically OUTSIDE the workspace is out of scope, and is recorded as out of scope rather than dropped
+   silently.
    Guard: **the derivation must be proven to reach the DIGEST, not merely to parse** (codex, r1 P1).
    Two separate premises were wrong. (a) "The derivation yields exactly ONE path" is false —
    `.trunk/trunk.yaml`'s `markdown-link-check` command also references
@@ -439,7 +443,10 @@ could never pass: its synthetic workspace deliberately references a DERIVED path
 frozen set, so a digest function that validated classes would refuse the very input cell 8 exists to
 create, and cells 8 and 11c would be mutually unsatisfiable. Class validation is therefore scoped to
 the production member set; a synthetic workspace carrying members outside both frozensets is
-ADMISSIBLE by construction. The two sets are frozen constants in
+ADMISSIBLE by construction. **The prohibition is verified by a direct check on the helper's call graph,
+not by observing cell 8** (codex, r5 P2): a relocation that keeps validating the production enumeration
+from inside the helper satisfies every behavioural observation cell 8 can make. Cell 11c owns that
+direct check and names the boundary it does not cover. The two sets are frozen constants in
 `test_trunk_check_workflow.py` — `REQUIRED_OCCUPIED_MEMBERS` and
 `OPTIONAL_CANDIDATE_MEMBERS`, both `frozenset` — so a class change is a reviewed source edit rather
 than an emergent property of the tree (gemini, r2).
@@ -555,7 +562,20 @@ meant.
       enumeration (§B4, cell 11c) — they are not preconditions of the digest function. An
       implementation that raises, refuses, or silently DROPS a member absent from both frozensets
       fails this cell. Without (e), cells 8 and 11c are mutually unsatisfiable and the contradiction
-      surfaces only once someone builds them.
+      surfaces only once someone builds them. **(e) proves ADMISSIBILITY ONLY — it does not prove
+      WHERE class validation lives** (codex, r5 P2; gemini, r5). Two implementations violate the
+      location prohibition while keeping (e) green: one guards the check with a test-environment
+      predicate (`if not is_synthetic_test_workspace(root)`), the other relocates it scope-preservingly
+      and validates the PRODUCTION enumeration from inside the helper
+      (`validate_classes(enumerate_members(REPO))`). Location needs the separate direct check in
+      cell 11c; do not read a green (e) as evidence of it.
+   f. **AGGREGATE-LEVEL control, DERIVED-ONLY, OUTSIDE-TARGET symlink** (codex, r5 P1). Place a
+      symlink at a lexically-internal `${workspace}` path whose target is OUTSIDE the workspace,
+      reference it ONLY from the synthetic `trunk.yaml` — not at a DECLARED path, not under
+      `.trunk/configs/**` — and assert the PRODUCTION aggregate REFUSES. MUTANT: an enumeration that
+      uses `Path.resolve()` for containment discards the reference and the aggregate then succeeds
+      SILENTLY; that must fail this cell. Without (f) the symlink refusal is only ever exercised on
+      members enumeration already chose to keep, which is not where the hole is.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
@@ -579,11 +599,31 @@ meant.
     `_digest_of_member` AND `_digest_of_tree`; the nested target-only mutation control; recursive kind
     classification with nested FIFO and socket controls; the two frozensets disjoint and covering —
     asserted in the TEST over the PRODUCTION member enumeration and **never inside the aggregate
-    digest function** (codex, r4), since a digest that validated classes would refuse cell 8(e)'s
-    synthetic DERIVED path and make the two cells mutually unsatisfiable; promotion and demotion each
-    requiring the paired constant edit plus the re-pin; and cell 9's guard scoped to existing members.
-    MUTANT: a class assertion relocated INTO the digest helper must red cell 8(e) — if it reds nothing,
-    the assertion is not where this cell claims it is.
+    digest function** (codex, r4) — because a validating digest CAN refuse cell 8(e)'s synthetic DERIVED
+    path outright, and because validation at that seam cannot be established from outside it at all, so
+    the prohibition needs its own check rather than an inference from cell 8 (r5, below); promotion and
+    demotion each requiring the paired constant edit plus the re-pin; and cell 9's guard scoped to
+    existing members.
+    **The r5 mutant was FALSE and is replaced** (codex, r5 P2). "A class assertion relocated into the
+    digest helper must red cell 8(e)" does not hold: a scope-preserving relocation that validates the
+    PRODUCTION enumeration from inside the helper — `validate_classes(enumerate_members(REPO))` — and a
+    relocation guarded by a test-environment predicate (gemini, r5) each violate the prohibition while
+    leaving 8(e) green. Relocating disjointness alone is green too. Changing an assertion's SCOPE while
+    moving it proves nothing about its LOCATION. Owned here instead:
+    - **MUTANT (admissibility):** an UNCONDITIONAL COVERING check over the membership of the digest
+      call's OWN argument — not over production — must red cell 8(e). That mutant, and only that one,
+      is what 8(e) discriminates.
+    - **A SEPARATE DIRECT CHECK for location**, because no observation of 8(e) can establish it: assert
+      that the aggregate digest function and every function it transitively calls within the module
+      reference NEITHER class frozenset NOR the class validator, by walking `co_names`/`co_consts` of
+      each code object in that call graph. Both implementations above red this check, because both must
+      NAME the validator inside the helper's call graph.
+    - **Boundary NOT covered, stated rather than implied:** a bypass reaching the validator indirectly
+      (`getattr`, a dict of callables, a module-level alias created at runtime) is invisible to a
+      name-based walk. The frozensets and the digest helpers live in the SAME module today
+      (`test_trunk_check_workflow.py`), so an import-direction constraint — the strongest form, which
+      would make the bypass inexpressible — is not available without moving the helpers out, and that
+      move is NOT in this plan's scope.
 
 11. **A config planted UNTRACKED at a CANDIDATE path moves the digest** — for the directory member
     (the existing cell 4b test) and, crucially, at candidate paths that hold nothing today
@@ -672,10 +712,10 @@ meant.
    d. **Update or explicitly supersede COREDEV-2780's ORIGINAL cell 3 text**, not only the evidence
       record (codex, r1). §5 accepts losing newly-introduced formatting detection, and the rollout
       contract permits a written narrowing — but a narrowing recorded only in the evidence artifact
-      leaves the governing cell still claiming the wider property. The same digest-binding caution as
-      §A5 applies: prefer superseding it from the contract yaml / evidence record over editing the
-      gated `*_PLAN.md` bytes, and if the bytes must change, re-gate that plan rather than pretending
-      its recorded verdict still covers them.
+      leaves the governing cell still claiming the wider property. **No hedge about avoiding the gated
+      bytes survives here** (codex, r5): §A5 already REQUIRES rewriting §6.4 and re-gating that plan
+      under either authority route, so the re-gate is budgeted work, not a cost to route around.
+      Supersede the cell-3 text in that same rewrite.
       **CORRECTION — the location revision 3 named DOES NOT EXIST** (codex, r3 P2). Revision 3 said
       to add a `superseded_by: COREDEV-2850` key to "cell 3's entry" in
       `COREDEV-2780-contract.yaml`. **That registry has no cell entries at all** — verified by parse,
