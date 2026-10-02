@@ -20,12 +20,14 @@ message proves reachability, not discrimination.
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,11 @@ import unittest
 from pathlib import Path
 
 import yaml
+
+try:  # Python >= 3.11. CI runs this suite on 3.12; an older interpreter must FAIL the content cell, not skip it.
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    tomllib = None
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO / ".github/workflows/trunk-check.yml"
@@ -43,9 +50,13 @@ TRUNK_CONFIG = REPO / ".trunk/trunk.yaml"
 
 # ---- frozen literals: the oracle, never derived from the artifact under test --------------------
 ACTION_PIN = "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
+# §6.4, stated once THERE and matched whole. COREDEV-2850: the REQUIRED job also excludes the five
+# `formatter: true` linters, which trunk evaluates whole-file and so reports pre-existing formatting
+# debt as NEW on any touched file. The push CANARY keeps them, so their findings are still OBSERVED.
 ARGUMENTS_LITERAL = (
-    "--filter=-markdown-link-check"  # §6.4, stated once THERE and matched whole
+    "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
 )
+CANARY_ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
 EXPECTED_RUNNER = "ubuntu-latest"
 EXPECTED_TIMEOUT_MINUTES = (
     15  # a CONCRETE ceiling; "a timeout exists" is satisfied by 360
@@ -104,8 +115,10 @@ C6_GUARDED_PATHS = (
     # linted nothing. The guard is now an allowlist, so this list is the CASE SET, not the rule.
     ".trunk/user_trunk.yaml",
 )
-# 20 enabled minus §6.4's declared exclusion. Held as literals: a membership oracle regenerated from
-# the config under test cannot detect that config being reduced.
+# 20 enabled minus §6.4's declared `markdown-link-check` exclusion. Held as literals: a membership oracle
+# regenerated from the config under test cannot detect that config being reduced. COREDEV-2850: five of
+# these nineteen — THE_FIVE_FORMATTERS — stay ENABLED but no longer RUN in the required job; the push
+# canary still runs them, so their findings are observed rather than lost.
 EXPECTED_LINTERS = frozenset(
     {
         "zizmor",
@@ -129,7 +142,15 @@ EXPECTED_LINTERS = frozenset(
         "yamllint",
     }
 )
-EXCLUDED_LINTER = "markdown-link-check"
+# COREDEV-2850 cell 4. The five `formatter: true` linters, which trunk evaluates WHOLE-FILE and so reports
+# pre-existing debt as NEW on any touched file. Filtered from the REQUIRED job only; the canary keeps them.
+THE_FIVE_FORMATTERS = frozenset({"black", "isort", "prettier", "shfmt", "taplo"})
+EXCLUDED_LINTERS = frozenset({"markdown-link-check"}) | THE_FIVE_FORMATTERS
+# Hand-listed DELIBERATELY, never derived from `is_security`. MEASURED on trunk's pinned v1.11.0
+# definitions: BOTH secret scanners — gitleaks and trufflehog — carry NO `is_security` flag (only bandit,
+# checkov and zizmor do), so a derived set would miss exactly the two linters that find credentials,
+# including the exclusion that disarms the separate `secret-scan` required context.
+SECURITY_LINTERS = frozenset({"gitleaks", "trufflehog", "zizmor", "bandit", "checkov"})
 
 # M2 ships job-scoped `continue-on-error: true` and C3 forbids it. The exemption is JOB SCOPE ONLY and
 # ends at M3, where cell 11's C3 cases are enabled. Asserting C3 at M2 would make the suite
@@ -201,15 +222,37 @@ def _recorded_remote_halves():
     skipped and the stale evidence unchallenged — and once the context is required, that is a
     protected branch with no producer, or the gate running on the wrong branches.
 
-    Returns None only when the artifact is genuinely unusable, so a missing file still skips rather
-    than inventing a pass.
+    FAILS CLOSED, and the earlier fail-open is the reason. The artifact is a COMMITTED repository
+    file, so its absence or corruption is a repository defect, never an environment condition. In CI
+    `_resolve_target_set()` is ALWAYS None (no authenticated `gh`), so this recorded path is the ONLY
+    path there — returning None on a read error therefore disarmed C2 and C16 into silent skips at
+    exactly the point where they are load-bearing. Deleting the artifact must RED the suite, not
+    quiet it.
+
+    The live ruleset being unreadable is a genuine environment condition and still skips; that is
+    `_REMOTE_HALF_SKIP`, and it is a different question from this one. Conflating the two is what
+    let a missing artifact borrow the excuse belonging to a missing token.
     """
     try:
-        return json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))[
-            "c2AndCell16RemoteHalves"
-        ]
-    except (OSError, KeyError, ValueError):
-        return None
+        document = json.loads(ROLLOUT_EVIDENCE.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} is missing or unreadable. It is committed evidence that §7 "
+            "assigns the remote halves of C2 and cell 16; without it those cells cannot be "
+            "evaluated, and skipping them would accept the workflows unchecked."
+        ) from error
+    except ValueError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} does not parse as JSON, so the recorded remote halves cannot "
+            "be read. Corrupt evidence must fail, not skip."
+        ) from error
+    try:
+        return document["c2AndCell16RemoteHalves"]
+    except KeyError as error:
+        raise AssertionError(
+            f"{ROLLOUT_EVIDENCE.name} has no `c2AndCell16RemoteHalves` key. Renaming or dropping it "
+            "would otherwise silently disarm C2 and cell 16."
+        ) from error
 
 
 def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set:
@@ -222,9 +265,9 @@ def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set
     resolved = _resolve_target_set()
     if resolved is not None:
         return resolved
+    # No `is None` branch: the reader now fails closed, so a missing or corrupt artifact raises
+    # here instead of turning this cell into a skip.
     recorded = _recorded_remote_halves()
-    if recorded is None:
-        test.skipTest(_REMOTE_HALF_SKIP)
     test.assertEqual(
         set(recorded[recorded_key]),
         shipped_branches,
@@ -467,58 +510,355 @@ def _normalised_trunk_config(config_text: str) -> str:
     return f"{body}\n# normalised: {','.join(sorted(normalised))}\n"
 
 
-def _config_tree_digest() -> str:
-    """Every linter's OWN configuration, hashed as a tree of (path, content).
+# ==== COREDEV-2860 — the freeze covers every configuration a SECURITY linter reads ======================
+#
+# COREDEV-2811 froze `.trunk/configs/**`, "what the linters will tolerate". Two security linters read
+# configs OUTSIDE it — gitleaks through `GITLEAKS_CONFIG=${workspace}/.gitleaks.toml`, zizmor through
+# `.github/zizmor.yml` — so a blanket allowlist appended to `.gitleaks.toml` disarmed BOTH `trunk-check`
+# and the separate `secret-scan` required context with this suite green. The frozen set is now a UNION
+# (plan §B3): DERIVED — every path `.trunk/trunk.yaml` itself references — and DECLARED — every
+# `direct_configs` candidate of every enabled security linter — alongside the `.trunk/configs` tree.
 
-    COREDEV-2811. `.trunk/trunk.yaml` decides WHICH linters run; `.trunk/configs/**` decides what
-    they will tolerate, and nothing froze it. The C6 guard deliberately ALLOWS these paths — they
-    are legitimate repository files — so the whole lever sat outside every check: a permissive
-    `ruff.toml`, a `.bandit` that skips every test, a `.shellcheckrc` full of disables, and the
-    required context reports success having enforced almost nothing. That is cell 4's founding
-    hazard one directory over, and the C6 comment named it as tracked-but-open rather than fixed.
 
-    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX — the same reasoning the C6 guard itself records.
-    An UNTRACKED config planted in this directory is read by trunk exactly like a tracked one, so
-    it must move this digest too. `not is_dir()` rather than `is_file()`, because `is_file()`
-    follows symlinks and is False for a dangling one, which would let a broken symlink drop a file
-    out of the census silently.
+# N818: the plan, both review arms and every refusal cell name this `ConfigFreezeRefusal`; the name
+# is the contract the shipped battery asserts against, so it is not renamed for a suffix convention.
+class ConfigFreezeRefusal(Exception):  # noqa: N818
+    """A DELIBERATE refusal by the config freeze, carrying WHY as structured fields.
+
+    Deliberately NOT an `OSError` subclass. `read_bytes()` on a Unix socket raises `OSError: [Errno
+    102] Operation not supported on socket: '<path>'` — a message that NAMES the path — so a check that
+    accepted "an exception naming the operand" passed an implementation that never refused at all and
+    simply tried to read the member (codex, r11). A refusal is an act, not an accident; tests assert the
+    class AND its `reason`, never the message.
     """
-    return _digest_of_tree(TRUNK_CONFIG_DIR)
+
+    REASONS = frozenset({"symlink", "dotdot", "lstat-error", "unsupported-kind"})
+
+    def __init__(self, operand: str, reason: str, subtype: str | None = None) -> None:
+        if reason not in self.REASONS:
+            raise ValueError(f"unknown refusal reason {reason!r}")
+        detail = f" ({subtype})" if subtype else ""
+        super().__init__(f"config freeze refuses {operand!r}: {reason}{detail}")
+        self.operand = operand
+        self.reason = reason
+        self.subtype = subtype
 
 
-def _digest_of_tree(root: pathlib.Path) -> str:
-    """The digest ITSELF, parameterised by root, so the mutation fixtures below exercise the very
-    function the frozen oracle uses rather than a second copy of its logic that could drift.
+CONFIG_DIR_MEMBER = ".trunk/configs"
+# §B3(2): every `direct_configs` candidate of every enabled security linter, ENUMERATED from the pinned
+# trunk-io/plugins v1.11.0 definitions — gitleaks 3, zizmor 4, bandit 1, checkov 2, trufflehog none.
+# A literal (cell 9), because a set regenerated from the definitions cannot see them change;
+# EXPECTED_PLUGIN_PROVENANCE is what says when this enumeration has gone stale. `.gitleaksignore` is the
+# reason the list is complete rather than one path per linter: it is a live suppression lever that is
+# neither referenced from trunk.yaml nor under `.trunk/configs`.
+DECLARED_MEMBERS = frozenset(
+    {
+        ".gitleaks.config",
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        "zizmor.yml",
+        "zizmor.yaml",
+        ".github/zizmor.yml",
+        ".github/zizmor.yaml",
+        ".bandit",
+        ".checkov.yml",
+        ".checkov.yaml",
+    }
+)
+# §B4: two CLASSES, because "every member exists and is non-empty" contradicts admitting candidates that
+# hold nothing today — and deleting those candidates to recover green reopens the planting bypass they
+# exist to close. A class is a property of the MEMBER, not of its source. Changing one is a reviewed edit
+# to these literals, in the same commit as the digest re-pin.
+REQUIRED_OCCUPIED_MEMBERS = frozenset(
+    {".gitleaks.toml", ".github/zizmor.yml", CONFIG_DIR_MEMBER}
+)
+OPTIONAL_CANDIDATE_MEMBERS = frozenset(
+    {
+        ".gitleaks.config",
+        ".gitleaksignore",
+        "zizmor.yml",
+        "zizmor.yaml",
+        ".github/zizmor.yaml",
+        ".bandit",
+        ".checkov.yml",
+        ".checkov.yaml",
+    }
+)
+# §B3(2), cell 11b: the RAW, un-normalised plugin provenance. `_normalised_trunk_config` deliberately
+# erases a canonical `ref` so a routine `trunk upgrade` does not red the gate — which is exactly what lets
+# an upgrade change WHICH candidates a linter declares while every digest stays byte-identical.
+EXPECTED_PLUGIN_PROVENANCE = {
+    "sources": [["https://github.com/trunk-io/plugins", "v1.11.0"]],
+    "cli_version": "1.25.0",
+}
+_WORKSPACE = "${workspace}"
+_WORKSPACE_TOKEN = re.compile(r"\$\{workspace\}[^\s\"']*")
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR})
+
+
+def _lstat(path: pathlib.Path) -> os.stat_result:
+    """THE one place the freeze stats a path. A test patches it to inject a real-shaped error (with its
+    filename, as a real one carries) or a kind it cannot create, such as a device, which needs root.
     """
+    return os.lstat(path)
+
+
+def _read_member(path: pathlib.Path) -> bytes:
+    """THE one place the freeze reads a member's bytes — what the "refuse before any read" spy watches."""
+    return pathlib.Path(path).read_bytes()
+
+
+def _errno_name(error: OSError) -> str:
+    return errno.errorcode.get(error.errno or 0, str(error.errno))
+
+
+def _join(operand: str, anchor: pathlib.Path) -> pathlib.PurePosixPath:
+    """§B3(1)(i). Substitute the anchor AS GIVEN and join a relative operand to it. Never resolves and
+    never collapses `..`: `PurePosixPath` drops `.` and repeated separators, and nothing else. The anchor
+    itself is never examined, so a platform alias above it (`/var -> /private/var`) is not a component.
+    """
+    path = pathlib.PurePosixPath(operand.replace(_WORKSPACE, str(anchor)))
+    return path if path.is_absolute() else pathlib.PurePosixPath(anchor) / path
+
+
+def _contained(path: pathlib.PurePosixPath, anchor: pathlib.Path) -> tuple | None:
+    """§B3(1)(iii). Component-wise containment in the anchor's LEXICAL namespace — `relative_to`, never
+    `str.startswith`, which admits `${workspace}_extra/x` as a member. `None` means out of scope.
+    """
+    try:
+        return path.relative_to(pathlib.PurePosixPath(anchor)).parts
+    except ValueError:
+        return None
+
+
+def _refuse_dotdot(parts: tuple, operand: str) -> None:
+    """§B3(1)(ii). A `..` beneath the anchor is REFUSED, never collapsed. Lexical normalisation and the
+    filesystem DISAGREE once an earlier component is a symlink: with `policy -> outside/child`,
+    `policy/../security.toml` normalises to an internal file while the linter reads an external one.
+    """
+    if ".." in parts:
+        raise ConfigFreezeRefusal(operand, "dotdot")
+
+
+def _walk(anchor: pathlib.Path, parts: tuple, operand: str) -> None:
+    """§B3(1)(iv). `lstat` every component beneath the anchor, top-down, and REFUSE a symlink at ANY of
+    them — the leaf or an ancestor; `Path.is_symlink()` alone inspects only the final component. An
+    absent component ENDS the walk without refusing (nothing below it can be a link), so an absent
+    optional candidate still reaches the member layer; any OTHER error refuses, failing closed.
+    """
+    current = pathlib.Path(anchor)
+    for part in parts:
+        current = current / part
+        try:
+            mode = _lstat(current).st_mode
+        except OSError as error:
+            if error.errno in _ABSENT_ERRNOS:
+                return
+            raise ConfigFreezeRefusal(
+                operand, "lstat-error", _errno_name(error)
+            ) from error
+        if stat.S_ISLNK(mode):
+            raise ConfigFreezeRefusal(operand, "symlink")
+
+
+def _adjudicate(operand: str, anchor: pathlib.Path) -> tuple:
+    """§B3(1)(i)-(v): ("member", rel) | ("out", operand) | ("root", None); refusals raise.
+
+    Every ambiguous or link-bearing reference REDS; none is dropped. Resolving for containment would
+    DISCARD a lexically-internal link whose target is outside, and a covering rule cannot protect a path
+    enumeration has already thrown away (codex, r5)."""
+    parts = _contained(_join(operand, anchor), anchor)
+    if parts is None:
+        return ("out", operand)
+    _refuse_dotdot(parts, operand)
+    if not parts:
+        return ("root", None)
+    _walk(anchor, parts, operand)
+    return ("member", pathlib.PurePosixPath(*parts))
+
+
+def _record(kind: str, rel: object, digest: str | None) -> str:
+    """Canonical JSON, never a delimiter-joined string. Revision 10 used `f"{rel}:tree:{t}"`, and a
+    `rel` containing `:tree` forged a DIRECTORY's record as a FILE's with no hash collision (codex, r10).
+    JSON QUOTES each field and ESCAPES an embedded newline, so kind, rel and boundary are unforgeable.
+    """
+    return json.dumps([kind, str(rel), digest], separators=(",", ":"))
+
+
+def _tree_entry(relative: str, digest: str) -> str:
+    """The same rule one level down: the shipped `f"{relative}:{digest}"` lines joined with `\n` let a
+    filename CONTAINING a newline forge a record boundary."""
+    return json.dumps([relative, digest], separators=(",", ":"))
+
+
+_UNSUPPORTED = (
+    (stat.S_ISFIFO, "fifo"),
+    (stat.S_ISSOCK, "socket"),
+    (stat.S_ISCHR, "char-device"),
+    (stat.S_ISBLK, "block-device"),
+)
+
+
+def _unsupported_subtype(mode: int) -> str | None:
+    """`None` for the only two kinds the freeze ADMITS. An ALLOWLIST: a blacklist of FIFO and socket
+    reads a device, and a kind nobody thought to list is refused rather than read."""
+    if stat.S_ISREG(mode) or stat.S_ISDIR(mode):
+        return None
+    return next((name for test, name in _UNSUPPORTED if test(mode)), "unknown")
+
+
+def _digest_of_tree(root: pathlib.Path, operand: str | None = None) -> str:
+    """Every regular file under `root`, as canonical `[relative, digest]` records.
+
+    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX: an UNTRACKED config planted here is read by trunk
+    exactly like a tracked one, so it moves this digest too. SYMLINKS ARE REFUSED, not hashed — hashing
+    `os.readlink()` froze the link's SPELLING and left its TARGET free, so a later target-only edit moved
+    nothing (codex, r1). Every other non-regular kind is refused too: a FIFO would hang `read_bytes()`.
+    `os.walk` IGNORES errors unless told otherwise, which would drop an unreadable subtree silently, so
+    a walk error is a refusal.
+    """
+    operand = operand if operand is not None else str(root)
+
+    def _refuse_walk_error(error: OSError) -> None:
+        raise ConfigFreezeRefusal(operand, "lstat-error", _errno_name(error)) from error
+
     entries = []
-    for path in sorted(root.rglob("*")):
-        # `and not path.is_symlink()` IS THE WHOLE FIX, and its absence was a freeze bypass.
-        # `is_dir()` FOLLOWS symlinks, so a symlink pointing at a directory answered True, hit this
-        # `continue`, and was never hashed — while `rglob` does not descend into it either, so the
-        # planted directory's contents went unhashed too. Measured: planting a directory symlink
-        # into the frozen tree left the digest BYTE-IDENTICAL (gemini, PR #85 GitHub review).
-        #
-        # The reasoning that produced the bug is one line up in this module's history: `not
-        # is_dir()` was chosen over `is_file()` BECAUSE `is_file()` follows symlinks — correct about
-        # `is_file()`, and blind to `is_dir()` doing exactly the same thing. Knowing a predicate
-        # follows links is not knowing which predicates do.
-        if path.is_dir() and not path.is_symlink():
+    for directory, dirnames, filenames in os.walk(
+        root, followlinks=False, onerror=_refuse_walk_error
+    ):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            path = pathlib.Path(directory) / name
+            mode = _lstat(path).st_mode
+            if stat.S_ISLNK(mode):
+                raise ConfigFreezeRefusal(operand, "symlink")
+            if stat.S_ISDIR(mode):
+                continue
+            subtype = _unsupported_subtype(mode)
+            if subtype:
+                raise ConfigFreezeRefusal(operand, "unsupported-kind", subtype)
+            entries.append(
+                _tree_entry(
+                    path.relative_to(root).as_posix(),
+                    hashlib.sha256(_read_member(path)).hexdigest(),
+                )
+            )
+    return hashlib.sha256("\n".join(sorted(entries)).encode("utf-8")).hexdigest()
+
+
+def _digest_of_member(anchor: pathlib.Path, rel: object, operand: str) -> str:
+    """§B4: one member, dispatched by KIND, refused before ANY read if it is not a regular file or a
+    directory. An absent member contributes a DISTINCT `missing` record — never the empty-tree digest,
+    or absence and an empty directory would be the same value (cell 10)."""
+    path = pathlib.Path(anchor) / str(rel)
+    try:
+        mode = _lstat(path).st_mode
+    except OSError as error:
+        if error.errno in _ABSENT_ERRNOS:
+            return _record("missing", rel, None)
+        raise ConfigFreezeRefusal(operand, "lstat-error", _errno_name(error)) from error
+    if stat.S_ISLNK(mode):
+        raise ConfigFreezeRefusal(operand, "symlink")
+    if stat.S_ISDIR(mode):
+        return _record("tree", rel, _digest_of_tree(path, operand))
+    subtype = _unsupported_subtype(mode)
+    if subtype:
+        raise ConfigFreezeRefusal(operand, "unsupported-kind", subtype)
+    return _record("file", rel, hashlib.sha256(_read_member(path)).hexdigest())
+
+
+def _from_direct_config(definition: dict) -> list:
+    single = definition.get("direct_config")
+    return [single] if isinstance(single, str) else []
+
+
+def _from_direct_configs(definition: dict) -> list:
+    return [c for c in definition.get("direct_configs") or [] if isinstance(c, str)]
+
+
+def _from_environment(definition: dict) -> list:
+    """A `${workspace}` token inside the value, or an ABSOLUTE value — which may reach the workspace by
+    another spelling and must then be recorded out of scope rather than ignored."""
+    operands: list = []
+    for variable in definition.get("environment") or []:
+        value = variable.get("value")
+        if not isinstance(value, str):
             continue
-        relative = path.relative_to(root).as_posix()
-        # SYMLINKS ARE HASHED AS LINKS, not followed. `not is_dir()` is True for a DANGLING symlink,
-        # so `read_bytes()` raised FileNotFoundError and the whole census crashed — chosen precisely
-        # so a dangling link could not be dropped silently, and then crashing on it instead (gemini,
-        # PR #85). Hashing the target PATH also makes a retarget visible: following the link would
-        # hash the destination's content, so pointing it at a different file with identical bytes
-        # would leave the digest unmoved.
-        if path.is_symlink():
-            digest = hashlib.sha256(
-                b"symlink:" + str(path.readlink()).encode()
-            ).hexdigest()
-        else:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        entries.append(f"{relative}:{digest}")
-    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+        if _WORKSPACE in value:
+            operands.extend(_WORKSPACE_TOKEN.findall(value))
+        elif value.startswith("/"):
+            operands.append(value)
+    return operands
+
+
+def _from_commands(definition: dict) -> list:
+    operands: list = []
+    for command in definition.get("commands") or []:
+        operands.extend(_WORKSPACE_TOKEN.findall(command.get("run") or ""))
+    return operands
+
+
+# One extractor per reference SHAPE, so cell 8(c)'s per-shape omission mutant removes exactly one of
+# them from the PRODUCTION path rather than re-implementing the parser beside it.
+_REFERENCE_SHAPES = {
+    "direct_config": _from_direct_config,
+    "direct_configs": _from_direct_configs,
+    "environment": _from_environment,
+    "commands.run": _from_commands,
+}
+
+
+def _derived_operands(trunk_text: str) -> list:
+    """§B3(1): every config reference `.trunk/trunk.yaml` itself makes, in all FOUR shapes. Only two are
+    live today, which is why cell 8(c) exercises all four synthetically: no shipped input could expose a
+    parser that ignored the other two."""
+    document = yaml.safe_load(trunk_text) or {}
+    operands: list = []
+    for definition in (document.get("lint") or {}).get("definitions") or []:
+        for extract in _REFERENCE_SHAPES.values():
+            operands.extend(extract(definition))
+    return list(dict.fromkeys(operands))
+
+
+def _aggregate(
+    anchor: pathlib.Path, trunk_text: str, declared: frozenset = DECLARED_MEMBERS
+) -> tuple:
+    """§B3's UNION: the configs tree, every DECLARED candidate, and every DERIVED reference — each
+    adjudicated, then hashed by kind. Returns (members, out_of_scope). Class validation is NOT done here:
+    it is a test-level assertion over the PRODUCTION enumeration (cell 11c), so a synthetic workspace
+    whose members are in neither class stays admissible (cell 8(e))."""
+    members: dict = {}
+    out_of_scope: list = []
+    for rel in sorted({CONFIG_DIR_MEMBER} | set(declared)):
+        _walk(anchor, pathlib.PurePosixPath(rel).parts, rel)
+        members[rel] = _digest_of_member(anchor, pathlib.PurePosixPath(rel), rel)
+    for operand in _derived_operands(trunk_text):
+        verdict, rel = _adjudicate(operand, anchor)
+        if verdict == "out":
+            out_of_scope.append(operand)
+            continue
+        if verdict != "member":
+            continue
+        key = str(rel)
+        # Already a member, or hashed inside the configs tree — the walk above still adjudicated it.
+        if key in members or key.startswith(CONFIG_DIR_MEMBER + "/"):
+            continue
+        members[key] = _digest_of_member(anchor, rel, operand)
+    return members, out_of_scope
+
+
+def _config_tree_digest(
+    anchor: pathlib.Path = REPO,
+    trunk_text: str | None = None,
+    declared: frozenset = DECLARED_MEMBERS,
+) -> str:
+    """The PRODUCTION aggregate digest: the sorted canonical records of `_aggregate`, hashed."""
+    if trunk_text is None:
+        trunk_text = TRUNK_CONFIG.read_text(encoding="utf-8")
+    members, _ = _aggregate(anchor, trunk_text, declared)
+    return hashlib.sha256(
+        "\n".join(sorted(members.values())).encode("utf-8")
+    ).hexdigest()
 
 
 # THE ORACLE THE NORMALISED DIGEST NEVER HAD. Both users of `_normalised_lint_block` compared the
@@ -539,8 +879,12 @@ EXPECTED_NORMALISED_CONFIG_DIGEST = (
 # FROZEN, and re-pinned in the SAME COMMIT as any reviewed configuration change, exactly as the
 # lint-block digest above is. There is nothing to normalise here: these files carry no version
 # specifiers, so a `trunk upgrade` does not move them and every movement is somebody's edit.
+# COREDEV-2860 widened what it covers — `.gitleaks.toml`, `.github/zizmor.yml` and eight absent
+# candidates join `.trunk/configs` — and changed the encoding to canonical JSON records, so it moved.
+# A digest is a CHANGE detector: it makes a weakening visible, it does not forbid one. The CONTENT
+# checks (cell 7) are what refuse a blanket allowlist outright.
 EXPECTED_CONFIG_TREE_DIGEST = (
-    "6a89eb8aa05f9aad5e9b2985ed0495e6579ec5a8a303874eb111f30e21c5c0f7"
+    "06f19dfbf863637e3a2d94a9ef21c8ed2eef70387a4b509d397ecefa6cbfb184"
 )
 
 
@@ -552,7 +896,8 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
             EXPECTED_CONFIG_TREE_DIGEST,
             _config_tree_digest(),
             "a linter configuration moved: re-pin EXPECTED_CONFIG_TREE_DIGEST in the same commit, "
-            "with the reason, or revert the change under .trunk/configs/",
+            "with the reason, or revert the change under .trunk/configs/, `.gitleaks.toml`, "
+            "`.github/zizmor.yml`, or at a declared candidate path",
         )
 
     def test_a_permissive_rule_added_to_a_config_moves_the_digest(self):
@@ -586,10 +931,9 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
 
     def test_the_census_covers_every_config_the_repository_ships(self):
         """A digest over an empty or truncated census is a digest that cannot fail."""
-        # Mirrors `_digest_of_tree`: a directory SYMLINK is hashed, so it must be counted.
-        counted = [
-            p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir() or p.is_symlink()
-        ]
+        # COREDEV-2860: `_digest_of_tree` now REFUSES a symlink rather than hashing it, so a link here
+        # reds the census before this count is reached. Every non-directory entry is a counted file.
+        counted = [p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir()]
         tracked = subprocess.run(
             ["git", "ls-files", ".trunk/configs"],
             check=True,
@@ -603,6 +947,939 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
             "the census and the repository disagree about what configuration exists",
         )
         self.assertGreaterEqual(len(counted), 9)
+
+    def test_every_required_member_exists_is_tracked_and_is_not_empty(self):
+        """§B4: the anti-truncation guard, extended from `.trunk/configs` to EVERY required occupied
+        member. Scoped to REQUIRED members only — applied to an absent OPTIONAL candidate it would red
+        the shipped tree, which is the §B3/§B4 contradiction over again."""
+        tracked = set(
+            subprocess.run(
+                ["git", "ls-files", *sorted(REQUIRED_OCCUPIED_MEMBERS)],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=str(REPO),
+            ).stdout.split()
+        )
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        empty = _record("tree", CONFIG_DIR_MEMBER, hashlib.sha256(b"").hexdigest())
+        for rel in sorted(REQUIRED_OCCUPIED_MEMBERS):
+            with self.subTest(member=rel):
+                path = REPO / rel
+                self.assertTrue(
+                    path.exists(), f"{rel} is a REQUIRED member and is absent"
+                )
+                if path.is_dir():
+                    self.assertTrue(
+                        any(t.startswith(rel + "/") for t in tracked),
+                        f"{rel} tracks nothing",
+                    )
+                    self.assertNotEqual(empty, members[rel], f"{rel} hashes as empty")
+                else:
+                    self.assertIn(rel, tracked, f"{rel} is not tracked")
+                    self.assertGreater(path.stat().st_size, 0, f"{rel} is empty")
+                    self.assertNotIn('"missing"', members[rel])
+
+
+# ---- COREDEV-2860 cell 7: the CONTENT checks, which close the hole against INTENT -------------------
+#
+# A digest is a change DETECTOR: it turns "weakened silently" into "weakened in a commit that also
+# updates a 64-hex constant", and this module's own procedure is to re-pin it in that same commit. So
+# the digest closes COREDEV-2860 against ACCIDENT only. These checks forbid a BLANKET suppression
+# outright, so a weakening needs a conspicuous edit to a security test rather than a routine re-pin.
+#
+# "Blanket" is BEHAVIOURAL, never `pattern == ".*"`: gitleaks matches with SEARCH semantics, so `.+`,
+# `.`, `\w`, `\S` and `[A-Za-z0-9]` all suppress every finding exactly as `.*` does. A pattern is blanket
+# when it matches every probe below. The secret probes are DERIVED AT RUNTIME from hashes — realistic
+# secret shapes that never appear as literals in this file, because a literal one would trip gitleaks
+# and red `secret-scan`, the very context this protects. STATED LIMIT: a pattern crafted to suppress one
+# secret SHAPE (say, only lowercase hex) is narrower than blanket and is not refused here; the digest
+# makes it visible, and review must judge it.
+
+
+def _secret_probes() -> tuple:
+    import base64
+
+    seeds = [
+        hashlib.sha256(f"coredev-2860-probe-{i}".encode()).digest() for i in range(3)
+    ]
+    return tuple(
+        token
+        for seed in seeds
+        for token in (
+            seed.hex(),
+            seed.hex().upper(),
+            base64.b64encode(seed).decode(),
+            base64.urlsafe_b64encode(seed).decode().rstrip("="),
+        )
+    )
+
+
+_PATH_PROBES = (
+    "src/app/main.py",
+    "deploy/production.env",
+    "README.md",
+    ".github/workflows/ci.yml",
+    "Z",
+)
+
+
+def _is_blanket(pattern: object, probes: tuple) -> bool:
+    """True when `pattern` (a regex) matches EVERY probe. An uncompilable pattern is blanket: a check
+    that cannot evaluate a pattern must not wave it through."""
+    try:
+        compiled = re.compile(str(pattern))
+    except re.error:
+        return True
+    return all(compiled.search(probe) for probe in probes)
+
+
+def _blanket_stopword(word: object, probes: tuple) -> bool:
+    """gitleaks lower-cases and tests a stopword as a SUBSTRING of the extracted secret."""
+    needle = str(word).lower()
+    return all(needle in probe.lower() for probe in probes)
+
+
+def _allowlist_is_blanket(entry: dict) -> bool:
+    """gitleaks' own semantics: a finding is ignored if ANY allowlist matches; within one allowlist the
+    default condition is OR (any criterion suffices) and AND requires every criterion. `commits` names
+    specific commits, so it never broadens an allowlist — and under AND it NARROWS it to them.
+    """
+    secrets = _secret_probes()
+    criteria = []
+    if entry.get("regexes"):
+        criteria.append(any(_is_blanket(p, secrets) for p in entry["regexes"]))
+    if entry.get("paths"):
+        criteria.append(any(_is_blanket(p, _PATH_PROBES) for p in entry["paths"]))
+    if entry.get("stopwords"):
+        criteria.append(any(_blanket_stopword(w, secrets) for w in entry["stopwords"]))
+    if str(entry.get("condition", "OR")).upper() == "AND":
+        return bool(criteria) and all(criteria) and not entry.get("commits")
+    return any(criteria)
+
+
+def gitleaks_content_problems(toml_text: str) -> list:
+    """No blanket allowlist anywhere — global, legacy global, or per-rule — and the default ruleset
+    neither switched off nor thinned. Each problem names what it found."""
+    if tomllib is None:
+        return [
+            "gitleaks content: Python >= 3.11 (tomllib) is required to check this file"
+        ]
+    try:
+        config = tomllib.loads(toml_text)
+    except tomllib.TOMLDecodeError as error:
+        return [f"gitleaks content: unparseable — {error}"]
+    problems = []
+    extend = config.get("extend") or {}
+    if extend.get("useDefault") is not True and not config.get("rules"):
+        problems.append(
+            "gitleaks content: `[extend] useDefault` is not true and no rules are defined — "
+            "the scanner has nothing to find"
+        )
+    if extend.get("disabledRules"):
+        problems.append(
+            "gitleaks content: `[extend] disabledRules` removes inherited detection rules"
+        )
+    entries = list(config.get("allowlists") or [])
+    if isinstance(config.get("allowlist"), dict):
+        entries.append(config["allowlist"])  # the legacy single global table
+    for rule in config.get("rules") or []:
+        entries.extend(rule.get("allowlists") or [])
+        if isinstance(rule.get("allowlist"), dict):
+            entries.append(rule["allowlist"])
+    problems.extend(
+        "gitleaks content: a BLANKET allowlist suppresses every finding — "
+        f"{entry.get('description', '(no description)')!r}"
+        for entry in entries
+        if _allowlist_is_blanket(entry)
+    )
+    return problems
+
+
+def zizmor_content_problems(yaml_text: str, workflows: frozenset) -> list:
+    """No audit disabled outright, and no audit ignored in EVERY workflow — a bare filename in `ignore`
+    silences that audit for the whole file, so covering them all is a blanket ignore."""
+    try:
+        config = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError as error:
+        return [f"zizmor content: unparseable — {error}"]
+    problems = []
+    for audit, raw in sorted((config.get("rules") or {}).items()):
+        settings = raw or {}
+        if settings.get("disable") is True:
+            problems.append(f"zizmor content: audit `{audit}` is disabled outright")
+        whole_files = {
+            str(item) for item in settings.get("ignore") or [] if ":" not in str(item)
+        }
+        if workflows and workflows <= whole_files:
+            problems.append(
+                f"zizmor content: audit `{audit}` is ignored in EVERY workflow — a blanket ignore"
+            )
+    return problems
+
+
+def _workflow_names() -> frozenset:
+    return frozenset(
+        p.name
+        for p in (REPO / ".github/workflows").iterdir()
+        if p.suffix in (".yml", ".yaml")
+    )
+
+
+def _mirror(destination: pathlib.Path) -> None:
+    """A writable COPY of every frozen member, copied BY TYPE. `shutil.copytree` raises
+    `NotADirectoryError` on a file member, so cell 4b's directory idiom cannot be reused for the new two.
+    """
+    for rel in sorted({CONFIG_DIR_MEMBER} | DECLARED_MEMBERS):
+        source = REPO / rel
+        if not source.exists():
+            continue
+        target = destination / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+
+
+class Cell7_TheB1MutantNowReds(unittest.TestCase):
+    """COREDEV-2860's reproduction — a blanket allowlist in `.gitleaks.toml`, a blanket ignore in
+    `.github/zizmor.yml` — must red, by DIGEST (against accident) and by CONTENT (against intent).
+    """
+
+    # Independent literals, deliberately NOT read from DECLARED_MEMBERS: if someone "de-duplicates"
+    # them into the declared list, this cell keeps holding the line instead of moving with it.
+    GITLEAKS = ".gitleaks.toml"
+    ZIZMOR = ".github/zizmor.yml"
+    BLANKET_ALLOWLIST = (
+        "\n[[allowlists]]\ndescription = \"everything\"\nregexes = ['''.*''']\n"
+    )
+    BLANKET_IGNORE_AUDIT = "template-injection"
+
+    def test_the_shipped_configs_carry_no_blanket_suppression(self):
+        """The passing positive control — the shipped allowlists are narrow (one is AND-bound to two
+        specific commits) and zizmor's one ignore covers three of the four workflows, not all.
+        """
+        self.assertIsNotNone(tomllib, "this cell needs Python >= 3.11 (tomllib)")
+        self.assertEqual(
+            [],
+            gitleaks_content_problems(
+                (REPO / self.GITLEAKS).read_text(encoding="utf-8")
+            ),
+        )
+        self.assertEqual(
+            [],
+            zizmor_content_problems(
+                (REPO / self.ZIZMOR).read_text(encoding="utf-8"), _workflow_names()
+            ),
+        )
+
+    def test_the_blanket_allowlist_moves_the_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+            before = _config_tree_digest(mirror, trunk)
+            with (mirror / self.GITLEAKS).open("a", encoding="utf-8") as handle:
+                handle.write(self.BLANKET_ALLOWLIST)
+            self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_the_blanket_ignore_moves_the_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+            before = _config_tree_digest(mirror, trunk)
+            with (mirror / self.ZIZMOR).open("a", encoding="utf-8") as handle:
+                handle.write(f"  {self.BLANKET_IGNORE_AUDIT}:\n    disable: true\n")
+            self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_every_gitleaks_content_mutant_fails_with_its_own_diagnostic(self):
+        shipped = (REPO / self.GITLEAKS).read_text(encoding="utf-8")
+        blanket = "gitleaks content: a BLANKET allowlist suppresses every finding"
+        cases = [
+            ("B1: regexes = .*", shipped + self.BLANKET_ALLOWLIST, blanket),
+            ("paths = .*", shipped + "\n[[allowlists]]\npaths = ['''.*''']\n", blanket),
+            (
+                "`.+` is as blanket as `.*`",
+                shipped + "\n[[allowlists]]\nregexes = ['''.+''']\n",
+                blanket,
+            ),
+            (
+                "`\\S` is as blanket as `.*`",
+                shipped + "\n[[allowlists]]\nregexes = ['''\\S''']\n",
+                blanket,
+            ),
+            (
+                "a one-character stopword",
+                shipped + "\n[[allowlists]]\nstopwords = ['''a''']\n",
+                blanket,
+            ),
+            (
+                "AND, every criterion blanket, no commits",
+                shipped
+                + "\n[[allowlists]]\ncondition = \"AND\"\nregexes = ['''.*''']\npaths = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "the legacy global [allowlist] table",
+                shipped + "\n[allowlist]\npaths = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "a per-rule allowlist",
+                shipped
+                + "\n[[rules]]\nid = \"aws-access-token\"\n[[rules.allowlists]]\nregexes = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "useDefault switched off",
+                shipped.replace("useDefault = true", "useDefault = false"),
+                (
+                    "gitleaks content: `[extend] useDefault` is not true and no rules are defined — "
+                    "the scanner has nothing to find"
+                ),
+            ),
+            (
+                "disabledRules",
+                shipped.replace(
+                    "useDefault = true",
+                    'useDefault = true\ndisabledRules = ["aws-access-token"]',
+                ),
+                "gitleaks content: `[extend] disabledRules` removes inherited detection rules",
+            ),
+        ]
+        for label, text, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertNotEqual(shipped, text, "the mutant must change the file")
+                problems = gitleaks_content_problems(text)
+                self.assertTrue(
+                    any(p.startswith(diagnostic) for p in problems),
+                    f"{label}: expected {diagnostic!r}, got {problems}",
+                )
+
+    def test_a_narrowing_condition_is_not_mistaken_for_a_blanket(self):
+        """The negative control the AND rule needs: a broad path ANDed with specific commits is narrow,
+        which is exactly the shape of the shipped firebase-debug.log allowlist."""
+        shipped = (REPO / self.GITLEAKS).read_text(encoding="utf-8")
+        narrowed = shipped + (
+            '\n[[allowlists]]\ncondition = "AND"\ncommits = ["0123456789abcdef0123456789abcdef01234567"]\n'
+            "paths = ['''.*''']\n"
+        )
+        self.assertEqual([], gitleaks_content_problems(narrowed))
+
+    def test_every_zizmor_content_mutant_fails_with_its_own_diagnostic(self):
+        shipped = (REPO / self.ZIZMOR).read_text(encoding="utf-8")
+        workflows = _workflow_names()
+        cases = [
+            (
+                "an audit disabled outright",
+                shipped + f"  {self.BLANKET_IGNORE_AUDIT}:\n    disable: true\n",
+                f"zizmor content: audit `{self.BLANKET_IGNORE_AUDIT}` is disabled outright",
+            ),
+            (
+                "the one ignored audit widened to every workflow",
+                shipped.rstrip("\n") + "\n      - plugin-ci.yml\n",
+                "zizmor content: audit `concurrency-limits` is ignored in EVERY workflow — a blanket ignore",
+            ),
+        ]
+        for label, text, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertNotEqual(shipped, text, "the mutant must change the file")
+                self.assertIn(diagnostic, zizmor_content_problems(text, workflows))
+
+
+# ---- COREDEV-2860 cells 8-11c ----------------------------------------------------------------------
+
+_PROBE_REL = "probe/derived.toml"  # outside DECLARED and outside `.trunk/configs`
+
+
+def _synthetic_trunk(shape: str, rel: str = _PROBE_REL) -> str:
+    """A minimal `trunk.yaml` referencing `rel` through exactly ONE of the four shapes."""
+    definition: dict = {"name": "probe"}
+    if shape == "direct_config":
+        definition["direct_config"] = rel
+    elif shape == "direct_configs":
+        definition["direct_configs"] = [rel]
+    elif shape == "environment":
+        definition["environment"] = [
+            {"name": "PROBE_CONFIG", "value": f"{_WORKSPACE}/{rel}"}
+        ]
+    elif shape == "commands.run":
+        definition["commands"] = [
+            {"name": "lint", "run": f"probe --config {_WORKSPACE}/{rel} ${{target}}"}
+        ]
+    else:
+        raise ValueError(shape)
+    return str(yaml.safe_dump({"lint": {"definitions": [definition]}}))
+
+
+def _create_edit_delete_moves(trunk_text: str, rel: str = _PROBE_REL) -> bool:
+    """True when the PRODUCTION aggregate moves on each of CREATE, EDIT and DELETE of `rel`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        absent = _config_tree_digest(root, trunk_text)
+        target.write_text("first\n", encoding="utf-8")
+        created = _config_tree_digest(root, trunk_text)
+        target.write_text("second\n", encoding="utf-8")
+        edited = _config_tree_digest(root, trunk_text)
+        target.unlink()
+        deleted = _config_tree_digest(root, trunk_text)
+    return absent != created != edited != deleted
+
+
+class Cell8_TheDerivedContributionReachesTheDigest(unittest.TestCase):
+    """§B3(1): the derivation must be proven to reach the DIGEST, not merely to parse (codex, r1)."""
+
+    def test_a_and_c_every_shape_moves_the_production_digest_on_create_edit_and_delete(
+        self,
+    ):
+        for shape in _REFERENCE_SHAPES:
+            with self.subTest(shape=shape):
+                self.assertTrue(_create_edit_delete_moves(_synthetic_trunk(shape)))
+
+    def test_b_an_aggregate_that_omits_DERIVED_entirely_fails_a(self):
+        """Without (b), (a) is satisfiable by a digest that covers the path through another source."""
+        original = _derived_operands
+        globals()["_derived_operands"] = lambda trunk_text: []
+        try:
+            for shape in _REFERENCE_SHAPES:
+                with self.subTest(shape=shape):
+                    self.assertFalse(_create_edit_delete_moves(_synthetic_trunk(shape)))
+        finally:
+            globals()["_derived_operands"] = original
+
+    def test_c_a_parser_ignoring_exactly_one_shape_fails_for_that_shape_only(self):
+        """The shipped config uses neither `direct_config` nor `direct_configs`, so no REAL input could
+        expose a parser that ignored them (codex, r3)."""
+        for omitted in list(_REFERENCE_SHAPES):
+            reduced = {k: v for k, v in _REFERENCE_SHAPES.items() if k != omitted}
+            original = dict(_REFERENCE_SHAPES)
+            _REFERENCE_SHAPES.clear()
+            _REFERENCE_SHAPES.update(reduced)
+            try:
+                for shape in original:
+                    with self.subTest(omitted=omitted, shape=shape):
+                        moves = _create_edit_delete_moves(_synthetic_trunk(shape))
+                        self.assertEqual(shape != omitted, moves)
+            finally:
+                _REFERENCE_SHAPES.clear()
+                _REFERENCE_SHAPES.update(original)
+
+    def test_d_the_parse_level_floor(self):
+        """A floor beneath (a)-(c), never the cell."""
+        shipped = TRUNK_CONFIG.read_text(encoding="utf-8")
+        self.assertEqual([], _derived_operands(""))
+        self.assertIn("${workspace}/.gitleaks.toml", _derived_operands(shipped))
+        without = shipped.replace("${workspace}/.gitleaks.toml", "")
+        self.assertNotIn("${workspace}/.gitleaks.toml", _derived_operands(without))
+        self.assertLess(
+            len(_derived_operands(without)), len(_derived_operands(shipped))
+        )
+
+    def test_e_a_member_in_NEITHER_frozenset_is_admissible(self):
+        """ADMISSIBILITY: class validation is test-level over the PRODUCTION enumeration, never a
+        precondition of computing a digest. Its mutant — unconditional COVERING over the digest call's
+        OWN membership — must red this, and is what this discriminates (codex, r5; confirmed r6).
+        """
+        trunk = _synthetic_trunk("environment")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / _PROBE_REL).parent.mkdir(parents=True)
+            (root / _PROBE_REL).write_text("x\n", encoding="utf-8")
+            members, _ = _aggregate(root, trunk)
+            self.assertIn(_PROBE_REL, members)
+            self.assertNotIn(
+                _PROBE_REL, REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS
+            )
+            _config_tree_digest(root, trunk)  # admissible: computes without refusing
+
+            original = _aggregate
+
+            def covering_over_own_argument(
+                anchor, trunk_text, declared=DECLARED_MEMBERS
+            ):
+                members, out = original(anchor, trunk_text, declared)
+                stray = set(members) - (
+                    REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS
+                )
+                if stray:
+                    raise AssertionError(
+                        f"COVERING over the call's own membership: {sorted(stray)}"
+                    )
+                return members, out
+
+            globals()["_aggregate"] = covering_over_own_argument
+            try:
+                with self.assertRaises(AssertionError):
+                    _config_tree_digest(root, trunk)
+            finally:
+                globals()["_aggregate"] = original
+
+
+def declared_tracking_problems(root: pathlib.Path, tracked: set) -> list:
+    """Cell 9's guard, scoped to EXISTING declared members — applied to an absent optional candidate it
+    would red the shipped tree."""
+    problems = []
+    for rel in sorted(DECLARED_MEMBERS):
+        path = root / rel
+        if not path.exists():
+            continue
+        if rel not in tracked:
+            problems.append(f"declared: `{rel}` exists but is NOT tracked")
+        elif path.is_file() and path.stat().st_size == 0:
+            problems.append(f"declared: `{rel}` is tracked but EMPTY")
+    return problems
+
+
+class Cell9_TheDeclaredListsContentIsPinned(unittest.TestCase):
+    def test_the_declared_set_is_exactly_the_enumerated_ten(self):
+        """Existence + tracked + non-empty are properties of whatever the tuple NAMES, so swapping
+        `.github/zizmor.yml` for any other tracked path satisfies them. Restated independently here.
+        """
+        self.assertEqual(
+            frozenset(
+                {
+                    ".gitleaks.config",
+                    ".gitleaks.toml",
+                    ".gitleaksignore",
+                    "zizmor.yml",
+                    "zizmor.yaml",
+                    ".github/zizmor.yml",
+                    ".github/zizmor.yaml",
+                    ".bandit",
+                    ".checkov.yml",
+                    ".checkov.yaml",
+                }
+            ),
+            DECLARED_MEMBERS,
+        )
+
+    def _tracked(self) -> set:
+        return set(
+            subprocess.run(
+                ["git", "ls-files", *sorted(DECLARED_MEMBERS)],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=str(REPO),
+            ).stdout.split()
+        )
+
+    def test_every_existing_declared_member_is_tracked_and_not_empty(self):
+        self.assertEqual([], declared_tracking_problems(REPO, self._tracked()))
+
+    def test_an_untracked_declared_member_reds(self):
+        tracked = self._tracked() - {".gitleaks.toml"}
+        self.assertIn(
+            "declared: `.gitleaks.toml` exists but is NOT tracked",
+            declared_tracking_problems(REPO, tracked),
+        )
+
+
+class Cell10_DeletingAFrozenConfigMovesTheDigest(unittest.TestCase):
+    """Without this, absence and emptiness are the same value (§B4)."""
+
+    def test_deletion_moves_the_digest_and_differs_from_emptiness(self):
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            present = _config_tree_digest(mirror, trunk)
+            (mirror / ".gitleaks.toml").write_text("", encoding="utf-8")
+            emptied = _config_tree_digest(mirror, trunk)
+            (mirror / ".gitleaks.toml").unlink()
+            deleted = _config_tree_digest(mirror, trunk)
+        self.assertNotEqual(present, deleted)
+        self.assertNotEqual(emptied, deleted, "absence must not hash as emptiness")
+
+
+class Cell11_APlantedConfigMovesTheDigest(unittest.TestCase):
+    CANDIDATES = (
+        ".gitleaksignore",
+        ".gitleaks.config",
+        "zizmor.yml",
+        ".github/zizmor.yaml",
+    )
+
+    def test_planting_at_a_candidate_that_holds_nothing_today_moves_the_digest(self):
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        for rel in self.CANDIDATES:
+            with self.subTest(candidate=rel), tempfile.TemporaryDirectory() as tmp:
+                mirror = pathlib.Path(tmp)
+                _mirror(mirror)
+                self.assertFalse(
+                    (mirror / rel).exists(), "the candidate must hold nothing"
+                )
+                before = _config_tree_digest(mirror, trunk)
+                (mirror / rel).parent.mkdir(parents=True, exist_ok=True)
+                (mirror / rel).write_text("planted\n", encoding="utf-8")
+                self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_planting_in_the_configs_tree_moves_the_aggregate(self):
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            before = _config_tree_digest(mirror, trunk)
+            (mirror / CONFIG_DIR_MEMBER / ".flake8").write_text(
+                "[flake8]\n", encoding="utf-8"
+            )
+            self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_the_digest_is_the_FILESYSTEM_not_the_index(self):
+        """A mirror has no git index at all and must hash identically to the repository, so untracking
+        a member cannot move the digest — cell 9's tracking guard is what reds instead.
+        """
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            self.assertEqual(
+                _config_tree_digest(REPO, trunk), _config_tree_digest(mirror, trunk)
+            )
+
+
+def plugin_provenance(trunk_text: str) -> dict:
+    """Read from the RAW document — never through `_normalised_trunk_config`, which erases exactly the
+    canonical `ref` this pin exists to catch."""
+    document = yaml.safe_load(trunk_text) or {}
+    return {
+        "sources": [
+            [str(source.get("uri")), str(source.get("ref"))]
+            for source in (document.get("plugins") or {}).get("sources") or []
+        ],
+        "cli_version": str((document.get("cli") or {}).get("version")),
+    }
+
+
+def provenance_problems(trunk_text: str) -> list:
+    if plugin_provenance(trunk_text) == EXPECTED_PLUGIN_PROVENANCE:
+        return []
+    return [
+        (
+            "plugin provenance moved: RE-ENUMERATE the declared candidate set from the new definitions "
+            "(every direct_configs candidate of every enabled security linter), update DECLARED_MEMBERS, "
+            "then re-pin EXPECTED_PLUGIN_PROVENANCE — re-pinning alone is the instruction that produced "
+            "this defect class twice"
+        )
+    ]
+
+
+class Cell11b_TheRawPluginProvenanceIsPinned(unittest.TestCase):
+    def test_the_shipped_provenance_is_the_enumerated_one(self):
+        self.assertEqual(
+            [], provenance_problems(TRUNK_CONFIG.read_text(encoding="utf-8"))
+        )
+
+    def test_every_provenance_mutant_reds_with_the_re_enumerate_diagnostic(self):
+        shipped = TRUNK_CONFIG.read_text(encoding="utf-8")
+        document = yaml.safe_load(shipped)
+
+        def with_(mutate):
+            doc = copy.deepcopy(document)
+            mutate(doc)
+            return yaml.safe_dump(doc)
+
+        bumped_ref = with_(
+            lambda d: d["plugins"]["sources"][0].__setitem__("ref", "v1.12.0")
+        )
+        cases = {
+            "a canonical ref bump": bumped_ref,
+            "a repointed uri": with_(
+                lambda d: d["plugins"]["sources"][0].__setitem__(
+                    "uri", "https://github.com/x/plugins"
+                )
+            ),
+            "a cli.version bump": with_(
+                lambda d: d["cli"].__setitem__("version", "9.9.9")
+            ),
+        }
+        for label, text in cases.items():
+            with self.subTest(mutant=label):
+                problems = provenance_problems(text)
+                self.assertEqual(1, len(problems))
+                self.assertIn("RE-ENUMERATE the declared candidate set", problems[0])
+        # The case the lint digest DELIBERATELY tolerates — which is why this third pin exists.
+        self.assertEqual(
+            _normalised_trunk_config(shipped), _normalised_trunk_config(bumped_ref)
+        )
+
+
+def class_problems(present: set, aggregate_members: set) -> list:
+    """§B4 / cell 11c, TWO-SIDED, over the PRODUCTION enumeration. A class must match OCCUPANCY, so a
+    class change — promotion or demotion — is a reviewed edit to the literals, never emergent.
+    """
+    problems = []
+    both = REQUIRED_OCCUPIED_MEMBERS & OPTIONAL_CANDIDATE_MEMBERS
+    if both:
+        problems.append(f"classes: DISJOINT fails — in both: {sorted(both)}")
+    neither = aggregate_members - (
+        REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS
+    )
+    if neither:
+        problems.append(f"classes: COVERING fails — in neither: {sorted(neither)}")
+    problems.extend(
+        f"classes: `{rel}` is REQUIRED OCCUPIED but absent — DEMOTION needs it moved to "
+        "OPTIONAL_CANDIDATE_MEMBERS in the same commit as the re-pin"
+        for rel in sorted(REQUIRED_OCCUPIED_MEMBERS - present)
+    )
+    problems.extend(
+        f"classes: `{rel}` is OPTIONAL CANDIDATE but occupied — PROMOTION needs it moved to "
+        "REQUIRED_OCCUPIED_MEMBERS in the same commit as the re-pin"
+        for rel in sorted(OPTIONAL_CANDIDATE_MEMBERS & present)
+    )
+    return problems
+
+
+def _present(root: pathlib.Path, members: set) -> set:
+    return {rel for rel in members if (root / rel).exists()}
+
+
+class Cell11c_RefusalAndClassRulesHaveNamedOwners(unittest.TestCase):
+    """§B4's refusal and class rules, owned here — §4 is what an implementer builds from."""
+
+    def test_the_production_classes_are_disjoint_covering_and_match_occupancy(self):
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        self.assertEqual([], class_problems(_present(REPO, set(members)), set(members)))
+
+    def test_the_class_assertion_is_two_sided(self):
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        present = _present(REPO, set(members))
+        cases = [
+            (
+                "a production member in NEITHER class",
+                set(members) | {"stray.toml"},
+                present,
+                "classes: COVERING fails",
+            ),
+            (
+                "DEMOTION without the paired edit",
+                set(members),
+                present - {".gitleaks.toml"},
+                "classes: `.gitleaks.toml` is REQUIRED OCCUPIED but absent",
+            ),
+            (
+                "PROMOTION without the paired edit",
+                set(members),
+                present | {".gitleaksignore"},
+                "classes: `.gitleaksignore` is OPTIONAL CANDIDATE but occupied",
+            ),
+        ]
+        for label, aggregate_members, occupied, diagnostic in cases:
+            with self.subTest(mutant=label):
+                problems = class_problems(occupied, aggregate_members)
+                self.assertTrue(
+                    any(p.startswith(diagnostic) for p in problems), problems
+                )
+        original = (REQUIRED_OCCUPIED_MEMBERS, OPTIONAL_CANDIDATE_MEMBERS)
+        globals()["OPTIONAL_CANDIDATE_MEMBERS"] = OPTIONAL_CANDIDATE_MEMBERS | {
+            ".gitleaks.toml"
+        }
+        try:
+            self.assertTrue(
+                any(
+                    p.startswith("classes: DISJOINT fails")
+                    for p in class_problems(present, set(members))
+                )
+            )
+        finally:
+            (
+                globals()["REQUIRED_OCCUPIED_MEMBERS"],
+                globals()["OPTIONAL_CANDIDATE_MEMBERS"],
+            ) = original
+
+    def _refusal(self, call):
+        with self.assertRaises(ConfigFreezeRefusal) as caught:
+            call()
+        return caught.exception
+
+    def test_a_symlinked_member_is_refused_at_the_member_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "target.toml").write_text("x\n", encoding="utf-8")
+            (root / ".gitleaks.toml").symlink_to(root / "target.toml")
+            refusal = self._refusal(
+                lambda: _digest_of_member(
+                    root, pathlib.PurePosixPath(".gitleaks.toml"), ".gitleaks.toml"
+                )
+            )
+            self.assertEqual("symlink", refusal.reason)
+
+    def test_a_symlinked_ANCESTOR_of_a_DECLARED_member_is_refused(self):
+        """Cell 8(f) exercises DERIVED references only, and step (iv) claims EVERY source."""
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp) / "ws"
+            outside = pathlib.Path(tmp) / "outside"
+            mirror.mkdir()
+            _mirror(mirror)
+            shutil.move(str(mirror / ".github"), str(outside))
+            (mirror / ".github").symlink_to(outside)
+            refusal = self._refusal(lambda: _config_tree_digest(mirror, trunk))
+            self.assertEqual(
+                ("symlink", ".github/zizmor.yaml"), (refusal.reason, refusal.operand)
+            )
+
+    def test_the_nested_target_only_mutation_is_refused_not_passed(self):
+        """Hashing `os.readlink()` froze the link's SPELLING and left its TARGET free (codex, r1)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "configs"
+            shutil.copytree(TRUNK_CONFIG_DIR, tree)
+            target = pathlib.Path(tmp) / "elsewhere.toml"
+            target.write_text("strict\n", encoding="utf-8")
+            (tree / "ruff.toml").unlink()
+            (tree / "ruff.toml").symlink_to(target)
+            self.assertEqual(
+                "symlink", self._refusal(lambda: _digest_of_tree(tree)).reason
+            )
+            target.write_text(
+                'ignore = ["ALL"]\n', encoding="utf-8"
+            )  # the target-only edit
+            self.assertEqual(
+                "symlink", self._refusal(lambda: _digest_of_tree(tree)).reason
+            )
+
+    def test_a_nested_socket_is_refused_before_it_is_read(self):
+        import socket
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "c"
+            tree.mkdir()
+            (tree / "a.toml").write_text("x\n", encoding="utf-8")
+            listener = socket.socket(socket.AF_UNIX)
+            try:
+                listener.bind(str(tree / "z.sock"))
+                reads: list = []
+                original = _read_member
+
+                def spying_read(path):
+                    reads.append(str(path))
+                    return original(path)
+
+                globals()["_read_member"] = spying_read
+                try:
+                    refusal = self._refusal(lambda: _digest_of_tree(tree))
+                finally:
+                    globals()["_read_member"] = original
+            finally:
+                listener.close()
+        self.assertEqual(
+            ("unsupported-kind", "socket"), (refusal.reason, refusal.subtype)
+        )
+        self.assertNotIn(
+            str(tree / "z.sock"), reads, "the offending path must never be read"
+        )
+
+    def test_a_nested_device_is_refused_and_named(self):
+        """A device node needs root to create, so its KIND is injected through `_lstat`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "c"
+            tree.mkdir()
+            (tree / "dev").write_text("x\n", encoding="utf-8")
+            original = _lstat
+
+            def as_device(path):
+                result = original(path)
+                if pathlib.Path(path).name == "dev":
+                    return os.stat_result((stat.S_IFCHR | 0o644, *tuple(result)[1:]))
+                return result
+
+            globals()["_lstat"] = as_device
+            try:
+                refusal = self._refusal(lambda: _digest_of_tree(tree))
+            finally:
+                globals()["_lstat"] = original
+        self.assertEqual(
+            ("unsupported-kind", "char-device"), (refusal.reason, refusal.subtype)
+        )
+
+    def test_a_nested_FIFO_is_refused_in_a_subprocess_under_a_timeout(self):
+        """A fall-through to `read_bytes()` on a FIFO blocks forever. Run in-process, that would HANG the
+        suite instead of reddening it; a timeout here is a FAILURE, never a pass."""
+        if not hasattr(os, "mkfifo"):
+            self.fail("os.mkfifo is required to exercise this refusal")
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "c"
+            tree.mkdir()
+            os.mkfifo(tree / "pipe")
+            probe = (
+                "import sys, pathlib; sys.path.insert(0, sys.argv[1]);"
+                "import test_trunk_check_workflow as t\n"
+                "try:\n    t._digest_of_tree(pathlib.Path(sys.argv[2]))\nexcept t.ConfigFreezeRefusal as r:\n"
+                "    print(r.reason, r.subtype)\n"
+            )
+            try:
+                done = subprocess.run(  # noqa: PLW1510 — exit status is not the oracle; stdout is
+                    [
+                        sys.executable,
+                        "-c",
+                        probe,
+                        str(pathlib.Path(__file__).parent),
+                        str(tree),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                self.fail("the freeze BLOCKED on a FIFO instead of refusing it")
+        self.assertEqual("unsupported-kind fifo", done.stdout.strip(), done.stderr)
+
+
+def _excluded_entries(literal: str) -> frozenset:
+    """The ENTRY SET of a `--filter=-a,-b` literal. Any other shape is refused, never coerced."""
+    prefix = "--filter="
+    if not literal.startswith(prefix) or any(c.isspace() for c in literal):
+        raise ValueError(f"{literal!r} is not a single `--filter=` argument")
+    entries = literal[len(prefix) :].split(",")
+    if not all(entry.startswith("-") and len(entry) > 1 for entry in entries):
+        raise ValueError(f"{literal!r} has an entry that is not a `-name` exclusion")
+    return frozenset(entry[1:] for entry in entries)
+
+
+def exclusion_problems(required: str, canary: str, enabled: frozenset) -> list:
+    """Cell 4 (COREDEV-2850): the required job's exclusion is a frozen SET, nothing security-bearing is
+    in it, and it differs from the canary's by EXACTLY the five formatters, in both directions.
+
+    A substring test is what this replaces: `assertIn("markdown-link-check", literal)` is satisfied
+    by a seven-name literal, by a security exclusion, and by an issue-code suppression alike.
+    """
+    try:
+        req = _excluded_entries(required)
+        can = _excluded_entries(canary)
+    except ValueError as error:
+        return [f"exclusion: malformed literal — {error}"]
+    problems = []
+    if req != EXCLUDED_LINTERS:
+        problems.append(
+            "exclusion: the required job's excluded set is not exactly the six declared entries"
+        )
+    if required == canary:
+        problems.append("exclusion: the required and canary literals are identical")
+    if req - can != THE_FIVE_FORMATTERS or can - req:
+        problems.append(
+            "exclusion: required and canary differ by something other than exactly the five "
+            "formatters"
+        )
+    # `--filter` accepts ISSUE CODES as well as names and does NOT validate codes, so
+    # `-bandit/B602` would silently suppress a security rule that a name-set check cannot see.
+    if any("/" in entry for entry in req | can):
+        problems.append(
+            "exclusion: an excluded entry is an issue code, not a linter name"
+        )
+    if (req | can) & SECURITY_LINTERS:
+        problems.append("exclusion: a security linter is excluded")
+    # `--filter` validates NAMES against `lint.enabled` and aborts with EXIT 2 — an argument error,
+    # not a lint failure — and dropping a formatter from `lint.enabled` is a plausible follow-up edit
+    # precisely because it no longer runs here.
+    if (req | can) - enabled:
+        problems.append(
+            "exclusion: an excluded name is not in `lint.enabled` (trunk aborts with EXIT 2)"
+        )
+    return problems
 
 
 def contract_problems(
@@ -809,7 +2086,9 @@ def contract_problems(
             problems.append(f"action inputs: unlisted input `{key}`")  # noqa: PERF401
         if "arguments" not in used:
             problems.append("action inputs: `arguments` is absent")
-        elif used["arguments"] != ARGUMENTS_LITERAL:
+        elif used["arguments"] != (
+            CANARY_ARGUMENTS_LITERAL if is_canary else ARGUMENTS_LITERAL
+        ):
             problems.append(
                 "action inputs: `arguments` does not equal the declared literal"
             )
@@ -847,28 +2126,43 @@ class Cell9_TheShippedWorkflowMeetsItsContract(unittest.TestCase):
     def setUpClass(cls):
         cls.workflow = _load_workflow()
 
-    def test_shipped_workflow_has_no_contract_problems_at_m2(self):
-        self.assertEqual([], contract_problems(self.workflow, milestone="M2"))
+    def test_shipped_workflow_has_no_contract_problems_at_m3(self):
+        """M3: the advisory exemption is GONE and the workflow is clean at the strict milestone.
 
-    def test_the_only_m3_problem_is_the_declared_advisory_exemption(self):
-        """M2's exemption is real and SCOPED: removing that ONE key makes the workflow M3-clean.
-
-        The clauses OVERLAP by design — `continue-on-error` violates both C3's job-mapping allowlist
-        and C3's explicit prohibition — so the honest assertion is not "exactly one diagnostic" but
-        "every M3 diagnostic names this key, and deleting it leaves none". Demanding non-overlap would
-        make most mutants unconstructible.
+        This assertion was `milestone="M2"` until M3 landed. The milestone parameter is the switch
+        C3 was written around: M2 deliberately shipped `continue-on-error: true`, so asserting C3
+        any earlier would have made the suite intentionally red (codex, r8).
         """
-        problems = contract_problems(self.workflow, milestone="M3")
-        self.assertNotEqual([], problems)
+        self.assertEqual([], contract_problems(self.workflow, milestone="M3"))
+
+    def test_readding_the_advisory_exemption_is_CAUGHT_at_m3(self):
+        """The inverse of the cell this replaces, and it must keep the same teeth.
+
+        Before M3 this asserted that the exemption was the ONLY M3 problem — which proved the gate
+        could see it. With the key removed that formulation is vacuous, so the discrimination is
+        preserved by re-adding the key and requiring every diagnostic to name it. A cell that only
+        checked the current shape would pass just as happily against a checker that had stopped
+        looking.
+        """
+        regressed = copy.deepcopy(self.workflow)
+        regressed["jobs"][EXPECTED_CONTEXT]["continue-on-error"] = True
+        problems = contract_problems(regressed, milestone="M3")
+        self.assertNotEqual(
+            [], problems, "re-adding the advisory exemption must be rejected"
+        )
         for problem in problems:
             self.assertIn("continue-on-error", problem)
-        at_m3 = copy.deepcopy(self.workflow)
-        at_m3["jobs"][EXPECTED_CONTEXT].pop("continue-on-error")
-        self.assertEqual([], contract_problems(at_m3, milestone="M3"))
 
-    def test_advisory_exemption_is_job_scoped_not_step_scoped(self):
-        """Step scope would rewrite the Trunk step's conclusion to success and make cell 2 blind."""
-        self.assertIs(True, _job(self.workflow).get("continue-on-error"))
+    def test_the_exemption_is_absent_at_BOTH_scopes(self):
+        """Job scope AND step scope. Step scope would rewrite the Trunk step's conclusion to
+        `success` and leave only the in-job `outcome`, which the REST API never exposes — so cell 2
+        would be blind and nothing could carry its claim.
+        """
+        self.assertNotIn(
+            "continue-on-error",
+            _job(self.workflow),
+            "M3 removes the job-scoped advisory exemption",
+        )
         for step in _steps(self.workflow):
             self.assertNotIn("continue-on-error", step, f"step {step.get('name')!r}")
 
@@ -1113,17 +2407,88 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         self.assertEqual(set(), EXPECTED_LINTERS - self.names)
 
     def test_no_unlisted_linter_appears(self):
-        self.assertEqual(set(), self.names - EXPECTED_LINTERS - {EXCLUDED_LINTER})
+        self.assertEqual(set(), self.names - EXPECTED_LINTERS - EXCLUDED_LINTERS)
 
-    def test_the_declared_exclusion_is_configured_but_filtered_from_the_required_job(
-        self,
-    ):
-        self.assertIn(EXCLUDED_LINTER, self.names)
+    def _shipped(self):
+        required = _step(_load_workflow(), "trunk")["with"]["arguments"]
+        canary = _step(
+            yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8")), "trunk"
+        )["with"]["arguments"]
+        return required, canary
+
+    def test_the_shipped_literals_are_the_declared_ones(self):
+        """Both surfaces, whole-string: the required job's AND the canary's."""
+        self.assertEqual((ARGUMENTS_LITERAL, CANARY_ARGUMENTS_LITERAL), self._shipped())
+
+    def test_the_shipped_exclusion_passes_every_cell_4_check(self):
+        """(a)-(e) on what ships — the passing positive control for every mutant below."""
+        required, canary = self._shipped()
         self.assertEqual(
-            ARGUMENTS_LITERAL,
-            _step(_load_workflow(), "trunk")["with"]["arguments"],
+            [], exclusion_problems(required, canary, frozenset(self.names))
         )
-        self.assertIn(EXCLUDED_LINTER, ARGUMENTS_LITERAL)
+
+    def test_every_cell_4_mutant_fails_with_its_own_diagnostic(self):
+        """(f). Each mutant must produce ITS OWN diagnostic — a cell that reds for any reason is not
+        evidence that it reds for this one."""
+        names = frozenset(self.names)
+        req, can = ARGUMENTS_LITERAL, CANARY_ARGUMENTS_LITERAL
+        cases = [
+            (
+                "a seventh entry",
+                req + ",-yamllint",
+                can,
+                names,
+                "exclusion: the required job's excluded set is not exactly the six declared entries",
+            ),
+            (
+                "a formatter dropped",
+                req.replace(",-taplo", ""),
+                can,
+                names,
+                "exclusion: the required job's excluded set is not exactly the six declared entries",
+            ),
+            (
+                "a security name added",
+                req + ",-gitleaks",
+                can,
+                names,
+                "exclusion: a security linter is excluded",
+            ),
+            (
+                "a code-scoped entry added",
+                req + ",-bandit/B602",
+                can,
+                names,
+                "exclusion: an excluded entry is an issue code, not a linter name",
+            ),
+            (
+                "the two literals collapsed",
+                can,
+                can,
+                names,
+                "exclusion: the required and canary literals are identical",
+            ),
+            (
+                "the two literals swapped",
+                can,
+                req,
+                names,
+                (
+                    "exclusion: required and canary differ by something other than exactly the five "
+                    "formatters"
+                ),
+            ),
+            (
+                "an excluded name dropped from lint.enabled",
+                req,
+                can,
+                names - {"taplo"},
+                "exclusion: an excluded name is not in `lint.enabled` (trunk aborts with EXIT 2)",
+            ),
+        ]
+        for label, required, canary, enabled, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertIn(diagnostic, exclusion_problems(required, canary, enabled))
 
     def test_a_reduced_configuration_is_detected(self):
         """The revision-5 wording — "the configured set minus the exclusions" — could not do this."""
@@ -1734,11 +3099,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 at_event("paths-ignore", ["docs/**"]),
                 "pull_request options: `paths-ignore` narrows reachability",
             ),
-            # Only a violation once M2's advisory exemption lapses at M3 — which is the point of
-            # writing the case at M2 and ENABLING it at M3.
+            # M3 REMOVED the advisory exemption, so this case now RE-ADDS it. Until M3 the shipped
+            # workflow carried the key and the case mutated nothing by design — at M3 that
+            # formulation is vacuous, because the unmutated workflow is clean and a checker that had
+            # stopped looking would pass it just as happily.
             (
                 "C3.nothing-skips-or-masks/job-continue-on-error",
-                lambda w: None,
+                lambda w: w["jobs"][EXPECTED_CONTEXT].update(
+                    {"continue-on-error": True}
+                ),
                 "job: `continue-on-error:` is prohibited",
                 "M3",
             ),
@@ -1848,6 +3217,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 move_to_step,
                 "step `trunk`: `continue-on-error:` is prohibited",
             ),
+            (
+                # COREDEV-2850: `contract_problems` now selects the canary's literal on `is_canary`.
+                # Without a canary case that branch has no mutant at all.
+                "C4.arguments-canary-literal/appended",
+                lambda w: _step(w, "trunk")["with"].__setitem__(
+                    "arguments", CANARY_ARGUMENTS_LITERAL + " --fix"
+                ),
+                "action inputs: `arguments` does not equal the declared literal",
+            ),
         ]
 
     def test_every_canary_mutant_fails_with_its_own_diagnostic(self):
@@ -1871,7 +3249,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
     def test_the_shipped_workflow_is_a_passing_positive_control(self):
         """Every mutant below starts from a GREEN baseline, or it proves nothing."""
         self.assertEqual(
-            [], contract_problems(copy.deepcopy(self.workflow), milestone="M2")
+            [], contract_problems(copy.deepcopy(self.workflow), milestone="M3")
         )
 
     def test_every_generated_mutant_fails_with_its_own_diagnostic(self):
@@ -1881,14 +3259,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             with self.subTest(case=case_id):
                 mutant = copy.deepcopy(self.workflow)
                 mutate(mutant)
-                if milestone == "M2":
-                    # At M3 one case asserts that the SHIPPED advisory key is itself the violation,
-                    # so it mutates nothing by design; every other case must really change the file.
-                    self.assertNotEqual(
-                        yaml.safe_dump(self.workflow, sort_keys=True),
-                        yaml.safe_dump(mutant, sort_keys=True),
-                        "the mutant must actually change the workflow",
-                    )
+                # EVERY mutant, no milestone carve-out. The exemption existed because one M3 case
+                # mutated nothing while M2's shipped workflow carried the advisory key; M3 removed
+                # the key and that case now re-adds it, so the carve-out has no remaining subject.
+                # A mutant that changes nothing cannot prove a checker sees anything.
+                self.assertNotEqual(
+                    yaml.safe_dump(self.workflow, sort_keys=True),
+                    yaml.safe_dump(mutant, sort_keys=True),
+                    "the mutant must actually change the workflow",
+                )
                 problems = contract_problems(mutant, milestone=milestone)
                 self.assertIn(
                     diagnostic,

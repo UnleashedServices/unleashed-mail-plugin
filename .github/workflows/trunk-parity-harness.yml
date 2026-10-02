@@ -132,13 +132,18 @@ jobs:
 
       - name: stage-the-deliberately-fixable-fixture
         # Running the action over already-canonical files proves NOTHING: autofix would produce no byte
-        # change there either, so the case would REACH the wrong implementation without killing it. The
-        # fixture is mis-indented on purpose, and `git add` makes it tracked so cell 5's claim — no
-        # TRACKED file's bytes change — actually bites.
+        # change there either, so the case would REACH the wrong implementation without killing it.
+        # `git add` makes the fixture tracked so cell 5's claim — no TRACKED file's bytes change — bites.
+        # COREDEV-2850: the fixture's finding must SURVIVE the required job's six-name filter, which now
+        # excludes the formatters — so the old mis-indented file (shfmt's whole-file `fmt`, its ONLY
+        # finding) went silent. It must also be AUTOFIXABLE by the same inputs plus `--fix`, or the
+        # autofix positive control cannot move it. Measured, not assumed: an unbraced variable reference
+        # is reported as `shellcheck/SC2250` at 3:7 under the six-name filter, and `--fix` rewrites it
+        # to `${name}`, leaving the file clean. codespell was tried first and is reported but NOT autofixed.
         run: |
           set -euo pipefail
           mkdir -p harness-fixtures
-          printf '#!/usr/bin/env bash\nif true; then\n      echo "deliberately   mis-indented"\n   fi\n' \
+          printf '#!/usr/bin/env bash\nname="deliberately fixable"\necho "$name"\n' \
             > harness-fixtures/fixable.sh
           git add --force harness-fixtures/fixable.sh
           echo "fixture staged:"; sed -n '1,10p' harness-fixtures/fixable.sh
@@ -265,11 +270,12 @@ jobs:
               succeeded. Only lint evaluation names THIS FILE together with the LINTER that
               judged it, so that pair is what is recorded.
 
-              The position is deliberately optional. The fixture is mis-indented, which shfmt
-              reports as a whole-file `fmt` finding printed as `-:-` — it has no line or column.
-              Requiring integers here would make the field unsatisfiable for the very fixture the
-              harness stages, which is how the first attempt at this returned null on a run that
-              had in fact linted the file. Trunk renders as:
+              The position is deliberately optional. A whole-file finding — e.g. a formatter's
+              `fmt`, printed as `-:-` — has no line or column, and the original fixture produced
+              exactly that; requiring integers made the field unsatisfiable, which is how the first
+              attempt at this returned null on a run that had in fact linted the file. The CURRENT
+              fixture (COREDEV-2850) is positional — `shellcheck/SC2250` at 3:7 — but optionality is
+              kept, because trunk legitimately emits both shapes. Trunk renders as:
 
                   harness-fixtures/fixable.sh
                    -:-  fmt  Incorrect formatting, autoformat by running 'trunk fmt'  shfmt
@@ -348,7 +354,7 @@ jobs:
 
       - name: upload-the-parity-artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: parity-${{ github.event_name }}
           path: parity-*.json
