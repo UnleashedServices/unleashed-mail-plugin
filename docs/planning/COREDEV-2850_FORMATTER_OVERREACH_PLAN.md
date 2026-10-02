@@ -128,11 +128,17 @@ on the surface that matters.
 | `.github/workflows/trunk-parity-harness.yml` | the deliberately-failing fixture — see §A6 |
 | `scripts/tests/test_trunk_check_workflow.py` | `ARGUMENTS_LITERAL`; **new** `CANARY_ARGUMENTS_LITERAL = "--filter=-markdown-link-check"`; `contract_problems` selects on `is_canary` for `arguments`; `EXCLUDED_LINTER` (singular) → `EXCLUDED_LINTERS` (frozenset) at its three call sites; a new `_canary_mutants` case covering the canary arguments branch; the comment above `EXPECTED_LINTERS` ("20 enabled minus §6.4's declared exclusion" — now minus SIX, and five of the frozen nineteen are enabled but no longer RUN in the required job) |
 | `scripts/tests/test_trunk_upstream_parity.py` | `ARGUMENTS_LITERAL` |
-| `scripts/tests/test_python39_floor.py` | re-pin `_JOB_DIGESTS[("trunk-check.yml","trunk-check")]` → `ba363bdaf13c60d1a19c8b5cee9926f73420a495193c764c57b5ec58ec1b9194`. `_WORKFLOW_LEVEL_DIGESTS["trunk-check.yml"]` does **not** move — do not "fix" the wrong constant |
+| `scripts/tests/test_python39_floor.py` | re-pin **TWO** job digests, not one (codex, r3 P2):
+`_JOB_DIGESTS[("trunk-parity-harness.yml","parity")]` as well, because §A6 necessarily changes that
+job's fixture step and `test_every_job_matches_its_frozen_definition` hashes the WHOLE job. Codex
+confirmed in-memory that the shipped pin matches and a fixture-body change moves it, so following the
+single-re-pin instruction **cannot pass the full local gate**. The parity re-pin must come AFTER the
+replacement fixture is validated (§A6), never before. And re-pin `_JOB_DIGESTS[("trunk-check.yml","trunk-check")]` → `ba363bdaf13c60d1a19c8b5cee9926f73420a495193c764c57b5ec58ec1b9194`. `_WORKFLOW_LEVEL_DIGESTS["trunk-check.yml"]` does **not** move — do not "fix" the wrong constant |
 | `docs/planning/COREDEV-2780-contract.yaml` | re-pin `action_inputs_digest` `cc125ae6…` → `2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe`; split `C4.arguments-required-literal` into a `required` and a `canary` obligation (or widen `entries:` and give each its own `literal_source`) so cell 11 generates a mutant for the new canary branch; amend the obligation's `statement` and its `/absent` case, which today say absence means "`markdown-link-check` runs in the required job" |
 | `docs/planning/COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md` §6.4 | **the literal's bytes live HERE**, not in the contract yaml. §6.4 must declare BOTH literals and why they differ, and its sentences "That exact scalar is the whole permitted value of the job's `arguments:` input" and "cell 13 asserts the SAME literal in the pre-commit invocation" must be rewritten. Editing a gated `*_PLAN.md` changes the bytes `review-verdict.py` binds to COREDEV-2780's recorded verdict — the cheaper alternative is to move the bytes into the contract yaml as `required_literal` / `canary_literal` keys that a test READS (nothing reads `literal_source:` today) |
 | `docs/planning/evidence/parity-pull_request.json`, `parity-push.json` | RE-RECORDED by a harness run. They carry the OLD canonical form + digest and the old literal in `invocations[1]`. Hand-editing them forges sensor output; **deleting** them is worse — the judge then SKIPS and the module reports `OK (skipped=1)`, silently regressing COREDEV-2780 M2c to "cells 1 and 5 unowned" |
 | `scripts/review/callers-scan-exemptions.tsv` | regenerated LAST in every commit (`python3 scripts/review/generate-callers-exemptions.py`) |
+| `docs/planning/evidence/COREDEV-2780-rollout.json` | cell 3's `stillOpenForM3` residual resolves to COREDEV-2850 and §6 step 4 edits it — so it belongs in this table (codex, r3) |
 | `scripts/tests/test_precommit_trunk_gate.py` | **unchanged** — asserts the HOOK's literal, which keeps formatters |
 
 The whole-string match is retained; C4's mutant (`payload: " --fix"`) stays and still produces its
@@ -303,6 +309,12 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
    class of defect twice already. This coexists with the version-normalisation policy rather than
    reversing it: normalisation governs what reds the LINT config digest, this pin governs when the
    candidate ENUMERATION is stale.
+   **State the pin's LIMIT rather than over-claiming it** (codex, r3). `uri` + `ref` close drift in
+   trunk's own plugin DEFINITIONS. They do not close drift in a linter's NATIVE discovery, which
+   belongs to the linter's own version and can move without either pin or `cli.version` moving. No
+   current bypass by that route was demonstrated, so the honest record is: this pin covers
+   definition-declared candidates, native-discovery candidates fall outside its scope, and pinning the
+   relevant linter versions is the follow-up if that gap is judged live.
 
    Today the declared set is, at minimum:
    `.gitleaks.config`, `.gitleaks.toml`, `.gitleaksignore`, `zizmor.yml`, `zizmor.yaml`,
@@ -369,6 +381,13 @@ and raise `IsADirectoryError` at test time (gemini, r2). Directories are hashed 
 `_digest_of_tree`; anything else — socket, fifo, symlink — is refused with a diagnostic naming the
 path and its kind.
 
+**THE REFUSAL MUST BE RECURSIVE, not only at member dispatch** (codex, r3). `_digest_of_tree`'s
+non-symlink branch calls `path.read_bytes()`, so a FIFO planted as a DESCENDANT of a directory member
+**blocks the test run indefinitely** and a socket **raises** — neither produces the diagnostic this
+section promises, and a hang is worse than a failure because it carries no message at all. Kind
+classification therefore happens for every traversed descendant, not just for top-level members, and
+the controls include a nested FIFO and a nested socket.
+
 **Symlinked config members are REFUSED, not hashed** (codex, r1 P1). Hashing `os.readlink(path)`
 freezes the link's SPELLING and leaves the TARGET's contents unfrozen. The attack needs no forgery:
 a reviewed relocation of `.github/zizmor.yml` to a symlink at `policy/zizmor.yml`, with the
@@ -399,6 +418,15 @@ exist to close. So:
 |---|---|---|
 | **required occupied** | exists in the shipped tree and is load-bearing today — `.gitleaks.toml`, `.github/zizmor.yml`, `.trunk/configs/**` | MUST exist, be tracked, be non-empty, digest `!= sha256(b"")` |
 | **optional candidate** | a declared `direct_configs` path holding nothing today — e.g. `.gitleaksignore`, `zizmor.yaml`, `.checkov.yml` | MUST contribute a `missing` marker; CREATING it must move the digest; it is NOT required to exist |
+
+**The two sets must be asserted DISJOINT and COVERING** (codex, r3): their intersection is empty and
+their union equals the aggregate's membership. Without both halves a member can be in NEITHER set —
+silently escaping every class guard while still contributing to the digest — or in BOTH, where the
+required and optional rules contradict. Two scope corrections follow: `OPTIONAL_CANDIDATE_MEMBERS` is
+defined as "declared `direct_configs` paths", which cannot accommodate a demoted `.trunk/configs/**`
+member or a future DERIVED-only member, so state the class as a property of the MEMBER rather than of
+its source; and **cell 9's tracked/non-empty guard applies to EXISTING members only** — applied to an
+absent optional candidate it reds the shipped tree, which is the §B3/§B4 contradiction over again.
 
 Both classes are verified THROUGH the aggregate digest, not beside it. The two sets are frozen
 constants in `test_trunk_check_workflow.py` — `REQUIRED_OCCUPIED_MEMBERS` and
@@ -501,8 +529,16 @@ meant.
    b. NEGATIVE MUTANT: an implementation whose union omits the DERIVED contribution entirely must
       FAIL this cell. Without (b), (a) is satisfiable by a digest that happens to cover the path
       through another source.
-   c. Parse-level checks — stub-to-`[]`, a synthetic second reference appearing, `GITLEAKS_CONFIG`
-      removed shrinking the result — remain as a FLOOR beneath (a) and (b), never as the cell.
+   c. **PARAMETERISED ACROSS ALL FOUR REFERENCE SHAPES** (codex, r3 P2). §B3(1) requires coverage of
+      `direct_config`, `direct_configs`, `environment[].value`, and a `${workspace}` token inside
+      `commands[].run`. Revision 3's cell specified ONE synthetic reference of unspecified shape — and
+      a parser handling only the two shapes that are LIVE in the shipped `trunk.yaml` passes every
+      observation here if the synthetic reference happens to use `environment[].value`. **The shipped
+      config contains neither `direct_config` nor `direct_configs`, so no real input can expose that
+      omission.** Run (a) once per shape, and add a PER-SHAPE OMISSION MUTANT: a parser that ignores
+      exactly one shape must fail the cell for that shape.
+   d. Parse-level checks — stub-to-`[]`, a synthetic second reference appearing, `GITLEAKS_CONFIG`
+      removed shrinking the result — remain as a FLOOR beneath (a)-(c), never as the cell.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
@@ -519,6 +555,14 @@ meant.
     the case the lint digest deliberately tolerates); repoint `uri`; bump `cli.version`. The
     diagnostic must say **re-enumerate the declared candidate set**, not merely "re-pin", because
     "re-pin the digest" is the instruction that produced this defect class twice already.
+
+11c. **§B4's refusal and class rules have NAMED OWNERS here** (codex, r3: they were specified in §B4
+    and owned by no cell — and §4 is what an implementer builds from, which is precisely the
+    prose-versus-cell gap that produced revision 3). Owned by this cell: symlink refusal at BOTH
+    `_digest_of_member` AND `_digest_of_tree`; the nested target-only mutation control; recursive kind
+    classification with nested FIFO and socket controls; the two frozensets disjoint and covering;
+    promotion and demotion each requiring the paired constant edit plus the re-pin; and cell 9's guard
+    scoped to existing members.
 
 11. **A config planted UNTRACKED at a CANDIDATE path moves the digest** — for the directory member
     (the existing cell 4b test) and, crucially, at candidate paths that hold nothing today
@@ -550,8 +594,14 @@ meant.
 
 1. This plan through the mandatory dual-review gate (`/unleashed-mail:gemini-review` +
    `/unleashed-mail:codex-review`, then `/unleashed-mail:review-synthesis`) — **in this worktree**.
-2. Implement Part A (workflow → the two-literal split → the four re-pins → §A6's harness fixture →
-   re-record the parity artifacts), then Part B, then §4's cells. Run CI's **full** local gate after
+2. Implement Part A in this order: workflow → the two-literal split → §A6's harness fixture (validated
+   with `--fix` BEFORE anything is pinned to it) → **the re-pins, counted rather than asserted** —
+   `ARGUMENTS_LITERAL` in two test modules, the contract's `action_inputs_digest`, and the TWO
+   `_JOB_DIGESTS` entries (`trunk-check.yml:trunk-check` AND `trunk-parity-harness.yml:parity`) →
+   re-record the parity artifacts. Then Part B, then §4's cells. The earlier wording said "the four
+   re-pins" and omitted the harness job entirely (codex, r3 P2); **derive the set from what the
+   change touches rather than trusting a count in this sentence** — a stated count is a derived value
+   and this document has had three go stale already. Run CI's **full** local gate after
    each commit, not the first six commands — including
    `python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv`,
    LAST, after every other edit. Note that committing THIS plan document already reds
@@ -605,10 +655,24 @@ meant.
       §A5 applies: prefer superseding it from the contract yaml / evidence record over editing the
       gated `*_PLAN.md` bytes, and if the bytes must change, re-gate that plan rather than pretending
       its recorded verdict still covers them.
-      **Name the schema addition explicitly** (gemini, r2): add a `superseded_by: COREDEV-2850` key
-      to cell 3's entry in `COREDEV-2780-contract.yaml`, and confirm the contract loader tolerates an
-      unknown key before relying on it — an unvalidated field that nothing reads is the
-      `backed_by` residue found on COREDEV-2811, repeated.
+      **CORRECTION — the location revision 3 named DOES NOT EXIST** (codex, r3 P2). Revision 3 said
+      to add a `superseded_by: COREDEV-2850` key to "cell 3's entry" in
+      `COREDEV-2780-contract.yaml`. **That registry has no cell entries at all** — verified by parse,
+      its top-level keys are `schemaVersion, ticket, renders, action_pin, action_inputs_digest,
+      entries, families, obligations`, and its `C3.*` obligations are about job structure
+      (`job-mapping-allowlist`, `nothing-skips-or-masks`, `no-defaults-run`, …), not cell 3's
+      over-reach property. This instruction was taken from a review recommendation and written in
+      without checking the location existed; the accompanying "confirm the loader tolerates an unknown
+      key" check could not have caught it, because tolerating an unknown key says nothing about
+      whether the ENTRY is there.
+      **So there are exactly two honest routes, and a named key is neither of them:**
+      (i) put the supersession in the rollout evidence artifact — where cell 3's residual already
+      lives as `stillOpenForM3[…].resolvesAt: COREDEV-2850` — and give it a READER, modelled on the
+      existing `primaryDiagnostic` judge, so the supersession is asserted rather than asserted-about;
+      or (ii) change the governing text in the gated plan and **re-gate that plan**, accepting the
+      cost rather than pretending its recorded verdict still covers the new bytes.
+      Adding an inert key to a registry that has nowhere to put it would be the `backed_by` residue
+      of COREDEV-2811 repeated exactly — an unvalidated field nothing reads.
 5. Version bump (four sync points + CHANGELOG).
 6. **LAND ATOMICALLY** (codex, r1). Step 2 orders IMPLEMENTATION A→B; it did not order MERGES.
    Part A, Part B, §4's cells and the accepted evidence land together, in one PR. **If they are ever
