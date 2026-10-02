@@ -13,6 +13,46 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.27] — 2026-10-02
+
+### Fixed
+
+- **`trunk-check` over-reach (COREDEV-2850): the required gate failed clean edits to files that were
+  already unformatted.** Trunk evaluates its five `formatter: true` linters (black, isort, prettier,
+  shfmt, taplo) whole-file and reports pre-existing formatting debt as NEW on any touched file, so an
+  edit to one of the ~73% of tracked files with such debt went red for debt the author did not
+  introduce. The required job now passes
+  `--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo`; the push canary keeps the
+  formatters, so their findings are still observed. Measured: a genuine new lint defect is still
+  caught under the new filter.
+- **Cell 4 is genuinely strict.** It replaced a substring test — which a seven-name literal, a security
+  exclusion and an issue-code suppression all passed — with a frozen exclusion SET, an exact
+  required-versus-canary difference in both directions, and rejection of issue codes and security
+  linters, each mutant asserted to fail with its own diagnostic.
+- **The parity harness's fixture was replaced by measurement, not by the plan's guess.** The old
+  fixture's only finding was shfmt's, which the new filter silences. `codespell` — the first
+  suggestion — is reported but not autofixed by trunk; an unbraced variable reference
+  (`shellcheck/SC2250`) is both, and leaves the file clean.
+
+### Security
+
+- **Security-linter configs outside the frozen tree (COREDEV-2860).** gitleaks reads `.gitleaks.toml`
+  and zizmor reads `.github/zizmor.yml`, neither of which was frozen, so a blanket allowlist appended to
+  `.gitleaks.toml` disarmed both `trunk-check` and the separate `secret-scan` required context with the
+  test suite green. The freeze now covers the union of every config `.trunk/trunk.yaml` references and
+  every `direct_configs` candidate of every enabled security linter — ten paths, including
+  `.gitleaksignore`, a suppression lever nothing else caught.
+- **References are adjudicated, never resolved.** `..` is refused rather than collapsed, containment is
+  component-wise, and a symlink at ANY path component is refused; every config is recorded as
+  canonical JSON so neither its kind nor a record boundary can be forged, and anything but a regular
+  file or directory is refused before it is read.
+- **Content checks close the hole against intent, not only accident.** A digest only makes a weakening
+  visible — it can be re-pinned in the same commit. A blanket gitleaks allowlist (global, legacy or
+  per-rule; `.*`, `.+`, `\S` and the like, judged behaviourally), `useDefault = false`, `disabledRules`,
+  a disabled zizmor audit, or an ignore covering every workflow is now refused outright.
+- **A mutant battery runs against the real code**: 29 single-decision operators over 30 rows, each
+  failing exactly its recorded rows, proven to discriminate by weakening the production allowlist.
+
 ## [2.8.26] — 2026-09-07
 
 ### Fixed
