@@ -525,6 +525,31 @@ obligations:
         validity: a second producer of the required `trunk-check` context
         diagnostic: "job: effective context `trunk-check` is not `trunk-check-push`"
 
+  - id: C3.single-job
+    clause: C3
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      Each workflow declares exactly ONE job. Every other C3 and C8 check, and the effective-context pin,
+      reads the first job, so a sibling appended under `jobs:` was never inspected. It could emit the
+      REQUIRED `validate` context without the contract suites running (both arms, r47).
+    target: $.jobs
+    cases:
+      - id: C3.single-job/required-sibling-named-validate
+        op: add
+        side: local
+        target: $.jobs.context-decoy
+        payload: "{name: validate, runs-on: ubuntu-latest, timeout-minutes: 15, steps: [{name: Context decoy, run: 'true'}]}"
+        validity: a valid second job; it emits a REQUIRED context on the same SHA
+        diagnostic: "jobs: expected exactly one job, found 2"
+      - id: C3.single-job/canary-sibling-named-validate
+        op: add
+        side: local
+        target: $.jobs.context-decoy
+        payload: "{name: validate, runs-on: ubuntu-latest, timeout-minutes: 15, steps: [{name: Context decoy, run: 'true'}]}"
+        validity: a valid second job; it emits a REQUIRED context on the same SHA
+        diagnostic: "jobs: expected exactly one job, found 2"
+
   - id: C3.no-defaults-run
     clause: C3
     kind: yaml

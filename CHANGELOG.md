@@ -39,9 +39,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
   the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
   `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
-  have emitted a REQUIRED context. Each entry's effective context is now pinned. Cell 11's
+  have emitted a REQUIRED context. Each entry's effective context is now pinned. **A sibling job**
+  (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
+  first job. Each workflow must now declare exactly one. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
-  and `continue-on-error` on every step) is now declared in the registry and executed: 36 new cases,
+  and `continue-on-error` on every step) is now declared in the registry and executed: 38 new cases,
   all valid workflows.
 - **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
   Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry

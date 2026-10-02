@@ -1968,6 +1968,13 @@ def contract_problems(
                     "types: the activity set is not exactly `opened, synchronize, reopened, edited`"
                 )
 
+    # C3 — exactly ONE job. Every check below reads `_job()`, the FIRST job, so a sibling appended under
+    # `jobs:` was never inspected at all, and could emit the required `validate` context (both arms, r47).
+    if len(workflow.get("jobs") or {}) != 1:
+        problems.append(
+            f"jobs: expected exactly one job, found {len(workflow.get('jobs') or {})}"
+        )
+
     # C3 — the EFFECTIVE context is pinned. `name:` decides which status context a job emits, so an
     # unconstrained `name` let the canary emit the REQUIRED `validate` context while its job ID, the
     # only thing checked, stayed `trunk-check-push` (codex, r46).
@@ -3399,6 +3406,22 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _job(w).update({"name": CANARY_CONTEXT}),
                 "job: effective context `trunk-check-push` is not `trunk-check`",
             ),
+            # A SIBLING job (both arms, r47): every check reads `_job()`, the FIRST job, so a second
+            # job appended under `jobs:` was never inspected, and could emit `validate`.
+            (
+                "C3.single-job/required-sibling-named-validate",
+                lambda w: w["jobs"].update(
+                    {
+                        "context-decoy": {
+                            "name": "validate",
+                            "runs-on": "ubuntu-latest",
+                            "timeout-minutes": 15,
+                            "steps": [{"name": "Context decoy", "run": "true"}],
+                        }
+                    }
+                ),
+                "jobs: expected exactly one job, found 2",
+            ),
         ]
 
     def _canary_mutants(self):
@@ -3442,6 +3465,20 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "C3.effective-context-pinned/canary-named-as-required",
                 lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
                 "job: effective context `trunk-check` is not `trunk-check-push`",
+            ),
+            (
+                "C3.single-job/canary-sibling-named-validate",
+                lambda w: w["jobs"].update(
+                    {
+                        "context-decoy": {
+                            "name": "validate",
+                            "runs-on": "ubuntu-latest",
+                            "timeout-minutes": 15,
+                            "steps": [{"name": "Context decoy", "run": "true"}],
+                        }
+                    }
+                ),
+                "jobs: expected exactly one job, found 2",
             ),
         ]
 

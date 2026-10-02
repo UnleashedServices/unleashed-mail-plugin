@@ -1,8 +1,10 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 45
-**Implementation status:** shipped through M3 (v2.8.26). The plan was respecified AFTER M3 landed, and
-the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
+**Status:** Planning, revision 46
+**Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
+independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
+on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
+respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
 * cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
   asserted diagnostics differ from the registry's (ten required-entry, one canary); the case-validity
   rule is not executed; the `(side, form)` resolver family runs as hard-coded helper tests, not as the
@@ -25,18 +27,24 @@ the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracke
   references, and its mutants are never executed independently (codex, r45);
 * cell 13 — §6.4 says cell 13 runs "the same mutants (appended flag, absent argument)" against the HOOK
   literal. The hook suite freezes the argument vector but implements neither mutant (codex, r45);
+* cell 16 — the runtime control was observed on a PRODUCTION `alpha` push, not on the disposable fork
+  this cell prescribes. The evidence record says so and lists what the fork exercise still needs.
+  Accepting that substitution is the maintainer's decision. Until then the fork exercise is outstanding
+  (codex, r47);
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-45, not outstanding** (codex, r44 to r46): five checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-46, not outstanding** (r44 to r47): six checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
 `actions/checkout` after the guards could replace the tree they had inspected (revision 44); and only
 the job ID was checked, never the job `name` that decides the emitted context, so a canary named
-`validate` passed (revision 45). Cell 11's per-step minimum is now declared in the registry and executed:
-36 cases added in revisions 43-45, every one actionlint-clean apart from the permitted `if-cond` notes.
-The survivor corpus now records all five forms, as §1 requires; it is still not EXECUTED (above). Its `TRUNK_PATH` cases now write that
+`validate` passed (revision 45); and every check read only the FIRST job, so a sibling job named
+`validate` appended under `jobs:` passed (revision 46, found by both arms). Cell 11's per-step minimum is
+now declared in the registry and executed: 38 cases added in revisions 43-46, every one actionlint-clean
+apart from the permitted `if-cond` notes. The survivor corpus records all six forms, as §1 requires; it
+is still not EXECUTED (above). Its `TRUNK_PATH` cases now write that
 assignment; until revision 44 all three appended `echo X`.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
@@ -261,6 +269,18 @@ assignment; until revision 44 all three appended `echo X`.
 > (`branches:` values, any 40-hex checkout SHA, `fetch-depth`'s value) are by design. C2's target set is
 > enforced on the shipped file by cell 15's resolved-set comparison, the checkout SHA's VALUE is
 > Dependabot's, and `fetch-depth` is allowlisted without a value constraint.
+> **r47** `500afa4` (revision 45), both arms, **CONCORDANT**: agy `REQUEST_CHANGES` and codex
+> `REQUEST_CHANGES`, one blocker each, and it was the SAME blocker. A **sixth survivor, reproduced here on
+> both entries**: every check read `_job()`, the FIRST job, and nothing limited how many jobs `jobs:`
+> held. A sibling job named `validate`, appended after the shipped one, returned no problems, passed
+> actionlint, and left the producer census unchanged. Revision 45's context pin was right about the job it
+> looked at, and it looked at only one. codex also confirmed the 36 additions agree, and added two
+> status clarifications: M5a and M6 already exist, and cell 16's runtime control used production `alpha`
+> rather than the prescribed fork. **Revision 46** requires exactly one job, adds a sibling-job case per
+> entry (both failed against the unfixed checker), records the survivor, and states both clarifications.
+> *Three survivors in a row (r45-r47) have the same root: a check that inspected the FIRST occurrence and
+> never asked how many there were. For a duplicate step, a sibling job, and the job `name` behind the job
+> ID, the fix was the same: count what can repeat, and pin what selects.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -775,6 +795,8 @@ own non-required context.
   **C3 — the JOB mapping is an allowlist, and nothing skips or masks on any step.** The job's own
   keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name` (cell 14's
   effective check name, which takes precedence over the job id when present) — and nothing else.
+  **Each workflow declares exactly ONE job** (both arms, r47): every check here reads the first job, so
+  without this a sibling appended under `jobs:` is never inspected at all.
   **The EFFECTIVE context is pinned per entry** (codex, r46): the job `name`, or else the job ID, must
   equal `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
   which status context a job emits. Checking only the job ID let a canary renamed `validate` emit a

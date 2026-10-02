@@ -328,3 +328,17 @@ survivors:
       A passing canary satisfying the REQUIRED `validate` context on its SHA, with the contract suites
       that `validate` exists to run never run.
     must_fail_because: each entry's effective context must equal its declared context (C3).
+
+  - id: survivor/sibling-job-named-validate
+    covered_by:
+      - C3.single-job/required-sibling-named-validate
+      - C3.single-job/canary-sibling-named-validate
+    found_in_round: r47
+    survived_formulation: >-
+      Revision 45 pinned the effective context of THE job, but every check read only the first job, and
+      nothing limited how many jobs `jobs:` held. Found by both arms independently.
+    mutant: a second job `context-decoy` with `name validate`, appended after the shipped job
+    would_have_shipped: >-
+      A required `validate` context satisfied on the PR's head SHA by a job that runs `true`, with the
+      contract suites `validate` exists to run never run.
+    must_fail_because: each workflow declares exactly one job (C3).
