@@ -314,8 +314,9 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
    `re.sub(r"@\d+[\w.\-+]*", "@<version>", ...)` over the WHOLE dumped document, so a reference
    repointed from `${workspace}/policy/plain@1.toml` to `plain@2.toml` normalises identically and the
    `trunk.yaml` digest does not move. **Part B closes this only PARTLY — revision 9 overstated it**
-   (codex, r9). Because every member contribution carries its `rel` (§B4), a repoint that CHANGES THE
-   UNION moves the aggregate. Two cases stay unfrozen until COREDEV-2867 lands:
+   (codex, r9). Because every member contribution is an unforgeable `[kind, rel, digest]` record (§B4),
+   a repoint that CHANGES THE UNION moves the aggregate — a guarantee that revision 10's
+   delimiter-joined encoding did NOT actually provide (codex, r10). Two cases stay unfrozen until COREDEV-2867 lands:
    - **switching between references that are ALL already enumerated** — e.g. `direct_configs` lists both
      `policy/plain@1.toml` and `policy/plain@2.toml`, and `environment[].value` moves from the first to
      the second. The union, every member contribution and the normalised `trunk.yaml` are all identical,
@@ -414,17 +415,33 @@ The union is hashed per MEMBER KIND, by a new `_digest_of_member(path)`:
 
 | kind | contribution |
 |---|---|
-| directory | `f"{rel}:tree:{_digest_of_tree(path)}"`, **with the tree's symlink branch changed to REFUSE** — see below |
+| directory | the record `["tree", rel, _digest_of_tree(path)]`, **with the tree's symlink branch changed to REFUSE** — see below |
 | symlink | **REFUSED** — see below |
-| regular file | `f"{rel}:{sha256(path.read_bytes())}"` |
-| missing | `f"{rel}:missing"` — a DISTINCT marker, never the empty-tree constant |
+| regular file | the record `["file", rel, sha256(path.read_bytes())]` |
+| missing | the record `["missing", rel, null]` — a DISTINCT kind, never the empty-tree constant |
+| anything else — FIFO, socket, device | **REFUSED** at the member itself, before any read, naming the path and its kind |
 
 **Every contribution carries the member's `rel`, directories included** (codex, r9). `_digest_of_tree`
 labels descendants relative to the DIRECTORY's own root, so revision 9's bare `_digest_of_tree(path)`
 gave two equal-content directories the same contribution, and repointing a reference from one to the
-other moved nothing. The `tree:` tag also keeps a directory's contribution from colliding with a
-regular file's. Cell 8(f) rows 17, 19 and 20 verify the directory member, the missing-versus-empty
-distinction, and the repoint.
+other moved nothing.
+
+**Every record that feeds the aggregate is canonical JSON — `json.dumps([...], separators=(",", ":"))` —
+never a delimiter-joined string** (codex, r10). Revision 10 encoded contributions as `f"{rel}:tree:{t}"`
+and claimed the `tree:` tag kept a directory from colliding with a file. **That claim was false.** A
+`rel` can itself contain `:tree`, so a DIRECTORY `policy_dir` holding `x.toml` and a regular FILE named
+`policy_dir:tree` whose bytes are exactly the tree's input produce the identical string — no hash
+collision needed; codex reproduced it. The same flaw is in the SHIPPED `_digest_of_tree`, which joins
+`f"{relative}:{digest}"` entries with `\n`: a filename containing a newline forges a record boundary,
+so one file named `a:<sha256(C1)>\nb` collides with the pair `a`, `b`. JSON escapes both `:` inside
+strings and `\n`, so the KIND, the `rel` and the record boundary are all unforgeable. The rule covers
+both levels: each member contribution is `[kind, rel, digest]`, each `_digest_of_tree` entry is
+`[relative, digest]`, and the aggregate is `sha256` over the sorted records joined with `\n`.
+This changes `_digest_of_tree`'s output, which is absorbed by the `EXPECTED_CONFIG_TREE_DIGEST` re-pin
+this plan already requires; every caller is in `scripts/tests/test_trunk_check_workflow.py` (the pinned
+assertion, and mirror tests that compare before against after and are format-independent).
+Cell 8(f) rows 17, 19, 20, 23 and 24 verify the directory member, missing versus empty, the repoint,
+the cross-kind forgery and the in-tree boundary forgery.
 
 **`_digest_of_tree` MUST ALSO REFUSE SYMLINKS — refusing only at `_digest_of_member` leaves the
 bypass open one directory down** (gemini, r2 BLOCKER). `_digest_of_tree` hashes a symlink as
@@ -664,6 +681,14 @@ meant.
       - **Row 16 injects its error by patching `os.lstat` for one named component, never with
         `chmod 000`.** A root runner bypasses permission bits, so a `chmod` fixture would stop exercising
         the branch under root while still passing.
+      - **Row 21 runs in a subprocess under a timeout, and a timeout is a FAILURE.** An implementation
+        that falls through to `read_bytes()` on a FIFO blocks forever; run in-process, that hangs the
+        suite instead of reddening it — a test that can hang is worse than the bug it looks for.
+      - **Rows 23 and 24 compare the SAME `rel` where the defect needs it.** Row 24 holds the reference
+        fixed and changes the filesystem: comparing two DIFFERENT references would let the `rel` label
+        alone separate them and MASK the in-tree collision — the first draft of this row did exactly that
+        and caught nothing. Row 23 carries one forgery per tree format, because a delimiter-joined member
+        encoding is forgeable over either.
       - **not a member, no record** (row 6) means the probe is absent from membership AND nothing was
         recorded out of scope. Recording the root as out of scope is a failure.
       - **OUT OF SCOPE, recorded** (row 7) means the probe is absent from membership AND the out-of-scope
@@ -691,6 +716,10 @@ meant.
       | 18 | symlink refusal, DANGLING | `${workspace}/dangle/x.toml`, `dangle` a link to a path that does not exist | REFUSE |
       | 19 | missing is not empty | `${workspace}/maybe_dir`, absent, then an EMPTY directory | the aggregate digest differs between the two |
       | 20 | directory contribution carries `rel` | `${workspace}/dirA` vs `${workspace}/dirB`, identical contents | the aggregate digest differs between the two |
+      | 21 | member-level kind refusal | `${workspace}/pipe`, a FIFO | REFUSE — run in a SUBPROCESS under a timeout |
+      | 22 | member-level kind refusal | `${workspace}/sock`, a Unix-domain socket | REFUSE |
+      | 23 | records unforgeable ACROSS kinds | two pairs: directory `coll_a` vs FILE `coll_a:tree` holding a line-format tree input, and directory `coll_b` vs FILE `coll_b:tree` holding a JSON-record tree input | within each pair, the aggregate digests differ |
+      | 24 | records unforgeable WITHIN a tree | ONE reference `${workspace}/forge`, in two states: files `a`, `b`; then one file named `a:<sha256 of a>\nb` with `b`'s bytes | the aggregate digest differs between the two states |
 
       **Row 10 is codex's r8 blocker.** Rows 8 and 9 sit at depth two, so an implementation that excluded
       the root AND every direct child (`if len(rel.parts) < 2: continue`) passed all nine revision-8 rows.
@@ -699,28 +728,35 @@ meant.
       (codex, r7): a DECLARED probe is supplied by DECLARED whether or not derivation found it.
       **MUTANTS — EXECUTED, not reasoned** (2026-10-02, macOS, anchor beneath a `/var -> /private/var`
       alias, through `DECLARED | DERIVED`, each row observed exactly as written above). The correct
-      procedure passes the baseline and all twenty rows. Each mutant must fail EXACTLY the rows named:
+      procedure passes the baseline and all twenty-four rows. Each mutant must fail EXACTLY the rows named.
+      **Every set below comes from ONE harness running every mutant against every row** (codex, r10):
+      revision 10 measured rows 15-20 against only its six new mutants, never the twelve older ones, and
+      SEVEN of the previously stated sets were wrong once all rows existed.
 
       | mutant | fails on |
       |---|---|
-      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | 1-5 |
-      | containment by `Path.resolve()`, operand only | 1-6, 8-14 — the WRONG reason; see below |
+      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | 1-5, 16, 18 |
+      | containment by `Path.resolve()`, operand only | 1-6, 8-24 — the WRONG reason; see below |
       | `..` collapsed by `os.path.normpath` before adjudication | 3, 4, 5 |
-      | LEAF-only `Path.is_symlink()` | 2 |
-      | `str.startswith` containment | 7 |
-      | unconditional `os.lstat` on the row's own walk | 9, 10, 11 |
+      | LEAF-only `Path.is_symlink()` | 2, 16, 18 |
+      | `str.startswith` containment | 7, 15 |
+      | unconditional `os.lstat` on the row's own walk | 9, 10, 11, 15, 16, 19 |
       | unconditional `os.lstat` on EVERY member, DECLARED included | the BASELINE (the absent candidate) |
-      | discard direct children, `len(rel.parts) < 2` | 10, 12, 13 |
+      | discard direct children, `len(rel.parts) < 2` | 10, 12, 13, 17, 19-24 |
       | `ENOENT` handled, `ENOTDIR` refused | 11 |
       | `..` tested as a SUBSTRING | 12 |
       | skip any component starting with `.` | 13 |
-      | refuse a `.` component as if it were `..` | 6, 14 |
+      | refuse a `.` component as if it were `..` | 6, 14, 15 |
       | drop operands lacking `${workspace}` | 15 |
       | treat ANY `lstat` error as absent (`except OSError: break`) | 16 |
-      | omit DERIVED directories | 17, 20 |
+      | omit DERIVED directories | 17, 20, 24 |
       | `exists()` before walking — it follows links, so a dangling one reads as missing | 18 |
       | a missing member contributes the empty-tree digest | 19 |
       | directory contribution without its `rel` | 20 |
+      | fall through to `read_bytes()` for an unsupported kind | 21 (by timeout), 22 |
+      | revision 10's encoding: `f"{rel}:..."` members over the shipped `f"{relative}:{digest}"` tree | 23, 24 |
+      | `f"{rel}:..."` members over JSON-record trees | 23 |
+      | JSON members over the shipped `f"{relative}:{digest}"` tree lines | 24 |
 
       **The `Path.resolve()` mutant must resolve both sides alike** (codex, r6). Resolving the operand alone
       discards every reference on macOS, ordinary ones included, so it fails for the WRONG reason; rows
@@ -748,6 +784,8 @@ meant.
       | refuse every other `lstat` error | 16 |
       | dispatch the survivor by kind | 8, 10 (file); 17 (directory) |
       | refuse symlinks and other kinds inside a tree | cell 11c's nested controls |
+      | refuse unsupported kinds at the MEMBER itself (FIFO, socket) | 21, 22 |
+      | records unforgeable across kinds and within a tree | 23, 24 |
       | missing is distinct from an empty tree | 19 |
       | every contribution carries `rel` | 20 |
       | required members exist, are tracked, non-empty | cells 9, 11c |
@@ -844,7 +882,9 @@ meant.
    against the shipped `_config_tree_digest` / `_digest_of_member` shows it. Each mutant must fail
    EXACTLY its named rows. A mutant that fails NO row is a missing row — add the row, then rerun. A
    mutant that fails MORE rows than named means the model and the implementation diverged — find out
-   why before merging; do not edit the table to match.
+   why before merging; do not edit the table to match. **This verifies the TESTED mutants against the
+   real code; it does not claim coverage of bugs nobody has written down** (codex, r10). Its value is
+   that the model the table was measured on cannot quietly disagree with what ships.
 3. Observe the cells that need a real run on a probe PR, never merged; record under
    `docs/planning/evidence/`. Three constraints the earlier wording left implicit:
    - **Name the probe file and its recorded pre-existing formatter finding** for cell 1. It cannot
