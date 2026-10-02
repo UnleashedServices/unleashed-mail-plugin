@@ -43,6 +43,22 @@ BACKGROUND = frozenset(
 # ---- the fixture ------------------------------------------------------------------------------------
 
 
+def symlinked_outer(tmp: pathlib.Path) -> pathlib.Path:
+    """The fixture's OUTER directory, reached through a symlink on EVERY platform.
+
+    macOS gives this for free (`$TMPDIR` is under `/var -> /private/var`) and Linux does not, so the
+    `resolve-one-side` mutant was measured on macOS as failing nearly every row, and on the Linux CI
+    runner it failed only the rows `resolve-alike` fails: resolving one side IS resolving both when no
+    ancestor of the anchor is a link. One fixture, two oracles. Planting the link here makes the mutant
+    discriminate identically everywhere, and models the real case of a checkout under a symlinked path.
+    """
+    target = tmp / "outer-target"
+    target.mkdir()
+    link = tmp / "outer"
+    link.symlink_to(target)
+    return link
+
+
 def build(outer: pathlib.Path) -> pathlib.Path:
     """One outer directory holding sibling `real/ws` and `outside`, plus `alias -> real` ABOVE the anchor,
     so row 29's alternate spelling exists on every platform (Linux has no `/var -> /private/var`).
@@ -654,7 +670,7 @@ def _row_21_in_child(name: str | None) -> bool:
         "import test_config_freeze_battery as b\n"
         "name = sys.argv[2] or None\n"
         "with tempfile.TemporaryDirectory() as tmp:\n"
-        "    ws = b.build(pathlib.Path(tmp))\n"
+        "    ws = b.build(b.symlinked_outer(pathlib.Path(tmp)))\n"
         "    patches = b._patchers(name) if name else []\n"
         "    [p.start() for p in patches]\n"
         "    print('OK' if b.observe(ws, 21) else 'FAIL')\n"
@@ -688,7 +704,7 @@ def measure() -> dict:
     results = {}
     for name in [None, *mutants()]:
         with tempfile.TemporaryDirectory() as tmp:
-            ws = build(pathlib.Path(tmp))
+            ws = build(symlinked_outer(pathlib.Path(tmp)))
             listener = _sock(ws)
             try:
                 results[name] = failing_rows(ws, name)
@@ -834,6 +850,19 @@ class Cell8f_TheAdjudicationBatteryRunsAgainstTheRealCode(unittest.TestCase):
 
     def test_the_correct_procedure_passes_the_baseline_and_every_row(self):
         self.assertEqual((True, []), self.results[None])
+
+    def test_the_fixture_anchor_has_a_symlinked_ancestor_on_this_platform(self):
+        """The discrimination between `resolve-alike` and `resolve-one-side` exists ONLY when an
+        ancestor of the anchor is a link. Without this control, a fixture that lost its link would
+        reproduce the Linux-only false oracle silently, on every platform."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = build(symlinked_outer(pathlib.Path(tmp)))
+            self.assertNotEqual(
+                ws, ws.resolve(), "the anchor must not be its own realpath"
+            )
+            self.assertTrue(
+                any(p.is_symlink() for p in ws.parents), "no symlinked ancestor"
+            )
 
     def test_every_mutant_fails_exactly_its_recorded_rows(self):
         """A mutant failing a DIFFERENT set means the model and the code diverged: find out why — do not

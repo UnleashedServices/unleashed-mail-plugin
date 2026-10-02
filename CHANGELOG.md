@@ -17,6 +17,13 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2860: the config-freeze mutant battery had a macOS-only oracle.** One mutant
+  (`resolve-one-side`) was measured on macOS, where `$TMPDIR` sits under the symlink
+  `/var -> /private/var`. On Linux there is no such link, so resolving one side IS resolving both, and the
+  mutant failed a different set of rows. CI's `validate` job went red (run 37070992110) while
+  `darwin-suite` stayed green. The fixture is now built under an explicit symlinked ancestor on every
+  platform, and a new control fails if that link is ever lost. Reproduced on macOS with a symlink-free
+  `TMPDIR` before fixing.
 - **COREDEV-2780: three gaps in the shipped `trunk-check` contract checker (codex, plan r44).**
   Each was reproduced before it was fixed. **C2** accepted any `types:` containing `edited`, so
   `types: [edited]`, which drops `synchronize` so the gate never re-runs on a new commit, passed. It now
