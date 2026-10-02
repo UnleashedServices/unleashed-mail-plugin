@@ -145,6 +145,13 @@ EXPECTED_LINTERS = frozenset(
 # COREDEV-2850 cell 4. The five `formatter: true` linters, which trunk evaluates WHOLE-FILE and so reports
 # pre-existing debt as NEW on any touched file. Filtered from the REQUIRED job only; the canary keeps them.
 THE_FIVE_FORMATTERS = frozenset({"black", "isort", "prettier", "shfmt", "taplo"})
+# C2 and C8, held as literals for the same reason as the linter set.
+EXPECTED_PR_TYPES = frozenset({"opened", "synchronize", "reopened", "edited"})
+RUN_STEP_KEYS = frozenset({"name", "run"})
+USES_STEP_KEYS = frozenset({"name", "uses", "with"})
+PROHIBITED_STEP_KEYS = frozenset(
+    {"if", "continue-on-error", "shell", "working-directory", "env"}
+)
 EXCLUDED_LINTERS = frozenset({"markdown-link-check"}) | THE_FIVE_FORMATTERS
 # Hand-listed DELIBERATELY, never derived from `is_security`. MEASURED on trunk's pinned v1.11.0
 # definitions: BOTH secret scanners — gitleaks and trufflehog — carry NO `is_security` flag (only bandit,
@@ -1949,8 +1956,17 @@ def contract_problems(
             problems.append("branches: key is absent")
         if "types" not in on["pull_request"]:
             problems.append("types: key is absent")
-        elif "edited" not in on["pull_request"]["types"]:
-            problems.append("types: `edited` is missing from the activity set")
+        else:
+            types = on["pull_request"]["types"]
+            types = set(types) if isinstance(types, list) else {types}
+            if "edited" not in types:
+                problems.append("types: `edited` is missing from the activity set")
+            # C2 states the set EXACTLY. Checking only for `edited` let `types: [edited]` pass, which
+            # drops `synchronize`, so the gate never re-runs on a new commit (codex, r44).
+            if types != EXPECTED_PR_TYPES:
+                problems.append(
+                    "types: the activity set is not exactly `opened, synchronize, reopened, edited`"
+                )
 
     # C3 — the JOB mapping is an allowlist, and nothing skips or masks.
     allowed_job = {"runs-on", "timeout-minutes", "permissions", "steps", "name"}
@@ -2017,16 +2033,17 @@ def contract_problems(
 
     for step in steps:
         label = step.get("name")
+        # C8 freezes the COMPLETE step mapping. This was a six-key blacklist, so any other key
+        # (`timeout-minutes`, say) passed (codex, r44). Keys that change behaviour keep their
+        # specific diagnostic; anything else is unlisted.
+        allowed = RUN_STEP_KEYS if "run" in step else USES_STEP_KEYS
         problems.extend(
             (
-                f"step `{label}`: unlisted key `{key}`"
-                if key == "id"
-                else f"step `{label}`: `{key}:` is prohibited"
+                f"step `{label}`: `{key}:` is prohibited"
+                if key in PROHIBITED_STEP_KEYS
+                else f"step `{label}`: unlisted key `{key}`"
             )
-            for key in sorted(
-                {"if", "continue-on-error", "shell", "working-directory", "env", "id"}
-                & set(step)
-            )
+            for key in sorted(set(step) - allowed)
         )
         body = step.get("run", "")
         if "GITHUB_ENV" in body:
@@ -2055,6 +2072,15 @@ def contract_problems(
 
     # C8 — checkout inputs are allowlisted too, with two REQUIRED-PRESENT members.
     if "checkout" in names:
+        # C8: `actions/checkout` (SHA-pinned). Only its inputs were checked, so `@v4` passed (codex,
+        # r44). The exact SHA is left to Dependabot; the FORM is what this contract freezes.
+        if not re.fullmatch(
+            r"actions/checkout@[0-9a-f]{40}",
+            str(_step(workflow, "checkout").get("uses", "")),
+        ):
+            problems.append(
+                "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA"
+            )
         checkout = _step(workflow, "checkout").get("with", {})
         for key in sorted(
             set(checkout) - {"fetch-depth", "lfs", "persist-credentials"}
@@ -2804,6 +2830,103 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
 
             return apply
 
+        def append_to(step, line):
+            def apply(w):
+                _step(w, step)["run"] = _step(w, step)["run"] + "\n" + line
+
+            return apply
+
+        def set_on(step, key, value):
+            def apply(w):
+                _step(w, step)[key] = value
+
+            return apply
+
+        def per_step():
+            """Cell 11's PER-STEP minimum (codex, r44): the registry declared the four injection forms
+            and the shell/working-directory changes on `guard-empty-diff` only, no step-level `if:` at
+            all, and `continue-on-error` on `trunk` only. One case per (step, form), each named.
+            """
+            run_steps = (
+                "guard-resolver-digest",
+                "guard-empty-diff",
+                "guard-launcher-path",
+            )
+            all_steps = ("checkout", *run_steps, "trunk")
+            injections = (
+                (
+                    "creates-c6-path",
+                    "install -D /bin/true tools/trunk",
+                    "creates a prohibited launcher path",
+                ),
+                (
+                    "github-env-trunk-path",
+                    'echo X >> "$GITHUB_ENV"',
+                    "writes to $GITHUB_ENV",
+                ),
+                (
+                    "github-env-bash-env",
+                    'echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"',
+                    "writes to $GITHUB_ENV",
+                ),
+                ("github-path", 'echo X >> "$GITHUB_PATH"', "writes to $GITHUB_PATH"),
+            )
+            cases = []
+            for step in ("guard-resolver-digest", "guard-launcher-path"):
+                for form, line, message in injections:
+                    # Only the C6 guard may NAME a launcher path, so in that step the planted path is
+                    # caught by the body digest rather than by the path census.
+                    exempt = step == "guard-launcher-path" and form == "creates-c6-path"
+                    diagnostic = "run body digest mismatch" if exempt else message
+                    cases.append(
+                        (
+                            f"C8.run-bodies-frozen/{form}-{step}",
+                            append_to(step, line),
+                            f"step `{step}`: {diagnostic}",
+                        )
+                    )
+                cases.append(
+                    (
+                        f"C8.run-bodies-frozen/changed-shell-{step}",
+                        set_on(step, "shell", "sh"),
+                        f"step `{step}`: `shell:` is prohibited",
+                    )
+                )
+                cases.append(
+                    (
+                        f"C8.run-bodies-frozen/changed-working-directory-{step}",
+                        set_on(step, "working-directory", "/tmp"),
+                        f"step `{step}`: `working-directory:` is prohibited",
+                    )
+                )
+            # "Omission" as a VALID workflow: removing or emptying `run:` is a schema error, so each
+            # guard is neutralised with a no-op body instead.
+            cases.extend(
+                (
+                    f"C8.run-bodies-frozen/no-op-body-{step}",
+                    set_on(step, "run", ":"),
+                    f"step `{step}`: run body digest mismatch",
+                )
+                for step in run_steps
+            )
+            for step in all_steps:
+                cases.append(
+                    (
+                        f"C3.nothing-skips-or-masks/step-if-{step}",
+                        set_on(step, "if", "false"),
+                        f"step `{step}`: `if:` is prohibited",
+                    )
+                )
+                if step != "trunk":
+                    cases.append(
+                        (
+                            f"C3.nothing-skips-or-masks/step-continue-on-error-{step}",
+                            set_on(step, "continue-on-error", True),
+                            f"step `{step}`: `continue-on-error:` is prohibited",
+                        )
+                    )
+            return cases
+
         return [
             (
                 "C0.permissions-pinned-at-root/write-all",
@@ -3209,6 +3332,25 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 ),
                 "step `guard-launcher-path`: run body digest mismatch",
             ),
+            # ---- three SURVIVORS of the shipped checker (codex, r44), each reproduced first --------
+            (
+                "C2.types-required/not-the-exact-set",
+                lambda w: _on(w)["pull_request"].update(
+                    {"types": ["opened", "reopened", "edited"]}
+                ),
+                "types: the activity set is not exactly `opened, synchronize, reopened, edited`",
+            ),
+            (
+                "C8.step-sequence-allowlist/sibling-key",
+                set_on("guard-empty-diff", "timeout-minutes", 1),
+                "step `guard-empty-diff`: unlisted key `timeout-minutes`",
+            ),
+            (
+                "C8.checkout-sha-pinned/tag",
+                set_on("checkout", "uses", "actions/checkout@v4"),
+                "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA",
+            ),
+            *per_step(),
         ]
 
     def _canary_mutants(self):

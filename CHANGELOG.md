@@ -17,6 +17,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2780: three gaps in the shipped `trunk-check` contract checker (codex, plan r44).**
+  Each was reproduced before it was fixed. **C2** accepted any `types:` containing `edited`, so
+  `types: [edited]`, which drops `synchronize` so the gate never re-runs on a new commit, passed. It now
+  requires exactly `opened, synchronize, reopened, edited`. **C8** blacklisted six step keys instead of
+  freezing the complete step mapping, so a sibling key such as `timeout-minutes` passed. It is now a
+  per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
+  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. Cell 11's
+  per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
+  and `continue-on-error` on every step) is now declared in the registry and executed: 27 new cases,
+  all valid workflows.
 - **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
   Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry
   prescribed three that GitHub would reject outright: a root-level `schedule` (not a root key),

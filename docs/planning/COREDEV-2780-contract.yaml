@@ -298,6 +298,13 @@ obligations:
           Its failure mode is OMISSION. A validator that checks the value only when the key is present
           rejects the reduced-set mutant while ACCEPTING an absent one — both cases are required.
         diagnostic: "types: key is absent"
+      - id: C2.types-required/not-the-exact-set
+        op: set
+        side: local
+        target: $.on.pull_request.types
+        payload: "[opened, reopened, edited]"
+        validity: keeps `edited` but drops `synchronize`, so the gate never re-runs on a new commit; the checker tested only for `edited` and passed it (codex, r44)
+        diagnostic: "types: the activity set is not exactly `opened, synchronize, reopened, edited`"
 
   # ------------------------------------------------------------------ C3: the job ----------------
   - id: C3.job-mapping-allowlist
@@ -414,6 +421,69 @@ obligations:
         payload: "true"
         validity: step scope rewrites the step's reported conclusion to success
         diagnostic: "step `trunk`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-checkout
+        op: set
+        side: local
+        target: steps[checkout].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        diagnostic: "step `checkout`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-checkout
+        op: set
+        side: local
+        target: steps[checkout].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `checkout`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-guard-empty-diff
+        op: set
+        side: local
+        target: steps[guard-empty-diff].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-empty-diff`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-empty-diff
+        op: set
+        side: local
+        target: steps[guard-empty-diff].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-empty-diff`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-trunk
+        op: set
+        side: local
+        target: steps[trunk].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        diagnostic: "step `trunk`: `if:` is prohibited"
 
   - id: C3.no-defaults-run
     clause: C3
@@ -794,6 +864,13 @@ obligations:
         payload: x
         validity: a valid complete-step key outside the allowlist
         diagnostic: "step `guard-empty-diff`: unlisted key `id`"
+      - id: C8.step-sequence-allowlist/sibling-key
+        op: set
+        side: local
+        target: steps[guard-empty-diff].timeout-minutes
+        payload: 1
+        validity: the COMPLETE step mapping is frozen; a six-key blacklist passed any other key (codex, r44)
+        diagnostic: "step `guard-empty-diff`: unlisted key `timeout-minutes`"
 
   - id: C8.run-bodies-frozen
     clause: C8
@@ -882,6 +959,111 @@ obligations:
           Frozen by C8 while revision 16 mutated it NOWHERE, so a validator checking body digest,
           `if`, `continue-on-error` and `shell` but forgetting `working-directory` passed every case.
         diagnostic: "step `guard-empty-diff`: complete step mapping changed"
+      - id: C8.run-bodies-frozen/creates-c6-path-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: install -D /bin/true tools/trunk
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: creates a prohibited launcher path"
+      - id: C8.run-bodies-frozen/github-env-trunk-path-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: echo X >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-env-bash-env-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-path-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: echo X >> "$GITHUB_PATH"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_PATH"
+      - id: C8.run-bodies-frozen/changed-shell-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].shell
+        payload: sh
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `shell:` is prohibited"
+      - id: C8.run-bodies-frozen/changed-working-directory-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].working-directory
+        payload: /tmp
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `working-directory:` is prohibited"
+      - id: C8.run-bodies-frozen/creates-c6-path-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: install -D /bin/true tools/trunk
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: run body digest mismatch"
+      - id: C8.run-bodies-frozen/github-env-trunk-path-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: echo X >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-env-bash-env-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-path-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: echo X >> "$GITHUB_PATH"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: writes to $GITHUB_PATH"
+      - id: C8.run-bodies-frozen/changed-shell-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].shell
+        payload: sh
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `shell:` is prohibited"
+      - id: C8.run-bodies-frozen/changed-working-directory-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].working-directory
+        payload: /tmp
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `working-directory:` is prohibited"
+      - id: C8.run-bodies-frozen/no-op-body-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: ":"
+        validity: "the OMISSION of the body, as a valid workflow: removing or emptying run: is a schema error (actionlint), so the guard is neutralised with a no-op"
+        diagnostic: "step `guard-resolver-digest`: run body digest mismatch"
+      - id: C8.run-bodies-frozen/no-op-body-guard-empty-diff
+        op: set
+        side: local
+        target: steps[guard-empty-diff].run
+        payload: ":"
+        validity: "the OMISSION of the body, as a valid workflow: removing or emptying run: is a schema error (actionlint), so the guard is neutralised with a no-op"
+        diagnostic: "step `guard-empty-diff`: run body digest mismatch"
+      - id: C8.run-bodies-frozen/no-op-body-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: ":"
+        validity: "the OMISSION of the body, as a valid workflow: removing or emptying run: is a schema error (actionlint), so the guard is neutralised with a no-op"
+        diagnostic: "step `guard-launcher-path`: run body digest mismatch"
 
   - id: C8.checkout-inputs-allowlist
     clause: C8
@@ -972,6 +1154,24 @@ obligations:
         payload: "true"
         validity: present but valued to the hazard
         diagnostic: "checkout inputs: `persist-credentials` must be false"
+
+  - id: C8.checkout-sha-pinned
+    clause: C8
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      `actions/checkout` is SHA-pinned (C8: "Exactly: `actions/checkout` (SHA-pinned)"). Only its
+      inputs were checked, so a tag such as `@v4` passed the contract (codex, r44). The FORM is frozen:
+      `actions/checkout@<40 hex>`. The exact SHA is Dependabot's to move.
+    target: steps[checkout].uses
+    cases:
+      - id: C8.checkout-sha-pinned/tag
+        op: set
+        side: local
+        target: steps[checkout].uses
+        payload: actions/checkout@v4
+        validity: a mutable tag where the contract requires a commit SHA
+        diagnostic: "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA"
 
   # ------------------------------------------------------------------ C9: the action pin ---------
   - id: C9.action-pinned-by-sha

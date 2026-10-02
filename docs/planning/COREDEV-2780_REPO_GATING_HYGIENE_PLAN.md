@@ -1,20 +1,32 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 42
+**Status:** Planning, revision 43
 **Implementation status:** shipped through M3 (v2.8.26). The plan was respecified AFTER M3 landed, and
 the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
-* cell 11 — YAML mutants are hand-written, not generated from the registry, and ten of their asserted
-  diagnostics differ from the registry's; the case-validity rule is not executed; the `(side, form)`
-  resolver family runs as hard-coded helper tests, not as the 24 registry-expanded executions;
+* cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
+  asserted diagnostics differ from the registry's (ten required-entry, one canary); the case-validity
+  rule is not executed; the `(side, form)` resolver family runs as hard-coded helper tests, not as the
+  24 registry-expanded executions;
 * cell 11 / cell 15 — resolution is not "once, before entry selection": the required and canary
   comparisons each call `_resolved_or_recorded`, which re-resolves on every call; and cell 15's
   sentinel data-flow test does not exist. The resolver itself IS entry-agnostic
   (`_resolve_ref_name(ref_name, default_branch)`);
-* cell 8 — the r33 root-operand controls for the pre-commit surface are source assertions and direct
-  detector calls, not real pre-commit executions; and the SessionStart runtime half has not witnessed
-  the DISPATCHER invoking the detector (see cell 8);
+* cell 8 — the pre-commit half is not proved through Git's entry point: no test makes a real
+  `git commit` that a stale install warns on and still permits, or runs the silent rows that way; the
+  r33 root-operand controls are source assertions and direct detector calls; the bucket boundary is
+  tested by planting prior-bucket markers, not by invoking one session across a controlled boundary;
+  and the SessionStart runtime half has not witnessed the DISPATCHER invoking the detector (see cell 8);
+* cell 13 — its tests use an empty repository and a fake Trunk with configured exit statuses. The
+  clean-index/dirty-worktree pair, the index and worktree mutation checks, and a representative clean
+  slow path are not implemented. The "slow path" is a one-second fake sleep;
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
+
+**Fixed in revision 43, not outstanding** (codex, r44): three checker SURVIVORS, each reproduced first:
+C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
+keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
+checked for a SHA pin (`@v4` passed). Cell 11's per-step minimum is now declared in the registry and
+executed: 27 cases added, every one actionlint-clean apart from the permitted `if-cond` notes.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -199,6 +211,20 @@ the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracke
 > and cell 8 naming the rollout record for a SessionStart invocation that lives in a different
 > artifact and does not witness the dispatcher. It also caught a false chronology claim in r41's
 > entry. **Revision 42** names the actionlint invocation in the rule and corrects all of these.
+> **r44** `540ceba` (revision 42), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2). codex confirmed
+> revision 42's actionlint and evidence corrections. Its two blockers were these. **Cell 11 demanded
+> per-step coverage the registry could not generate**: the four injection forms, `shell` and
+> `working-directory` on one run step only, no step-level `if:`, and `continue-on-error` on one step.
+> And **§6.1's new switch recipe was still incomplete**: it missed C3's own permissions pin, the
+> `action_inputs_digest` and the parity harness. It also reported **three checker SURVIVORS, which
+> reproduced here before any fix**: `types: [edited]`, a sibling `timeout-minutes` step key, and
+> `actions/checkout@v4` all returned no contract problems. Those are real gaps in shipped enforcement,
+> not document drift. **Revision 43** fixes the checker (exact activity set; complete step mapping as a
+> per-kind allowlist; checkout SHA pin), declares and executes the 27 cases cell 11 requires (the three
+> survivor cases failed against the UNFIXED checker before the fix; the 24 per-step cases were already
+> killed by it, so that gap was coverage, not enforcement), and stops giving §6.1 a recipe. It also lists codex's
+> further unimplemented items (cell 8 through Git's entry point and across a real bucket boundary;
+> cell 13's behavioural fixtures), and settles "omission" as a no-op body and cell 2's M3/M4 split.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1388,9 +1414,9 @@ alternative turned out to be complementary rather than competing.
          sacrificial PR is **`blocked`** with the reason naming `trunk-check`, and that a green PR is
          **`clean`**. **No merge endpoint is called, on either half** (codex, r33): the red half's
          failure mode is landing that PR on a protected base, and the green half would advance a base
-         tip this milestone's own readback requires unchanged. Every other observation in this plan is
-         pre-requirement and verifies what the workflow and rule *contain* — this is the only one that
-         verifies the ruleset's *behaviour*.
+         tip this milestone's own readback requires unchanged. Every other observation in this plan, except
+         cell 2's M4 rule-satisfaction half, is pre-requirement and verifies what the workflow and rule
+         *contain* — this is the only one that verifies the ruleset's *behaviour* as an enforcement.
       2. **Rehearse the §6.2a rollback — as a SUBSTITUTION, so the repository is never ungated.**
          In one PUT, replace the `trunk-check` entry with a placeholder required context that
          **nothing produces** (`trunk-check-rollback-rehearsal`); observe read-only that the red PR is
@@ -1566,6 +1592,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      land, then **retarget it to the other base** and assert the context that satisfies the rule is a
      **new run against the new base's range** — not the earlier same-SHA result. Without `edited` in
      the set the old run persists and this case fails, which is the discrimination the clause needs.
+     **The case splits across two milestones** (codex, r44), as the rollout record already does: the
+     range re-resolution is observable at M3, and "the context that SATISFIES THE RULE" only from M4,
+     when `trunk-check` becomes a required context. Until then no rule is satisfied by it.
 3. **The gate does not over-reach** — *asserted from M3*, the milestone at which the job ships without
    `continue-on-error`. Revision 11's reason for the qualification — that M2's `continue-on-error: true`
    made the job conclude green — rests on the premise cell 2 now corrects (codex, r39). Asserting from
@@ -1708,7 +1737,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      or locally-newer install cannot train people to ignore the warning.
    * **`SessionStart`** cannot be proved by the planned suite (codex, r10, refined r11): the
      repository *does* install Claude Code later in `plugin-ci.yml`, but **the Python suites run
-     before that step**, and §7 leaves the workflow unchanged — so any "real entry point" assertion there would be a parser or
+     before that step**, and this plan does not reorder `plugin-ci.yml` (its only change is installing
+     PyYAML; see §7) — so any "real entry point" assertion there would be a parser or
      emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly.**
 
      **CI asserts the DECLARATION**, against the documented stdin contract — rewritten as a list
@@ -1800,7 +1830,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     obligation needing several). **Each mutant must be constructible, must change the intended
     property, and must fail with its OWN diagnostic.** **Constructible means GitHub would accept the
     workflow:** `actionlint -shellcheck= -pyflakes=` reports nothing for it, except the style-only
-    `if-cond` on `job-if`, whose constant `false` IS the hazard. **The flags are part of the rule**
+    `if-cond` on the six `if: false` cases (`job-if` and the five `step-if-*`), whose constant `false`
+    IS the hazard. **The flags are part of the rule**
     (codex, r43). Validity of the WORKFLOW is the criterion, not lint of the scripts embedded in it.
     With ShellCheck enabled, the three `shell: sh` mutants (`C3.no-defaults-run/workflow` and `/job`,
     `C8.run-bodies-frozen/changed-shell`) report SC3040/SC3001, because they run the frozen Bash
@@ -1941,7 +1972,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       arbitrary key outside the allowlist**; on **each of the five steps** an `if: false` and a
       `continue-on-error: true`; on the **three `run:` steps only** — the C6a digest guard, the
       empty-diff guard and the C6 launcher guard — a changed `shell`, a changed `working-directory`,
-      an exact-form mutation of each body, and an **omission** of each; and a `defaults.run` at workflow and at job level.
+      an exact-form mutation of each body, and an **omission** of each — as a no-op body (`run: ":"`),
+      since removing or emptying `run:` is a schema error and would break the validity rule below; and
+      a `defaults.run` at workflow and at job level.
 
       **`shell` is valid only on `run:` steps** (codex, r17): `actions/checkout` and the Trunk action
       are `uses:` steps, where `actionlint` rejects `shell` as an unexpected key — so revision 16's
@@ -2191,10 +2224,14 @@ permission alone, the deciding factor.
 annotating, and the job's token scope stays minimal. **The accepted cost, restated so it is not
 rediscovered as a defect later:** findings are reachable only from the job log or the
 `trunk-annotations` artifact, never inline on the diff. If that proves to make the gate unusable in
-practice, the remedy is a scope change to option (a), not a redesign. It is NOT a one-line permissions
-edit (codex, r43): `save-annotations: true` keeps selecting artifact output whatever the token scope,
-so the switch is the permissions edit, plus removing `save-annotations`, plus amending the registry's
-`C4.save-annotations-required` obligation, plus cell 10.
+practice, the remedy is a scope change to option (a), not a redesign. **It is a planned change with its own
+plan revision and gate, not a local edit.** Revision 42 wrote a recipe for it, and the recipe was still
+incomplete (codex, r44), so this plan no longer gives one. Known touch points, for scoping and NOT a
+complete list: the job's `permissions` (C0 and C3 pin `contents: read` independently, and C3 rejects
+`{contents: read, checks: write}`); `save-annotations`, which keeps selecting artifact output whatever
+the token scope, and its `C4.save-annotations-required` obligation; the registry's
+`action_inputs_digest`, which the parity harness checks and which `used['save-annotations']` indexes
+directly; and cell 10.
 
 ### 6.2 — Adding a required context to ruleset `Control`
 
