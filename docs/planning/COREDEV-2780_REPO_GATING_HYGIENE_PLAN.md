@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 39
+**Status:** Planning, revision 40
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -146,6 +146,18 @@
 > CONFIGURED membership, rebinds cell 5 to a finding the REQUIRED literal keeps (ShellCheck SC2250), and
 > corrects cells 2-3's premise. The sweep now runs on whitespace-joined text and was tested against a
 > re-inserted wrapped residue.
+> **r40** `5a0c2b0` (revision 39), both arms, concurrently, `TREE=clean`: **agy `APPROVE`**, codex
+> `REQUEST_CHANGES` (1). **Both confirmed all five revision-39 repairs against the files on disk**, and
+> codex found no round-39 finding still open. codex re-derived the TOML freeze membership, the cell-5
+> SC2250 hashes and the continue-on-error semantics independently. Its one blocker is OLDER than
+> revisions 37-39: §6.2a held M4a's rollback rehearsal to M4's "exactly one semantic difference (the
+> `trunk-check` entry appearing or disappearing)". But revision 32 had made the rehearsal a
+> SUBSTITUTION, two named entries per PUT, so a correct rehearsal could not pass its own mandatory
+> comparison — the cell that cannot pass, eight revisions undetected. **Revision 40** gives each write
+> its own named difference: one entry for an incident rollback, the substitution pair and its reverse
+> for the rehearsal's two PUTs, and makes the DIRECTION of each named entry a separate assertion:
+> executed against sample payloads, a subtract-and-compare rule alone passed a PUT that left the
+> repository UNGATED. M4a's existing net-zero final-state check is unchanged.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -2180,10 +2192,27 @@ head while `main` is unmergeable. This repository has already shipped that incid
   is that the red PR's blocking reason **stops naming `trunk-check`**, read-only. An untested rollback
   is a plan, not a remedy. *(A real incident rollback is the plain removal below — there the ungated
   state is the intended outcome, because the gate is what is broken.)*
-* **Both ruleset writes here carry M4's readback discipline** — the rehearsal in M4a and any real
-  incident rollback. Capture the canonical ruleset before and after, admit **exactly one semantic
-  difference** (the `trunk-check` entry appearing or disappearing), and confirm every other rule,
-  enforcement setting, bypass list and target condition is byte-identical. An emergency edit made
+* **Every ruleset write here carries M4's readback discipline, each with its OWN named difference**
+  (codex, r40). Capture the canonical ruleset before and after each write, then make TWO assertions,
+  both required:
+  1. **Direction.** Each named entry is absent and present on exactly the sides stated below.
+  2. **Remainder.** Subtract the named entries from both documents and require the remainders to be
+     equal: every other rule, enforcement setting, bypass list and target condition byte-identical.
+
+  The remainder check alone is NOT enough. Executed against sample payloads, it passes a PUT that adds
+  the placeholder and keeps `trunk-check`, and a PUT that removes `trunk-check` and adds nothing —
+  the UNGATED state. Direction catches both. Remainder catches a payload that also drops another
+  required context. The named entries differ by write:
+  * **a real incident rollback** — **exactly one**: the `trunk-check` entry disappears;
+  * **M4a's substitution PUT** — **exactly two, in the same required-status-check rule**: `trunk-check`
+    disappears AND `trunk-check-rollback-rehearsal` appears;
+  * **M4a's restore PUT** — the reverse pair: the placeholder disappears AND `trunk-check` reappears
+    with its expected `integration_id`.
+
+  Revision 32 made the rehearsal a substitution and left this bullet demanding one difference for both
+  writes. A correct rehearsal therefore failed its own comparison: subtracting `trunk-check` alone
+  leaves the placeholder in one snapshot. M4a's mandatory final state separately requires the NET
+  result to equal the pre-M4a bytes. An emergency edit made
   under pressure is *more* likely to carry an accidental change, not less, and this plan already
   requires that discipline of the M4 write that is made calmly.
 * **Then re-enter at M3** — the gate returns only through the same evidence path that admitted it.
