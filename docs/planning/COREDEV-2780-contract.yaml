@@ -313,7 +313,11 @@ obligations:
     entries: [required, canary]
     statement: >-
       The job's keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name`
-      (cell 14's effective check name, which takes precedence over the job id when present).
+      (cell 14's effective check name, which takes precedence over the job id when present). One
+      exception per entry, stated here because the checker implements both: the CANARY additionally
+      carries the permanent job-scoped `continue-on-error: true` that C16 REQUIRES, and the required
+      workflow carries it only at M2 (the advisory exemption). Without the canary exception this
+      allowlist and C16 could not both hold (codex, r49).
     target: $.jobs.<job>
     cases:
       - id: C3.job-mapping-allowlist/arbitrary-key
@@ -485,39 +489,53 @@ obligations:
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
         diagnostic: "step `trunk`: `if:` is prohibited"
 
-  - id: C3.effective-context-pinned
+  - id: C3.effective-context-pinned-required
     clause: C3
     kind: yaml
-    entries: [required, canary]
+    entries: [required]
     statement: >-
-      Each entry's EFFECTIVE context, its job `name` or else its job ID, equals its declared context:
-      `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
-      the status context a job emits. Checking only the job ID let a canary renamed `validate` emit a
-      REQUIRED context without running the contract suites (codex, r46).
+      The required entry's EFFECTIVE context, its job `name` or else its job ID, equals `trunk-check`. `name:`
+      decides the status context a job emits. Checking only the job ID let a canary renamed `validate` emit
+      a REQUIRED context without running the contract suites (codex, r46). Split per entry because each
+      case's payload and diagnostic are entry-specific: one obligation over both entries made a generated
+      mutant change nothing, or report the other entry's diagnostic (codex, r49).
     target: $.jobs.<job>.name
     cases:
-      - id: C3.effective-context-pinned/required-named-validate
+      - id: C3.effective-context-pinned-required/named-validate
         op: set
         side: local
         target: $.jobs.<job>.name
         payload: validate
         validity: the required job would stop emitting `trunk-check` and would emit `validate` instead
         diagnostic: "job: effective context `validate` is not `trunk-check`"
-      - id: C3.effective-context-pinned/required-named-as-canary
+      - id: C3.effective-context-pinned-required/named-as-canary
         op: set
         side: local
         target: $.jobs.<job>.name
         payload: trunk-check-push
         validity: the two entries would emit the same context
         diagnostic: "job: effective context `trunk-check-push` is not `trunk-check`"
-      - id: C3.effective-context-pinned/canary-named-validate
+
+  - id: C3.effective-context-pinned-canary
+    clause: C3
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary entry's EFFECTIVE context, its job `name` or else its job ID, equals `trunk-check-push`. `name:`
+      decides the status context a job emits. Checking only the job ID let a canary renamed `validate` emit
+      a REQUIRED context without running the contract suites (codex, r46). Split per entry because each
+      case's payload and diagnostic are entry-specific: one obligation over both entries made a generated
+      mutant change nothing, or report the other entry's diagnostic (codex, r49).
+    target: $.jobs.<job>.name
+    cases:
+      - id: C3.effective-context-pinned-canary/named-validate
         op: set
         side: local
         target: $.jobs.<job>.name
         payload: validate
         validity: a passing canary would satisfy the REQUIRED `validate` context on its SHA
         diagnostic: "job: effective context `validate` is not `trunk-check-push`"
-      - id: C3.effective-context-pinned/canary-named-as-required
+      - id: C3.effective-context-pinned-canary/named-as-required
         op: set
         side: local
         target: $.jobs.<job>.name

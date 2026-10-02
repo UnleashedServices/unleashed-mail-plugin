@@ -3397,12 +3397,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             *per_step(),
             # ---- the EFFECTIVE context (codex, r46): `name:` decides what context a job emits ------
             (
-                "C3.effective-context-pinned/required-named-validate",
+                "C3.effective-context-pinned-required/named-validate",
                 lambda w: _job(w).update({"name": "validate"}),
                 "job: effective context `validate` is not `trunk-check`",
             ),
             (
-                "C3.effective-context-pinned/required-named-as-canary",
+                "C3.effective-context-pinned-required/named-as-canary",
                 lambda w: _job(w).update({"name": CANARY_CONTEXT}),
                 "job: effective context `trunk-check-push` is not `trunk-check`",
             ),
@@ -3457,12 +3457,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             (
                 # A passing canary named `validate` would emit a REQUIRED context without running the
                 # contract suites (codex, r46). The job ID never changed, so the ID check passed.
-                "C3.effective-context-pinned/canary-named-validate",
+                "C3.effective-context-pinned-canary/named-validate",
                 lambda w: _job(w).update({"name": "validate"}),
                 "job: effective context `validate` is not `trunk-check-push`",
             ),
             (
-                "C3.effective-context-pinned/canary-named-as-required",
+                "C3.effective-context-pinned-canary/named-as-required",
                 lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
                 "job: effective context `trunk-check` is not `trunk-check-push`",
             ),

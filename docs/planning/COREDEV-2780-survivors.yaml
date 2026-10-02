@@ -318,8 +318,8 @@ survivors:
 
   - id: survivor/context-named-validate
     covered_by:
-      - C3.effective-context-pinned/canary-named-validate
-      - C3.effective-context-pinned/required-named-validate
+      - C3.effective-context-pinned-canary/named-validate
+      - C3.effective-context-pinned-required/named-validate
     found_in_round: r46
     survived_formulation: >-
       The canary's job ID was checked, and its `name:` was not. `name:` decides the emitted context.

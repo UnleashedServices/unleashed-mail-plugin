@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 46
+**Status:** Planning, revision 47
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -281,6 +281,21 @@ assignment; until revision 44 all three appended `echo X`.
 > *Three survivors in a row (r45-r47) have the same root: a check that inspected the FIRST occurrence and
 > never asked how many there were. For a duplicate step, a sibling job, and the job `name` behind the job
 > ID, the fix was the same: count what can repeat, and pin what selects.*
+> **r48** `96c2f94` (revision 46), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES`, a double approval.
+> codex constructed no further bypass and confirmed all 38 additions. CI was fully green at `500afa4`,
+> `darwin-suite` included. **r49, a byte-identical REPRODUCTION with neutral prompts**: agy `APPROVE`
+> again, **codex `REQUEST_CHANGES` (3)**. It did not reproduce, the second time this campaign (after r42).
+> (1) **M4a's failure recovery reopened the merge race**: "roll back to pre-M4" is the ungated state,
+> reached with the red PR still open. (2) **C3's job allowlist and C16 could not both hold**: the
+> registry applied "and nothing else" to the canary, which C16 requires to carry job-scoped
+> `continue-on-error`. The checker had the exception and the authority did not. (3) **Revision 45's
+> context obligation was not generatable**: its four cases were entry-specific under an obligation
+> declaring both entries. A sweep of all 110 mutants across every declared entry found exactly those
+> four combinations failing, and nothing else. Three file claims were also false (the Overview's
+> "today", §3b's "no mode operand", and §7's "only PyYAML"). **Revision 47** orders M4a's recovery
+> fail-closed first, closes the PR before any ungating write, states the canary exception in the clause
+> and the registry, and splits the context obligation per entry, so that 0 of 110 combinations fail. It
+> also corrects the three claims.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -483,7 +498,7 @@ here so that observation resolves rather than re-opens.
 Three defects that share one shape: **a static assertion about the tree, or about which bytes are
 running, that is either absent, self-invalidating, or authoritative over the truth it should track.**
 
-| ticket | defect | today |
+| ticket | defect | at planning (the ORIGINAL baseline, not the current state) |
 |---|---|---|
 | COREDEV-2780 | 20 trunk linters configured, wired into **nothing** | bad lints merge freely |
 | COREDEV-2798 | the COREDEV-2619 inventory pins line numbers in files that are *prepended to* | **every release** reds the test |
@@ -794,7 +809,11 @@ own non-required context.
 
   **C3 — the JOB mapping is an allowlist, and nothing skips or masks on any step.** The job's own
   keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name` (cell 14's
-  effective check name, which takes precedence over the job id when present) — and nothing else.
+  effective check name, which takes precedence over the job id when present) — and nothing else,
+  **with one exception per entry** (codex, r49): the CANARY also carries the permanent job-scoped
+  `continue-on-error: true` that C16 REQUIRES, and the required workflow carries it only at M2 (the
+  advisory exemption). Without the canary exception this allowlist and C16 cannot both hold. The checker
+  implemented the exception; the authority omitted it.
   **Each workflow declares exactly ONE job** (both arms, r47): every check here reads the first job, so
   without this a sibling appended under `jobs:` is never inspected at all.
   **The EFFECTIVE context is pinned per entry** (codex, r46): the job `name`, or else the job ID, must
@@ -1085,7 +1104,11 @@ ambient variable the other does not have.
 Earlier revisions had pre-commit read the *staged* manifest and `SessionStart` the *worktree*; both
 are wrong for the same reason Table A now states — the working tree and the index are where the
 version-bump rule *raises* the version, so either would warn on the healthy state for a whole
-branch's life. **The detector therefore has NO mode operand at all** (codex, r24). Revision 22 kept
+branch's life. **The detector therefore has NO COMPARISON-SOURCE mode** (codex, r24). It does take a second operand,
+`--session-start`, which `.claude/settings.json` passes and the pre-commit hook does not. That operand
+selects only the hook PROTOCOL (JSON on stdin, deduplication, the `systemMessage` envelope). WHAT is
+compared is identical on both surfaces. Revision 46 said "no mode operand at all", which was false of
+the code (codex, r49). Revision 22 kept
 one and redefined it as selecting "which installs to report on" without ever defining that mapping;
 revision 23 deleted one site of the old semantics and left two more standing. There is nothing for a
 mode to select — both surfaces compare the *same* installed record against the *same* `origin/main`
@@ -1497,8 +1520,17 @@ alternative turned out to be complementary rather than competing.
          enforce, asserted as though it could. Keeping a placeholder context that nothing satisfies
          makes the interval **fail-closed**: every PR stays blocked throughout, auto-merge included, so
          the guarantee no longer depends on nobody acting for the duration.
-      Both outcomes land in the rollout evidence artifact. **If either fails, roll the ruleset back to
-      its pre-M4 canonical state** and return to M3.
+      Both outcomes land in the rollout evidence artifact. **If either fails, recover in THIS order**
+      (codex, r49). Revision 46 said "roll the ruleset back to its pre-M4 canonical state", which holds
+      neither `trunk-check` nor the placeholder. That is the ungated state, reached with the deliberately
+      red PR still open and its other required checks green, so it reopened the merge race the
+      substitution exists to close, auto-merge included.
+      1. **Stay fail-closed first.** Mid-rehearsal, keep the placeholder. Otherwise restore the
+         pre-M4a canonical state: `trunk-check` present, no placeholder. Either way, under §6.2a's
+         readback for that write.
+      2. **Close the sacrificial PR**, and confirm it is closed, before any write that could ungate.
+      3. **Only then**, and only if the failure shows the gate itself is broken, perform §6.2a's incident
+         rollback to the pre-M4 state (its one-entry readback), and return to M3.
 
       **M4a TOUCHES THE LIVE RULESET AND MUST BE INTERRUPTION-SAFE** (codex, r30 then r33). Step 2
       rewrites the required-context list, so an interruption between its two PUTs leaves `Control` in
@@ -2515,9 +2547,11 @@ hook and the canary still run `taplo lint`.
   here, because three independent enumerations of this file's obligations have already drifted apart
   once. Created by M2b, asserted by cell 16. Revision 20 required
   this file to exist and listed it nowhere (sweep).
-* `.github/workflows/plugin-ci.yml` — changed by this ticket ONLY to install PyYAML for the contract
-  cells: two steps labelled COREDEV-2780, one in `validate` and one in `darwin-suite` (codex, r43
-  corrected "unchanged"). It keeps its `workflow_dispatch`, which is exactly why `trunk-check` may not
+* `.github/workflows/plugin-ci.yml` — changed by this ticket for its own CI needs, and nothing that
+  hosts the gate (codex, r43 corrected "unchanged", and r49 corrected "only PyYAML"). Those needs are:
+  PyYAML installs for the contract cells, in `validate` and `darwin-suite`; the pinned mypy install,
+  with a `pinned-mypy-bin` PATH shim, so the 3.9-floor cell cannot skip; and ShellCheck coverage
+  extended to `scripts/ci/*.sh`. It keeps its `workflow_dispatch`, which is exactly why `trunk-check` may not
   live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
   `:358` updated
