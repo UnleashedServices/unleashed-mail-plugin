@@ -2,7 +2,7 @@
 
 **Tickets:** COREDEV-2850 (High, blocks COREDEV-2780 M4) · COREDEV-2860 (Highest, security)
 **Epic:** COREDEV-2485 · **Branch:** `fix/COREDEV-2850-formatter-overreach` · **Base:** `main` (`5f877ec`)
-**Status:** planning — not implemented
+**Status:** implementing — plan gate CLOSED BY MAINTAINER DECISION after round 13 (2026-10-02); NOT passed. See §6 step 1.
 
 ---
 
@@ -910,6 +910,15 @@ meant.
 
 1. This plan through the mandatory dual-review gate (`/unleashed-mail:gemini-review` +
    `/unleashed-mail:codex-review`, then `/unleashed-mail:review-synthesis`) — **in this worktree**.
+   **OUTCOME: CLOSED BY MAINTAINER DECISION, NOT PASSED** (2026-10-02, after round 13, revision 13).
+   Codex returned REQUEST_CHANGES on every round from 5 to 13; gemini approved rounds 7-11 and 13 and
+   requested changes at 12. No Combined APPROVE verdict exists, and `review-synthesis` was not run —
+   there is no approving pair to synthesise. The maintainer treated the DESIGN as settled: the last
+   design-level defect was round 10's forgeable record encoding, and rounds 11-13 found test-coverage and
+   mutation-operator issues, not defects in the procedure. Round 13 was allowed to finish as a check on
+   that premise; none of its findings was a design defect (codex's own 22-rule accounting found every
+   other rule covered). Its findings are carried into step 2a below as obligations on the shipped
+   battery. **Every edit to this document after revision 13 is ungated by construction.**
 2. Implement Part A in this order: workflow → the two-literal split → §A6's harness fixture (validated
    with `--fix` BEFORE anything is pinned to it) → **the re-pins, counted rather than asserted** —
    `ARGUMENTS_LITERAL` in two test modules, the contract's `action_inputs_digest`, and the TWO
@@ -936,6 +945,28 @@ meant.
    became an executed suite the same way. The measurement model is NOT committed alongside the plan: a
    planning script would duplicate the table it measured, and duplicated values go stale. Its value is
    that the model the table was measured on cannot quietly disagree with what ships.
+   **Carried forward from round 13 — obligations on the shipped battery** (codex, r13; none is a design
+   defect, so they are closed in the test suite rather than by another plan round):
+   - **Add the named lexical-outsider instance.** An absolute operand reaching the workspace by another
+     spelling — `/var/...` against an anchor spelled `/private/var/...` — must be absent from
+     membership and recorded OUT OF SCOPE with that exact operand, observed through the aggregate. §B3(1)
+     names it; cell 8(f) has no row for it.
+   - **Re-state the two `Path.resolve()` operators at their true boundary.** Step (ii) refuses `..`
+     BEFORE containment, so a containment-only mutant cannot change rows 3-5. The measured operators
+     resolve the operand — collapsing `..` — and then test containment: two decisions. Either implement a
+     genuinely containment-only operator and measure its set, or name the measured one for what it does.
+   - **Exempt or split the compound encoding operator.** Revision 10's encoding changes member AND tree
+     encoding at once; the two isolated operators beside it already cover each decision. Keep it only as
+     an explicitly-labelled historical regression control, exempt from the one-decision rule.
+   - **Define the read spy's boundary.** It observes CONTENT reads during adjudication and hashing, after
+     the synthetic `trunk.yaml` is loaded, and permits only explicitly named healthy background files. A
+     global spy would catch prerequisite parsing; a blanket background-DIRECTORY exemption could hide a
+     read of the offending nested path.
+   - **State the missing-as-empty-tree mutant's full record**: it emits the empty directory's complete
+     contribution, `["tree", rel, sha256(b"")]`. Changing only the digest while keeping `"missing"` cannot
+     fail row 19.
+   - **Assert the unsupported SUBTYPE**, not only `reason="unsupported-kind"`: §B4 promises the diagnostic
+     names FIFO, socket or device. Carry it as a structured field beside `reason`.
 3. Observe the cells that need a real run on a probe PR, never merged; record under
    `docs/planning/evidence/`. Three constraints the earlier wording left implicit:
    - **Name the probe file and its recorded pre-existing formatter finding** for cell 1. It cannot
