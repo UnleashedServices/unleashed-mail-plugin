@@ -2827,8 +2827,8 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C0.root-mapping-allowlist/arbitrary-key",
-                at_root("schedule", []),
-                "root mapping: unlisted key `schedule`",
+                at_root("run-name", "drift"),
+                "root mapping: unlisted key `run-name`",
             ),
             (
                 "C1.single-event/add-workflow-dispatch",
@@ -2837,7 +2837,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C1.single-event/arbitrary-event",
-                lambda w: _on(w).update({"schedule": []}),
+                lambda w: _on(w).update({"schedule": [{"cron": "0 0 * * *"}]}),
                 "event set: unlisted event `schedule`",
             ),
             (
@@ -2852,7 +2852,9 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C1.event-option-allowlist/arbitrary-option",
-                at_event("branches-ignore", ["x"]),
+                lambda w: _on(w)["pull_request"].update(
+                    {"branches-ignore": _on(w)["pull_request"].pop("branches")}
+                ),
                 "pull_request options: unlisted option `branches-ignore`",
             ),
             (
@@ -2877,7 +2879,17 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C3.job-mapping-allowlist/needs",
-                at_job("needs", ["support"]),
+                lambda w: (
+                    w["jobs"].update(
+                        {
+                            "support": {
+                                "runs-on": "ubuntu-latest",
+                                "steps": [{"run": "exit 1"}],
+                            }
+                        }
+                    ),
+                    _job(w).update({"needs": ["support"]}),
+                ),
                 "job mapping: unlisted key `needs`",
             ),
             (
@@ -3091,7 +3103,10 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C1.single-event/remove-pull-request",
-                lambda w: _on(w).pop("pull_request"),
+                lambda w: (
+                    _on(w).pop("pull_request"),
+                    _on(w).update({"push": {"branches": ["main"]}}),
+                ),
                 "event set: `pull_request` is absent",
             ),
             (

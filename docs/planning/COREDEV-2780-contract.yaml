@@ -115,10 +115,13 @@ obligations:
       - id: C0.root-mapping-allowlist/arbitrary-key
         op: add
         side: local
-        target: $.schedule
-        payload: "cron: '0 0 * * *'"
-        validity: a valid workflow root key outside the allowlist, so a blacklist detector passes it
-        diagnostic: "root mapping: unlisted key `schedule`"
+        target: $.run-name
+        payload: drift
+        validity: >-
+          a VALID workflow root key outside the allowlist, so a blacklist detector passes it. It was
+          `schedule`, which is not a workflow root key at all: actionlint rejects it as a syntax error,
+          so the case failed SCHEMA validation, not the contract (codex, r42)
+        diagnostic: "root mapping: unlisted key `run-name`"
 
   - id: C0.permissions-pinned-at-root
     clause: C0
@@ -194,10 +197,15 @@ obligations:
         validity: the seventh hazard; dispatch autodetects check-mode=all at the pinned SHA
         diagnostic: "event set: unlisted event `workflow_dispatch`"
       - id: C1.single-event/remove-pull-request
-        op: remove
+        op: set
         side: local
-        target: $.on.pull_request
-        validity: omission, whose failure mode a presence-only validator misses
+        target: $.on
+        payload: "{push: {branches: [main]}}"
+        validity: >-
+          omission, whose failure mode a presence-only validator misses. The sole trigger is REPLACED
+          by another valid one, not removed: `on: {}` is not a valid workflow (actionlint: "on" section
+          should not be empty), so plain removal failed schema validation (codex, r42). The
+          replacement's own unlisted-event diagnostic overlaps, which cell 11 permits
         diagnostic: "event set: `pull_request` is absent"
       - id: C1.single-event/arbitrary-event
         op: add
@@ -234,11 +242,14 @@ obligations:
         validity: the sibling narrowing filter; leaves a required context Pending, which blocks
         diagnostic: "pull_request options: `paths-ignore` narrows reachability"
       - id: C1.event-option-allowlist/arbitrary-option
-        op: add
+        op: move
         side: local
-        target: $.on.pull_request.branches-ignore
-        payload: "['wip/**']"
-        validity: a valid unlisted mapping option
+        target: $.on.pull_request.branches
+        payload: to branches-ignore
+        validity: >-
+          a valid unlisted mapping option. GitHub rejects `branches` and `branches-ignore` on one
+          event, so ADDING it beside `branches` failed schema validation (codex, r42); the filter is
+          moved instead, and C2's absent-`branches` diagnostic overlaps, which cell 11 permits
         diagnostic: "pull_request options: unlisted option `branches-ignore`"
 
   # ------------------------------------------------------------------ C2: branches + types -------

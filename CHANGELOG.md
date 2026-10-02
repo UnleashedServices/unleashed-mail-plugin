@@ -17,6 +17,14 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
+  Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry
+  prescribed three that GitHub would reject outright: a root-level `schedule` (not a root key),
+  `branches-ignore` beside `branches`, and removing the only trigger, which leaves `on: {}`. The
+  hand-written suite had drifted from the registry on two more: an empty `on.schedule`, and `needs:`
+  naming a job that did not exist. All five are corrected in `COREDEV-2780-contract.yaml` and
+  `test_trunk_check_workflow.py`, verified by an actionlint 1.7.12 sweep over all 69 mutants.
+  Generating mutants from the registry and executing that check in CI is COREDEV-2869.
 - **`trunk-check` over-reach (COREDEV-2850): the required gate failed clean edits to files that were
   already unformatted.** Trunk evaluates its five `formatter: true` linters (black, isort, prettier,
   shfmt, taplo) whole-file and reports pre-existing formatting debt as NEW on any touched file, so an

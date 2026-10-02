@@ -1,6 +1,10 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 40
+**Status:** Planning, revision 41
+**Implementation status:** shipped through M3 (v2.8.26). Revisions 33-41 respecified parts of cells 11
+and 15 AFTER M3 landed, and the suite has not caught up: YAML mutants are hand-written rather than
+generated from the registry, cell 11's case-validity rule is not executed, and cell 15's sentinel
+data-flow test does not exist. Tracked as COREDEV-2869 (codex, r42).
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -158,6 +162,20 @@
 > for the rehearsal's two PUTs, and makes the DIRECTION of each named entry a separate assertion:
 > executed against sample payloads, a subtract-and-compare rule alone passed a PUT that left the
 > repository UNGATED. M4a's existing net-zero final-state check is unchanged.
+> **r41** `c9499c6` (revision 40), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES` — **the first
+> double approval since r16**. Both confirmed §6.2a's direction-plus-remainder rule passes each
+> correct write and fails every wrong payload they constructed. codex's note, a delayed same-bucket
+> invocation re-creating a just-swept dedup marker, is low-impact and ticketed as COREDEV-2868.
+> **r42**, a byte-identical REPRODUCTION of r41 with neutral prompts: agy `APPROVE` again, **codex
+> `REQUEST_CHANGES`**. The double approval did not reproduce, the fourth time this rule has caught one.
+> codex's blocker: the authoritative registry prescribed three mutants GitHub would reject, which
+> breaks cell 11's own case-validity rule (r17, r21). Verified by actionlint. **A sweep of all 69
+> suite mutants found two more**, where the suite had drifted from the registry. codex also found
+> §1's "Python suites run only in `validate`" false (`darwin-suite` runs them, unrequired), and §3b/§7
+> summarising cell 8's declared `timeout: 5` as a runtime "timeout against a sleeping detector".
+> It also identified that cells 11 and 15 are respecified but not implemented. **Revision 41** fixes
+> the five recipes in the registry AND the suite, defines "constructible" as actionlint-clean, corrects
+> §1, §3b and §7, and states the implementation status at the top, tracked as COREDEV-2869.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -537,7 +555,9 @@ own non-required context.
   authority; cell 11 asserts these clauses by name.
 
 * **THE CONTRACT'S TEETH DEPEND ON `validate` STAYING A REQUIRED CONTEXT.** Every clause below is
-  enforced by the Python suites, which run **only** inside `plugin-ci.yml`'s `validate` job. If that
+  enforced by the Python suites, which run in `plugin-ci.yml`'s `validate` job and again in its
+  `darwin-suite` job. `darwin-suite` is NOT a required context, so it adds no teeth: only `validate`
+  gates a merge (codex, r42 corrected an earlier "only inside `validate`"). If that
   context were ever dropped from ruleset `Control`, a contract-breaking edit to `trunk-check.yml` would
   merge green behind a passing `trunk-check`, and nothing here would notice. **Verified live at
   revision 28**: `Control` requires `validate`, `py39-smoke`, `secret-scan`, `load-check` and
@@ -1147,7 +1167,8 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
 
   Cell 8 exercises the matcher set, `${CLAUDE_PROJECT_DIR}` resolution, **the anchored git lookup
   from an unrelated cwd, and the root OPERAND on BOTH surfaces — pre-commit with that variable unset,
-  empty and pointing at a different repository**, the timeout against a sleeping detector, the dedup
+  empty and pointing at a different repository**, the declared `timeout: 5` literal mutated as an
+  operand (a declaration; CI cannot dispatch a real `SessionStart` to time one), the dedup
   marker under
   concurrent invocation **and aged-marker resumption**, **a filename-hostile `session_id` with a
   hash-removal mutation**, **the bucket-boundary cases and the `604800` mutation**, and the
@@ -1749,7 +1770,15 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     Concretely, one mutant per declared **case** (codex, r9: a single mutant cannot exercise the
     independent parser paths inside a multi-part clause; codex, r15: one per *entry* under-covers any
     obligation needing several). **Each mutant must be constructible, must change the intended
-    property, and must fail with its OWN diagnostic.** It need not satisfy every other clause — the
+    property, and must fail with its OWN diagnostic.** **Constructible means GitHub would accept the
+    workflow:** actionlint reports nothing for it, except the style-only `if-cond` on `job-if`, whose
+    constant `false` IS the hazard. Round 42 found five cases breaking this rule (codex, r42, three in
+    the registry; a sweep found two more in the suite): a root-level `schedule`, `branches-ignore`
+    beside `branches`, an empty `on:` after removing the only trigger, an empty `on.schedule`, and
+    `needs:` naming a job that did not exist. Revision 41 corrects all five. Verified by a one-off
+    sweep, actionlint 1.7.12 over all 69 suite mutants. **The suite does not yet EXECUTE this rule**
+    (COREDEV-2869): `validate` installs actionlint only after the scripts suite runs. It need not
+    satisfy every other clause — the
     clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
     (codex, r14). The generator must at minimum produce:
@@ -2408,8 +2437,8 @@ hook and the canary still run `taplo lint`.
   `${CLAUDE_PROJECT_DIR}` resolution **and the anchored lookup from an unrelated cwd**, the
   `O_EXCL` dedup marker under concurrent invocation **and aged-marker resumption**, **the
   filename-hostile `session_id` and hash-removal mutation**, **the bucket-boundary cases and the
-  `604800` mutation**, the `systemMessage` output shape, and the timeout against a sleeping detector
-  (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower).
+  `604800` mutation**, the `systemMessage` output shape, and the declared `timeout: 5` literal
+  mutated as an operand (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower).
   **The root-operand cases on the pre-commit surface — unset, empty, and naming a different
   repository — belong to `test_precommit_trunk_gate.py`**, which owns that entry point (codex, r33)
 
