@@ -290,14 +290,26 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
    the leaf or an ancestor. `Path.is_symlink()` inspects the final component only, so a leaf-only check
    reads `${workspace}/sym_dir/config.toml` straight through a symlinked `sym_dir` (gemini, r6). This
    step applies to EVERY member, whatever its source — DECLARED paths and `.trunk/configs/**` included.
+   **An absent component ENDS the walk; it does not refuse** (codex, r7). `lstat` raising `ENOENT` or
+   `ENOTDIR` means nothing at or below that component exists, so nothing below it can be a symlink; the
+   member is handed on whole, and an absent OPTIONAL CANDIDATE reaches `_digest_of_member` and
+   contributes its `missing` marker. Any OTHER `lstat` error REFUSES (fail closed). A literal,
+   unconditional `os.lstat` walk raises instead on every absent candidate — `.gitleaksignore`,
+   `zizmor.yaml` — and reds the shipped tree, because optional candidates are absent by definition.
    (v) Hand the surviving member path to `_digest_of_member`.
    **Every ambiguous or link-bearing reference REDS the suite; none is dropped** (codex, r5 P1).
    Resolving for containment would DISCARD `${workspace}/policy/security.toml -> /outside/security.toml`
    — lexically inside, target outside — and a discarded reference never reaches `_digest_of_member`:
    §B4's refusal never fires, `REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS` equals the
    TRUNCATED enumeration so COVERING passes, and every later edit to that target is invisible.
-   **COVERING cannot protect a path enumeration has already thrown away.** Only an operand that is
-   unambiguously outside the anchor is out of scope.
+   **COVERING cannot protect a path enumeration has already thrown away.** Only an operand outside the
+   anchor's LEXICAL namespace is out of scope — and that namespace is a spelling, not an inode (codex,
+   r7). An absolute operand that reaches the workspace by another spelling, `/var/...` against an anchor
+   spelled `/private/var/...`, is recorded OUT OF SCOPE although `samefile()` is true. That is the
+   accepted price of never resolving. It is recorded rather than dropped, and introducing such an
+   operand is itself an edit to `.trunk/trunk.yaml`, whose WHOLE document is frozen — only canonical
+   version specifiers normalise (`_normalised_trunk_config`) — so it moves that digest and needs a
+   reviewed re-pin.
    **None of (ii)-(iv) reds the shipped tree** (verified 2026-10-02): its only two live references,
    `${workspace}/.gitleaks.toml` (`.trunk/trunk.yaml:67`) and
    `${workspace}/.trunk/configs/markdown-link-check.json` (`:77`), contain no `..`, and no member, no
@@ -483,7 +495,9 @@ cell 8's synthetic input. The rule is a MECHANISM, not a property, and it protec
 claims. Production-scoped validation, wherever it runs, passes on a correctly classified tree and reds
 on a misclassified one exactly as the test-level assertion does; that assertion is independently
 required and independently mutated (cell 11c), so an extra copy elsewhere can only ADD failures, never
-remove one. Nor is the rule checkable: rounds 5 and 6 found FOUR placements — a test-environment
+remove one — provided it has no side effect on membership, class bindings or hashed bytes. Validation
+WITH such a side effect is not licensed by this withdrawal: it violates the admissibility, derivation
+and candidate-planting invariants that cells 8(e), 8(a) and 11 assert (codex, r7). Nor is the rule checkable: rounds 5 and 6 found FOUR placements — a test-environment
 predicate, a scope-preserving relocation, disjointness alone, and inlined literal copies of the
 frozensets — each invisible to a name-based call-graph walk, the last reproduced in memory by codex. A
 check that cannot establish its property is not evidence, so revision 6's call-graph check is DELETED
@@ -598,8 +612,8 @@ meant.
       removed shrinking the result — remain as a FLOOR beneath (a)-(c), never as the cell.
    e. **ADMISSIBILITY — the digest is computable for a member in NEITHER frozenset** (codex, r4-r6).
       The references this cell creates are, by design, in neither set, and the class assertions are
-      test-level over the PRODUCTION enumeration (§B4, cell 11c), never a precondition of computing a
-      digest. An implementation that raises, refuses, or silently DROPS such a member fails this cell.
+      test-level over the PRODUCTION enumeration (§B4, cell 11c); classifying the digest call's OWN
+      membership is not a prerequisite of computing its digest (codex, r7). An implementation that raises, refuses, or silently DROPS such a member fails this cell.
       MUTANT: an UNCONDITIONAL COVERING check over the membership of the digest call's OWN argument —
       not over production — must red (e); that is the mutant (e) discriminates (codex, r5 P2,
       confirmed r6). (e) proves admissibility and nothing more. It does not prove — and this plan no
@@ -622,22 +636,33 @@ meant.
       | 5 | climbs above the anchor | `${workspace}/../outside.toml` | REFUSE |
       | 6 | the workspace root | `${workspace}/.` | not a member |
       | 7 | spelling-prefix sibling | `${workspace}_extra/x.toml` | OUT OF SCOPE, recorded |
-      | 8 | ordinary internal reference | `${workspace}/.gitleaks.toml`, a regular file | MEMBER |
+      | 8 | ordinary DERIVED-only reference | `${workspace}/policy/plain.toml`, a regular file, not DECLARED | MEMBER |
+      | 9 | ABSENT ancestor | `${workspace}/no_such_dir/absent.toml`, nothing at either component | MEMBER (`missing` marker) |
 
-      **Row 8 is the positive control, and the table is two-sided because of it.** Rows 1-7 are all
-      refusals or exclusions, so without row 8 an implementation that refuses EVERY internal member
-      passes the table while redding the shipped tree.
-      MUTANTS — each must fail this cell on EXACTLY the rows named. These row sets were EXECUTED, not
-      reasoned (2026-10-02, macOS, with the anchor beneath a `/var -> /private/var` alias); the correct
-      procedure passes all eight rows there.
+      **Rows 8 and 9 are the positive controls, and the table is two-sided because of them.** Rows 1-7
+      are all refusals or exclusions, so without a MEMBER row an implementation that refuses EVERY
+      internal member passes the table while redding the shipped tree.
+      **Row 8 must be DERIVED-ONLY — revision 7 got this wrong** (codex, r7). It used `.gitleaks.toml`,
+      which is DECLARED, breaking this cell's own rule above. Through the aggregate, DECLARED supplies
+      that path whether or not derivation found it, so `DECLARED | DERIVED` contains it under the correct
+      procedure AND under one that discarded the reference: the row could not tell them apart. The
+      revision-7 table was executed against the adjudication function in isolation, which is why it missed
+      this — the row sets below are measured through the AGGREGATE, observed exactly as each row
+      specifies (a MEMBER row observes aggregate membership and nothing else).
+      MUTANTS — each must fail this cell on EXACTLY the rows named. EXECUTED, not reasoned (2026-10-02,
+      macOS, with the anchor beneath a `/var -> /private/var` alias, through `DECLARED | DERIVED`); the
+      correct procedure passes all nine rows there.
+
       | mutant | fails on |
       |---|---|
       | containment by `Path.resolve()`, anchor and operand resolved ALIKE | rows 1-5 — silently DISCARDS 1, 2, 3 and 5; ADMITS 4 as a member |
       | `..` collapsed by `os.path.normpath` before adjudication | rows 3, 4, 5 |
       | LEAF-only `Path.is_symlink()` check | row 2 only |
       | `str.startswith` containment | row 7 only |
+      | unconditional `os.lstat` walk, no absent-component handling | row 9 only — it RAISES `ENOENT` |
+
       **The `Path.resolve()` mutant must resolve both sides alike** (codex, r6). Resolving the operand
-      alone discards every reference on macOS — rows 1-6 AND row 8 — so it fails for the WRONG reason.
+      alone discards every reference on macOS — rows 1-6, 8 AND 9 — so it fails for the WRONG reason.
       Row 8 is what tells the two apart: the alike mutant keeps it, the one-sided one discards it. Row 4
       is refused although harmless: refusing every `..` is what removes the ambiguity, and the shipped
       tree contains none.
