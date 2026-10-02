@@ -135,7 +135,7 @@ confirmed in-memory that the shipped pin matches and a fixture-body change moves
 single-re-pin instruction **cannot pass the full local gate**. The parity re-pin must come AFTER the
 replacement fixture is validated (§A6), never before. And re-pin `_JOB_DIGESTS[("trunk-check.yml","trunk-check")]` → `ba363bdaf13c60d1a19c8b5cee9926f73420a495193c764c57b5ec58ec1b9194`. `_WORKFLOW_LEVEL_DIGESTS["trunk-check.yml"]` does **not** move — do not "fix" the wrong constant |
 | `docs/planning/COREDEV-2780-contract.yaml` | re-pin `action_inputs_digest` `cc125ae6…` → `2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe`; split `C4.arguments-required-literal` into a `required` and a `canary` obligation (or widen `entries:` and give each its own `literal_source`) so cell 11 generates a mutant for the new canary branch; amend the obligation's `statement` and its `/absent` case, which today say absence means "`markdown-link-check` runs in the required job" |
-| `docs/planning/COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md` §6.4 | **the literal's bytes live HERE**, not in the contract yaml. §6.4 must declare BOTH literals and why they differ, and its sentences "That exact scalar is the whole permitted value of the job's `arguments:` input" and "cell 13 asserts the SAME literal in the pre-commit invocation" must be rewritten. Editing a gated `*_PLAN.md` changes the bytes `review-verdict.py` binds to COREDEV-2780's recorded verdict — the cheaper alternative is to move the bytes into the contract yaml as `required_literal` / `canary_literal` keys that a test READS (nothing reads `literal_source:` today) |
+| `docs/planning/COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md` §6.4 | **the literal's bytes live HERE**, not in the contract yaml. §6.4 must declare BOTH literals and why they differ, and its sentences "That exact scalar is the whole permitted value of the job's `arguments:` input" and "cell 13 asserts the SAME literal in the pre-commit invocation" must be rewritten. Editing a gated `*_PLAN.md` changes the bytes `review-verdict.py` binds to COREDEV-2780's recorded verdict — a cheaper SPLIT of authority is to move the bytes into the contract yaml as `required_literal` / `canary_literal` keys that a test READS (nothing reads `literal_source:` today) — but that is **not** an escape from the §6.4 rewrite above (codex, r4): YAML keys do not supersede §6.4's own "whole permitted value" and shared-hook sentences, so EITHER route updates and RE-GATES COREDEV-2780 during this migration. Budget that re-gate; do not plan around it |
 | `docs/planning/evidence/parity-pull_request.json`, `parity-push.json` | RE-RECORDED by a harness run. They carry the OLD canonical form + digest and the old literal in `invocations[1]`. Hand-editing them forges sensor output; **deleting** them is worse — the judge then SKIPS and the module reports `OK (skipped=1)`, silently regressing COREDEV-2780 M2c to "cells 1 and 5 unowned" |
 | `scripts/review/callers-scan-exemptions.tsv` | regenerated LAST in every commit (`python3 scripts/review/generate-callers-exemptions.py`) |
 | `docs/planning/evidence/COREDEV-2780-rollout.json` | cell 3's `stillOpenForM3` residual resolves to COREDEV-2850 and §6 step 4 edits it — so it belongs in this table (codex, r3) |
@@ -417,19 +417,30 @@ exist to close. So:
 | class | membership | anti-truncation guard |
 |---|---|---|
 | **required occupied** | exists in the shipped tree and is load-bearing today — `.gitleaks.toml`, `.github/zizmor.yml`, `.trunk/configs/**` | MUST exist, be tracked, be non-empty, digest `!= sha256(b"")` |
-| **optional candidate** | a declared `direct_configs` path holding nothing today — e.g. `.gitleaksignore`, `zizmor.yaml`, `.checkov.yml` | MUST contribute a `missing` marker; CREATING it must move the digest; it is NOT required to exist |
+| **optional candidate** | a union member that holds nothing in the shipped tree, WHATEVER its source — a declared `direct_configs` path, a DEMOTED `.trunk/configs/**` member, or a DERIVED-only path — e.g. `.gitleaksignore`, `zizmor.yaml`, `.checkov.yml` | MUST contribute a `missing` marker; CREATING it must move the digest; it is NOT required to exist |
 
 **The two sets must be asserted DISJOINT and COVERING** (codex, r3): their intersection is empty and
-their union equals the aggregate's membership. Without both halves a member can be in NEITHER set —
-silently escaping every class guard while still contributing to the digest — or in BOTH, where the
-required and optional rules contradict. Two scope corrections follow: `OPTIONAL_CANDIDATE_MEMBERS` is
-defined as "declared `direct_configs` paths", which cannot accommodate a demoted `.trunk/configs/**`
-member or a future DERIVED-only member, so state the class as a property of the MEMBER rather than of
-its source; and **cell 9's tracked/non-empty guard applies to EXISTING members only** — applied to an
-absent optional candidate it reds the shipped tree, which is the §B3/§B4 contradiction over again.
+their union equals the **PRODUCTION** aggregate's membership — production, because cell 8(e)'s
+synthetic workspace deliberately carries a member in neither set. Without both halves a member can be
+in NEITHER set — silently escaping every class guard while still contributing to the digest — or in
+BOTH, where the required and optional rules contradict. Two scope corrections are ALREADY FOLDED INTO
+the table above and into cell 9, and are recorded here as rationale, not as pending work: the optional
+class is stated as a property of the MEMBER rather than of its source, because "declared
+`direct_configs` paths" cannot accommodate a demoted `.trunk/configs/**` member or a future
+DERIVED-only one; and **cell 9's tracked/non-empty guard applies to EXISTING members only** — applied
+to an absent optional candidate it reds the shipped tree, which is the §B3/§B4 contradiction over
+again.
 
-Both classes are verified THROUGH the aggregate digest, not beside it. The two sets are frozen
-constants in `test_trunk_check_workflow.py` — `REQUIRED_OCCUPIED_MEMBERS` and
+Both classes are verified THROUGH the aggregate digest, not beside it — the cells observe the
+digest MOVING, while the class assertions themselves live in the TEST, over the PRODUCTION member
+enumeration. **The aggregate digest function itself performs no class validation** (codex, r4).
+Were disjointness, covering or the anti-truncation guard enforced inside the digest seam, cell 8
+could never pass: its synthetic workspace deliberately references a DERIVED path that is in NEITHER
+frozen set, so a digest function that validated classes would refuse the very input cell 8 exists to
+create, and cells 8 and 11c would be mutually unsatisfiable. Class validation is therefore scoped to
+the production member set; a synthetic workspace carrying members outside both frozensets is
+ADMISSIBLE by construction. The two sets are frozen constants in
+`test_trunk_check_workflow.py` — `REQUIRED_OCCUPIED_MEMBERS` and
 `OPTIONAL_CANDIDATE_MEMBERS`, both `frozenset` — so a class change is a reviewed source edit rather
 than an emergent property of the tree (gemini, r2).
 
@@ -539,6 +550,12 @@ meant.
       exactly one shape must fail the cell for that shape.
    d. Parse-level checks — stub-to-`[]`, a synthetic second reference appearing, `GITLEAKS_CONFIG`
       removed shrinking the result — remain as a FLOOR beneath (a)-(c), never as the cell.
+   e. **The references this cell creates are members of NEITHER frozenset, by design** (codex, r4).
+      That is admissible: the class assertions are test-level, over the PRODUCTION member
+      enumeration (§B4, cell 11c) — they are not preconditions of the digest function. An
+      implementation that raises, refuses, or silently DROPS a member absent from both frozensets
+      fails this cell. Without (e), cells 8 and 11c are mutually unsatisfiable and the contradiction
+      surfaces only once someone builds them.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
@@ -560,9 +577,13 @@ meant.
     and owned by no cell — and §4 is what an implementer builds from, which is precisely the
     prose-versus-cell gap that produced revision 3). Owned by this cell: symlink refusal at BOTH
     `_digest_of_member` AND `_digest_of_tree`; the nested target-only mutation control; recursive kind
-    classification with nested FIFO and socket controls; the two frozensets disjoint and covering;
-    promotion and demotion each requiring the paired constant edit plus the re-pin; and cell 9's guard
-    scoped to existing members.
+    classification with nested FIFO and socket controls; the two frozensets disjoint and covering —
+    asserted in the TEST over the PRODUCTION member enumeration and **never inside the aggregate
+    digest function** (codex, r4), since a digest that validated classes would refuse cell 8(e)'s
+    synthetic DERIVED path and make the two cells mutually unsatisfiable; promotion and demotion each
+    requiring the paired constant edit plus the re-pin; and cell 9's guard scoped to existing members.
+    MUTANT: a class assertion relocated INTO the digest helper must red cell 8(e) — if it reds nothing,
+    the assertion is not where this cell claims it is.
 
 11. **A config planted UNTRACKED at a CANDIDATE path moves the digest** — for the directory member
     (the existing cell 4b test) and, crucially, at candidate paths that hold nothing today
