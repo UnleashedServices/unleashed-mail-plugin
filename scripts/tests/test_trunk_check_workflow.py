@@ -20,12 +20,14 @@ message proves reachability, not discrimination.
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -503,58 +505,329 @@ def _normalised_trunk_config(config_text: str) -> str:
     return f"{body}\n# normalised: {','.join(sorted(normalised))}\n"
 
 
-def _config_tree_digest() -> str:
-    """Every linter's OWN configuration, hashed as a tree of (path, content).
+# ==== COREDEV-2860 — the freeze covers every configuration a SECURITY linter reads ======================
+#
+# COREDEV-2811 froze `.trunk/configs/**`, "what the linters will tolerate". Two security linters read
+# configs OUTSIDE it — gitleaks through `GITLEAKS_CONFIG=${workspace}/.gitleaks.toml`, zizmor through
+# `.github/zizmor.yml` — so a blanket allowlist appended to `.gitleaks.toml` disarmed BOTH `trunk-check`
+# and the separate `secret-scan` required context with this suite green. The frozen set is now a UNION
+# (plan §B3): DERIVED — every path `.trunk/trunk.yaml` itself references — and DECLARED — every
+# `direct_configs` candidate of every enabled security linter — alongside the `.trunk/configs` tree.
 
-    COREDEV-2811. `.trunk/trunk.yaml` decides WHICH linters run; `.trunk/configs/**` decides what
-    they will tolerate, and nothing froze it. The C6 guard deliberately ALLOWS these paths — they
-    are legitimate repository files — so the whole lever sat outside every check: a permissive
-    `ruff.toml`, a `.bandit` that skips every test, a `.shellcheckrc` full of disables, and the
-    required context reports success having enforced almost nothing. That is cell 4's founding
-    hazard one directory over, and the C6 comment named it as tracked-but-open rather than fixed.
 
-    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX — the same reasoning the C6 guard itself records.
-    An UNTRACKED config planted in this directory is read by trunk exactly like a tracked one, so
-    it must move this digest too. `not is_dir()` rather than `is_file()`, because `is_file()`
-    follows symlinks and is False for a dangling one, which would let a broken symlink drop a file
-    out of the census silently.
+# N818: the plan, both review arms and every refusal cell name this `ConfigFreezeRefusal`; the name
+# is the contract the shipped battery asserts against, so it is not renamed for a suffix convention.
+class ConfigFreezeRefusal(Exception):  # noqa: N818
+    """A DELIBERATE refusal by the config freeze, carrying WHY as structured fields.
+
+    Deliberately NOT an `OSError` subclass. `read_bytes()` on a Unix socket raises `OSError: [Errno
+    102] Operation not supported on socket: '<path>'` — a message that NAMES the path — so a check that
+    accepted "an exception naming the operand" passed an implementation that never refused at all and
+    simply tried to read the member (codex, r11). A refusal is an act, not an accident; tests assert the
+    class AND its `reason`, never the message.
     """
-    return _digest_of_tree(TRUNK_CONFIG_DIR)
+
+    REASONS = frozenset({"symlink", "dotdot", "lstat-error", "unsupported-kind"})
+
+    def __init__(self, operand: str, reason: str, subtype: str | None = None) -> None:
+        if reason not in self.REASONS:
+            raise ValueError(f"unknown refusal reason {reason!r}")
+        detail = f" ({subtype})" if subtype else ""
+        super().__init__(f"config freeze refuses {operand!r}: {reason}{detail}")
+        self.operand = operand
+        self.reason = reason
+        self.subtype = subtype
 
 
-def _digest_of_tree(root: pathlib.Path) -> str:
-    """The digest ITSELF, parameterised by root, so the mutation fixtures below exercise the very
-    function the frozen oracle uses rather than a second copy of its logic that could drift.
+CONFIG_DIR_MEMBER = ".trunk/configs"
+# §B3(2): every `direct_configs` candidate of every enabled security linter, ENUMERATED from the pinned
+# trunk-io/plugins v1.11.0 definitions — gitleaks 3, zizmor 4, bandit 1, checkov 2, trufflehog none.
+# A literal (cell 9), because a set regenerated from the definitions cannot see them change;
+# EXPECTED_PLUGIN_PROVENANCE is what says when this enumeration has gone stale. `.gitleaksignore` is the
+# reason the list is complete rather than one path per linter: it is a live suppression lever that is
+# neither referenced from trunk.yaml nor under `.trunk/configs`.
+DECLARED_MEMBERS = frozenset(
+    {
+        ".gitleaks.config",
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        "zizmor.yml",
+        "zizmor.yaml",
+        ".github/zizmor.yml",
+        ".github/zizmor.yaml",
+        ".bandit",
+        ".checkov.yml",
+        ".checkov.yaml",
+    }
+)
+# §B4: two CLASSES, because "every member exists and is non-empty" contradicts admitting candidates that
+# hold nothing today — and deleting those candidates to recover green reopens the planting bypass they
+# exist to close. A class is a property of the MEMBER, not of its source. Changing one is a reviewed edit
+# to these literals, in the same commit as the digest re-pin.
+REQUIRED_OCCUPIED_MEMBERS = frozenset(
+    {".gitleaks.toml", ".github/zizmor.yml", CONFIG_DIR_MEMBER}
+)
+OPTIONAL_CANDIDATE_MEMBERS = frozenset(
+    {
+        ".gitleaks.config",
+        ".gitleaksignore",
+        "zizmor.yml",
+        "zizmor.yaml",
+        ".github/zizmor.yaml",
+        ".bandit",
+        ".checkov.yml",
+        ".checkov.yaml",
+    }
+)
+# §B3(2), cell 11b: the RAW, un-normalised plugin provenance. `_normalised_trunk_config` deliberately
+# erases a canonical `ref` so a routine `trunk upgrade` does not red the gate — which is exactly what lets
+# an upgrade change WHICH candidates a linter declares while every digest stays byte-identical.
+EXPECTED_PLUGIN_PROVENANCE = {
+    "sources": [["https://github.com/trunk-io/plugins", "v1.11.0"]],
+    "cli_version": "1.25.0",
+}
+_WORKSPACE = "${workspace}"
+_WORKSPACE_TOKEN = re.compile(r"\$\{workspace\}[^\s\"']*")
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR})
+
+
+def _lstat(path: pathlib.Path) -> os.stat_result:
+    """THE one place the freeze stats a path. A test patches it to inject a real-shaped error (with its
+    filename, as a real one carries) or a kind it cannot create, such as a device, which needs root.
     """
+    return os.lstat(path)
+
+
+def _read_member(path: pathlib.Path) -> bytes:
+    """THE one place the freeze reads a member's bytes — what the "refuse before any read" spy watches."""
+    return pathlib.Path(path).read_bytes()
+
+
+def _errno_name(error: OSError) -> str:
+    return errno.errorcode.get(error.errno or 0, str(error.errno))
+
+
+def _join(operand: str, anchor: pathlib.Path) -> pathlib.PurePosixPath:
+    """§B3(1)(i). Substitute the anchor AS GIVEN and join a relative operand to it. Never resolves and
+    never collapses `..`: `PurePosixPath` drops `.` and repeated separators, and nothing else. The anchor
+    itself is never examined, so a platform alias above it (`/var -> /private/var`) is not a component.
+    """
+    path = pathlib.PurePosixPath(operand.replace(_WORKSPACE, str(anchor)))
+    return path if path.is_absolute() else pathlib.PurePosixPath(anchor) / path
+
+
+def _contained(path: pathlib.PurePosixPath, anchor: pathlib.Path) -> tuple | None:
+    """§B3(1)(iii). Component-wise containment in the anchor's LEXICAL namespace — `relative_to`, never
+    `str.startswith`, which admits `${workspace}_extra/x` as a member. `None` means out of scope.
+    """
+    try:
+        return path.relative_to(pathlib.PurePosixPath(anchor)).parts
+    except ValueError:
+        return None
+
+
+def _refuse_dotdot(parts: tuple, operand: str) -> None:
+    """§B3(1)(ii). A `..` beneath the anchor is REFUSED, never collapsed. Lexical normalisation and the
+    filesystem DISAGREE once an earlier component is a symlink: with `policy -> outside/child`,
+    `policy/../security.toml` normalises to an internal file while the linter reads an external one.
+    """
+    if ".." in parts:
+        raise ConfigFreezeRefusal(operand, "dotdot")
+
+
+def _walk(anchor: pathlib.Path, parts: tuple, operand: str) -> None:
+    """§B3(1)(iv). `lstat` every component beneath the anchor, top-down, and REFUSE a symlink at ANY of
+    them — the leaf or an ancestor; `Path.is_symlink()` alone inspects only the final component. An
+    absent component ENDS the walk without refusing (nothing below it can be a link), so an absent
+    optional candidate still reaches the member layer; any OTHER error refuses, failing closed.
+    """
+    current = pathlib.Path(anchor)
+    for part in parts:
+        current = current / part
+        try:
+            mode = _lstat(current).st_mode
+        except OSError as error:
+            if error.errno in _ABSENT_ERRNOS:
+                return
+            raise ConfigFreezeRefusal(
+                operand, "lstat-error", _errno_name(error)
+            ) from error
+        if stat.S_ISLNK(mode):
+            raise ConfigFreezeRefusal(operand, "symlink")
+
+
+def _adjudicate(operand: str, anchor: pathlib.Path) -> tuple:
+    """§B3(1)(i)-(v): ("member", rel) | ("out", operand) | ("root", None); refusals raise.
+
+    Every ambiguous or link-bearing reference REDS; none is dropped. Resolving for containment would
+    DISCARD a lexically-internal link whose target is outside, and a covering rule cannot protect a path
+    enumeration has already thrown away (codex, r5)."""
+    parts = _contained(_join(operand, anchor), anchor)
+    if parts is None:
+        return ("out", operand)
+    _refuse_dotdot(parts, operand)
+    if not parts:
+        return ("root", None)
+    _walk(anchor, parts, operand)
+    return ("member", pathlib.PurePosixPath(*parts))
+
+
+def _record(kind: str, rel: object, digest: str | None) -> str:
+    """Canonical JSON, never a delimiter-joined string. Revision 10 used `f"{rel}:tree:{t}"`, and a
+    `rel` containing `:tree` forged a DIRECTORY's record as a FILE's with no hash collision (codex, r10).
+    JSON QUOTES each field and ESCAPES an embedded newline, so kind, rel and boundary are unforgeable.
+    """
+    return json.dumps([kind, str(rel), digest], separators=(",", ":"))
+
+
+def _tree_entry(relative: str, digest: str) -> str:
+    """The same rule one level down: the shipped `f"{relative}:{digest}"` lines joined with `\n` let a
+    filename CONTAINING a newline forge a record boundary."""
+    return json.dumps([relative, digest], separators=(",", ":"))
+
+
+_UNSUPPORTED = (
+    (stat.S_ISFIFO, "fifo"),
+    (stat.S_ISSOCK, "socket"),
+    (stat.S_ISCHR, "char-device"),
+    (stat.S_ISBLK, "block-device"),
+)
+
+
+def _unsupported_subtype(mode: int) -> str | None:
+    """`None` for the only two kinds the freeze ADMITS. An ALLOWLIST: a blacklist of FIFO and socket
+    reads a device, and a kind nobody thought to list is refused rather than read."""
+    if stat.S_ISREG(mode) or stat.S_ISDIR(mode):
+        return None
+    return next((name for test, name in _UNSUPPORTED if test(mode)), "unknown")
+
+
+def _digest_of_tree(root: pathlib.Path, operand: str | None = None) -> str:
+    """Every regular file under `root`, as canonical `[relative, digest]` records.
+
+    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX: an UNTRACKED config planted here is read by trunk
+    exactly like a tracked one, so it moves this digest too. SYMLINKS ARE REFUSED, not hashed — hashing
+    `os.readlink()` froze the link's SPELLING and left its TARGET free, so a later target-only edit moved
+    nothing (codex, r1). Every other non-regular kind is refused too: a FIFO would hang `read_bytes()`.
+    `os.walk` IGNORES errors unless told otherwise, which would drop an unreadable subtree silently, so
+    a walk error is a refusal.
+    """
+    operand = operand if operand is not None else str(root)
+
+    def _refuse_walk_error(error: OSError) -> None:
+        raise ConfigFreezeRefusal(operand, "lstat-error", _errno_name(error)) from error
+
     entries = []
-    for path in sorted(root.rglob("*")):
-        # `and not path.is_symlink()` IS THE WHOLE FIX, and its absence was a freeze bypass.
-        # `is_dir()` FOLLOWS symlinks, so a symlink pointing at a directory answered True, hit this
-        # `continue`, and was never hashed — while `rglob` does not descend into it either, so the
-        # planted directory's contents went unhashed too. Measured: planting a directory symlink
-        # into the frozen tree left the digest BYTE-IDENTICAL (gemini, PR #85 GitHub review).
-        #
-        # The reasoning that produced the bug is one line up in this module's history: `not
-        # is_dir()` was chosen over `is_file()` BECAUSE `is_file()` follows symlinks — correct about
-        # `is_file()`, and blind to `is_dir()` doing exactly the same thing. Knowing a predicate
-        # follows links is not knowing which predicates do.
-        if path.is_dir() and not path.is_symlink():
+    for directory, dirnames, filenames in os.walk(
+        root, followlinks=False, onerror=_refuse_walk_error
+    ):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            path = pathlib.Path(directory) / name
+            mode = _lstat(path).st_mode
+            if stat.S_ISLNK(mode):
+                raise ConfigFreezeRefusal(operand, "symlink")
+            if stat.S_ISDIR(mode):
+                continue
+            subtype = _unsupported_subtype(mode)
+            if subtype:
+                raise ConfigFreezeRefusal(operand, "unsupported-kind", subtype)
+            entries.append(
+                _tree_entry(
+                    path.relative_to(root).as_posix(),
+                    hashlib.sha256(_read_member(path)).hexdigest(),
+                )
+            )
+    return hashlib.sha256("\n".join(sorted(entries)).encode("utf-8")).hexdigest()
+
+
+def _digest_of_member(anchor: pathlib.Path, rel: object, operand: str) -> str:
+    """§B4: one member, dispatched by KIND, refused before ANY read if it is not a regular file or a
+    directory. An absent member contributes a DISTINCT `missing` record — never the empty-tree digest,
+    or absence and an empty directory would be the same value (cell 10)."""
+    path = pathlib.Path(anchor) / str(rel)
+    try:
+        mode = _lstat(path).st_mode
+    except OSError as error:
+        if error.errno in _ABSENT_ERRNOS:
+            return _record("missing", rel, None)
+        raise ConfigFreezeRefusal(operand, "lstat-error", _errno_name(error)) from error
+    if stat.S_ISLNK(mode):
+        raise ConfigFreezeRefusal(operand, "symlink")
+    if stat.S_ISDIR(mode):
+        return _record("tree", rel, _digest_of_tree(path, operand))
+    subtype = _unsupported_subtype(mode)
+    if subtype:
+        raise ConfigFreezeRefusal(operand, "unsupported-kind", subtype)
+    return _record("file", rel, hashlib.sha256(_read_member(path)).hexdigest())
+
+
+def _derived_operands(trunk_text: str) -> list:
+    """§B3(1): every config reference `.trunk/trunk.yaml` itself makes, in all FOUR shapes — `direct_config`,
+    `direct_configs`, an `environment[].value`, and a `${workspace}` token inside `commands[].run`. Only
+    two are live today, which is why cell 8(c) exercises all four synthetically: no shipped input could
+    expose a parser that ignored the other two."""
+    document = yaml.safe_load(trunk_text) or {}
+    operands: list = []
+    for definition in (document.get("lint") or {}).get("definitions") or []:
+        single = definition.get("direct_config")
+        if isinstance(single, str):
+            operands.append(single)
+        operands.extend(
+            c for c in definition.get("direct_configs") or [] if isinstance(c, str)
+        )
+        for variable in definition.get("environment") or []:
+            value = variable.get("value")
+            if not isinstance(value, str):
+                continue
+            if _WORKSPACE in value:
+                operands.extend(_WORKSPACE_TOKEN.findall(value))
+            elif value.startswith("/"):
+                operands.append(value)
+        for command in definition.get("commands") or []:
+            operands.extend(_WORKSPACE_TOKEN.findall(command.get("run") or ""))
+    return list(dict.fromkeys(operands))
+
+
+def _aggregate(
+    anchor: pathlib.Path, trunk_text: str, declared: frozenset = DECLARED_MEMBERS
+) -> tuple:
+    """§B3's UNION: the configs tree, every DECLARED candidate, and every DERIVED reference — each
+    adjudicated, then hashed by kind. Returns (members, out_of_scope). Class validation is NOT done here:
+    it is a test-level assertion over the PRODUCTION enumeration (cell 11c), so a synthetic workspace
+    whose members are in neither class stays admissible (cell 8(e))."""
+    members: dict = {}
+    out_of_scope: list = []
+    for rel in sorted({CONFIG_DIR_MEMBER} | set(declared)):
+        _walk(anchor, pathlib.PurePosixPath(rel).parts, rel)
+        members[rel] = _digest_of_member(anchor, pathlib.PurePosixPath(rel), rel)
+    for operand in _derived_operands(trunk_text):
+        verdict, rel = _adjudicate(operand, anchor)
+        if verdict == "out":
+            out_of_scope.append(operand)
             continue
-        relative = path.relative_to(root).as_posix()
-        # SYMLINKS ARE HASHED AS LINKS, not followed. `not is_dir()` is True for a DANGLING symlink,
-        # so `read_bytes()` raised FileNotFoundError and the whole census crashed — chosen precisely
-        # so a dangling link could not be dropped silently, and then crashing on it instead (gemini,
-        # PR #85). Hashing the target PATH also makes a retarget visible: following the link would
-        # hash the destination's content, so pointing it at a different file with identical bytes
-        # would leave the digest unmoved.
-        if path.is_symlink():
-            digest = hashlib.sha256(
-                b"symlink:" + str(path.readlink()).encode()
-            ).hexdigest()
-        else:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        entries.append(f"{relative}:{digest}")
-    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+        if verdict != "member":
+            continue
+        key = str(rel)
+        # Already a member, or hashed inside the configs tree — the walk above still adjudicated it.
+        if key in members or key.startswith(CONFIG_DIR_MEMBER + "/"):
+            continue
+        members[key] = _digest_of_member(anchor, rel, operand)
+    return members, out_of_scope
+
+
+def _config_tree_digest(
+    anchor: pathlib.Path = REPO,
+    trunk_text: str | None = None,
+    declared: frozenset = DECLARED_MEMBERS,
+) -> str:
+    """The PRODUCTION aggregate digest: the sorted canonical records of `_aggregate`, hashed."""
+    if trunk_text is None:
+        trunk_text = TRUNK_CONFIG.read_text(encoding="utf-8")
+    members, _ = _aggregate(anchor, trunk_text, declared)
+    return hashlib.sha256(
+        "\n".join(sorted(members.values())).encode("utf-8")
+    ).hexdigest()
 
 
 # THE ORACLE THE NORMALISED DIGEST NEVER HAD. Both users of `_normalised_lint_block` compared the
@@ -575,8 +848,12 @@ EXPECTED_NORMALISED_CONFIG_DIGEST = (
 # FROZEN, and re-pinned in the SAME COMMIT as any reviewed configuration change, exactly as the
 # lint-block digest above is. There is nothing to normalise here: these files carry no version
 # specifiers, so a `trunk upgrade` does not move them and every movement is somebody's edit.
+# COREDEV-2860 widened what it covers — `.gitleaks.toml`, `.github/zizmor.yml` and eight absent
+# candidates join `.trunk/configs` — and changed the encoding to canonical JSON records, so it moved.
+# A digest is a CHANGE detector: it makes a weakening visible, it does not forbid one. The CONTENT
+# checks (cell 7) are what refuse a blanket allowlist outright.
 EXPECTED_CONFIG_TREE_DIGEST = (
-    "6a89eb8aa05f9aad5e9b2985ed0495e6579ec5a8a303874eb111f30e21c5c0f7"
+    "06f19dfbf863637e3a2d94a9ef21c8ed2eef70387a4b509d397ecefa6cbfb184"
 )
 
 
@@ -588,7 +865,8 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
             EXPECTED_CONFIG_TREE_DIGEST,
             _config_tree_digest(),
             "a linter configuration moved: re-pin EXPECTED_CONFIG_TREE_DIGEST in the same commit, "
-            "with the reason, or revert the change under .trunk/configs/",
+            "with the reason, or revert the change under .trunk/configs/, `.gitleaks.toml`, "
+            "`.github/zizmor.yml`, or at a declared candidate path",
         )
 
     def test_a_permissive_rule_added_to_a_config_moves_the_digest(self):
@@ -622,10 +900,9 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
 
     def test_the_census_covers_every_config_the_repository_ships(self):
         """A digest over an empty or truncated census is a digest that cannot fail."""
-        # Mirrors `_digest_of_tree`: a directory SYMLINK is hashed, so it must be counted.
-        counted = [
-            p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir() or p.is_symlink()
-        ]
+        # COREDEV-2860: `_digest_of_tree` now REFUSES a symlink rather than hashing it, so a link here
+        # reds the census before this count is reached. Every non-directory entry is a counted file.
+        counted = [p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir()]
         tracked = subprocess.run(
             ["git", "ls-files", ".trunk/configs"],
             check=True,
@@ -639,6 +916,38 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
             "the census and the repository disagree about what configuration exists",
         )
         self.assertGreaterEqual(len(counted), 9)
+
+    def test_every_required_member_exists_is_tracked_and_is_not_empty(self):
+        """§B4: the anti-truncation guard, extended from `.trunk/configs` to EVERY required occupied
+        member. Scoped to REQUIRED members only — applied to an absent OPTIONAL candidate it would red
+        the shipped tree, which is the §B3/§B4 contradiction over again."""
+        tracked = set(
+            subprocess.run(
+                ["git", "ls-files", *sorted(REQUIRED_OCCUPIED_MEMBERS)],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=str(REPO),
+            ).stdout.split()
+        )
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        empty = _record("tree", CONFIG_DIR_MEMBER, hashlib.sha256(b"").hexdigest())
+        for rel in sorted(REQUIRED_OCCUPIED_MEMBERS):
+            with self.subTest(member=rel):
+                path = REPO / rel
+                self.assertTrue(
+                    path.exists(), f"{rel} is a REQUIRED member and is absent"
+                )
+                if path.is_dir():
+                    self.assertTrue(
+                        any(t.startswith(rel + "/") for t in tracked),
+                        f"{rel} tracks nothing",
+                    )
+                    self.assertNotEqual(empty, members[rel], f"{rel} hashes as empty")
+                else:
+                    self.assertIn(rel, tracked, f"{rel} is not tracked")
+                    self.assertGreater(path.stat().st_size, 0, f"{rel} is empty")
+                    self.assertNotIn('"missing"', members[rel])
 
 
 def _excluded_entries(literal: str) -> frozenset:
