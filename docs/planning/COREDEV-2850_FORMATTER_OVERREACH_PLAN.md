@@ -589,8 +589,10 @@ say which class it found, which it expected, and which of the two edits is missi
       security-rule suppression that a name-set check cannot see.
    d. Assert the excluded set is disjoint from a HAND-LISTED security set
       `{gitleaks, trufflehog, zizmor, bandit, checkov}`. Hand-listed deliberately: `is_security` is
-      not a usable selector — in trunk's own v1.11.0 definitions **gitleaks carries no `is_security`
-      flag** (bandit, checkov, trufflehog and zizmor do), and gitleaks findings are counted as
+      not a usable selector — in trunk's own v1.11.0 definitions **BOTH secret scanners, gitleaks and
+      trufflehog, carry no `is_security` flag** (only bandit, checkov and zizmor do; earlier revisions
+      wrongly listed trufflehog among them — corrected by measurement during implementation), and
+      gitleaks findings are counted as
       "lint issues", so both an `is_security`-derived guard and an oracle bound to the word
       "security" miss the one exclusion that disarms `secret-scan`.
    e. Assert all SIX excluded names are present in `lint.enabled` (gemini, r1). `--filter` validates

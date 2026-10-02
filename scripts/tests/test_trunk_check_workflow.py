@@ -139,9 +139,10 @@ EXPECTED_LINTERS = frozenset(
 # pre-existing debt as NEW on any touched file. Filtered from the REQUIRED job only; the canary keeps them.
 THE_FIVE_FORMATTERS = frozenset({"black", "isort", "prettier", "shfmt", "taplo"})
 EXCLUDED_LINTERS = frozenset({"markdown-link-check"}) | THE_FIVE_FORMATTERS
-# Hand-listed DELIBERATELY, never derived from `is_security`: in trunk's pinned v1.11.0 definitions
-# gitleaks carries NO `is_security` flag (bandit, checkov, trufflehog and zizmor do), so a derived set
-# would miss exactly the exclusion that disarms the separate `secret-scan` required context.
+# Hand-listed DELIBERATELY, never derived from `is_security`. MEASURED on trunk's pinned v1.11.0
+# definitions: BOTH secret scanners — gitleaks and trufflehog — carry NO `is_security` flag (only bandit,
+# checkov and zizmor do), so a derived set would miss exactly the two linters that find credentials,
+# including the exclusion that disarms the separate `secret-scan` required context.
 SECURITY_LINTERS = frozenset({"gitleaks", "trufflehog", "zizmor", "bandit", "checkov"})
 
 # M2 ships job-scoped `continue-on-error: true` and C3 forbids it. The exemption is JOB SCOPE ONLY and
