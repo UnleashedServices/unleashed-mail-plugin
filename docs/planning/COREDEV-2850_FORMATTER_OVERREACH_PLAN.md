@@ -265,20 +265,43 @@ than hard-coding a second directory. That is right, and **insufficient on its ow
 **So the frozen set is a UNION of two sources, and each needs its own guard:**
 
 1. **Derived** — every path referenced by `lint.definitions[].direct_config(s)`,
-   `environment[].value`, or a `${workspace}`-rooted token inside `commands[].run`, that is
-   **LEXICALLY** inside the workspace — after `${workspace}` substitution and `.`/`..` normalisation,
-   and **never** via `realpath`/`Path.resolve()` — and is **not** the workspace root itself (a bare
-   `${workspace}` would make the entire repository the frozen census).
-   **Containment is LEXICAL, and a symlink is REFUSED rather than followed** (codex, r5 P1). Resolving
-   for containment DISCARDS `${workspace}/policy/security.toml -> /outside/security.toml`: lexically
-   inside, target outside. A discarded reference never reaches `_digest_of_member`, so §B4's symlink
-   refusal never fires; `REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS` still equals the
-   TRUNCATED enumeration, so COVERING passes; and every later edit to that target is invisible. That is
-   precisely the target-only edit §B4 rejects, re-entered one layer higher — **COVERING cannot protect a
-   path enumeration has already thrown away.** Enumeration therefore RETAINS every lexically-internal
-   reference and hands it to the member layer, which refuses it if it is a symlink. A reference that is
-   lexically OUTSIDE the workspace is out of scope, and is recorded as out of scope rather than dropped
+   `environment[].value`, or a `${workspace}`-rooted token inside `commands[].run`, ADJUDICATED by the
+   procedure below. The workspace root itself is never a member (a bare `${workspace}` would make the
+   entire repository the frozen census).
+   **Adjudication — no step resolves a path, collapses `..`, or compares paths as strings** (codex, r5
+   P1 and r6 P1; gemini, r6). Revision 6 specified "`.`/`..` normalisation", and that normalisation was
+   itself the next hole.
+   (i) Substitute `${workspace}` with the workspace ANCHOR as given; take a relative operand relative to
+   the anchor. The anchor is never examined or resolved — a platform alias ABOVE it (macOS
+   `/var -> /private/var`) is not a component of any reference.
+   (ii) **REFUSE any operand with a `..` component beneath the anchor.** Lexical normalisation and the
+   filesystem DISAGREE whenever an earlier component is a symlink: with `workspace/policy ->
+   outside/child`, `${workspace}/policy/../security.toml` normalises to `workspace/security.toml`, but
+   the linter follows `policy` first and reads `outside/security.toml`. Normalising first hashes a file
+   the linter never reads and leaves every edit to the one it does read invisible (codex, r6 P1 —
+   measured on this host: `/var/../private` resolves to `/private/private`, where lexical normalisation
+   yields `/private`). Refusing `..` REMOVES the ambiguity rather than adjudicating it. `.` components are
+   dropped; they never traverse.
+   (iii) **Containment is COMPONENT-WISE** — `PurePosixPath(operand).relative_to(anchor)` — never
+   `str.startswith`, which admits a sibling sharing the anchor's spelling (`${workspace}_extra/x`). An
+   operand not relative to the anchor is OUT OF SCOPE and is RECORDED as out of scope, never dropped
    silently.
+   (iv) **`lstat` every component beneath the anchor, top-down, and REFUSE a symlink at ANY of them** —
+   the leaf or an ancestor. `Path.is_symlink()` inspects the final component only, so a leaf-only check
+   reads `${workspace}/sym_dir/config.toml` straight through a symlinked `sym_dir` (gemini, r6). This
+   step applies to EVERY member, whatever its source — DECLARED paths and `.trunk/configs/**` included.
+   (v) Hand the surviving member path to `_digest_of_member`.
+   **Every ambiguous or link-bearing reference REDS the suite; none is dropped** (codex, r5 P1).
+   Resolving for containment would DISCARD `${workspace}/policy/security.toml -> /outside/security.toml`
+   — lexically inside, target outside — and a discarded reference never reaches `_digest_of_member`:
+   §B4's refusal never fires, `REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS` equals the
+   TRUNCATED enumeration so COVERING passes, and every later edit to that target is invisible.
+   **COVERING cannot protect a path enumeration has already thrown away.** Only an operand that is
+   unambiguously outside the anchor is out of scope.
+   **None of (ii)-(iv) reds the shipped tree** (verified 2026-10-02): its only two live references,
+   `${workspace}/.gitleaks.toml` (`.trunk/trunk.yaml:67`) and
+   `${workspace}/.trunk/configs/markdown-link-check.json` (`:77`), contain no `..`, and no member, no
+   ancestor of a member, and no tracked path is a symlink.
    Guard: **the derivation must be proven to reach the DIGEST, not merely to parse** (codex, r1 P1).
    Two separate premises were wrong. (a) "The derivation yields exactly ONE path" is false —
    `.trunk/trunk.yaml`'s `markdown-link-check` command also references
@@ -403,6 +426,9 @@ and cycle handling, and an incomplete resolver fails OPEN. Refusal fails CLOSED,
 member is a regular file today, so the refusal is inert until someone introduces the shape — at which
 point they get a diagnostic instead of a silent hole. A target-only mutation control accompanies it:
 plant a symlink member, mutate ONLY its target, and assert the census REFUSES rather than passing.
+The refusal covers EVERY component beneath the workspace anchor, not only a member's final one
+(§B3(1)(iv)): a symlinked ANCESTOR is refused exactly like a symlinked member, because a check on the
+final component alone reads straight through it (gemini, r6).
 
 and cell 4b's own anti-truncation guard,
 `test_the_census_covers_every_config_the_repository_ships` — whose docstring is "A digest over an
@@ -437,19 +463,32 @@ again.
 
 Both classes are verified THROUGH the aggregate digest, not beside it — the cells observe the
 digest MOVING, while the class assertions themselves live in the TEST, over the PRODUCTION member
-enumeration. **The aggregate digest function itself performs no class validation** (codex, r4).
-Were disjointness, covering or the anti-truncation guard enforced inside the digest seam, cell 8
-could never pass: its synthetic workspace deliberately references a DERIVED path that is in NEITHER
-frozen set, so a digest function that validated classes would refuse the very input cell 8 exists to
-create, and cells 8 and 11c would be mutually unsatisfiable. Class validation is therefore scoped to
-the production member set; a synthetic workspace carrying members outside both frozensets is
-ADMISSIBLE by construction. **The prohibition is verified by a direct check on the helper's call graph,
-not by observing cell 8** (codex, r5 P2): a relocation that keeps validating the production enumeration
-from inside the helper satisfies every behavioural observation cell 8 can make. Cell 11c owns that
-direct check and names the boundary it does not cover. The two sets are frozen constants in
-`test_trunk_check_workflow.py` — `REQUIRED_OCCUPIED_MEMBERS` and
-`OPTIONAL_CANDIDATE_MEMBERS`, both `frozenset` — so a class change is a reviewed source edit rather
-than an emergent property of the tree (gemini, r2).
+enumeration. The two sets are frozen constants in `test_trunk_check_workflow.py` —
+`REQUIRED_OCCUPIED_MEMBERS` and `OPTIONAL_CANDIDATE_MEMBERS`, both `frozenset` — so a class change
+is a reviewed source edit rather than an emergent property of the tree (gemini, r2).
+
+**The property verified here is ADMISSIBILITY, and only admissibility** (codex, r6 P2/P3 — this
+SUPERSEDES the location rule of revisions 4-6, and keeps the goal of codex's r4 recommendation, which
+was admissibility, while dropping the mechanism it was turned into). The aggregate digest must be
+computable for a workspace whose membership includes a path in NEITHER frozenset; cell 8's synthetic
+DERIVED path is the case that matters. That fails when something on the digest path enforces COVERING
+over the digest call's OWN membership and so rejects the unclassified member. Cell 8(e) observes it,
+and its mutant — unconditional COVERING over the call's own argument — discriminates.
+
+**"No class validation anywhere in the digest helper" is WITHDRAWN as a verified rule.** Revisions 4-6
+justified it by saying that disjointness, covering or the anti-truncation guard enforced inside the
+digest seam would mean cell 8 "could never pass". That is false (codex, r6 P3): disjointness alone
+never rejects an unclassified member, and validation scoped to the PRODUCTION enumeration passes on
+cell 8's synthetic input. The rule is a MECHANISM, not a property, and it protects nothing this plan
+claims. Production-scoped validation, wherever it runs, passes on a correctly classified tree and reds
+on a misclassified one exactly as the test-level assertion does; that assertion is independently
+required and independently mutated (cell 11c), so an extra copy elsewhere can only ADD failures, never
+remove one. Nor is the rule checkable: rounds 5 and 6 found FOUR placements — a test-environment
+predicate, a scope-preserving relocation, disjointness alone, and inlined literal copies of the
+frozensets — each invisible to a name-based call-graph walk, the last reproduced in memory by codex. A
+check that cannot establish its property is not evidence, so revision 6's call-graph check is DELETED
+rather than patched a fifth time. Class assertions belong in the test, over the production enumeration
+— a design note, which no cell asserts.
 
 **Both directions of class change are reviewed edits, and DEMOTION was missing** (gemini, r2).
 PROMOTION — a candidate becomes occupied — is a re-pin plus moving the path between the two
@@ -557,25 +596,51 @@ meant.
       exactly one shape must fail the cell for that shape.
    d. Parse-level checks — stub-to-`[]`, a synthetic second reference appearing, `GITLEAKS_CONFIG`
       removed shrinking the result — remain as a FLOOR beneath (a)-(c), never as the cell.
-   e. **The references this cell creates are members of NEITHER frozenset, by design** (codex, r4).
-      That is admissible: the class assertions are test-level, over the PRODUCTION member
-      enumeration (§B4, cell 11c) — they are not preconditions of the digest function. An
-      implementation that raises, refuses, or silently DROPS a member absent from both frozensets
-      fails this cell. Without (e), cells 8 and 11c are mutually unsatisfiable and the contradiction
-      surfaces only once someone builds them. **(e) proves ADMISSIBILITY ONLY — it does not prove
-      WHERE class validation lives** (codex, r5 P2; gemini, r5). Two implementations violate the
-      location prohibition while keeping (e) green: one guards the check with a test-environment
-      predicate (`if not is_synthetic_test_workspace(root)`), the other relocates it scope-preservingly
-      and validates the PRODUCTION enumeration from inside the helper
-      (`validate_classes(enumerate_members(REPO))`). Location needs the separate direct check in
-      cell 11c; do not read a green (e) as evidence of it.
-   f. **AGGREGATE-LEVEL control, DERIVED-ONLY, OUTSIDE-TARGET symlink** (codex, r5 P1). Place a
-      symlink at a lexically-internal `${workspace}` path whose target is OUTSIDE the workspace,
-      reference it ONLY from the synthetic `trunk.yaml` — not at a DECLARED path, not under
-      `.trunk/configs/**` — and assert the PRODUCTION aggregate REFUSES. MUTANT: an enumeration that
-      uses `Path.resolve()` for containment discards the reference and the aggregate then succeeds
-      SILENTLY; that must fail this cell. Without (f) the symlink refusal is only ever exercised on
-      members enumeration already chose to keep, which is not where the hole is.
+   e. **ADMISSIBILITY — the digest is computable for a member in NEITHER frozenset** (codex, r4-r6).
+      The references this cell creates are, by design, in neither set, and the class assertions are
+      test-level over the PRODUCTION enumeration (§B4, cell 11c), never a precondition of computing a
+      digest. An implementation that raises, refuses, or silently DROPS such a member fails this cell.
+      MUTANT: an UNCONDITIONAL COVERING check over the membership of the digest call's OWN argument —
+      not over production — must red (e); that is the mutant (e) discriminates (codex, r5 P2,
+      confirmed r6). (e) proves admissibility and nothing more. It does not prove — and this plan no
+      longer asks anything to prove — WHERE class validation lives; §B4 explains why that rule was
+      withdrawn rather than verified.
+   f. **AGGREGATE-LEVEL ADJUDICATION controls, DERIVED-ONLY — one row per step of §B3(1)'s procedure**
+      (codex, r5 P1 and r6 P1; gemini, r6). Fixture: ONE temporary outer directory holding sibling
+      `workspace/` and `outside/` directories, both alive for the whole assertion (codex, r6 —
+      `symlink_to` already runs on both suite platforms at `scripts/tests/test_trunk_check_workflow.py:2295`,
+      and `plugin-ci.yml` runs the scripts suite on Ubuntu and macOS). Each reference appears ONLY in
+      the synthetic `trunk.yaml` — not at a DECLARED path, not under `.trunk/configs/**` — and every
+      outcome is asserted on the PRODUCTION aggregate:
+
+      | # | shape | reference | required outcome |
+      |---|---|---|---|
+      | 1 | leaf symlink, outside target | `${workspace}/policy/security.toml`, itself a link into `outside/` | REFUSE |
+      | 2 | ANCESTOR symlink, no `..` | `${workspace}/sym_dir/config.toml`, `sym_dir` a link to `outside/` | REFUSE |
+      | 3 | ANCESTOR symlink, then `..` | `${workspace}/policy/../security.toml`, `policy` a link to `outside/child/` | REFUSE |
+      | 4 | `..`, no symlink anywhere | `${workspace}/real_dir/../security.toml` | REFUSE |
+      | 5 | climbs above the anchor | `${workspace}/../outside.toml` | REFUSE |
+      | 6 | the workspace root | `${workspace}/.` | not a member |
+      | 7 | spelling-prefix sibling | `${workspace}_extra/x.toml` | OUT OF SCOPE, recorded |
+      | 8 | ordinary internal reference | `${workspace}/.gitleaks.toml`, a regular file | MEMBER |
+
+      **Row 8 is the positive control, and the table is two-sided because of it.** Rows 1-7 are all
+      refusals or exclusions, so without row 8 an implementation that refuses EVERY internal member
+      passes the table while redding the shipped tree.
+      MUTANTS — each must fail this cell on EXACTLY the rows named. These row sets were EXECUTED, not
+      reasoned (2026-10-02, macOS, with the anchor beneath a `/var -> /private/var` alias); the correct
+      procedure passes all eight rows there.
+      | mutant | fails on |
+      |---|---|
+      | containment by `Path.resolve()`, anchor and operand resolved ALIKE | rows 1-5 — silently DISCARDS 1, 2, 3 and 5; ADMITS 4 as a member |
+      | `..` collapsed by `os.path.normpath` before adjudication | rows 3, 4, 5 |
+      | LEAF-only `Path.is_symlink()` check | row 2 only |
+      | `str.startswith` containment | row 7 only |
+      **The `Path.resolve()` mutant must resolve both sides alike** (codex, r6). Resolving the operand
+      alone discards every reference on macOS — rows 1-6 AND row 8 — so it fails for the WRONG reason.
+      Row 8 is what tells the two apart: the alike mutant keeps it, the one-sided one discards it. Row 4
+      is refused although harmless: refusing every `..` is what removes the ambiguity, and the shipped
+      tree contains none.
 9. **The declared list's CONTENT is pinned.** Existence + tracked + non-empty are properties of
    whatever the tuple names, so swapping `.github/zizmor.yml` for any other tracked path satisfies
    them and the only thing that moves is a digest the swapping commit re-pins. Assert the declared
@@ -596,34 +661,23 @@ meant.
 11c. **§B4's refusal and class rules have NAMED OWNERS here** (codex, r3: they were specified in §B4
     and owned by no cell — and §4 is what an implementer builds from, which is precisely the
     prose-versus-cell gap that produced revision 3). Owned by this cell: symlink refusal at BOTH
-    `_digest_of_member` AND `_digest_of_tree`; the nested target-only mutation control; recursive kind
-    classification with nested FIFO and socket controls; the two frozensets disjoint and covering —
-    asserted in the TEST over the PRODUCTION member enumeration and **never inside the aggregate
-    digest function** (codex, r4) — because a validating digest CAN refuse cell 8(e)'s synthetic DERIVED
-    path outright, and because validation at that seam cannot be established from outside it at all, so
-    the prohibition needs its own check rather than an inference from cell 8 (r5, below); promotion and
-    demotion each requiring the paired constant edit plus the re-pin; and cell 9's guard scoped to
-    existing members.
-    **The r5 mutant was FALSE and is replaced** (codex, r5 P2). "A class assertion relocated into the
-    digest helper must red cell 8(e)" does not hold: a scope-preserving relocation that validates the
-    PRODUCTION enumeration from inside the helper — `validate_classes(enumerate_members(REPO))` — and a
-    relocation guarded by a test-environment predicate (gemini, r5) each violate the prohibition while
-    leaving 8(e) green. Relocating disjointness alone is green too. Changing an assertion's SCOPE while
-    moving it proves nothing about its LOCATION. Owned here instead:
-    - **MUTANT (admissibility):** an UNCONDITIONAL COVERING check over the membership of the digest
-      call's OWN argument — not over production — must red cell 8(e). That mutant, and only that one,
-      is what 8(e) discriminates.
-    - **A SEPARATE DIRECT CHECK for location**, because no observation of 8(e) can establish it: assert
-      that the aggregate digest function and every function it transitively calls within the module
-      reference NEITHER class frozenset NOR the class validator, by walking `co_names`/`co_consts` of
-      each code object in that call graph. Both implementations above red this check, because both must
-      NAME the validator inside the helper's call graph.
-    - **Boundary NOT covered, stated rather than implied:** a bypass reaching the validator indirectly
-      (`getattr`, a dict of callables, a module-level alias created at runtime) is invisible to a
-      name-based walk. The frozensets and the digest helpers live in the SAME module today
-      (`test_trunk_check_workflow.py`), so an import-direction constraint — the strongest form, which
-      would make the bypass inexpressible — is not available without moving the helpers out, and that
-      move is NOT in this plan's scope.
+    `_digest_of_member` AND `_digest_of_tree`, and at EVERY component beneath the workspace anchor
+    (§B3(1)(iv)) — with a control that plants a symlinked ANCESTOR of a DECLARED member in a mirror and
+    asserts refusal, because cell 8(f) exercises DERIVED references only and (iv) claims every source;
+    the nested target-only mutation control; recursive kind classification with nested FIFO and socket
+    controls; promotion and demotion each requiring the paired constant edit plus the re-pin; and
+    cell 9's guard scoped to existing members.
+    **The class assertion is TWO-SIDED, and it is the control** (codex, r6). With the location rule
+    withdrawn (§B4), this assertion carries the whole weight, so both halves are stated: over the
+    PRODUCTION member enumeration, assert DISJOINT and COVERING. MUTANTS: an enumerated production
+    member placed in NEITHER frozenset must red COVERING; a path placed in BOTH must red DISJOINT. A
+    suite that reds only one of the two has verified half the rule.
+    **No location check** (codex, r6 P2 — supersedes revisions 5 and 6). Revision 5's "a class
+    assertion relocated into the digest helper must red cell 8(e)" was false, and revision 6's
+    replacement — a `co_names`/`co_consts` walk of the helper's call graph — was defeated by inlined
+    literal copies of the frozensets: the fourth placement in two rounds that a name-based walk cannot
+    see. §B4 shows the rule protects nothing this plan claims, so it is withdrawn rather than patched a
+    fifth time. Admissibility, the property it was standing in for, is cell 8(e)'s.
 
 11. **A config planted UNTRACKED at a CANDIDATE path moves the digest** — for the directory member
     (the existing cell 4b test) and, crucially, at candidate paths that hold nothing today
@@ -726,12 +780,16 @@ meant.
       without checking the location existed; the accompanying "confirm the loader tolerates an unknown
       key" check could not have caught it, because tolerating an unknown key says nothing about
       whether the ENTRY is there.
-      **So there are exactly two honest routes, and a named key is neither of them:**
+      **So there are exactly two honest routes for cell 3's SUPERSESSION, and a named key is neither
+      of them.** Neither route touches the §6.4 rewrite and re-gate, which §A5 requires regardless
+      (codex, r6):
       (i) put the supersession in the rollout evidence artifact — where cell 3's residual already
       lives as `stillOpenForM3[…].resolvesAt: COREDEV-2850` — and give it a READER, modelled on the
       existing `primaryDiagnostic` judge, so the supersession is asserted rather than asserted-about;
       or (ii) change the governing text in the gated plan and **re-gate that plan**, accepting the
       cost rather than pretending its recorded verdict still covers the new bytes.
+      **Route (ii) is the one this plan takes.** That plan is being rewritten and re-gated for §6.4
+      anyway, so the cell-3 supersession rides the same re-gate at no added cost (step 4(d)).
       Adding an inert key to a registry that has nowhere to put it would be the `backed_by` residue
       of COREDEV-2811 repeated exactly — an unvalidated field nothing reads.
 5. Version bump (four sync points + CHANGELOG).
