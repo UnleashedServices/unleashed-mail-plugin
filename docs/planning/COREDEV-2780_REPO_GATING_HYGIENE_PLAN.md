@@ -1,10 +1,20 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 41
-**Implementation status:** shipped through M3 (v2.8.26). Revisions 33-41 respecified parts of cells 11
-and 15 AFTER M3 landed, and the suite has not caught up: YAML mutants are hand-written rather than
-generated from the registry, cell 11's case-validity rule is not executed, and cell 15's sentinel
-data-flow test does not exist. Tracked as COREDEV-2869 (codex, r42).
+**Status:** Planning, revision 42
+**Implementation status:** shipped through M3 (v2.8.26). The plan was respecified AFTER M3 landed, and
+the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
+* cell 11 — YAML mutants are hand-written, not generated from the registry, and ten of their asserted
+  diagnostics differ from the registry's; the case-validity rule is not executed; the `(side, form)`
+  resolver family runs as hard-coded helper tests, not as the 24 registry-expanded executions;
+* cell 11 / cell 15 — resolution is not "once, before entry selection": the required and canary
+  comparisons each call `_resolved_or_recorded`, which re-resolves on every call; and cell 15's
+  sentinel data-flow test does not exist. The resolver itself IS entry-agnostic
+  (`_resolve_ref_name(ref_name, default_branch)`);
+* cell 8 — the r33 root-operand controls for the pre-commit surface are source assertions and direct
+  detector calls, not real pre-commit executions; and the SessionStart runtime half has not witnessed
+  the DISPATCHER invoking the detector (see cell 8);
+* **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
+  plan.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -163,7 +173,8 @@ data-flow test does not exist. Tracked as COREDEV-2869 (codex, r42).
 > executed against sample payloads, a subtract-and-compare rule alone passed a PUT that left the
 > repository UNGATED. M4a's existing net-zero final-state check is unchanged.
 > **r41** `c9499c6` (revision 40), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES` — **the first
-> double approval since r16**. Both confirmed §6.2a's direction-plus-remainder rule passes each
+> double approval since r28/r29**, which gated revision 27 (revision 41's log said "since r16", which
+> was false). Both confirmed §6.2a's direction-plus-remainder rule passes each
 > correct write and fails every wrong payload they constructed. codex's note, a delayed same-bucket
 > invocation re-creating a just-swept dedup marker, is low-impact and ticketed as COREDEV-2868.
 > **r42**, a byte-identical REPRODUCTION of r41 with neutral prompts: agy `APPROVE` again, **codex
@@ -176,6 +187,18 @@ data-flow test does not exist. Tracked as COREDEV-2869 (codex, r42).
 > It also identified that cells 11 and 15 are respecified but not implemented. **Revision 41** fixes
 > the five recipes in the registry AND the suite, defines "constructible" as actionlint-clean, corrects
 > §1, §3b and §7, and states the implementation status at the top, tracked as COREDEV-2869.
+> **r43** `c2ee5ce` (revision 41), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (1).
+> Both confirmed that the five corrected mutants are valid workflows, that each still produces its own
+> diagnostic, and that the registry and suite now agree on all five. **codex's blocker was revision
+> 41's own rule.** It said "actionlint reports nothing", while the sweep that verified it ran
+> `-shellcheck= -pyflakes=`. With ShellCheck on, three `shell: sh` mutants report SC3040/SC3001, so the
+> rule as written was stricter than what had been measured. *Harness and spec disagreed again, in the
+> other direction.* agy found ten registry-versus-suite diagnostic mismatches, added to COREDEV-2869.
+> codex found the implementation-status list incomplete (four more gaps, one older than revision 33),
+> and three document claims false: `plugin-ci.yml` "unchanged", §6.1's "one-line" mechanism switch,
+> and cell 8 naming the rollout record for a SessionStart invocation that lives in a different
+> artifact and does not witness the dispatcher. It also caught a false chronology claim in r41's
+> entry. **Revision 42** names the actionlint invocation in the rule and corrects all of these.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1724,7 +1747,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
      **The real session-start invocation** is recorded once as a **committed evidence artifact**, the
      same standing cells 10 and 12 have. Claiming a CI proof this repo's pipeline cannot produce would
-     be a cell that cannot pass.
+     be a cell that cannot pass. **The artifact is `evidence/COREDEV-2801-sessionstart-observation.json`,
+     not the rollout record**, and it is weaker than this cell first claimed (codex, r43). It pipes a real
+     `SessionStart` payload into the command `.claude/settings.json` wires: the envelope on the first
+     call, silence on the second. Its evidence for the WIRING is inferred from dispatcher-written dedup
+     markers. **The dispatcher invoking the detector has not been witnessed**, and that runtime proof
+     remains outstanding.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
    **absent** (not "absent-or-false": C4 is an allowlist, and `post-annotations: false` is an unlisted
    key *present* in `with:`, which cell 11's arbitrary-unlisted-key mutant reds — the two cells
@@ -1771,8 +1799,14 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     independent parser paths inside a multi-part clause; codex, r15: one per *entry* under-covers any
     obligation needing several). **Each mutant must be constructible, must change the intended
     property, and must fail with its OWN diagnostic.** **Constructible means GitHub would accept the
-    workflow:** actionlint reports nothing for it, except the style-only `if-cond` on `job-if`, whose
-    constant `false` IS the hazard. Round 42 found five cases breaking this rule (codex, r42, three in
+    workflow:** `actionlint -shellcheck= -pyflakes=` reports nothing for it, except the style-only
+    `if-cond` on `job-if`, whose constant `false` IS the hazard. **The flags are part of the rule**
+    (codex, r43). Validity of the WORKFLOW is the criterion, not lint of the scripts embedded in it.
+    With ShellCheck enabled, the three `shell: sh` mutants (`C3.no-defaults-run/workflow` and `/job`,
+    `C8.run-bodies-frozen/changed-shell`) report SC3040/SC3001, because they run the frozen Bash
+    bodies under `sh`. That mismatch IS the hazard those cases exist to catch, and GitHub accepts
+    those workflows. Revision 41 wrote "actionlint reports nothing" while its own sweep ran with
+    these flags, so the rule as written was stricter than what had been measured. Round 42 found five cases breaking this rule (codex, r42, three in
     the registry; a sweep found two more in the suite): a root-level `schedule`, `branches-ignore`
     beside `branches`, an empty `on:` after removing the only trigger, an empty `on.schedule`, and
     `needs:` naming a job that did not exist. Revision 41 corrects all five. Verified by a one-off
@@ -2157,8 +2191,10 @@ permission alone, the deciding factor.
 annotating, and the job's token scope stays minimal. **The accepted cost, restated so it is not
 rediscovered as a defect later:** findings are reachable only from the job log or the
 `trunk-annotations` artifact, never inline on the diff. If that proves to make the gate unusable in
-practice, the remedy is a scope change to option (a) — a one-line permissions edit plus cell 10 —
-not a redesign.
+practice, the remedy is a scope change to option (a), not a redesign. It is NOT a one-line permissions
+edit (codex, r43): `save-annotations: true` keeps selecting artifact output whatever the token scope,
+so the switch is the permissions edit, plus removing `save-annotations`, plus amending the registry's
+`C4.save-annotations-required` obligation, plus cell 10.
 
 ### 6.2 — Adding a required context to ruleset `Control`
 
@@ -2380,8 +2416,10 @@ hook and the canary still run `taplo lint`.
   here, because three independent enumerations of this file's obligations have already drifted apart
   once. Created by M2b, asserted by cell 16. Revision 20 required
   this file to exist and listed it nowhere (sweep).
-* `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
-  which is exactly why `trunk-check` may not live in it
+* `.github/workflows/plugin-ci.yml` — changed by this ticket ONLY to install PyYAML for the contract
+  cells: two steps labelled COREDEV-2780, one in `validate` and one in `darwin-suite` (codex, r43
+  corrected "unchanged"). It keeps its `workflow_dispatch`, which is exactly why `trunk-check` may not
+  live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
   `:358` updated
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
@@ -2417,7 +2455,7 @@ hook and the canary still run `taplo lint`.
   (the workflow-jobs API exposes `conclusion`, never `outcome` — codex, r20), **cell 16's ruleset read
   and its canary runtime control**, **cell 17's post-M4 enforcement smoke test and the §6.2a rollback
   rehearsal (M4a)**, cell 3's observed PR outcomes, C2's live-ruleset
-  half**, and cell 8's real `SessionStart` invocation. Provenance-bound observations of things a real
+  half**. Provenance-bound observations of things a real
   run **reports** — never runner-local state that vanishes with the job, which is why cell 5's
   post-invocation hash moved to the harness (codex, r18)
 * **`.github/workflows/trunk-parity-harness.yml` (NEW, non-required) + `scripts/tests/test_trunk_upstream_parity.py`.**
@@ -2474,7 +2512,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 17 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: it asserts the live ruleset's *behaviour* (the red PR observed `blocked` with `trunk-check` named, the green one `clean`), which nothing static can observe. **Both observations are reads; this cell never calls the merge endpoint** (codex, r33) |
 | 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, SHA pins, both guards and their shared resolver, C5's `env:` prohibition, C6's launcher guard, `permissions` by value, and that `branches:` is well-formed and non-empty. **`branches:` EQUALLING the ruleset's live RESOLVED target set (C2's `resolve()`) is a local-vs-remote comparison** and therefore hybrid under §7's own rule, exactly as C2 is for the required workflow — the evidence artifact carries that half; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
-| 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
+| 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2801-sessionstart-observation.json` (the runtime half, which no test file can carry; codex, r11). It records the wired command run with a real payload, and dispatcher markers as INFERRED wiring; the dispatcher's invocation itself is outstanding (codex, r43) |
 | 10 | **hybrid**: `test_trunk_check_workflow.py` pins `permissions` by value at both scopes (a wider token yields identical runtime evidence, so only a static check discriminates it — codex, r25); `evidence/COREDEV-2780-rollout.json` carries the annotation-artifact observation |
 | 12 | `docs/planning/evidence/COREDEV-2780-rollout.json` — **evidence, not a unit test**: the annotation artifact and the dual-base provenance-bound check runs are observations of real runs, recorded as a committed artifact the way COREDEV-2711 §3a's measurement was. Saying so is what makes them ownable |
 | 13 | `test_precommit_trunk_gate.py` |
