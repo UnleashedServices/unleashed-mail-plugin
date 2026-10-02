@@ -272,9 +272,9 @@ def _clean_record(event: str = "pull_request") -> dict:
             # mis-indented fixture (shfmt's whole-file `fmt`, no position; run 34073353787) because the
             # required job now filters shfmt out. This shape was MEASURED by running the harness's own
             # `primary_diagnostic()` over a `trunk check --ci --upstream` of the staged fixture under the
-            # six-name filter: `shellcheck/SC2250` at line 3, column 7. It must be re-confirmed against
-            # the first CI harness run's recorded `parity-*.json`; if that artifact disagrees, the
-            # artifact wins and this record changes — never the reverse.
+            # six-name filter: `shellcheck/SC2250` at line 3, column 7 — and CONFIRMED by CI: the
+            # harness runs 37064766555 (push) and 37064772381 (pull_request) on `e71b0bf` recorded
+            # exactly this diagnostic, and both artifacts are what `parity-*.json` now hold.
             "primaryDiagnostic": {
                 "path": "harness-fixtures/fixable.sh",
                 "linter": "shellcheck/SC2250",
