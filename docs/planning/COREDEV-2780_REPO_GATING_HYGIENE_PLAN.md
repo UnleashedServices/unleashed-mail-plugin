@@ -1,12 +1,13 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 47
+**Status:** Planning, revision 48
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
 respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
 * cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
-  asserted diagnostics differ from the registry's (ten required-entry, one canary); the case-validity
+  asserted diagnostics differ from the registry's (ten required-entry, one canary: 19 executions once
+  each case runs on every entry it declares); the case-validity
   rule is not executed; the `(side, form)` resolver family runs as hard-coded helper tests, not as the
   24 registry-expanded executions;
 * cell 11 / cell 15 — resolution is not "once, before entry selection": the required and canary
@@ -21,6 +22,8 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * cell 13 — its tests use an empty repository and a fake Trunk with configured exit statuses. The
   clean-index/dirty-worktree pair, the index and worktree mutation checks, and a representative clean
   slow path are not implemented. The "slow path" is a one-second fake sleep;
+* C6 and C6a — their fixture tests accept a path fragment or `digest mismatch`, not the registry's own
+  diagnostic messages (codex, r50);
 * cells 3 and 5 — `scripts/tests/test_trunk_check_behaviour.py`, which §7 names as the owner of their
   constructible fixture halves, does not exist (codex, r45);
 * cell 11 — the survivor corpus (`COREDEV-2780-survivors.yaml`) is read for metadata and registry
@@ -42,7 +45,8 @@ checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequ
 the job ID was checked, never the job `name` that decides the emitted context, so a canary named
 `validate` passed (revision 45); and every check read only the FIRST job, so a sibling job named
 `validate` appended under `jobs:` passed (revision 46, found by both arms). Cell 11's per-step minimum is
-now declared in the registry and executed: 38 cases added in revisions 43-46, every one actionlint-clean
+now declared in the registry and executed: 40 cases added in revisions 43-48 (two of them, the runner
+and timeout operands, close a coverage gap rather than a survivor), every one actionlint-clean
 apart from the permitted `if-cond` notes. The survivor corpus records all six forms, as §1 requires; it
 is still not EXECUTED (above). Its `TRUNK_PATH` cases now write that
 assignment; until revision 44 all three appended `echo X`.
@@ -296,6 +300,17 @@ assignment; until revision 44 all three appended `echo X`.
 > fail-closed first, closes the PR before any ungating write, states the canary exception in the clause
 > and the registry, and splits the context obligation per entry, so that 0 of 110 combinations fail. It
 > also corrects the three claims.
+> **r50** `2ab37ea` (revision 47), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1). codex confirmed
+> revision 47's recovery order, its canary exception, and the per-entry context split. Its one blocker
+> refined the first: **M4a's "stay fail-closed" step could restore an INEFFECTIVE gate.** M4 preserved
+> `enforcement` across its comparison but never required it to be `active`, so an inactive ruleset
+> passed M4. Cell 17 would then see the red PR mergeable, and recovery would restore that same
+> ineffective state before closing the PR. **Revision 48** requires a fresh `enforcement: active` in M4's
+> reads and in every M4a transition read. When cell 17 fails, recovery now closes the witness PR FIRST.
+> It also fixes two residues the r49 corrections left (§3b's "the operand is removed", cell 8's "only
+> PyYAML"), rebinds the timeout-360 survivor (it was bound to an unrelated container-key case, because
+> no registry case exercised the timeout), adds the runner/timeout cases, and records the C6/C6a message
+> gap. 0 of 112 mutant x entry combinations fail. CI was fully green at `96c2f94`.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1112,7 +1127,8 @@ the code (codex, r49). Revision 22 kept
 one and redefined it as selecting "which installs to report on" without ever defining that mapping;
 revision 23 deleted one site of the old semantics and left two more standing. There is nothing for a
 mode to select — both surfaces compare the *same* installed record against the *same* `origin/main`
-manifest, and differ only in **when they fire**. The operand is removed. *(Not to be confused with
+manifest, and differ only in **when they fire**, and in the hook protocol `--session-start` selects
+(above). The comparison-mode operand is removed. *(Not to be confused with
 trunk's `--index` in cell 13, which is a different flag on a different tool and is unaffected.)*
 
 **`origin/main` is a local bookmark — a STATED LIMITATION, not a mechanism.** It is only as current
@@ -1446,6 +1462,10 @@ alternative turned out to be complementary rather than competing.
       4. **`trunk-check-push` ABSENT from the required-context list**, before and after (cell 16's
          re-verification — an M4 payload could otherwise require the canary and still satisfy the
          readback, leaving ordinary PRs pending and giving a `main`→`alpha` PR a same-SHA substitute).
+      5. **`enforcement` is `active`** in BOTH reads, read fresh each time. It must be ACTIVE, which is
+         more than "unchanged" (codex, r50). The recorded `active` in the rollout evidence is history,
+         not a precondition, and an inactive ruleset passes items 1-4 and every comparison while
+         enforcing nothing.
 
       **Must CHANGE, in exactly one direction** — roll back if not:
       5. `trunk-check` is **absent** from the required contexts in the pre-read and **present with its
@@ -1525,10 +1545,15 @@ alternative turned out to be complementary rather than competing.
       neither `trunk-check` nor the placeholder. That is the ungated state, reached with the deliberately
       red PR still open and its other required checks green, so it reopened the merge race the
       substitution exists to close, auto-merge included.
-      1. **Stay fail-closed first.** Mid-rehearsal, keep the placeholder. Otherwise restore the
-         pre-M4a canonical state: `trunk-check` present, no placeholder. Either way, under §6.2a's
-         readback for that write.
-      2. **Close the sacrificial PR**, and confirm it is closed, before any write that could ungate.
+      1. **If cell 17 failed, close the sacrificial PR FIRST.** The red PR observed as mergeable means the
+         gate is NOT enforcing, so restoring that same state is not "fail-closed" (codex, r50). Nothing in
+         the ruleset can be relied on to protect the witness, and an interruption before closure leaves
+         it mergeable. Otherwise, for a rehearsal failure under a ruleset verified `enforcement: active`,
+         **stay fail-closed**: mid-rehearsal keep the placeholder, or else restore the pre-M4a canonical
+         state (`trunk-check` present, no placeholder). Either way, under §6.2a's readback for that
+         write, with `enforcement: active` verified in it.
+      2. **Close the sacrificial PR** if it is still open, and confirm it is closed, before any write
+         that could ungate.
       3. **Only then**, and only if the failure shows the gate itself is broken, perform §6.2a's incident
          rollback to the pre-M4 state (its one-entry readback), and return to M3.
 
@@ -1545,7 +1570,9 @@ alternative turned out to be complementary rather than competing.
         state; **placeholder present = interrupted mid-rehearsal**, resume at the restore PUT;
         **neither present = the repository is UNGATED**, which the substitution model should never
         produce — stop, restore `trunk-check` from the recorded pre-M4a canonical document, and
-        re-enter at step 1 rather than continuing.
+        re-enter at step 1 rather than continuing. **Every one of these reads also requires
+        `enforcement: active`** (codex, r50). A placeholder under an inactive ruleset protects nothing.
+        Any other value means no ruleset state is blocking: close the sacrificial PR first, and stop.
       * **Preflight, and RE-READ immediately before each PUT.** Enumerate open PRs against both bases
         and confirm none has auto-merge enabled or sits in a merge queue. The entry preflight is a
         snapshot; the read that decides is the one taken immediately before the write, because the
@@ -1831,8 +1858,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      or locally-newer install cannot train people to ignore the warning.
    * **`SessionStart`** cannot be proved by the planned suite (codex, r10, refined r11): the
      repository *does* install Claude Code later in `plugin-ci.yml`, but **the Python suites run
-     before that step**, and this plan does not reorder `plugin-ci.yml` (its only change is installing
-     PyYAML; see §7) — so any "real entry point" assertion there would be a parser or
+     before that step**, and this plan does not reorder `plugin-ci.yml` (it changes only this ticket's own
+     CI needs, listed in §7) — so any "real entry point" assertion there would be a parser or
      emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly.**
 
      **CI asserts the DECLARATION**, against the documented stdin contract — rewritten as a list

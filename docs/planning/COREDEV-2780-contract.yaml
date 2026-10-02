@@ -543,6 +543,31 @@ obligations:
         validity: a second producer of the required `trunk-check` context
         diagnostic: "job: effective context `trunk-check` is not `trunk-check-push`"
 
+  - id: C3.runner-and-timeout-pinned
+    clause: C3
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      `runs-on: ubuntu-latest` and `timeout-minutes: 15`, each asserted and mutated as an OPERAND. The
+      checker enforced both, but no registry case exercised either, so the timeout-360 survivor was
+      bound to an unrelated container-key case (codex, r50).
+    target: $.jobs.<job>
+    cases:
+      - id: C3.runner-and-timeout-pinned/timeout-360
+        op: set
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "360"
+        validity: GitHub's own six-hour default, a timeout that changes nothing
+        diagnostic: "job: expected `timeout-minutes: 15`, found 360"
+      - id: C3.runner-and-timeout-pinned/other-runner
+        op: set
+        side: local
+        target: $.jobs.<job>.runs-on
+        payload: macos-latest
+        validity: a valid runner other than the declared one
+        diagnostic: "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'"
+
   - id: C3.single-job
     clause: C3
     kind: yaml

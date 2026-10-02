@@ -183,7 +183,7 @@ survivors:
     # deleted while six siblings kept the clause present, so the binding permitted exactly
     # the regression it claimed to detect (codex, PR #85).
     covered_by:
-      - C3.job-mapping-allowlist/arbitrary-key
+      - C3.runner-and-timeout-pinned/timeout-360
     found_in_round: r21
     survived_formulation: >-
       Cell 15 required only that `timeout-minutes` EXIST.

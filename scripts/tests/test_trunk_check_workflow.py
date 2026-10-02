@@ -3406,6 +3406,18 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _job(w).update({"name": CANARY_CONTEXT}),
                 "job: effective context `trunk-check-push` is not `trunk-check`",
             ),
+            # The runner and the timeout as OPERANDS (codex, r50): both are enforced, but the registry had
+            # no case for either, so the timeout-360 survivor was bound to an unrelated container key.
+            (
+                "C3.runner-and-timeout-pinned/timeout-360",
+                lambda w: _job(w).update({"timeout-minutes": 360}),
+                "job: expected `timeout-minutes: 15`, found 360",
+            ),
+            (
+                "C3.runner-and-timeout-pinned/other-runner",
+                lambda w: _job(w).update({"runs-on": "macos-latest"}),
+                "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'",
+            ),
             # A SIBLING job (both arms, r47): every check reads `_job()`, the FIRST job, so a second
             # job appended under `jobs:` was never inspected, and could emit `validate`.
             (
