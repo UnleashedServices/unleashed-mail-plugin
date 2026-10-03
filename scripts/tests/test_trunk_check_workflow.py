@@ -346,6 +346,45 @@ def _construct_core_int(loader, node) -> int:
 _ActionsYamlLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
 
 
+def _mapping_values(node, key: str) -> list:
+    """Every value node under `key` in a MappingNode, duplicates included, keys compared as text."""
+    if not isinstance(node, yaml.MappingNode):
+        return []
+    return [
+        value
+        for k, value in node.value
+        if isinstance(k, yaml.ScalarNode) and k.value == key
+    ]
+
+
+def _pinned_value_nodes(root, path: tuple) -> list:
+    """The value nodes at a pinned path: `(key,)` under the single job, or `(step_name, key)` under
+    that step's `with:`. Every job and every matching step is searched, so a duplicate is COUNTED.
+    """
+    jobs = [
+        job
+        for jobs_node in _mapping_values(root, "jobs")
+        if isinstance(jobs_node, yaml.MappingNode)
+        for _, job in jobs_node.value
+    ]
+    if len(path) == 1:
+        return [value for job in jobs for value in _mapping_values(job, path[0])]
+    step_name, key = path
+    found = []
+    for job in jobs:
+        for steps in _mapping_values(job, "steps"):
+            for step in steps.value if isinstance(steps, yaml.SequenceNode) else []:
+                names = _mapping_values(step, "name")
+                if (
+                    names
+                    and isinstance(names[0], yaml.ScalarNode)
+                    and names[0].value == step_name
+                ):
+                    for with_node in _mapping_values(step, "with"):
+                        found.extend(_mapping_values(with_node, key))
+    return found
+
+
 def raw_workflow_problems(text: str, *, entry: str = "required") -> list[str]:
     """What only the RAW TEXT can show (codex, r61). (1) No explicit YAML tags: `!!bool yes` and
     `!!int 1_5` bypass every implicit resolver, so they re-admit the YAML 1.1 coercions the loader
@@ -360,23 +399,30 @@ def raw_workflow_problems(text: str, *, entry: str = "required") -> list[str]:
         and event.tag is not None
     ]
     canonical = {
-        "timeout-minutes": "15",
-        "fetch-depth": "0" if entry == "canary" else "2",
-        "lfs": "true",
-        "persist-credentials": "false",
-        "save-annotations": "true",
+        ("timeout-minutes",): "15",
+        ("checkout", "fetch-depth"): "0" if entry == "canary" else "2",
+        ("checkout", "lfs"): "true",
+        ("checkout", "persist-credentials"): "false",
+        ("trunk", "save-annotations"): "true",
     }
-    for key, spelling in canonical.items():
-        found = re.findall(
-            rf"^\s*{re.escape(key)}:\s*(.*?)\s*(?:#.*)?$", text, flags=re.MULTILINE
-        )
-        if len(found) != 1:
+    # BY YAML PATH, NEVER BY TEXT (codex, r62): a line regex rejected a quoted key such as
+    # `"timeout-minutes": 15`, and it ACCEPTED a forbidden `+15` when a decoy `timeout-minutes: 15`
+    # line sat inside a block string. Each value is found through the composed node graph, and its
+    # spelling is read from that node's own source span.
+    root = yaml.compose(text, Loader=_ActionsYamlLoader)
+    for path, spelling in canonical.items():
+        key = path[-1]
+        nodes = _pinned_value_nodes(root, path)
+        if len(nodes) != 1:
             problems.append(
-                f"{key}: expected exactly one occurrence, found {len(found)}"
+                f"{key}: expected exactly one occurrence, found {len(nodes)}"
             )
-        elif found[0] != spelling:
+            continue
+        node = nodes[0]
+        written = text[node.start_mark.index : node.end_mark.index]
+        if node.style is not None or written != spelling:
             problems.append(
-                f"{key}: spelled `{found[0]}`, not the canonical `{spelling}`"
+                f"{key}: spelled `{written}`, not the canonical `{spelling}`"
             )
     return problems
 
@@ -4169,6 +4215,52 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
                     raw_workflow_problems(
                         path.read_text(encoding="utf-8"), entry=entry
                     ),
+                )
+
+    def test_it_reads_YAML_PATHS_not_lines(self):
+        """codex, r62: a line regex rejected a quoted key and accepted a forbidden `+15` hidden behind
+        a decoy line inside a block string. Positive: a quoted key, and the whole document in flow
+        style, are accepted by BOTH checks. Negative: the decoy cannot launder `+15`."""
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            text = path.read_text(encoding="utf-8")
+            quoted, n = re.subn(
+                r"^(\s*)timeout-minutes:(\s*15\s*)$",
+                r'\g<1>"timeout-minutes":\g<2>',
+                text,
+                flags=re.MULTILINE,
+            )
+            flow = yaml.dump(
+                _load_actions_yaml(text),
+                default_flow_style=True,
+                sort_keys=False,
+                width=10**6,
+            )
+            decoy, m = re.subn(
+                r"^(\s*)timeout-minutes:\s*15\s*$",
+                r'\g<1>"timeout-minutes": +15',
+                text,
+                flags=re.MULTILINE,
+            )
+            decoy, k = re.subn(
+                r"^(\s*)save-annotations: true$",
+                "\\g<1>save-annotations: true\n\\g<1>cache-key: |\n\\g<1>  timeout-minutes: 15",
+                decoy,
+                flags=re.MULTILINE,
+            )
+            self.assertEqual((1, 1, 1), (n, m, k))
+            for label, document in (("quoted key", quoted), ("flow style", flow)):
+                with self.subTest(entry=entry, positive=label):
+                    self.assertEqual([], raw_workflow_problems(document, entry=entry))
+                    self.assertEqual(
+                        [],
+                        contract_problems(
+                            _load_actions_yaml(document), milestone="M3", entry=entry
+                        ),
+                    )
+            with self.subTest(entry=entry, negative="decoy line inside a block string"):
+                self.assertIn(
+                    "timeout-minutes: spelled `+15`, not the canonical `15`",
+                    raw_workflow_problems(decoy, entry=entry),
                 )
 
     def test_each_case_is_rejected_on_both_entries(self):

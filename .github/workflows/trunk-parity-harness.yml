@@ -113,7 +113,8 @@ jobs:
           # run and the autofix positive control — and validating only the first meant a pin bump
           # that updated the shipped workflow and the primary step but missed the control would
           # record the new pin while the control's sensitivity was established with an older action.
-          # The control's whole premise is that ONLY `--fix` differs (codex, PR #84).
+          # The control's premise is that only `--fix` changes what can REWRITE the fixture (codex, PR #84);
+          # `save-annotations` also differs, and cannot (codex, plan r62).
           hused = {
               str(s["uses"])
               for s in hjob["steps"]

@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 58
+**Status:** Planning, revision 59
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -456,6 +456,17 @@ assignment; until revision 44 all three appended `echo X`.
 > C0.raw-text-canonical. Four raw cases run on both entries, and all eight executions were accepted by
 > `contract_problems` alone. It also splits the octal survivor from the boolean one and records the tag
 > survivor (eleven forms), and corrects the harness's "only `--fix` differs".
+> **r62** `570fe27` (revision 58), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1 P2, 2 P3). codex
+> confirmed tag rejection, the four raw cases, and the corpus split. P2: **revision 58's canonical
+> check was a line REGEX over the text, not a check of YAML values.** It rejected a permitted quoted
+> key, and it accepted a forbidden `+15` when a decoy `timeout-minutes: 15` line sat inside a
+> `cache-key` block string. codex had suggested node positions one round earlier, and I took the
+> shortcut. P3: a second "ONLY `--fix` differs" comment in the harness (inside a run body), and the
+> registry-kind inventory missing `raw_text`. **Revision 59** reads each pinned value at its YAML
+> PATH through the composed node graph, with its spelling from the node's own source span. Standing
+> tests check a quoted key and a flow-style document as positives, on BOTH checks, and the decoy as a
+> negative; the old regex implementation fails six of their subtests. It also corrects the harness
+> comment (and re-pins that job's digest) and adds `raw_text` to the inventory.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -783,6 +794,7 @@ own non-required context.
   | `repo_fixture` | a path that must not exist in the checked-out tree (C6) | materialise it — and for `.trunk/setup-ci`, as a **valid composite action that exits green**, not a bare executable |
   | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block, **C6a's shared resolver script**) | edit the bytes while preserving the surrounding shape |
   | `remote_relation` | local content that must equal live remote state (C2) | diverge the local half, and separately the remote half |
+  | `raw_text` | a property only the source TEXT can show: no explicit YAML tag, and canonical spellings of pinned scalars, read at their YAML PATHS (C0.raw-text-canonical, revision 58; codex r62) | edit the bytes of the workflow source, then check the text and its parse |
 
   **Mutation CASES are first-class, and the generator iterates cases rather than entries**
   (codex, r15). One mutant per *entry* still under-covers, because several obligations need more than
@@ -1065,7 +1077,12 @@ own non-required context.
   **every pinned scalar is spelled canonically** (`15`, `2`/`0`, `true`, `false`, `true`). A respelling
   such as `+15` or `TRUE` parses to the pinned value. The raw-text mutation tests had silently assumed
   canonical spellings, so a correct-but-respelled workflow failed them; the assumption is now a
-  declared contract rule, checked by `raw_workflow_problems` on both entries. The parity
+  declared contract rule, checked by `raw_workflow_problems` on both entries. **Each pinned value is
+  found at its YAML PATH, never by a line search** (codex, r62). Revision 58 used a line regex, which
+  rejected a quoted key (`"timeout-minutes": 15`). Worse, it ACCEPTED a forbidden `+15` when a decoy
+  `timeout-minutes: 15` line sat inside a permitted block string. The value is now located through the
+  composed node graph, and its spelling read from that node's own source span. A quoted key and a
+  flow-style document are accepted; the decoy is not. The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 
@@ -2816,7 +2833,7 @@ hook and the canary still run `taplo lint`.
   because revision 26 required "one shared shipped script" and inventoried none (codex, r27).
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
   per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
-  `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
+  `content_digest`, `remote_relation`, and since revision 58 `raw_text`) and **one or more mutation cases** — operator and side, target,
   payload or fixture, validity check, and expected diagnostic. §1's C0–C9 and C6a prose is rendered from it,
   cell 11's mutants are generated by iterating its **cases**, and cell 15 asserts prose and registry
   agree. It exists because "derived from the clause text" is not a mechanism when the clause text is
