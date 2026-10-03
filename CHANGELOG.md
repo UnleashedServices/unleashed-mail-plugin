@@ -17,6 +17,22 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2850 plan §6 step 3: the probe-PR cells are observed and JUDGED.**
+  Probe PR #103 was never merged. It ran the bundle's six-entry required literal and observed the cells
+  that no unit test can show:
+  - A finding-neutral edit to the recorded-unformatted `scripts/validate-hooks.py` went GREEN
+    (cell 1), and so did a format-only defect (arm E).
+  - A new shellcheck finding went RED (cell 2).
+  - A new bandit `B602` finding went RED with no lint finding (cell 3).
+
+  `COREDEV-2850-probe-observations.json` records the runs from their own job logs.
+  `test_coredev_2850_probe_evidence.py` refuses the record if any of these stop holding:
+  - its action inputs still hash to the contract's digest, under the pinned action;
+  - each run's conclusion matches its cell;
+  - each red is bound to findings of a single category;
+  - cell 1 used the recorded reproduction;
+  - the canary cells are marked DEFERRED.
+
 - **COREDEV-2780: the contract checker parsed workflows as YAML 1.1; GitHub parses YAML 1.2.**
   PyYAML's default reads unquoted `yes`/`no` as booleans, so `save-annotations: yes`, `lfs: yes` and
   `persist-credentials: no` passed the checker while the runner received the STRINGS (codex, plan r59).

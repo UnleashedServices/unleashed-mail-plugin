@@ -1012,6 +1012,26 @@ meant.
    - For **cell 5**, the staged fixture's ONLY finding must be a formatter finding, and the same
      staged file under the required job's literal must exit 0. Without that second half the cell is
      satisfied by a run whose exit 1 was overdetermined by lint findings.
+   **OBSERVED — probe PR #103** (2026-10-03; `evidence/COREDEV-2850-probe` → `main`, cut from the
+   bundle head `f796a19`, never merged). Three commits were pushed one at a time, and each run was
+   observed before the next push:
+   - **Cells 1 + 2b:** GREEN on the required context in all three runs (`No new issues`, 59
+     existing).
+   - **Cell 2:** RED, bound to `shellcheck/SC2086` and `SC2250` at
+     `harness-fixtures/2850-lint-probe.sh:5:4`.
+   - **Cell 3:** RED, bound to `bandit/B602` (and `B404`); `2 new security issues` and no lint
+     finding.
+   - **Cell 5 and arm E's hook half:** the local hook blocked the staged probe commit on black (both
+     files) and isort. The same files under the required literal exit 0, which is commit 1's green.
+
+   Every run's action inputs hash to the contract's `action_inputs_digest` under the pinned action.
+   The record is `docs/planning/evidence/COREDEV-2850-probe-observations.json`, built from the runs'
+   own job logs. It is JUDGED by `scripts/tests/test_coredev_2850_probe_evidence.py`, and each of the
+   judge's ten checks turns a test red when disabled. **Cell 6 and arm E's canary half remain
+   DEFERRED:** no disposable fork was stood up.
+
+   The red commits used `--no-verify` after the hook's other checks passed, as in M3. The probe
+   planted no credential; cell 3's fixture is bandit's `shell=True`.
 4. Update COREDEV-2780's `stillOpenForM3` cell-3 entry. Three things, not one:
    a. **Re-derive its `discriminator`.** It is currently a bare
       `trunk check --no-fix --ci --upstream=$(git rev-parse origin/main)` with **no `--filter`** —
