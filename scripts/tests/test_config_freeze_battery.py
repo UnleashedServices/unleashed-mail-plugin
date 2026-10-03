@@ -27,9 +27,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import suppress
 from typing import Any
-from unittest import mock
 
 import test_trunk_check_workflow as t
 import yaml
@@ -209,7 +209,7 @@ def _kind_patches(kind: str, want: Any) -> list:
                 raise OSError(code, os.strerror(code), str(path))
             return real_lstat(path)
 
-        return [mock.patch.object(t, "_lstat", injected)]
+        return [unittest.mock.patch.object(t, "_lstat", injected)]
     if kind == "REFUSE_DEVICE":
 
         def as_device(path: Any) -> Any:
@@ -218,7 +218,7 @@ def _kind_patches(kind: str, want: Any) -> list:
                 return os.stat_result((stat.S_IFCHR | 0o644, *tuple(result)[1:]))
             return result
 
-        return [mock.patch.object(t, "_lstat", as_device)]
+        return [unittest.mock.patch.object(t, "_lstat", as_device)]
     return []
 
 
@@ -334,7 +334,7 @@ def observe(ws: pathlib.Path, n: int) -> bool:
         reads.append(str(path))
         return bytes(real_read(path))
 
-    with mock.patch.object(t, "_read_member", spy):
+    with unittest.mock.patch.object(t, "_read_member", spy):
         try:
             return _observe(ws, operand, kind, want, reads)
         except (t.ConfigFreezeRefusal, OSError):
@@ -636,12 +636,16 @@ def _patchers(name: str) -> list:
     for attribute, replacement in mutants()[name]:
         if attribute == "ConfigFreezeRefusal.__init__":
             out.append(
-                mock.patch.object(t.ConfigFreezeRefusal, "__init__", replacement)
+                unittest.mock.patch.object(
+                    t.ConfigFreezeRefusal, "__init__", replacement
+                )
             )
         elif isinstance(replacement, dict):
-            out.append(mock.patch.dict(getattr(t, attribute), replacement, clear=True))
+            out.append(
+                unittest.mock.patch.dict(getattr(t, attribute), replacement, clear=True)
+            )
         else:
-            out.append(mock.patch.object(t, attribute, replacement))
+            out.append(unittest.mock.patch.object(t, attribute, replacement))
     return out
 
 

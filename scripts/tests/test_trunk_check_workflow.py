@@ -32,8 +32,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 import yaml
 
@@ -2864,7 +2864,7 @@ class Cell15_TargetSetResolution(unittest.TestCase):
         thing BOTH entries are judged against: each verdict and each diagnostic follows it, and the
         boundary is crossed exactly once."""
         sentinel = {"sentinel-coredev-2869"}
-        boundary = mock.patch.object(
+        boundary = unittest.mock.patch.object(
             sys.modules[__name__], "_resolve_once", return_value=sentinel
         )
         with boundary as resolved:
@@ -2879,7 +2879,7 @@ class Cell15_TargetSetResolution(unittest.TestCase):
         # Governed in the other direction too: a sentinel equal to each entry's branches clears both.
         shipped = _shipped_branches()
         self.assertEqual(shipped["required"], shipped["canary"])
-        boundary = mock.patch.object(
+        boundary = unittest.mock.patch.object(
             sys.modules[__name__],
             "_resolve_once",
             return_value=set(shipped["required"]),
@@ -4634,7 +4634,7 @@ class TheSourceGeneratorsFailByName(unittest.TestCase):
             sort_keys=False,
             width=10**6,
         )
-        forced = mock.patch.object(
+        forced = unittest.mock.patch.object(
             sys.modules[__name__], "_ends_its_line", return_value=True
         )
         named = self.assertRaisesRegex(
