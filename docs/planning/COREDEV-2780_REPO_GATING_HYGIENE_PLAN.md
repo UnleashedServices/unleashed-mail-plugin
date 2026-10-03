@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 59
+**Status:** Planning, revision 60
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-58, not outstanding** (r44 to r61): eleven checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-60, not outstanding** (r44 to r63): twelve checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -54,13 +54,15 @@ operands were compared by VALUE only, so `fetch-depth: false` and `timeout-minut
 `save-annotations: yes` passed while GitHub's YAML 1.2 parse delivers the string "yes" (revision 56); and
 revision 56 fixed only the booleans, so `timeout-minutes: 017` passed as octal 15 where GitHub reads 17
 (revision 57, the whole core schema); and an explicit tag (`!!bool yes`, `!!int 1_5`) bypassed the
-implicit resolvers altogether (revision 58, C0.raw-text-canonical). Also fixed in
+implicit resolvers altogether (revision 58, C0.raw-text-canonical); and the effective context used Python
+truthiness, so `name: false` fell back to the job ID (revision 60; cell 14 caught it at suite level, but
+the comparator did not). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
 one bucket (COREDEV-2868). Cell 11's per-step minimum is
-now declared in the registry and executed: 62 cases added in revisions 43-58, eight of them RAW-TEXT (the runner and timeout
+now declared in the registry and executed: 64 cases added in revisions 43-60, eight of them RAW-TEXT (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
 survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
-apart from the permitted `if-cond` notes. The survivor corpus records all eleven forms, as §1 requires; it
+apart from the permitted `if-cond` notes. The survivor corpus records all twelve forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
 and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
@@ -467,6 +469,16 @@ assignment; until revision 44 all three appended `echo X`.
 > tests check a quoted key and a flow-style document as positives, on BOTH checks, and the decoy as a
 > negative; the old regex implementation fails six of their subtests. It also corrects the harness
 > comment (and re-pins that job's digest) and adds `raw_text` to the inventory.
+> **r63** `d52ebe8` (revision 59), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1 P2, 1 P3). codex
+> confirmed the YAML-path check, the harness correction and the digest re-pin. P2: **the fixture
+> builders still used line regexes.** I had fixed the CHECKER and not the TESTS, so a permitted inline
+> comment or quoted key in the shipped file would fail them falsely. P3: `name: false` or `name: 0`
+> fell back to the job ID by truthiness, which the comparator accepted; cell 14 caught it at suite
+> level. **Revision 60** builds every raw mutation from the same node spans the checker reads. It runs
+> every raw case on four permitted spellings of each source (as shipped, inline comments, quoted keys,
+> flow style), all actionlint-clean and all a positive control for both checks. A present `name`
+> decides the context whatever its value, with a `named-false` case per entry; the old expression
+> accepted both. 128 recipes, 218 combinations, 0 failing.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -990,7 +1002,8 @@ own non-required context.
   implemented the exception; the authority omitted it.
   **Each workflow declares exactly ONE job** (both arms, r47): every check here reads the first job, so
   without this a sibling appended under `jobs:` is never inspected at all.
-  **The EFFECTIVE context is pinned per entry** (codex, r46): the job `name`, or else the job ID, must
+  **The EFFECTIVE context is pinned per entry** (codex, r46): a PRESENT `name`, whatever its value
+  (a truthiness test let `name: false` fall back to the job ID; codex, r63), or else the job ID, must
   equal `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
   which status context a job emits. Checking only the job ID let a canary renamed `validate` emit a
   REQUIRED context, satisfying it on its SHA without the contract suites ever running. **With
@@ -1082,7 +1095,11 @@ own non-required context.
   rejected a quoted key (`"timeout-minutes": 15`). Worse, it ACCEPTED a forbidden `+15` when a decoy
   `timeout-minutes: 15` line sat inside a permitted block string. The value is now located through the
   composed node graph, and its spelling read from that node's own source span. A quoted key and a
-  flow-style document are accepted; the decoy is not. The parity
+  flow-style document are accepted; the decoy is not. **The mutation BUILDERS locate values the same
+  way** (codex, r63). They had kept line regexes, so a permitted inline comment or quoted key in the
+  shipped file would have failed the standing tests. Every raw case now runs on four permitted
+  spellings of each source (as shipped, inline comments, quoted keys, flow style), and all four are a
+  positive control for both checks. The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 

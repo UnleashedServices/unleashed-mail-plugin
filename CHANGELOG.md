@@ -60,7 +60,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
   the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
   `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
-  have emitted a REQUIRED context. Each entry's effective context is now pinned. **A sibling job**
+  have emitted a REQUIRED context. Each entry's effective context is now pinned, and a
+  PRESENT name decides it whatever its value (`name: false` had fallen back to the job ID; codex,
+  plan r63). **A sibling job**
   (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
   first job. Each workflow must now declare exactly one. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`

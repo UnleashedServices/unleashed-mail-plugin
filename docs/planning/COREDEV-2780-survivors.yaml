@@ -412,3 +412,17 @@ survivors:
     would_have_shipped: >-
       The YAML 1.1 coercions re-admitted through one prefix, accepted by the checker and by actionlint.
     must_fail_because: C0.raw-text-canonical forbids explicit tags in a workflow.
+
+  - id: survivor/falsey-job-name
+    covered_by:
+      - C3.effective-context-pinned-required/named-false
+      - C3.effective-context-pinned-canary/named-false
+    found_in_round: r63
+    survived_formulation: >-
+      The effective context was `str(job.get("name") or job_id)`, so a PRESENT but falsey name fell
+      back to the job ID by Python truthiness. Cell 14's census rejects a non-string name at suite
+      level, so this survived the COMPARATOR, not the whole suite.
+    mutant: the job's `name` key set to `false` (or `0`)
+    would_have_shipped: >-
+      A comparator that reported the job ID as the context while the job carried a different name.
+    must_fail_because: a present `name` decides the effective context, whatever its value (C3).

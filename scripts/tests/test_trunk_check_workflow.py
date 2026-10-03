@@ -346,21 +346,25 @@ def _construct_core_int(loader, node) -> int:
 _ActionsYamlLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
 
 
-def _mapping_values(node, key: str) -> list:
-    """Every value node under `key` in a MappingNode, duplicates included, keys compared as text."""
+def _mapping_pairs(node, key: str) -> list:
+    """Every (key node, value node) under `key` in a MappingNode, duplicates included."""
     if not isinstance(node, yaml.MappingNode):
         return []
     return [
-        value
+        (k, value)
         for k, value in node.value
         if isinstance(k, yaml.ScalarNode) and k.value == key
     ]
 
 
-def _pinned_value_nodes(root, path: tuple) -> list:
-    """The value nodes at a pinned path: `(key,)` under the single job, or `(step_name, key)` under
-    that step's `with:`. Every job and every matching step is searched, so a duplicate is COUNTED.
-    """
+def _mapping_values(node, key: str) -> list:
+    return [value for _, value in _mapping_pairs(node, key)]
+
+
+def _pinned_pairs(root, path: tuple) -> list:
+    """The (key, value) node pairs at a pinned path: `(key,)` under the single job, or
+    `(step_name, key)` under that step's `with:`. Every job and every matching step is searched, so a
+    duplicate is COUNTED."""
     jobs = [
         job
         for jobs_node in _mapping_values(root, "jobs")
@@ -368,7 +372,7 @@ def _pinned_value_nodes(root, path: tuple) -> list:
         for _, job in jobs_node.value
     ]
     if len(path) == 1:
-        return [value for job in jobs for value in _mapping_values(job, path[0])]
+        return [pair for job in jobs for pair in _mapping_pairs(job, path[0])]
     step_name, key = path
     found = []
     for job in jobs:
@@ -381,8 +385,60 @@ def _pinned_value_nodes(root, path: tuple) -> list:
                     and names[0].value == step_name
                 ):
                     for with_node in _mapping_values(step, "with"):
-                        found.extend(_mapping_values(with_node, key))
+                        found.extend(_mapping_pairs(with_node, key))
     return found
+
+
+def _pinned_value_nodes(root, path: tuple) -> list:
+    return [value for _, value in _pinned_pairs(root, path)]
+
+
+PINNED_PATHS = {
+    "timeout-minutes": ("timeout-minutes",),
+    "fetch-depth": ("checkout", "fetch-depth"),
+    "lfs": ("checkout", "lfs"),
+    "persist-credentials": ("checkout", "persist-credentials"),
+    "save-annotations": ("trunk", "save-annotations"),
+}
+
+
+def _respell(text: str, key: str, replacement: str) -> str:
+    """Replace the SOURCE SPAN of one pinned value, found by YAML path (codex, r63): the mutation
+    builders used line regexes, so a permitted comment or quoted key made them match nothing.
+    """
+    pairs = _pinned_pairs(
+        yaml.compose(text, Loader=_ActionsYamlLoader), PINNED_PATHS[key]
+    )
+    assert (
+        len(pairs) == 1
+    ), f"{key}: expected exactly one pinned value, found {len(pairs)}"
+    value = pairs[0][1]
+    return text[: value.start_mark.index] + replacement + text[value.end_mark.index :]
+
+
+def _source_variants(text: str) -> dict:
+    """The SAME workflow in four permitted spellings: as shipped; an inline comment after every
+    pinned value; every pinned key quoted; and the whole document in flow style."""
+    root = yaml.compose(text, Loader=_ActionsYamlLoader)
+    pairs = [
+        pair for path in PINNED_PATHS.values() for pair in _pinned_pairs(root, path)
+    ]
+    commented, quoted = text, text
+    for _key_node, value_node in sorted(pairs, key=lambda p: -p[1].end_mark.index):
+        at = value_node.end_mark.index
+        commented = commented[:at] + "  # pinned" + commented[at:]
+    for key_node, _ in sorted(pairs, key=lambda p: -p[0].start_mark.index):
+        start, end = key_node.start_mark.index, key_node.end_mark.index
+        quoted = quoted[:start] + f'"{key_node.value}"' + quoted[end:]
+    flow = yaml.dump(
+        _load_actions_yaml(text), default_flow_style=True, sort_keys=False, width=10**6
+    )
+    return {
+        "as shipped": text,
+        "inline comments": commented,
+        "quoted keys": quoted,
+        "flow style": flow,
+    }
 
 
 def raw_workflow_problems(text: str, *, entry: str = "required") -> list[str]:
@@ -2134,7 +2190,11 @@ def contract_problems(
     # unconstrained `name` let the canary emit the REQUIRED `validate` context while its job ID, the
     # only thing checked, stayed `trunk-check-push` (codex, r46).
     expected_context = CANARY_CONTEXT if is_canary else EXPECTED_CONTEXT
-    effective_context = str(job.get("name") or _job_id(workflow))
+    # A PRESENT name decides the context, whatever its value: `name: false` or `name: 0` fell back to
+    # the job ID through Python truthiness (codex, r63).
+    effective_context = str(
+        _job_id(workflow) if job.get("name") is None else job["name"]
+    )
     if effective_context != expected_context:
         problems.append(
             f"job: effective context `{effective_context}` is not `{expected_context}`"
@@ -3571,6 +3631,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _job(w).update({"name": CANARY_CONTEXT}),
                 "job: effective context `trunk-check-push` is not `trunk-check`",
             ),
+            (
+                # A PRESENT but falsey name fell back to the job ID by truthiness (codex, r63).
+                "C3.effective-context-pinned-required/named-false",
+                lambda w: _job(w).update({"name": False}),
+                "job: effective context `False` is not `trunk-check`",
+            ),
             # The runner and the timeout as OPERANDS (codex, r50): both are enforced, but the registry had
             # no case for either, so the timeout-360 survivor was bound to an unrelated container key.
             (
@@ -3665,6 +3731,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "C3.effective-context-pinned-canary/named-as-required",
                 lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
                 "job: effective context `trunk-check` is not `trunk-check-push`",
+            ),
+            (
+                "C3.effective-context-pinned-canary/named-false",
+                lambda w: _job(w).update({"name": False}),
+                "job: effective context `False` is not `trunk-check-push`",
             ),
             # ---- the canary's OWN event contract (codex, r52): C1's required-entry cases are written
             # against `pull_request`, so nothing in the registry could test the canary's `push`.
@@ -4115,175 +4186,137 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
 
 
 class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
-    """GitHub parses workflows as YAML 1.2, whose core schema has ONLY `true`/`false` as booleans. Under
-    PyYAML's YAML 1.1 default, `save-annotations: yes` loaded as True and the checker accepted it, while
-    the runner receives the STRING "yes" (codex, r59). Mutated as raw TEXT, on both entries, because
-    the defect is in the parse, and a dictionary mutation happens after it."""
+    """GitHub parses workflows as YAML 1.2. Under PyYAML's 1.1 default, `save-annotations: yes` loaded
+    as True and `timeout-minutes: 017` as octal 15, and the checker accepted them while the runner
+    receives the STRING "yes" and the number 17 (codex, r59 and r60). Mutated as raw TEXT, by
+    YAML path, on both entries AND on every permitted spelling of the source (codex, r63).
+    """
 
     CASES = (
         (
             "C3.runner-and-timeout-pinned/yaml-11-octal-017",
             "timeout-minutes",
-            "15",
             "017",
             "job: expected `timeout-minutes: 15`, found 17",
         ),
         (
             "C4.save-annotations-required/yaml-11-synonym-yes",
             "save-annotations",
-            "true",
             "yes",
             "action inputs: `save-annotations` must be true",
         ),
         (
             "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
             "lfs",
-            "true",
             "yes",
             "checkout inputs: `lfs` must be true",
         ),
         (
             "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
             "persist-credentials",
-            "false",
             "no",
             "checkout inputs: `persist-credentials` must be false",
         ),
     )
 
-    def test_each_synonym_is_rejected_on_both_entries(self):
+    def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            text = path.read_text(encoding="utf-8")
-            for case_id, key, pinned, synonym, diagnostic in self.CASES:
-                with self.subTest(case=case_id, entry=entry):
-                    mutated, count = re.subn(
-                        rf"^(\s*{re.escape(key)}:\s*){pinned}(\s*(?:#.*)?)$",
-                        rf"\g<1>{synonym}\g<2>",
-                        text,
-                        flags=re.MULTILINE,
-                    )
-                    self.assertEqual(
-                        1, count, f"{key}: {pinned} must appear exactly once"
-                    )
-                    self.assertIn(
-                        diagnostic,
-                        contract_problems(
-                            _load_actions_yaml(mutated), milestone="M3", entry=entry
-                        ),
-                    )
+            for spelling, source in _source_variants(
+                path.read_text(encoding="utf-8")
+            ).items():
+                for case_id, key, replacement, diagnostic in self.CASES:
+                    with self.subTest(case=case_id, entry=entry, source=spelling):
+                        mutated = _respell(source, key, replacement)
+                        self.assertIn(
+                            diagnostic,
+                            contract_problems(
+                                _load_actions_yaml(mutated), milestone="M3", entry=entry
+                            ),
+                        )
 
 
 class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
-    """C0.raw-text-canonical, on BOTH entries (codex, r61)."""
+    """C0.raw-text-canonical, on BOTH entries and every permitted spelling of the source (codex, r61
+    to r63)."""
 
     CASES = (
         (
             "C0.raw-text-canonical/tag-bool-yes",
             "save-annotations",
-            "true",
             "!!bool yes",
             "workflow: explicit YAML tag `tag:yaml.org,2002:bool` is not permitted",
         ),
         (
             "C0.raw-text-canonical/tag-int-underscore",
             "timeout-minutes",
-            "15",
             "!!int 1_5",
             "workflow: explicit YAML tag `tag:yaml.org,2002:int` is not permitted",
         ),
         (
             "C0.raw-text-canonical/respell-plus-15",
             "timeout-minutes",
-            "15",
             "+15",
             "timeout-minutes: spelled `+15`, not the canonical `15`",
         ),
         (
             "C0.raw-text-canonical/respell-TRUE",
             "lfs",
-            "true",
             "TRUE",
             "lfs: spelled `TRUE`, not the canonical `true`",
         ),
     )
 
-    def test_the_shipped_workflows_are_untagged_and_canonical(self):
+    def test_every_permitted_spelling_of_the_source_is_accepted(self):
+        """The positive control the builders were missing: a comment, a quoted key, or flow style
+        changes nothing the contract pins, so BOTH checks must accept every variant."""
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            with self.subTest(entry=entry):
-                self.assertEqual(
-                    [],
-                    raw_workflow_problems(
-                        path.read_text(encoding="utf-8"), entry=entry
-                    ),
-                )
-
-    def test_it_reads_YAML_PATHS_not_lines(self):
-        """codex, r62: a line regex rejected a quoted key and accepted a forbidden `+15` hidden behind
-        a decoy line inside a block string. Positive: a quoted key, and the whole document in flow
-        style, are accepted by BOTH checks. Negative: the decoy cannot launder `+15`."""
-        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            text = path.read_text(encoding="utf-8")
-            quoted, n = re.subn(
-                r"^(\s*)timeout-minutes:(\s*15\s*)$",
-                r'\g<1>"timeout-minutes":\g<2>',
-                text,
-                flags=re.MULTILINE,
-            )
-            flow = yaml.dump(
-                _load_actions_yaml(text),
-                default_flow_style=True,
-                sort_keys=False,
-                width=10**6,
-            )
-            decoy, m = re.subn(
-                r"^(\s*)timeout-minutes:\s*15\s*$",
-                r'\g<1>"timeout-minutes": +15',
-                text,
-                flags=re.MULTILINE,
-            )
-            decoy, k = re.subn(
-                r"^(\s*)save-annotations: true$",
-                "\\g<1>save-annotations: true\n\\g<1>cache-key: |\n\\g<1>  timeout-minutes: 15",
-                decoy,
-                flags=re.MULTILINE,
-            )
-            self.assertEqual((1, 1, 1), (n, m, k))
-            for label, document in (("quoted key", quoted), ("flow style", flow)):
-                with self.subTest(entry=entry, positive=label):
-                    self.assertEqual([], raw_workflow_problems(document, entry=entry))
+            for spelling, source in _source_variants(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, source=spelling):
+                    self.assertEqual([], raw_workflow_problems(source, entry=entry))
                     self.assertEqual(
                         [],
                         contract_problems(
-                            _load_actions_yaml(document), milestone="M3", entry=entry
+                            _load_actions_yaml(source), milestone="M3", entry=entry
                         ),
                     )
-            with self.subTest(entry=entry, negative="decoy line inside a block string"):
-                self.assertIn(
-                    "timeout-minutes: spelled `+15`, not the canonical `15`",
-                    raw_workflow_problems(decoy, entry=entry),
-                )
 
-    def test_each_case_is_rejected_on_both_entries(self):
+    def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            text = path.read_text(encoding="utf-8")
-            for case_id, key, pinned, replacement, diagnostic in self.CASES:
-                with self.subTest(case=case_id, entry=entry):
+            for spelling, source in _source_variants(
+                path.read_text(encoding="utf-8")
+            ).items():
+                for case_id, key, replacement, diagnostic in self.CASES:
+                    with self.subTest(case=case_id, entry=entry, source=spelling):
+                        mutated = _respell(source, key, replacement)
+                        self.assertIn(
+                            diagnostic, raw_workflow_problems(mutated, entry=entry)
+                        )
 
-                    def substitute(
-                        match: re.Match[str], value: str = replacement
-                    ) -> str:
-                        # A function, not a replacement string: `!!` and `+` must stay literal.
-                        return match.group(1) + value + match.group(2)
-
-                    mutated, count = re.subn(
-                        rf"^(\s*{re.escape(key)}:\s*){re.escape(pinned)}(\s*(?:#.*)?)$",
-                        substitute,
-                        text,
-                        flags=re.MULTILINE,
+    def test_a_decoy_line_inside_a_block_string_cannot_launder_a_respelling(self):
+        """codex, r62: a line search accepted `+15` when a decoy `timeout-minutes: 15` sat inside a
+        permitted `cache-key` block string. Block-style variants only: a block scalar cannot sit in a
+        flow mapping."""
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            variants = _source_variants(path.read_text(encoding="utf-8"))
+            for spelling in ("as shipped", "inline comments", "quoted keys"):
+                with self.subTest(entry=entry, source=spelling):
+                    source = _respell(variants[spelling], "timeout-minutes", "+15")
+                    ((key_node, value_node),) = _pinned_pairs(
+                        yaml.compose(source, Loader=_ActionsYamlLoader),
+                        PINNED_PATHS["save-annotations"],
                     )
-                    self.assertEqual(1, count)
+                    line_end = source.index("\n", value_node.end_mark.index)
+                    indent = " " * key_node.start_mark.column
+                    decoy = (
+                        source[:line_end]
+                        + f"\n{indent}cache-key: |\n{indent}  timeout-minutes: 15"
+                        + source[line_end:]
+                    )
                     self.assertIn(
-                        diagnostic, raw_workflow_problems(mutated, entry=entry)
+                        "timeout-minutes: spelled `+15`, not the canonical `15`",
+                        raw_workflow_problems(decoy, entry=entry),
                     )
 
 

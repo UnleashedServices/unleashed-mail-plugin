@@ -631,6 +631,13 @@ obligations:
         payload: trunk-check-push
         validity: the two entries would emit the same context
         diagnostic: "job: effective context `trunk-check-push` is not `trunk-check`"
+      - id: C3.effective-context-pinned-required/named-false
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "false"
+        validity: a PRESENT but falsey name, which a truthiness test replaced with the job ID (codex, r63)
+        diagnostic: "job: effective context `False` is not `trunk-check`"
 
   - id: C3.effective-context-pinned-canary
     clause: C3
@@ -658,6 +665,13 @@ obligations:
         payload: trunk-check
         validity: a second producer of the required `trunk-check` context
         diagnostic: "job: effective context `trunk-check` is not `trunk-check-push`"
+      - id: C3.effective-context-pinned-canary/named-false
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "false"
+        validity: a PRESENT but falsey name, which a truthiness test replaced with the job ID (codex, r63)
+        diagnostic: "job: effective context `False` is not `trunk-check-push`"
 
   - id: C3.runner-and-timeout-pinned
     clause: C3
