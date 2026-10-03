@@ -136,6 +136,22 @@ jobs:
           "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
           echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
 
+      # BEFORE the scripts suite (COREDEV-2869): cell 11's validity rule runs INSIDE it, and it refuses
+      # to skip in `validate`. Unpacked in RUNNER_TEMP, so the suite's view of the checkout is
+      # unchanged by the download.
+      - name: Install actionlint (pinned + checksum-verified)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint --version
+
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
@@ -316,18 +332,6 @@ jobs:
         # pins by digest and executes — and the parity recorder. The documented gate and the
         # enforced gate disagreed, and the enforced one is the only one that runs.
         run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
-
-      - name: Install actionlint (pinned + checksum-verified)
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
-          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
-          tar -xzf actionlint.tar.gz actionlint
-          install -m 0755 actionlint /usr/local/bin/actionlint
-          actionlint --version
 
       - name: Lint GitHub Actions workflows (actionlint)
         id: actionlint_gate

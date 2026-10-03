@@ -171,7 +171,7 @@ jobs:
           # `post-init` (the action's own docs: "a caller-controlled escape hatch").
           # §6.4's declared literal, matched as a WHOLE STRING: an appended argument would satisfy a
           # substring test. Absence is a failure — it would run markdown-link-check in the required job.
-          arguments: --filter=-markdown-link-check
+          arguments: --filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo
           # §6.1 option (b): the action writes an annotation artifact INSTEAD of posting annotations,
           # so `contents: read` stands and there is no 403 to hit.
           save-annotations: true

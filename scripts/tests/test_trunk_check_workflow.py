@@ -20,19 +20,27 @@ message proves reachability, not discrimination.
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import yaml
+
+try:  # Python >= 3.11. CI runs this suite on 3.12; an older interpreter must FAIL the content cell, not skip it.
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    tomllib = None
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO / ".github/workflows/trunk-check.yml"
@@ -43,9 +51,13 @@ TRUNK_CONFIG = REPO / ".trunk/trunk.yaml"
 
 # ---- frozen literals: the oracle, never derived from the artifact under test --------------------
 ACTION_PIN = "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
+# §6.4, stated once THERE and matched whole. COREDEV-2850: the REQUIRED job also excludes the five
+# `formatter: true` linters, which trunk evaluates whole-file and so reports pre-existing formatting
+# debt as NEW on any touched file. The push CANARY keeps them, so their findings are still OBSERVED.
 ARGUMENTS_LITERAL = (
-    "--filter=-markdown-link-check"  # §6.4, stated once THERE and matched whole
+    "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
 )
+CANARY_ARGUMENTS_LITERAL = "--filter=-markdown-link-check"
 EXPECTED_RUNNER = "ubuntu-latest"
 EXPECTED_TIMEOUT_MINUTES = (
     15  # a CONCRETE ceiling; "a timeout exists" is satisfied by 360
@@ -77,6 +89,18 @@ FIXTURE_EXECUTED_CASES = {
     "C6.no-repository-supplied-launcher/user-trunk-yaml",
     "C6a.resolver-pinned-by-digest/edit-resolver",
 }
+# Raw-TEXT mutants (codex, r59): a YAML 1.1 boolean synonym is a property of the BYTES, so a mutation of an
+# already-parsed dictionary cannot express it. Executed per entry by `RawYamlSynonymsAreNotThePinnedBooleans`.
+RAW_YAML_CASES = {
+    "C0.raw-text-canonical/tag-bool-yes",
+    "C0.raw-text-canonical/tag-int-underscore",
+    "C0.raw-text-canonical/respell-plus-15",
+    "C0.raw-text-canonical/respell-TRUE",
+    "C3.runner-and-timeout-pinned/yaml-11-octal-017",
+    "C4.save-annotations-required/yaml-11-synonym-yes",
+    "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
+    "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
+}
 CELL16_INJECTED_CASES = {
     "C16.canary-not-required/present",
     "C16.canary-branches-equal-resolved-target-set/local-divergence",
@@ -104,8 +128,10 @@ C6_GUARDED_PATHS = (
     # linted nothing. The guard is now an allowlist, so this list is the CASE SET, not the rule.
     ".trunk/user_trunk.yaml",
 )
-# 20 enabled minus §6.4's declared exclusion. Held as literals: a membership oracle regenerated from
-# the config under test cannot detect that config being reduced.
+# 20 enabled minus §6.4's declared `markdown-link-check` exclusion. Held as literals: a membership oracle
+# regenerated from the config under test cannot detect that config being reduced. COREDEV-2850: five of
+# these nineteen — THE_FIVE_FORMATTERS — stay ENABLED but no longer RUN in the required job; the push
+# canary still runs them, so their findings are observed rather than lost.
 EXPECTED_LINTERS = frozenset(
     {
         "zizmor",
@@ -129,7 +155,22 @@ EXPECTED_LINTERS = frozenset(
         "yamllint",
     }
 )
-EXCLUDED_LINTER = "markdown-link-check"
+# COREDEV-2850 cell 4. The five `formatter: true` linters, which trunk evaluates WHOLE-FILE and so reports
+# pre-existing debt as NEW on any touched file. Filtered from the REQUIRED job only; the canary keeps them.
+THE_FIVE_FORMATTERS = frozenset({"black", "isort", "prettier", "shfmt", "taplo"})
+# C2 and C8, held as literals for the same reason as the linter set.
+EXPECTED_PR_TYPES = frozenset({"opened", "synchronize", "reopened", "edited"})
+RUN_STEP_KEYS = frozenset({"name", "run"})
+USES_STEP_KEYS = frozenset({"name", "uses", "with"})
+PROHIBITED_STEP_KEYS = frozenset(
+    {"if", "continue-on-error", "shell", "working-directory", "env"}
+)
+EXCLUDED_LINTERS = frozenset({"markdown-link-check"}) | THE_FIVE_FORMATTERS
+# Hand-listed DELIBERATELY, never derived from `is_security`. MEASURED on trunk's pinned v1.11.0
+# definitions: BOTH secret scanners — gitleaks and trufflehog — carry NO `is_security` flag (only bandit,
+# checkov and zizmor do), so a derived set would miss exactly the two linters that find credentials,
+# including the exclusion that disarms the separate `secret-scan` required context.
+SECURITY_LINTERS = frozenset({"gitleaks", "trufflehog", "zizmor", "bandit", "checkov"})
 
 # M2 ships job-scoped `continue-on-error: true` and C3 forbids it. The exemption is JOB SCOPE ONLY and
 # ends at M3, where cell 11's C3 cases are enabled. Asserting C3 at M2 would make the suite
@@ -234,30 +275,411 @@ def _recorded_remote_halves():
         ) from error
 
 
-def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set:
-    """The live resolved set, or the committed evidence BOUND TO THIS WORKFLOW.
+# Each entry's own record of its `branches:` in the committed evidence, keyed by registry entry id.
+_RECORDED_BRANCHES_KEY = {
+    "required": "requiredWorkflowBranches",
+    "canary": "canaryWorkflowBranches",
+}
 
-    The offline path is not a weaker version of the online one: it additionally requires the
-    artifact's own record of this workflow's branches to match what the workflow now says, so
-    evidence recorded for a different branch set cannot certify the current one.
+
+def _shipped_branches() -> dict[str, set[str]]:
+    """Each entry's `branches:`, keyed by registry entry id."""
+    canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
+    return {
+        "required": set(_on(_load_workflow())["pull_request"]["branches"]),
+        "canary": set(_on(canary)["push"]["branches"]),
+    }
+
+
+def _resolve_once(test, shipped: dict[str, set[str]]) -> set[str]:
+    """THE BOUNDARY (cell 15; COREDEV-2869): the ruleset's target set, resolved ONCE, before any entry
+    is selected. Live when `gh` can read the ruleset, otherwise the committed evidence, and then ONLY
+    if its record of EVERY entry's branches still matches what that entry ships. Evidence recorded for
+    a different branch set cannot certify the current one.
+
+    Revision 37's registry declared `resolved_once_before_entry_selection`, while each entry's test
+    resolved on its own. Two calls are two places a per-entry resolver can hide, so the shape is
+    removed: this is called once, and `_target_set_problems` receives its result and resolves nothing.
     """
     resolved = _resolve_target_set()
     if resolved is not None:
         return resolved
-    # No `is None` branch: the reader now fails closed, so a missing or corrupt artifact raises
-    # here instead of turning this cell into a skip.
+    # The reader fails closed: a missing or corrupt artifact raises instead of skipping.
     recorded = _recorded_remote_halves()
-    test.assertEqual(
-        set(recorded[recorded_key]),
-        shipped_branches,
-        f"{ROLLOUT_EVIDENCE.name} records {recorded[recorded_key]} for this workflow, which no "
-        "longer matches its `branches:` — the evidence predates the change and must be re-recorded",
-    )
+    for entry, branches in shipped.items():
+        key = _RECORDED_BRANCHES_KEY[entry]
+        test.assertEqual(
+            set(recorded[key]),
+            branches,
+            f"{ROLLOUT_EVIDENCE.name} records {recorded[key]} for the {entry} workflow, which no "
+            "longer matches its `branches:` — the evidence predates the change and must be "
+            "re-recorded",
+        )
     return set(recorded["resolvedTargetSet"])
 
 
+def _target_set_problems(
+    resolved: set[str], entry: str, branches: set[str]
+) -> list[str]:
+    """THE comparator, ONE function parameterised by registry entry (C2 and C16). It is handed the one
+    resolved set and never resolves, so it has no second resolver path to drift along.
+    """
+    if branches == resolved:
+        return []
+    return [
+        (
+            f"{entry}: `branches:` {sorted(branches)} is not the ruleset's resolved target set "
+            f"{sorted(resolved)}"
+        )
+    ]
+
+
+def _target_set_results(test) -> dict[str, list[str]]:
+    """Resolve once, then compare every entry against that single result."""
+    shipped = _shipped_branches()
+    resolved = _resolve_once(test, shipped)
+    return {
+        entry: _target_set_problems(resolved, entry, branches)
+        for entry, branches in shipped.items()
+    }
+
+
+class _ActionsYamlLoader(yaml.SafeLoader):  # type: ignore[misc]  # PyYAML is untyped
+    """Parse a WORKFLOW the way GitHub Actions does: YAML 1.2's CORE schema, for every scalar kind.
+
+    PyYAML's default is YAML 1.1, and the two disagree on values this contract pins. 1.1 reads
+    `yes`/`no`/`on`/`off` as booleans (`save-annotations: yes` passed while the runner got the
+    STRING "yes"; codex, r59). It reads a leading-zero integer as OCTAL (`timeout-minutes: 017`
+    loaded as 15 while 1.2 reads 17; codex, r60). It also takes `1_5` and sexagesimal `1:30` as
+    integers, and dates as timestamps. Replacing only the booleans fixed one class and left the next,
+    so this implements the whole core schema: booleans, integers, floats and null. The resolver table
+    is REBUILT from those four, not filtered: filtering left 1.1's merge key `<<` and value `=` (r65).
+    """
+
+
+_CORE_SCALARS = {
+    "tag:yaml.org,2002:bool": (r"^(?:true|True|TRUE|false|False|FALSE)$", list("tTfF")),
+    "tag:yaml.org,2002:int": (
+        r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$",
+        list("-+0123456789"),
+    ),
+    "tag:yaml.org,2002:float": (
+        (
+            r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?"
+            r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+        ),
+        list("-+.0123456789"),
+    ),
+    "tag:yaml.org,2002:null": (r"^(?:~|null|Null|NULL|)$", ["~", "n", "N", ""]),
+}
+# AN ALLOWLIST (r65): every implicit type the loader knows is named below. The table this replaced
+# started from PyYAML's 1.1 resolvers and removed the ones it named, so 1.1's merge (`<<`) and value
+# (`=`) types survived it, one resolver over from the booleans and integers it had already fixed.
+_ActionsYamlLoader.yaml_implicit_resolvers = {}
+for _tag, (_pattern, _first) in _CORE_SCALARS.items():
+    _ActionsYamlLoader.add_implicit_resolver(_tag, re.compile(_pattern), _first)
+
+
+def _construct_core_int(loader, node) -> int:
+    """YAML 1.2 core: decimal unless prefixed `0o` or `0x`. A leading zero is NOT octal."""
+    text = loader.construct_scalar(node)
+    if text.startswith(("0o", "0x")):
+        return int(text, 0)
+    return int(text, 10)
+
+
+_ActionsYamlLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
+
+
+def _mapping_pairs(node, key: str) -> list:
+    """Every (key node, value node) under `key` in a MappingNode, duplicates included."""
+    if not isinstance(node, yaml.MappingNode):
+        return []
+    return [
+        (k, value)
+        for k, value in node.value
+        if isinstance(k, yaml.ScalarNode) and k.value == key
+    ]
+
+
+def _mapping_values(node, key: str) -> list:
+    return [value for _, value in _mapping_pairs(node, key)]
+
+
+def _pinned_pairs(root, path: tuple) -> list:
+    """The (key, value) node pairs at a pinned path: `(key,)` under the single job, or
+    `(step_name, key)` under that step's `with:`. Every job and every matching step is searched, so a
+    duplicate is COUNTED."""
+    jobs = [
+        job
+        for jobs_node in _mapping_values(root, "jobs")
+        if isinstance(jobs_node, yaml.MappingNode)
+        for _, job in jobs_node.value
+    ]
+    if len(path) == 1:
+        return [pair for job in jobs for pair in _mapping_pairs(job, path[0])]
+    step_name, key = path
+    return [
+        pair
+        for _, with_node in _with_pairs(root, step_name)
+        for pair in _mapping_pairs(with_node, key)
+    ]
+
+
+def _with_pairs(root, step_name: str) -> list:
+    """Every (`with` key node, `with` value node) of every step named `step_name`, in every job."""
+    found = []
+    for jobs_node in _mapping_values(root, "jobs"):
+        for _, job in (
+            jobs_node.value if isinstance(jobs_node, yaml.MappingNode) else []
+        ):
+            for steps in _mapping_values(job, "steps"):
+                for step in steps.value if isinstance(steps, yaml.SequenceNode) else []:
+                    names = _mapping_values(step, "name")
+                    if (
+                        names
+                        and isinstance(names[0], yaml.ScalarNode)
+                        and names[0].value == step_name
+                    ):
+                        found.extend(_mapping_pairs(step, "with"))
+    return found
+
+
+def _pinned_value_nodes(root, path: tuple) -> list:
+    return [value for _, value in _pinned_pairs(root, path)]
+
+
+PINNED_PATHS = {
+    "timeout-minutes": ("timeout-minutes",),
+    "fetch-depth": ("checkout", "fetch-depth"),
+    "lfs": ("checkout", "lfs"),
+    "persist-credentials": ("checkout", "persist-credentials"),
+    "save-annotations": ("trunk", "save-annotations"),
+}
+
+
+def _respell(text: str, key: str, replacement: str) -> str:
+    """Replace the SOURCE SPAN of one pinned value, found by YAML path (codex, r63): the mutation
+    builders used line regexes, so a permitted comment or quoted key made them match nothing.
+    """
+    pairs = _pinned_pairs(
+        yaml.compose(text, Loader=_ActionsYamlLoader), PINNED_PATHS[key]
+    )
+    assert (
+        len(pairs) == 1
+    ), f"{key}: expected exactly one pinned value, found {len(pairs)}"
+    value = pairs[0][1]
+    return text[: value.start_mark.index] + replacement + text[value.end_mark.index :]
+
+
+def _ends_its_line(text: str, node) -> bool:
+    """True when only spaces or tabs separate the node from the end of its line, or from EOF."""
+    return re.match(r"[ \t]*(?:\n|$)", text[node.end_mark.index :]) is not None
+
+
+def _source_variants(text: str) -> dict:
+    """The SAME workflow in permitted spellings: as given; every pinned key quoted; the whole document
+    in flow style; and, ONLY where every pinned value ends its line, an inline comment after each.
+    Inside a flow collection a trailing comment would comment out the commas and braces after it, so
+    that variant would not be the same workflow (codex, r64)."""
+    root = yaml.compose(text, Loader=_ActionsYamlLoader)
+    pairs = [
+        pair for path in PINNED_PATHS.values() for pair in _pinned_pairs(root, path)
+    ]
+    quoted = text
+    for key_node, _ in sorted(pairs, key=lambda p: -p[0].start_mark.index):
+        # A node's span INCLUDES its properties: `&a save-annotations` lost its anchor when the whole
+        # span was replaced, leaving every `*a` undefined (codex, r65). Only a PLAIN key whose span ends
+        # in its own text is re-spelled, and only that text; a key already quoted, or written as a
+        # block scalar, is left as it is.
+        end = key_node.end_mark.index
+        start = end - len(key_node.value)
+        if key_node.style is None and quoted[start:end] == key_node.value:
+            quoted = quoted[:start] + f'"{key_node.value}"' + quoted[end:]
+    variants = {
+        "as given": text,
+        "quoted keys": quoted,
+        "flow style": yaml.dump(
+            _load_actions_yaml(text),
+            default_flow_style=True,
+            sort_keys=False,
+            width=10**6,
+        ),
+    }
+    if all(_ends_its_line(text, value) for _, value in pairs):
+        commented = text
+        for _, value_node in sorted(pairs, key=lambda p: -p[1].end_mark.index):
+            at = value_node.end_mark.index
+            commented = commented[:at] + "  # pinned" + commented[at:]
+        variants["inline comments"] = commented
+    # A variant that is not the SAME workflow is a generator defect, reported here by name rather than
+    # as a parser error, or a pass, three tests later (codex, r65).
+    expected = _load_actions_yaml(text)
+    for label, variant in variants.items():
+        try:
+            loaded = _load_actions_yaml(variant)
+        except yaml.YAMLError as exc:  # named too, not a bare parser error (codex, r66)
+            raise AssertionError(
+                f"source variant {label!r} does not parse: {exc}"
+            ) from exc
+        if loaded != expected:
+            raise AssertionError(f"source variant {label!r} is not the same workflow")
+    return variants
+
+
+def _line_end(text: str, node) -> int:
+    """The index of the newline ending the node's LAST line, or the end of the text. Not the node's
+    end mark: a block scalar's end mark is the START of the following line, so splicing there joins
+    whatever comes next onto that line (COREDEV-2871)."""
+    found = text.find("\n", node.end_mark.index - 1)
+    return len(text) if found == -1 else found
+
+
+def _generator_domain_problems(text: str) -> list[str]:
+    """What `_relaid_trunk_inputs` needs of its INPUT, stated as a predicate rather than assumed
+    (COREDEV-2871). It splices text at node marks, which is sound only when no anchor or alias exists
+    (an alias node carries its ANCHOR's marks), the trunk inputs are ONE BLOCK mapping (a flow
+    mapping's closing brace is not at its last value; codex, r66), each input is a scalar (a nested
+    block collection ends at the next token, not on its own line), and there is no `cache-key` yet
+    (the anchored base adds one). The shipped files must satisfy it. A source outside it is refused
+    BY NAME: a declared limit that fails loudly, never a parser error and never a pass.
+    """
+    problems = [
+        f"line {event.start_mark.line + 1}: an anchor or alias"
+        for event in yaml.parse(text, Loader=_ActionsYamlLoader)
+        if getattr(event, "anchor", None) is not None
+    ]
+    pairs = _with_pairs(yaml.compose(text, Loader=_ActionsYamlLoader), "trunk")
+    if len(pairs) != 1:
+        return [*problems, f"expected one trunk `with` mapping, found {len(pairs)}"]
+    ((_, with_node),) = pairs
+    if not isinstance(with_node, yaml.MappingNode) or with_node.flow_style:
+        return [*problems, "the trunk inputs are not a block mapping"]
+    problems += [
+        f"trunk input `{key.value}` is not a scalar"
+        for key, value in with_node.value
+        if not isinstance(value, yaml.ScalarNode)
+    ]
+    if _mapping_pairs(with_node, "cache-key"):
+        problems.append("the trunk inputs already have a `cache-key`")
+    return problems
+
+
+def _relaid_trunk_inputs(text: str) -> dict:
+    """Two more permitted layouts of the trunk step's inputs, both actionlint-clean (codex, r65):
+    a FLOW mapping whose last entry ends its line before the closing brace, so ending a line does not
+    make a mapping block; and an ANCHORED key whose alias is a permitted `cache-key`, so a key's node
+    span is not its spelling. Both are built at node positions, never by text search, and only inside
+    `_generator_domain_problems`: fed one of its own flow or anchored outputs, the splice raised a
+    parser error (codex, r66), so a source outside the domain is refused by name instead.
+    """
+    problems = _generator_domain_problems(text)
+    if problems:
+        raise AssertionError(
+            "source is outside the generators' declared domain (COREDEV-2871): "
+            + "; ".join(problems)
+        )
+    root = yaml.compose(text, Loader=_ActionsYamlLoader)
+    ((with_key, with_node),) = _with_pairs(root, "trunk")
+    indent = " " * with_key.start_mark.column
+    entries = [
+        f"{key}: {json.dumps(value)}"
+        for key, value in _step(_load_actions_yaml(text), "trunk")["with"].items()
+    ]
+    flow = "with: {" + f",\n{indent}  ".join(entries) + f"\n{indent}}}"
+    end = _line_end(text, with_node.value[-1][1])
+    ((key_node, value_node),) = _pinned_pairs(root, PINNED_PATHS["save-annotations"])
+    line_end = _line_end(text, value_node)
+    at = key_node.start_mark.index
+    return {
+        "trunk inputs in a multi-line flow mapping": (
+            text[: with_key.start_mark.index] + flow + text[end:]
+        ),
+        "anchored key, aliased by cache-key": (
+            text[:at]
+            + "&pinned "
+            + text[at:line_end]
+            + f"\n{' ' * key_node.start_mark.column}cache-key: *pinned"
+            + text[line_end:]
+        ),
+    }
+
+
+def _permitted_bases(text: str) -> dict:
+    """Every BASE a shipped workflow may legitimately have: as it is, entirely in flow style, without
+    a final newline (codex, r64), and with its trunk inputs re-laid out in the two ways codex found at
+    r65."""
+    return {
+        "shipped": text,
+        "shipped in flow style": yaml.dump(
+            _load_actions_yaml(text),
+            default_flow_style=True,
+            sort_keys=False,
+            width=10**6,
+        ),
+        "no final newline": text.rstrip("\n"),
+        **_relaid_trunk_inputs(text),
+    }
+
+
+def _all_permitted_sources(text: str) -> dict:
+    """Every variant of every permitted base. The standing tests must not fail on any of them."""
+    return {
+        f"{base_label} / {variant_label}": variant
+        for base_label, base in _permitted_bases(text).items()
+        for variant_label, variant in _source_variants(base).items()
+    }
+
+
+def raw_workflow_problems(text: str, *, entry: str = "required") -> list[str]:
+    """What only the RAW TEXT can show (codex, r61). (1) No explicit YAML tags: `!!bool yes` and
+    `!!int 1_5` bypass every implicit resolver, so they re-admit the YAML 1.1 coercions the loader
+    removed. (2) Every pinned scalar is spelled CANONICALLY, so `+15`, `015` and `TRUE` are declared
+    violations rather than an undeclared assumption a test happened to make."""
+    problems = [
+        f"workflow: explicit YAML tag `{event.tag}` is not permitted"
+        for event in yaml.parse(text, Loader=_ActionsYamlLoader)
+        if isinstance(
+            event, (yaml.ScalarEvent, yaml.MappingStartEvent, yaml.SequenceStartEvent)
+        )
+        and event.tag is not None
+    ]
+    canonical = {
+        ("timeout-minutes",): "15",
+        ("checkout", "fetch-depth"): "0" if entry == "canary" else "2",
+        ("checkout", "lfs"): "true",
+        ("checkout", "persist-credentials"): "false",
+        ("trunk", "save-annotations"): "true",
+    }
+    # BY YAML PATH, NEVER BY TEXT (codex, r62): a line regex rejected a quoted key such as
+    # `"timeout-minutes": 15`, and it ACCEPTED a forbidden `+15` when a decoy `timeout-minutes: 15`
+    # line sat inside a block string. Each value is found through the composed node graph, and its
+    # spelling is read from that node's own source span.
+    root = yaml.compose(text, Loader=_ActionsYamlLoader)
+    for path, spelling in canonical.items():
+        key = path[-1]
+        nodes = _pinned_value_nodes(root, path)
+        if len(nodes) != 1:
+            problems.append(
+                f"{key}: expected exactly one occurrence, found {len(nodes)}"
+            )
+            continue
+        node = nodes[0]
+        written = text[node.start_mark.index : node.end_mark.index]
+        if node.style is not None or written != spelling:
+            problems.append(
+                f"{key}: spelled `{written}`, not the canonical `{spelling}`"
+            )
+    return problems
+
+
+def _load_actions_yaml(text: str):
+    # A SafeLoader subclass: no arbitrary construction, only the 1.2 boolean schema.
+    return yaml.load(text, Loader=_ActionsYamlLoader)
+
+
 def _load_workflow() -> dict:
-    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    document = _load_actions_yaml(WORKFLOW_PATH.read_text(encoding="utf-8"))
     assert isinstance(document, dict), "the workflow must parse to a mapping"
     return document
 
@@ -489,58 +911,355 @@ def _normalised_trunk_config(config_text: str) -> str:
     return f"{body}\n# normalised: {','.join(sorted(normalised))}\n"
 
 
-def _config_tree_digest() -> str:
-    """Every linter's OWN configuration, hashed as a tree of (path, content).
+# ==== COREDEV-2860 — the freeze covers every configuration a SECURITY linter reads ======================
+#
+# COREDEV-2811 froze `.trunk/configs/**`, "what the linters will tolerate". Two security linters read
+# configs OUTSIDE it — gitleaks through `GITLEAKS_CONFIG=${workspace}/.gitleaks.toml`, zizmor through
+# `.github/zizmor.yml` — so a blanket allowlist appended to `.gitleaks.toml` disarmed BOTH `trunk-check`
+# and the separate `secret-scan` required context with this suite green. The frozen set is now a UNION
+# (plan §B3): DERIVED — every path `.trunk/trunk.yaml` itself references — and DECLARED — every
+# `direct_configs` candidate of every enabled security linter — alongside the `.trunk/configs` tree.
 
-    COREDEV-2811. `.trunk/trunk.yaml` decides WHICH linters run; `.trunk/configs/**` decides what
-    they will tolerate, and nothing froze it. The C6 guard deliberately ALLOWS these paths — they
-    are legitimate repository files — so the whole lever sat outside every check: a permissive
-    `ruff.toml`, a `.bandit` that skips every test, a `.shellcheckrc` full of disables, and the
-    required context reports success having enforced almost nothing. That is cell 4's founding
-    hazard one directory over, and the C6 comment named it as tracked-but-open rather than fixed.
 
-    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX — the same reasoning the C6 guard itself records.
-    An UNTRACKED config planted in this directory is read by trunk exactly like a tracked one, so
-    it must move this digest too. `not is_dir()` rather than `is_file()`, because `is_file()`
-    follows symlinks and is False for a dangling one, which would let a broken symlink drop a file
-    out of the census silently.
+# N818: the plan, both review arms and every refusal cell name this `ConfigFreezeRefusal`; the name
+# is the contract the shipped battery asserts against, so it is not renamed for a suffix convention.
+class ConfigFreezeRefusal(Exception):  # noqa: N818
+    """A DELIBERATE refusal by the config freeze, carrying WHY as structured fields.
+
+    Deliberately NOT an `OSError` subclass. `read_bytes()` on a Unix socket raises `OSError: [Errno
+    102] Operation not supported on socket: '<path>'` — a message that NAMES the path — so a check that
+    accepted "an exception naming the operand" passed an implementation that never refused at all and
+    simply tried to read the member (codex, r11). A refusal is an act, not an accident; tests assert the
+    class AND its `reason`, never the message.
     """
-    return _digest_of_tree(TRUNK_CONFIG_DIR)
+
+    REASONS = frozenset({"symlink", "dotdot", "lstat-error", "unsupported-kind"})
+
+    def __init__(self, operand: str, reason: str, subtype: str | None = None) -> None:
+        if reason not in self.REASONS:
+            raise ValueError(f"unknown refusal reason {reason!r}")
+        detail = f" ({subtype})" if subtype else ""
+        super().__init__(f"config freeze refuses {operand!r}: {reason}{detail}")
+        self.operand = operand
+        self.reason = reason
+        self.subtype = subtype
 
 
-def _digest_of_tree(root: pathlib.Path) -> str:
-    """The digest ITSELF, parameterised by root, so the mutation fixtures below exercise the very
-    function the frozen oracle uses rather than a second copy of its logic that could drift.
+CONFIG_DIR_MEMBER = ".trunk/configs"
+# §B3(2): every `direct_configs` candidate of every enabled security linter, ENUMERATED from the pinned
+# trunk-io/plugins v1.11.0 definitions — gitleaks 3, zizmor 4, bandit 1, checkov 2, trufflehog none.
+# A literal (cell 9), because a set regenerated from the definitions cannot see them change;
+# EXPECTED_PLUGIN_PROVENANCE is what says when this enumeration has gone stale. `.gitleaksignore` is the
+# reason the list is complete rather than one path per linter: it is a live suppression lever that is
+# neither referenced from trunk.yaml nor under `.trunk/configs`.
+DECLARED_MEMBERS = frozenset(
+    {
+        ".gitleaks.config",
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        "zizmor.yml",
+        "zizmor.yaml",
+        ".github/zizmor.yml",
+        ".github/zizmor.yaml",
+        ".bandit",
+        ".checkov.yml",
+        ".checkov.yaml",
+    }
+)
+# §B4: two CLASSES, because "every member exists and is non-empty" contradicts admitting candidates that
+# hold nothing today — and deleting those candidates to recover green reopens the planting bypass they
+# exist to close. A class is a property of the MEMBER, not of its source. Changing one is a reviewed edit
+# to these literals, in the same commit as the digest re-pin.
+REQUIRED_OCCUPIED_MEMBERS = frozenset(
+    {".gitleaks.toml", ".github/zizmor.yml", CONFIG_DIR_MEMBER}
+)
+OPTIONAL_CANDIDATE_MEMBERS = frozenset(
+    {
+        ".gitleaks.config",
+        ".gitleaksignore",
+        "zizmor.yml",
+        "zizmor.yaml",
+        ".github/zizmor.yaml",
+        ".bandit",
+        ".checkov.yml",
+        ".checkov.yaml",
+    }
+)
+# §B3(2), cell 11b: the RAW, un-normalised plugin provenance. `_normalised_trunk_config` deliberately
+# erases a canonical `ref` so a routine `trunk upgrade` does not red the gate — which is exactly what lets
+# an upgrade change WHICH candidates a linter declares while every digest stays byte-identical.
+EXPECTED_PLUGIN_PROVENANCE = {
+    "sources": [["https://github.com/trunk-io/plugins", "v1.11.0"]],
+    "cli_version": "1.25.0",
+}
+_WORKSPACE = "${workspace}"
+_WORKSPACE_TOKEN = re.compile(r"\$\{workspace\}[^\s\"']*")
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR})
+
+
+def _lstat(path: pathlib.Path) -> os.stat_result:
+    """THE one place the freeze stats a path. A test patches it to inject a real-shaped error (with its
+    filename, as a real one carries) or a kind it cannot create, such as a device, which needs root.
     """
+    return os.lstat(path)
+
+
+def _read_member(path: pathlib.Path) -> bytes:
+    """THE one place the freeze reads a member's bytes — what the "refuse before any read" spy watches."""
+    return pathlib.Path(path).read_bytes()
+
+
+def _errno_name(error: OSError) -> str:
+    return errno.errorcode.get(error.errno or 0, str(error.errno))
+
+
+def _join(operand: str, anchor: pathlib.Path) -> pathlib.PurePosixPath:
+    """§B3(1)(i). Substitute the anchor AS GIVEN and join a relative operand to it. Never resolves and
+    never collapses `..`: `PurePosixPath` drops `.` and repeated separators, and nothing else. The anchor
+    itself is never examined, so a platform alias above it (`/var -> /private/var`) is not a component.
+    """
+    path = pathlib.PurePosixPath(operand.replace(_WORKSPACE, str(anchor)))
+    return path if path.is_absolute() else pathlib.PurePosixPath(anchor) / path
+
+
+def _contained(path: pathlib.PurePosixPath, anchor: pathlib.Path) -> tuple | None:
+    """§B3(1)(iii). Component-wise containment in the anchor's LEXICAL namespace — `relative_to`, never
+    `str.startswith`, which admits `${workspace}_extra/x` as a member. `None` means out of scope.
+    """
+    try:
+        return path.relative_to(pathlib.PurePosixPath(anchor)).parts
+    except ValueError:
+        return None
+
+
+def _refuse_dotdot(parts: tuple, operand: str) -> None:
+    """§B3(1)(ii). A `..` beneath the anchor is REFUSED, never collapsed. Lexical normalisation and the
+    filesystem DISAGREE once an earlier component is a symlink: with `policy -> outside/child`,
+    `policy/../security.toml` normalises to an internal file while the linter reads an external one.
+    """
+    if ".." in parts:
+        raise ConfigFreezeRefusal(operand, "dotdot")
+
+
+def _walk(anchor: pathlib.Path, parts: tuple, operand: str) -> None:
+    """§B3(1)(iv). `lstat` every component beneath the anchor, top-down, and REFUSE a symlink at ANY of
+    them — the leaf or an ancestor; `Path.is_symlink()` alone inspects only the final component. An
+    absent component ENDS the walk without refusing (nothing below it can be a link), so an absent
+    optional candidate still reaches the member layer; any OTHER error refuses, failing closed.
+    """
+    current = pathlib.Path(anchor)
+    for part in parts:
+        current = current / part
+        try:
+            mode = _lstat(current).st_mode
+        except OSError as error:
+            if error.errno in _ABSENT_ERRNOS:
+                return
+            raise ConfigFreezeRefusal(
+                operand, "lstat-error", _errno_name(error)
+            ) from error
+        if stat.S_ISLNK(mode):
+            raise ConfigFreezeRefusal(operand, "symlink")
+
+
+def _adjudicate(operand: str, anchor: pathlib.Path) -> tuple:
+    """§B3(1)(i)-(v): ("member", rel) | ("out", operand) | ("root", None); refusals raise.
+
+    Every ambiguous or link-bearing reference REDS; none is dropped. Resolving for containment would
+    DISCARD a lexically-internal link whose target is outside, and a covering rule cannot protect a path
+    enumeration has already thrown away (codex, r5)."""
+    parts = _contained(_join(operand, anchor), anchor)
+    if parts is None:
+        return ("out", operand)
+    _refuse_dotdot(parts, operand)
+    if not parts:
+        return ("root", None)
+    _walk(anchor, parts, operand)
+    return ("member", pathlib.PurePosixPath(*parts))
+
+
+def _record(kind: str, rel: object, digest: str | None) -> str:
+    """Canonical JSON, never a delimiter-joined string. Revision 10 used `f"{rel}:tree:{t}"`, and a
+    `rel` containing `:tree` forged a DIRECTORY's record as a FILE's with no hash collision (codex, r10).
+    JSON QUOTES each field and ESCAPES an embedded newline, so kind, rel and boundary are unforgeable.
+    """
+    return json.dumps([kind, str(rel), digest], separators=(",", ":"))
+
+
+def _tree_entry(relative: str, digest: str) -> str:
+    """The same rule one level down: the shipped `f"{relative}:{digest}"` lines joined with `\n` let a
+    filename CONTAINING a newline forge a record boundary."""
+    return json.dumps([relative, digest], separators=(",", ":"))
+
+
+_UNSUPPORTED = (
+    (stat.S_ISFIFO, "fifo"),
+    (stat.S_ISSOCK, "socket"),
+    (stat.S_ISCHR, "char-device"),
+    (stat.S_ISBLK, "block-device"),
+)
+
+
+def _unsupported_subtype(mode: int) -> str | None:
+    """`None` for the only two kinds the freeze ADMITS. An ALLOWLIST: a blacklist of FIFO and socket
+    reads a device, and a kind nobody thought to list is refused rather than read."""
+    if stat.S_ISREG(mode) or stat.S_ISDIR(mode):
+        return None
+    return next((name for test, name in _UNSUPPORTED if test(mode)), "unknown")
+
+
+def _digest_of_tree(root: pathlib.Path, operand: str | None = None) -> str:
+    """Every regular file under `root`, as canonical `[relative, digest]` records.
+
+    THE FILESYSTEM IS THE ORACLE, NOT THE INDEX: an UNTRACKED config planted here is read by trunk
+    exactly like a tracked one, so it moves this digest too. SYMLINKS ARE REFUSED, not hashed — hashing
+    `os.readlink()` froze the link's SPELLING and left its TARGET free, so a later target-only edit moved
+    nothing (codex, r1). Every other non-regular kind is refused too: a FIFO would hang `read_bytes()`.
+    `os.walk` IGNORES errors unless told otherwise, which would drop an unreadable subtree silently, so
+    a walk error is a refusal.
+    """
+    operand = operand if operand is not None else str(root)
+
+    def _refuse_walk_error(error: OSError) -> None:
+        raise ConfigFreezeRefusal(operand, "lstat-error", _errno_name(error)) from error
+
     entries = []
-    for path in sorted(root.rglob("*")):
-        # `and not path.is_symlink()` IS THE WHOLE FIX, and its absence was a freeze bypass.
-        # `is_dir()` FOLLOWS symlinks, so a symlink pointing at a directory answered True, hit this
-        # `continue`, and was never hashed — while `rglob` does not descend into it either, so the
-        # planted directory's contents went unhashed too. Measured: planting a directory symlink
-        # into the frozen tree left the digest BYTE-IDENTICAL (gemini, PR #85 GitHub review).
-        #
-        # The reasoning that produced the bug is one line up in this module's history: `not
-        # is_dir()` was chosen over `is_file()` BECAUSE `is_file()` follows symlinks — correct about
-        # `is_file()`, and blind to `is_dir()` doing exactly the same thing. Knowing a predicate
-        # follows links is not knowing which predicates do.
-        if path.is_dir() and not path.is_symlink():
+    for directory, dirnames, filenames in os.walk(
+        root, followlinks=False, onerror=_refuse_walk_error
+    ):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            path = pathlib.Path(directory) / name
+            mode = _lstat(path).st_mode
+            if stat.S_ISLNK(mode):
+                raise ConfigFreezeRefusal(operand, "symlink")
+            if stat.S_ISDIR(mode):
+                continue
+            subtype = _unsupported_subtype(mode)
+            if subtype:
+                raise ConfigFreezeRefusal(operand, "unsupported-kind", subtype)
+            entries.append(
+                _tree_entry(
+                    path.relative_to(root).as_posix(),
+                    hashlib.sha256(_read_member(path)).hexdigest(),
+                )
+            )
+    return hashlib.sha256("\n".join(sorted(entries)).encode("utf-8")).hexdigest()
+
+
+def _digest_of_member(anchor: pathlib.Path, rel: object, operand: str) -> str:
+    """§B4: one member, dispatched by KIND, refused before ANY read if it is not a regular file or a
+    directory. An absent member contributes a DISTINCT `missing` record — never the empty-tree digest,
+    or absence and an empty directory would be the same value (cell 10)."""
+    path = pathlib.Path(anchor) / str(rel)
+    try:
+        mode = _lstat(path).st_mode
+    except OSError as error:
+        if error.errno in _ABSENT_ERRNOS:
+            return _record("missing", rel, None)
+        raise ConfigFreezeRefusal(operand, "lstat-error", _errno_name(error)) from error
+    if stat.S_ISLNK(mode):
+        raise ConfigFreezeRefusal(operand, "symlink")
+    if stat.S_ISDIR(mode):
+        return _record("tree", rel, _digest_of_tree(path, operand))
+    subtype = _unsupported_subtype(mode)
+    if subtype:
+        raise ConfigFreezeRefusal(operand, "unsupported-kind", subtype)
+    return _record("file", rel, hashlib.sha256(_read_member(path)).hexdigest())
+
+
+def _from_direct_config(definition: dict) -> list:
+    single = definition.get("direct_config")
+    return [single] if isinstance(single, str) else []
+
+
+def _from_direct_configs(definition: dict) -> list:
+    return [c for c in definition.get("direct_configs") or [] if isinstance(c, str)]
+
+
+def _from_environment(definition: dict) -> list:
+    """A `${workspace}` token inside the value, or an ABSOLUTE value — which may reach the workspace by
+    another spelling and must then be recorded out of scope rather than ignored."""
+    operands: list = []
+    for variable in definition.get("environment") or []:
+        value = variable.get("value")
+        if not isinstance(value, str):
             continue
-        relative = path.relative_to(root).as_posix()
-        # SYMLINKS ARE HASHED AS LINKS, not followed. `not is_dir()` is True for a DANGLING symlink,
-        # so `read_bytes()` raised FileNotFoundError and the whole census crashed — chosen precisely
-        # so a dangling link could not be dropped silently, and then crashing on it instead (gemini,
-        # PR #85). Hashing the target PATH also makes a retarget visible: following the link would
-        # hash the destination's content, so pointing it at a different file with identical bytes
-        # would leave the digest unmoved.
-        if path.is_symlink():
-            digest = hashlib.sha256(
-                b"symlink:" + str(path.readlink()).encode()
-            ).hexdigest()
-        else:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        entries.append(f"{relative}:{digest}")
-    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+        if _WORKSPACE in value:
+            operands.extend(_WORKSPACE_TOKEN.findall(value))
+        elif value.startswith("/"):
+            operands.append(value)
+    return operands
+
+
+def _from_commands(definition: dict) -> list:
+    operands: list = []
+    for command in definition.get("commands") or []:
+        operands.extend(_WORKSPACE_TOKEN.findall(command.get("run") or ""))
+    return operands
+
+
+# One extractor per reference SHAPE, so cell 8(c)'s per-shape omission mutant removes exactly one of
+# them from the PRODUCTION path rather than re-implementing the parser beside it.
+_REFERENCE_SHAPES = {
+    "direct_config": _from_direct_config,
+    "direct_configs": _from_direct_configs,
+    "environment": _from_environment,
+    "commands.run": _from_commands,
+}
+
+
+def _derived_operands(trunk_text: str) -> list:
+    """§B3(1): every config reference `.trunk/trunk.yaml` itself makes, in all FOUR shapes. Only two are
+    live today, which is why cell 8(c) exercises all four synthetically: no shipped input could expose a
+    parser that ignored the other two."""
+    document = yaml.safe_load(trunk_text) or {}
+    operands: list = []
+    for definition in (document.get("lint") or {}).get("definitions") or []:
+        for extract in _REFERENCE_SHAPES.values():
+            operands.extend(extract(definition))
+    return list(dict.fromkeys(operands))
+
+
+def _aggregate(
+    anchor: pathlib.Path, trunk_text: str, declared: frozenset = DECLARED_MEMBERS
+) -> tuple:
+    """§B3's UNION: the configs tree, every DECLARED candidate, and every DERIVED reference — each
+    adjudicated, then hashed by kind. Returns (members, out_of_scope). Class validation is NOT done here:
+    it is a test-level assertion over the PRODUCTION enumeration (cell 11c), so a synthetic workspace
+    whose members are in neither class stays admissible (cell 8(e))."""
+    members: dict = {}
+    out_of_scope: list = []
+    for rel in sorted({CONFIG_DIR_MEMBER} | set(declared)):
+        _walk(anchor, pathlib.PurePosixPath(rel).parts, rel)
+        members[rel] = _digest_of_member(anchor, pathlib.PurePosixPath(rel), rel)
+    for operand in _derived_operands(trunk_text):
+        verdict, rel = _adjudicate(operand, anchor)
+        if verdict == "out":
+            out_of_scope.append(operand)
+            continue
+        if verdict != "member":
+            continue
+        key = str(rel)
+        # Already a member, or hashed inside the configs tree — the walk above still adjudicated it.
+        if key in members or key.startswith(CONFIG_DIR_MEMBER + "/"):
+            continue
+        members[key] = _digest_of_member(anchor, rel, operand)
+    return members, out_of_scope
+
+
+def _config_tree_digest(
+    anchor: pathlib.Path = REPO,
+    trunk_text: str | None = None,
+    declared: frozenset = DECLARED_MEMBERS,
+) -> str:
+    """The PRODUCTION aggregate digest: the sorted canonical records of `_aggregate`, hashed."""
+    if trunk_text is None:
+        trunk_text = TRUNK_CONFIG.read_text(encoding="utf-8")
+    members, _ = _aggregate(anchor, trunk_text, declared)
+    return hashlib.sha256(
+        "\n".join(sorted(members.values())).encode("utf-8")
+    ).hexdigest()
 
 
 # THE ORACLE THE NORMALISED DIGEST NEVER HAD. Both users of `_normalised_lint_block` compared the
@@ -561,8 +1280,12 @@ EXPECTED_NORMALISED_CONFIG_DIGEST = (
 # FROZEN, and re-pinned in the SAME COMMIT as any reviewed configuration change, exactly as the
 # lint-block digest above is. There is nothing to normalise here: these files carry no version
 # specifiers, so a `trunk upgrade` does not move them and every movement is somebody's edit.
+# COREDEV-2860 widened what it covers — `.gitleaks.toml`, `.github/zizmor.yml` and eight absent
+# candidates join `.trunk/configs` — and changed the encoding to canonical JSON records, so it moved.
+# A digest is a CHANGE detector: it makes a weakening visible, it does not forbid one. The CONTENT
+# checks (cell 7) are what refuse a blanket allowlist outright.
 EXPECTED_CONFIG_TREE_DIGEST = (
-    "6a89eb8aa05f9aad5e9b2985ed0495e6579ec5a8a303874eb111f30e21c5c0f7"
+    "06f19dfbf863637e3a2d94a9ef21c8ed2eef70387a4b509d397ecefa6cbfb184"
 )
 
 
@@ -574,7 +1297,8 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
             EXPECTED_CONFIG_TREE_DIGEST,
             _config_tree_digest(),
             "a linter configuration moved: re-pin EXPECTED_CONFIG_TREE_DIGEST in the same commit, "
-            "with the reason, or revert the change under .trunk/configs/",
+            "with the reason, or revert the change under .trunk/configs/, `.gitleaks.toml`, "
+            "`.github/zizmor.yml`, or at a declared candidate path",
         )
 
     def test_a_permissive_rule_added_to_a_config_moves_the_digest(self):
@@ -608,10 +1332,9 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
 
     def test_the_census_covers_every_config_the_repository_ships(self):
         """A digest over an empty or truncated census is a digest that cannot fail."""
-        # Mirrors `_digest_of_tree`: a directory SYMLINK is hashed, so it must be counted.
-        counted = [
-            p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir() or p.is_symlink()
-        ]
+        # COREDEV-2860: `_digest_of_tree` now REFUSES a symlink rather than hashing it, so a link here
+        # reds the census before this count is reached. Every non-directory entry is a counted file.
+        counted = [p for p in TRUNK_CONFIG_DIR.rglob("*") if not p.is_dir()]
         tracked = subprocess.run(
             ["git", "ls-files", ".trunk/configs"],
             check=True,
@@ -625,6 +1348,1049 @@ class Cell4b_TheLinterConfigurationIsFrozen(unittest.TestCase):
             "the census and the repository disagree about what configuration exists",
         )
         self.assertGreaterEqual(len(counted), 9)
+
+    def test_every_required_member_exists_is_tracked_and_is_not_empty(self):
+        """§B4: the anti-truncation guard, extended from `.trunk/configs` to EVERY required occupied
+        member. Scoped to REQUIRED members only — applied to an absent OPTIONAL candidate it would red
+        the shipped tree, which is the §B3/§B4 contradiction over again."""
+        tracked = set(
+            subprocess.run(
+                ["git", "ls-files", *sorted(REQUIRED_OCCUPIED_MEMBERS)],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=str(REPO),
+            ).stdout.split()
+        )
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        empty = _record("tree", CONFIG_DIR_MEMBER, hashlib.sha256(b"").hexdigest())
+        for rel in sorted(REQUIRED_OCCUPIED_MEMBERS):
+            with self.subTest(member=rel):
+                path = REPO / rel
+                self.assertTrue(
+                    path.exists(), f"{rel} is a REQUIRED member and is absent"
+                )
+                if path.is_dir():
+                    self.assertTrue(
+                        any(t.startswith(rel + "/") for t in tracked),
+                        f"{rel} tracks nothing",
+                    )
+                    self.assertNotEqual(empty, members[rel], f"{rel} hashes as empty")
+                else:
+                    self.assertIn(rel, tracked, f"{rel} is not tracked")
+                    self.assertGreater(path.stat().st_size, 0, f"{rel} is empty")
+                    self.assertNotIn('"missing"', members[rel])
+
+
+# ---- COREDEV-2860 cell 7: the CONTENT checks, which close the hole against INTENT -------------------
+#
+# A digest is a change DETECTOR: it turns "weakened silently" into "weakened in a commit that also
+# updates a 64-hex constant", and this module's own procedure is to re-pin it in that same commit. So
+# the digest closes COREDEV-2860 against ACCIDENT only. These checks forbid a BLANKET suppression
+# outright, so a weakening needs a conspicuous edit to a security test rather than a routine re-pin.
+#
+# "Blanket" is BEHAVIOURAL, never `pattern == ".*"`: gitleaks matches with SEARCH semantics, so `.+`,
+# `.`, `\w`, `\S` and `[A-Za-z0-9]` all suppress every finding exactly as `.*` does. A pattern is blanket
+# when it matches every probe below. The secret probes are DERIVED AT RUNTIME from hashes — realistic
+# secret shapes that never appear as literals in this file, because a literal one would trip gitleaks
+# and red `secret-scan`, the very context this protects. STATED LIMIT: a pattern crafted to suppress one
+# secret SHAPE (say, only lowercase hex) is narrower than blanket and is not refused here; the digest
+# makes it visible, and review must judge it.
+
+
+def _secret_probes() -> tuple:
+    import base64
+
+    seeds = [
+        hashlib.sha256(f"coredev-2860-probe-{i}".encode()).digest() for i in range(3)
+    ]
+    return tuple(
+        token
+        for seed in seeds
+        for token in (
+            seed.hex(),
+            seed.hex().upper(),
+            base64.b64encode(seed).decode(),
+            base64.urlsafe_b64encode(seed).decode().rstrip("="),
+        )
+    )
+
+
+_PATH_PROBES = (
+    "src/app/main.py",
+    "deploy/production.env",
+    "README.md",
+    ".github/workflows/ci.yml",
+    "Z",
+)
+
+
+def _is_blanket(pattern: object, probes: tuple) -> bool:
+    """True when `pattern` (a regex) matches EVERY probe. An uncompilable pattern is blanket: a check
+    that cannot evaluate a pattern must not wave it through."""
+    try:
+        compiled = re.compile(str(pattern))
+    except re.error:
+        return True
+    return all(compiled.search(probe) for probe in probes)
+
+
+def _blanket_stopword(word: object, probes: tuple) -> bool:
+    """gitleaks lower-cases and tests a stopword as a SUBSTRING of the extracted secret."""
+    needle = str(word).lower()
+    return all(needle in probe.lower() for probe in probes)
+
+
+def _allowlist_is_blanket(entry: dict) -> bool:
+    """gitleaks' own semantics: a finding is ignored if ANY allowlist matches; within one allowlist the
+    default condition is OR (any criterion suffices) and AND requires every criterion. `commits` names
+    specific commits, so it never broadens an allowlist — and under AND it NARROWS it to them.
+    """
+    secrets = _secret_probes()
+    criteria = []
+    if entry.get("regexes"):
+        criteria.append(any(_is_blanket(p, secrets) for p in entry["regexes"]))
+    if entry.get("paths"):
+        criteria.append(any(_is_blanket(p, _PATH_PROBES) for p in entry["paths"]))
+    if entry.get("stopwords"):
+        criteria.append(any(_blanket_stopword(w, secrets) for w in entry["stopwords"]))
+    if str(entry.get("condition", "OR")).upper() == "AND":
+        return bool(criteria) and all(criteria) and not entry.get("commits")
+    return any(criteria)
+
+
+# Rule ids this repository defines for itself — none today. A custom `[[rules]]` entry whose id
+# matches a built-in rule REPLACES it: a never-matching regex under `aws-access-token` switched AWS
+# detection off (audit, PR #104, measured against gitleaks 8.30.1). This is an allowlist of OUR ids,
+# not a list of gitleaks' built-in ids, which changes with every gitleaks release.
+ALLOWED_CUSTOM_RULE_IDS: frozenset = frozenset()
+
+
+def _casefold_keys(node, where: str, collisions: list):
+    """gitleaks reads its config through viper, which IGNORES THE CASE of keys: `disabledrules`,
+    `UseDefault` and `Regexes` all take effect, and a case-sensitive check saw none of them (audit,
+    PR #104). Lowercase every key, as gitleaks does, and record any two keys of one table that
+    differ only by case, since which of them wins is not what the file says."""
+    if isinstance(node, dict):
+        folded: dict = {}
+        for key, value in node.items():
+            lowered = str(key).lower()
+            if lowered in folded:
+                collisions.append(f"{where}{lowered}")
+            folded[lowered] = _casefold_keys(value, f"{where}{lowered}.", collisions)
+        return folded
+    if isinstance(node, list):
+        return [_casefold_keys(item, where, collisions) for item in node]
+    return node
+
+
+def gitleaks_content_problems(toml_text: str) -> list:
+    """No blanket allowlist anywhere — global, legacy global, or per-rule — and the default ruleset
+    neither switched off nor thinned. Each problem names what it found."""
+    if tomllib is None:
+        return [
+            "gitleaks content: Python >= 3.11 (tomllib) is required to check this file"
+        ]
+    try:
+        config = tomllib.loads(toml_text)
+    except tomllib.TOMLDecodeError as error:
+        return [f"gitleaks content: unparseable — {error}"]
+    collisions: list = []
+    config = _casefold_keys(config, "", collisions)
+    problems = [
+        f"gitleaks content: two keys differ only by case at `{path}` — gitleaks ignores key case, "
+        "so which one applies is not what the file says"
+        for path in collisions
+    ]
+    extend = config.get("extend") or {}
+    # EXACTLY true, whatever custom rules exist (codex, PR #104 P1). Without it gitleaks REPLACES its
+    # built-in rules with this file's, so `useDefault = false` beside one narrow dummy rule, or no
+    # `[extend]` table at all, left every default secret detector off with both scans green. The
+    # earlier condition only refused the case where NO rules were defined.
+    if extend.get("usedefault") is not True:
+        problems.append(
+            "gitleaks content: `[extend] useDefault` is not exactly true — gitleaks then REPLACES its "
+            "built-in rules with this file's, whatever custom rules it defines"
+        )
+    if extend.get("disabledrules"):
+        problems.append(
+            "gitleaks content: `[extend] disabledRules` removes inherited detection rules"
+        )
+    entries = list(config.get("allowlists") or [])
+    if isinstance(config.get("allowlist"), dict):
+        entries.append(config["allowlist"])  # the legacy single global table
+    for rule in config.get("rules") or []:
+        if rule.get("id") not in ALLOWED_CUSTOM_RULE_IDS:
+            problems.append(
+                f"gitleaks content: custom rule {rule.get('id')!r} — a custom rule REPLACES any "
+                "built-in rule with the same id, and this repository defines none "
+                "(ALLOWED_CUSTOM_RULE_IDS)"
+            )
+        entries.extend(rule.get("allowlists") or [])
+        if isinstance(rule.get("allowlist"), dict):
+            entries.append(rule["allowlist"])
+    problems.extend(
+        "gitleaks content: a BLANKET allowlist suppresses every finding — "
+        f"{entry.get('description', '(no description)')!r}"
+        for entry in entries
+        if _allowlist_is_blanket(entry)
+    )
+    return problems
+
+
+def zizmor_content_problems(yaml_text: str, workflows: frozenset) -> list:
+    """No audit disabled outright, and no audit ignored in EVERY workflow — a bare filename in `ignore`
+    silences that audit for the whole file, so covering them all is a blanket ignore."""
+    try:
+        config = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError as error:
+        return [f"zizmor content: unparseable — {error}"]
+    problems = []
+    for audit, raw in sorted((config.get("rules") or {}).items()):
+        settings = raw or {}
+        if settings.get("disable") is True:
+            problems.append(f"zizmor content: audit `{audit}` is disabled outright")
+        whole_files = {
+            str(item) for item in settings.get("ignore") or [] if ":" not in str(item)
+        }
+        if workflows and workflows <= whole_files:
+            problems.append(
+                f"zizmor content: audit `{audit}` is ignored in EVERY workflow — a blanket ignore"
+            )
+    return problems
+
+
+def _workflow_names() -> frozenset:
+    return frozenset(
+        p.name
+        for p in (REPO / ".github/workflows").iterdir()
+        if p.suffix in (".yml", ".yaml")
+    )
+
+
+def _mirror(destination: pathlib.Path) -> None:
+    """A writable COPY of every frozen member, copied BY TYPE. `shutil.copytree` raises
+    `NotADirectoryError` on a file member, so cell 4b's directory idiom cannot be reused for the new two.
+    """
+    for rel in sorted({CONFIG_DIR_MEMBER} | DECLARED_MEMBERS):
+        source = REPO / rel
+        if not source.exists():
+            continue
+        target = destination / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+
+
+class Cell7_TheB1MutantNowReds(unittest.TestCase):
+    """COREDEV-2860's reproduction — a blanket allowlist in `.gitleaks.toml`, a blanket ignore in
+    `.github/zizmor.yml` — must red, by DIGEST (against accident) and by CONTENT (against intent).
+    """
+
+    # Independent literals, deliberately NOT read from DECLARED_MEMBERS: if someone "de-duplicates"
+    # them into the declared list, this cell keeps holding the line instead of moving with it.
+    GITLEAKS = ".gitleaks.toml"
+    ZIZMOR = ".github/zizmor.yml"
+    # A custom configuration REPLACES gitleaks' built-in rules unless `[extend] useDefault = true`;
+    # one narrow rule is enough to leave every default secret detector switched off (codex, PR #104).
+    DEFAULTS_DROPPED = (
+        "gitleaks content: `[extend] useDefault` is not exactly true — gitleaks then REPLACES its "
+        "built-in rules with this file's"
+    )
+    DUMMY_RULE = (
+        "\n[[rules]]\nid = \"probe-dummy\"\nregex = '''XYZZY-NEVER-MATCHES'''\n"
+    )
+    BLANKET_ALLOWLIST = (
+        "\n[[allowlists]]\ndescription = \"everything\"\nregexes = ['''.*''']\n"
+    )
+    BLANKET_IGNORE_AUDIT = "template-injection"
+
+    def test_the_shipped_configs_carry_no_blanket_suppression(self):
+        """The passing positive control — the shipped allowlists are narrow (one is AND-bound to two
+        specific commits) and zizmor's one ignore covers three of the four workflows, not all.
+        """
+        self.assertIsNotNone(tomllib, "this cell needs Python >= 3.11 (tomllib)")
+        self.assertEqual(
+            [],
+            gitleaks_content_problems(
+                (REPO / self.GITLEAKS).read_text(encoding="utf-8")
+            ),
+        )
+        self.assertEqual(
+            [],
+            zizmor_content_problems(
+                (REPO / self.ZIZMOR).read_text(encoding="utf-8"), _workflow_names()
+            ),
+        )
+
+    def test_the_blanket_allowlist_moves_the_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+            before = _config_tree_digest(mirror, trunk)
+            with (mirror / self.GITLEAKS).open("a", encoding="utf-8") as handle:
+                handle.write(self.BLANKET_ALLOWLIST)
+            self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_the_blanket_ignore_moves_the_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+            before = _config_tree_digest(mirror, trunk)
+            with (mirror / self.ZIZMOR).open("a", encoding="utf-8") as handle:
+                handle.write(f"  {self.BLANKET_IGNORE_AUDIT}:\n    disable: true\n")
+            self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_every_gitleaks_content_mutant_fails_with_its_own_diagnostic(self):
+        shipped = (REPO / self.GITLEAKS).read_text(encoding="utf-8")
+        blanket = "gitleaks content: a BLANKET allowlist suppresses every finding"
+        cases = [
+            ("B1: regexes = .*", shipped + self.BLANKET_ALLOWLIST, blanket),
+            ("paths = .*", shipped + "\n[[allowlists]]\npaths = ['''.*''']\n", blanket),
+            (
+                "`.+` is as blanket as `.*`",
+                shipped + "\n[[allowlists]]\nregexes = ['''.+''']\n",
+                blanket,
+            ),
+            (
+                "`\\S` is as blanket as `.*`",
+                shipped + "\n[[allowlists]]\nregexes = ['''\\S''']\n",
+                blanket,
+            ),
+            (
+                "a one-character stopword",
+                shipped + "\n[[allowlists]]\nstopwords = ['''a''']\n",
+                blanket,
+            ),
+            (
+                "AND, every criterion blanket, no commits",
+                shipped
+                + "\n[[allowlists]]\ncondition = \"AND\"\nregexes = ['''.*''']\npaths = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "the legacy global [allowlist] table",
+                shipped + "\n[allowlist]\npaths = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "a per-rule allowlist",
+                shipped
+                + "\n[[rules]]\nid = \"aws-access-token\"\n[[rules.allowlists]]\nregexes = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "useDefault switched off",
+                shipped.replace("useDefault = true", "useDefault = false"),
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "useDefault switched off BESIDE a narrow custom rule (codex, PR #104 P1)",
+                shipped.replace("useDefault = true", "useDefault = false")
+                + self.DUMMY_RULE,
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "no [extend] table at all, with a narrow custom rule",
+                shipped.replace("[extend]\nuseDefault = true\n", "") + self.DUMMY_RULE,
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                'useDefault as the STRING "true"',
+                shipped.replace("useDefault = true", 'useDefault = "true"'),
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "disabledRules",
+                shipped.replace(
+                    "useDefault = true",
+                    'useDefault = true\ndisabledRules = ["aws-access-token"]',
+                ),
+                "gitleaks content: `[extend] disabledRules` removes inherited detection rules",
+            ),
+            # KEY CASE (audit, PR #104; each measured against gitleaks 8.30.1, which then stopped
+            # detecting a planted key). gitleaks reads its config case-insensitively.
+            (
+                "lowercase `disabledrules`",
+                shipped.replace(
+                    "useDefault = true",
+                    'useDefault = true\ndisabledrules = ["aws-access-token"]',
+                ),
+                "gitleaks content: `[extend] disabledRules` removes inherited detection rules",
+            ),
+            (
+                "`UseDefault = false` beside `useDefault = true`",
+                shipped.replace(
+                    "useDefault = true", "useDefault = true\nUseDefault = false"
+                ),
+                "gitleaks content: two keys differ only by case",
+            ),
+            (
+                "`[Extend] UseDefault = false`",
+                shipped.replace(
+                    "[extend]\nuseDefault = true", "[Extend]\nUseDefault = false"
+                ),
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "capitalised `Regexes` blanket",
+                shipped + "\n[[allowlists]]\nRegexes = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "capitalised `Paths` blanket",
+                shipped + "\n[[allowlists]]\nPaths = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "a custom rule reusing the built-in id `aws-access-token`",
+                shipped
+                + "\n[[rules]]\nid = \"aws-access-token\"\nregex = '''XYZZY-NEVER-MATCHES'''\n",
+                "gitleaks content: custom rule 'aws-access-token'",
+            ),
+        ]
+        for label, text, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertNotEqual(shipped, text, "the mutant must change the file")
+                problems = gitleaks_content_problems(text)
+                self.assertTrue(
+                    any(p.startswith(diagnostic) for p in problems),
+                    f"{label}: expected {diagnostic!r}, got {problems}",
+                )
+
+    def test_a_narrowing_condition_is_not_mistaken_for_a_blanket(self):
+        """The negative control the AND rule needs: a broad path ANDed with specific commits is narrow,
+        which is exactly the shape of the shipped firebase-debug.log allowlist."""
+        shipped = (REPO / self.GITLEAKS).read_text(encoding="utf-8")
+        narrowed = shipped + (
+            '\n[[allowlists]]\ncondition = "AND"\ncommits = ["0123456789abcdef0123456789abcdef01234567"]\n'
+            "paths = ['''.*''']\n"
+        )
+        self.assertEqual([], gitleaks_content_problems(narrowed))
+
+    def test_every_zizmor_content_mutant_fails_with_its_own_diagnostic(self):
+        shipped = (REPO / self.ZIZMOR).read_text(encoding="utf-8")
+        workflows = _workflow_names()
+        cases = [
+            (
+                "an audit disabled outright",
+                shipped + f"  {self.BLANKET_IGNORE_AUDIT}:\n    disable: true\n",
+                f"zizmor content: audit `{self.BLANKET_IGNORE_AUDIT}` is disabled outright",
+            ),
+            (
+                "the one ignored audit widened to every workflow",
+                shipped.rstrip("\n") + "\n      - plugin-ci.yml\n",
+                "zizmor content: audit `concurrency-limits` is ignored in EVERY workflow — a blanket ignore",
+            ),
+        ]
+        for label, text, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertNotEqual(shipped, text, "the mutant must change the file")
+                self.assertIn(diagnostic, zizmor_content_problems(text, workflows))
+
+
+# ---- COREDEV-2860 cells 8-11c ----------------------------------------------------------------------
+
+_PROBE_REL = "probe/derived.toml"  # outside DECLARED and outside `.trunk/configs`
+
+
+def _synthetic_trunk(shape: str, rel: str = _PROBE_REL) -> str:
+    """A minimal `trunk.yaml` referencing `rel` through exactly ONE of the four shapes."""
+    definition: dict = {"name": "probe"}
+    if shape == "direct_config":
+        definition["direct_config"] = rel
+    elif shape == "direct_configs":
+        definition["direct_configs"] = [rel]
+    elif shape == "environment":
+        definition["environment"] = [
+            {"name": "PROBE_CONFIG", "value": f"{_WORKSPACE}/{rel}"}
+        ]
+    elif shape == "commands.run":
+        definition["commands"] = [
+            {"name": "lint", "run": f"probe --config {_WORKSPACE}/{rel} ${{target}}"}
+        ]
+    else:
+        raise ValueError(shape)
+    return str(yaml.safe_dump({"lint": {"definitions": [definition]}}))
+
+
+def _create_edit_delete_moves(trunk_text: str, rel: str = _PROBE_REL) -> bool:
+    """True when the PRODUCTION aggregate moves on each of CREATE, EDIT and DELETE of `rel`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        absent = _config_tree_digest(root, trunk_text)
+        target.write_text("first\n", encoding="utf-8")
+        created = _config_tree_digest(root, trunk_text)
+        target.write_text("second\n", encoding="utf-8")
+        edited = _config_tree_digest(root, trunk_text)
+        target.unlink()
+        deleted = _config_tree_digest(root, trunk_text)
+    return absent != created != edited != deleted
+
+
+class Cell8_TheDerivedContributionReachesTheDigest(unittest.TestCase):
+    """§B3(1): the derivation must be proven to reach the DIGEST, not merely to parse (codex, r1)."""
+
+    def test_a_and_c_every_shape_moves_the_production_digest_on_create_edit_and_delete(
+        self,
+    ):
+        for shape in _REFERENCE_SHAPES:
+            with self.subTest(shape=shape):
+                self.assertTrue(_create_edit_delete_moves(_synthetic_trunk(shape)))
+
+    def test_b_an_aggregate_that_omits_DERIVED_entirely_fails_a(self):
+        """Without (b), (a) is satisfiable by a digest that covers the path through another source."""
+        original = _derived_operands
+        globals()["_derived_operands"] = lambda trunk_text: []
+        try:
+            for shape in _REFERENCE_SHAPES:
+                with self.subTest(shape=shape):
+                    self.assertFalse(_create_edit_delete_moves(_synthetic_trunk(shape)))
+        finally:
+            globals()["_derived_operands"] = original
+
+    def test_c_a_parser_ignoring_exactly_one_shape_fails_for_that_shape_only(self):
+        """The shipped config uses neither `direct_config` nor `direct_configs`, so no REAL input could
+        expose a parser that ignored them (codex, r3)."""
+        for omitted in list(_REFERENCE_SHAPES):
+            reduced = {k: v for k, v in _REFERENCE_SHAPES.items() if k != omitted}
+            original = dict(_REFERENCE_SHAPES)
+            _REFERENCE_SHAPES.clear()
+            _REFERENCE_SHAPES.update(reduced)
+            try:
+                for shape in original:
+                    with self.subTest(omitted=omitted, shape=shape):
+                        moves = _create_edit_delete_moves(_synthetic_trunk(shape))
+                        self.assertEqual(shape != omitted, moves)
+            finally:
+                _REFERENCE_SHAPES.clear()
+                _REFERENCE_SHAPES.update(original)
+
+    def test_d_the_parse_level_floor(self):
+        """A floor beneath (a)-(c), never the cell."""
+        shipped = TRUNK_CONFIG.read_text(encoding="utf-8")
+        self.assertEqual([], _derived_operands(""))
+        self.assertIn("${workspace}/.gitleaks.toml", _derived_operands(shipped))
+        without = shipped.replace("${workspace}/.gitleaks.toml", "")
+        self.assertNotIn("${workspace}/.gitleaks.toml", _derived_operands(without))
+        self.assertLess(
+            len(_derived_operands(without)), len(_derived_operands(shipped))
+        )
+
+    def test_e_a_member_in_NEITHER_frozenset_is_admissible(self):
+        """ADMISSIBILITY: class validation is test-level over the PRODUCTION enumeration, never a
+        precondition of computing a digest. Its mutant — unconditional COVERING over the digest call's
+        OWN membership — must red this, and is what this discriminates (codex, r5; confirmed r6).
+        """
+        trunk = _synthetic_trunk("environment")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / _PROBE_REL).parent.mkdir(parents=True)
+            (root / _PROBE_REL).write_text("x\n", encoding="utf-8")
+            members, _ = _aggregate(root, trunk)
+            self.assertIn(_PROBE_REL, members)
+            self.assertNotIn(
+                _PROBE_REL, REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS
+            )
+            _config_tree_digest(root, trunk)  # admissible: computes without refusing
+
+            original = _aggregate
+
+            def covering_over_own_argument(
+                anchor, trunk_text, declared=DECLARED_MEMBERS
+            ):
+                members, out = original(anchor, trunk_text, declared)
+                stray = set(members) - (
+                    REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS
+                )
+                if stray:
+                    raise AssertionError(
+                        f"COVERING over the call's own membership: {sorted(stray)}"
+                    )
+                return members, out
+
+            globals()["_aggregate"] = covering_over_own_argument
+            try:
+                with self.assertRaises(AssertionError):
+                    _config_tree_digest(root, trunk)
+            finally:
+                globals()["_aggregate"] = original
+
+
+def declared_tracking_problems(root: pathlib.Path, tracked: set) -> list:
+    """Cell 9's guard, scoped to EXISTING declared members — applied to an absent optional candidate it
+    would red the shipped tree."""
+    problems = []
+    for rel in sorted(DECLARED_MEMBERS):
+        path = root / rel
+        if not path.exists():
+            continue
+        if rel not in tracked:
+            problems.append(f"declared: `{rel}` exists but is NOT tracked")
+        elif path.is_file() and path.stat().st_size == 0:
+            problems.append(f"declared: `{rel}` is tracked but EMPTY")
+    return problems
+
+
+class Cell9_TheDeclaredListsContentIsPinned(unittest.TestCase):
+    def test_the_declared_set_is_exactly_the_enumerated_ten(self):
+        """Existence + tracked + non-empty are properties of whatever the tuple NAMES, so swapping
+        `.github/zizmor.yml` for any other tracked path satisfies them. Restated independently here.
+        """
+        self.assertEqual(
+            frozenset(
+                {
+                    ".gitleaks.config",
+                    ".gitleaks.toml",
+                    ".gitleaksignore",
+                    "zizmor.yml",
+                    "zizmor.yaml",
+                    ".github/zizmor.yml",
+                    ".github/zizmor.yaml",
+                    ".bandit",
+                    ".checkov.yml",
+                    ".checkov.yaml",
+                }
+            ),
+            DECLARED_MEMBERS,
+        )
+
+    def _tracked(self) -> set:
+        return set(
+            subprocess.run(
+                ["git", "ls-files", *sorted(DECLARED_MEMBERS)],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=str(REPO),
+            ).stdout.split()
+        )
+
+    def test_every_existing_declared_member_is_tracked_and_not_empty(self):
+        self.assertEqual([], declared_tracking_problems(REPO, self._tracked()))
+
+    def test_an_untracked_declared_member_reds(self):
+        tracked = self._tracked() - {".gitleaks.toml"}
+        self.assertIn(
+            "declared: `.gitleaks.toml` exists but is NOT tracked",
+            declared_tracking_problems(REPO, tracked),
+        )
+
+
+class Cell10_DeletingAFrozenConfigMovesTheDigest(unittest.TestCase):
+    """Without this, absence and emptiness are the same value (§B4)."""
+
+    def test_deletion_moves_the_digest_and_differs_from_emptiness(self):
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            present = _config_tree_digest(mirror, trunk)
+            (mirror / ".gitleaks.toml").write_text("", encoding="utf-8")
+            emptied = _config_tree_digest(mirror, trunk)
+            (mirror / ".gitleaks.toml").unlink()
+            deleted = _config_tree_digest(mirror, trunk)
+        self.assertNotEqual(present, deleted)
+        self.assertNotEqual(emptied, deleted, "absence must not hash as emptiness")
+
+
+class Cell11_APlantedConfigMovesTheDigest(unittest.TestCase):
+    CANDIDATES = (
+        ".gitleaksignore",
+        ".gitleaks.config",
+        "zizmor.yml",
+        ".github/zizmor.yaml",
+    )
+
+    def test_planting_at_a_candidate_that_holds_nothing_today_moves_the_digest(self):
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        for rel in self.CANDIDATES:
+            with self.subTest(candidate=rel), tempfile.TemporaryDirectory() as tmp:
+                mirror = pathlib.Path(tmp)
+                _mirror(mirror)
+                self.assertFalse(
+                    (mirror / rel).exists(), "the candidate must hold nothing"
+                )
+                before = _config_tree_digest(mirror, trunk)
+                (mirror / rel).parent.mkdir(parents=True, exist_ok=True)
+                (mirror / rel).write_text("planted\n", encoding="utf-8")
+                self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_planting_in_the_configs_tree_moves_the_aggregate(self):
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            before = _config_tree_digest(mirror, trunk)
+            (mirror / CONFIG_DIR_MEMBER / ".flake8").write_text(
+                "[flake8]\n", encoding="utf-8"
+            )
+            self.assertNotEqual(before, _config_tree_digest(mirror, trunk))
+
+    def test_the_digest_is_the_FILESYSTEM_not_the_index(self):
+        """A mirror has no git index at all and must hash identically to the repository, so untracking
+        a member cannot move the digest — cell 9's tracking guard is what reds instead.
+        """
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp)
+            _mirror(mirror)
+            self.assertEqual(
+                _config_tree_digest(REPO, trunk), _config_tree_digest(mirror, trunk)
+            )
+
+
+def plugin_provenance(trunk_text: str) -> dict:
+    """Read from the RAW document — never through `_normalised_trunk_config`, which erases exactly the
+    canonical `ref` this pin exists to catch."""
+    document = yaml.safe_load(trunk_text) or {}
+    return {
+        "sources": [
+            [str(source.get("uri")), str(source.get("ref"))]
+            for source in (document.get("plugins") or {}).get("sources") or []
+        ],
+        "cli_version": str((document.get("cli") or {}).get("version")),
+    }
+
+
+def provenance_problems(trunk_text: str) -> list:
+    if plugin_provenance(trunk_text) == EXPECTED_PLUGIN_PROVENANCE:
+        return []
+    return [
+        (
+            "plugin provenance moved: RE-ENUMERATE the declared candidate set from the new definitions "
+            "(every direct_configs candidate of every enabled security linter), update DECLARED_MEMBERS, "
+            "then re-pin EXPECTED_PLUGIN_PROVENANCE — re-pinning alone is the instruction that produced "
+            "this defect class twice"
+        )
+    ]
+
+
+class Cell11b_TheRawPluginProvenanceIsPinned(unittest.TestCase):
+    def test_the_shipped_provenance_is_the_enumerated_one(self):
+        self.assertEqual(
+            [], provenance_problems(TRUNK_CONFIG.read_text(encoding="utf-8"))
+        )
+
+    def test_every_provenance_mutant_reds_with_the_re_enumerate_diagnostic(self):
+        shipped = TRUNK_CONFIG.read_text(encoding="utf-8")
+        document = yaml.safe_load(shipped)
+
+        def with_(mutate):
+            doc = copy.deepcopy(document)
+            mutate(doc)
+            return yaml.safe_dump(doc)
+
+        bumped_ref = with_(
+            lambda d: d["plugins"]["sources"][0].__setitem__("ref", "v1.12.0")
+        )
+        cases = {
+            "a canonical ref bump": bumped_ref,
+            "a repointed uri": with_(
+                lambda d: d["plugins"]["sources"][0].__setitem__(
+                    "uri", "https://github.com/x/plugins"
+                )
+            ),
+            "a cli.version bump": with_(
+                lambda d: d["cli"].__setitem__("version", "9.9.9")
+            ),
+        }
+        for label, text in cases.items():
+            with self.subTest(mutant=label):
+                problems = provenance_problems(text)
+                self.assertEqual(1, len(problems))
+                self.assertIn("RE-ENUMERATE the declared candidate set", problems[0])
+        # The case the lint digest DELIBERATELY tolerates — which is why this third pin exists.
+        self.assertEqual(
+            _normalised_trunk_config(shipped), _normalised_trunk_config(bumped_ref)
+        )
+
+
+def class_problems(present: set, aggregate_members: set) -> list:
+    """§B4 / cell 11c, TWO-SIDED, over the PRODUCTION enumeration. A class must match OCCUPANCY, so a
+    class change — promotion or demotion — is a reviewed edit to the literals, never emergent.
+    """
+    problems = []
+    both = REQUIRED_OCCUPIED_MEMBERS & OPTIONAL_CANDIDATE_MEMBERS
+    if both:
+        problems.append(f"classes: DISJOINT fails — in both: {sorted(both)}")
+    neither = aggregate_members - (
+        REQUIRED_OCCUPIED_MEMBERS | OPTIONAL_CANDIDATE_MEMBERS
+    )
+    if neither:
+        problems.append(f"classes: COVERING fails — in neither: {sorted(neither)}")
+    problems.extend(
+        f"classes: `{rel}` is REQUIRED OCCUPIED but absent — DEMOTION needs it moved to "
+        "OPTIONAL_CANDIDATE_MEMBERS in the same commit as the re-pin"
+        for rel in sorted(REQUIRED_OCCUPIED_MEMBERS - present)
+    )
+    problems.extend(
+        f"classes: `{rel}` is OPTIONAL CANDIDATE but occupied — PROMOTION needs it moved to "
+        "REQUIRED_OCCUPIED_MEMBERS in the same commit as the re-pin"
+        for rel in sorted(OPTIONAL_CANDIDATE_MEMBERS & present)
+    )
+    return problems
+
+
+def _present(root: pathlib.Path, members: set) -> set:
+    return {rel for rel in members if (root / rel).exists()}
+
+
+class Cell11c_RefusalAndClassRulesHaveNamedOwners(unittest.TestCase):
+    """§B4's refusal and class rules, owned here — §4 is what an implementer builds from."""
+
+    def test_the_production_classes_are_disjoint_covering_and_match_occupancy(self):
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        self.assertEqual([], class_problems(_present(REPO, set(members)), set(members)))
+
+    def test_the_class_assertion_is_two_sided(self):
+        members, _ = _aggregate(REPO, TRUNK_CONFIG.read_text(encoding="utf-8"))
+        present = _present(REPO, set(members))
+        cases = [
+            (
+                "a production member in NEITHER class",
+                set(members) | {"stray.toml"},
+                present,
+                "classes: COVERING fails",
+            ),
+            (
+                "DEMOTION without the paired edit",
+                set(members),
+                present - {".gitleaks.toml"},
+                "classes: `.gitleaks.toml` is REQUIRED OCCUPIED but absent",
+            ),
+            (
+                "PROMOTION without the paired edit",
+                set(members),
+                present | {".gitleaksignore"},
+                "classes: `.gitleaksignore` is OPTIONAL CANDIDATE but occupied",
+            ),
+        ]
+        for label, aggregate_members, occupied, diagnostic in cases:
+            with self.subTest(mutant=label):
+                problems = class_problems(occupied, aggregate_members)
+                self.assertTrue(
+                    any(p.startswith(diagnostic) for p in problems), problems
+                )
+        original = (REQUIRED_OCCUPIED_MEMBERS, OPTIONAL_CANDIDATE_MEMBERS)
+        globals()["OPTIONAL_CANDIDATE_MEMBERS"] = OPTIONAL_CANDIDATE_MEMBERS | {
+            ".gitleaks.toml"
+        }
+        try:
+            self.assertTrue(
+                any(
+                    p.startswith("classes: DISJOINT fails")
+                    for p in class_problems(present, set(members))
+                )
+            )
+        finally:
+            (
+                globals()["REQUIRED_OCCUPIED_MEMBERS"],
+                globals()["OPTIONAL_CANDIDATE_MEMBERS"],
+            ) = original
+
+    def _refusal(self, call):
+        with self.assertRaises(ConfigFreezeRefusal) as caught:
+            call()
+        return caught.exception
+
+    def test_a_symlinked_member_is_refused_at_the_member_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "target.toml").write_text("x\n", encoding="utf-8")
+            (root / ".gitleaks.toml").symlink_to(root / "target.toml")
+            refusal = self._refusal(
+                lambda: _digest_of_member(
+                    root, pathlib.PurePosixPath(".gitleaks.toml"), ".gitleaks.toml"
+                )
+            )
+            self.assertEqual("symlink", refusal.reason)
+
+    def test_a_symlinked_ANCESTOR_of_a_DECLARED_member_is_refused(self):
+        """Cell 8(f) exercises DERIVED references only, and step (iv) claims EVERY source."""
+        trunk = TRUNK_CONFIG.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = pathlib.Path(tmp) / "ws"
+            outside = pathlib.Path(tmp) / "outside"
+            mirror.mkdir()
+            _mirror(mirror)
+            shutil.move(str(mirror / ".github"), str(outside))
+            (mirror / ".github").symlink_to(outside)
+            refusal = self._refusal(lambda: _config_tree_digest(mirror, trunk))
+            self.assertEqual(
+                ("symlink", ".github/zizmor.yaml"), (refusal.reason, refusal.operand)
+            )
+
+    def test_the_nested_target_only_mutation_is_refused_not_passed(self):
+        """Hashing `os.readlink()` froze the link's SPELLING and left its TARGET free (codex, r1)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "configs"
+            shutil.copytree(TRUNK_CONFIG_DIR, tree)
+            target = pathlib.Path(tmp) / "elsewhere.toml"
+            target.write_text("strict\n", encoding="utf-8")
+            (tree / "ruff.toml").unlink()
+            (tree / "ruff.toml").symlink_to(target)
+            self.assertEqual(
+                "symlink", self._refusal(lambda: _digest_of_tree(tree)).reason
+            )
+            target.write_text(
+                'ignore = ["ALL"]\n', encoding="utf-8"
+            )  # the target-only edit
+            self.assertEqual(
+                "symlink", self._refusal(lambda: _digest_of_tree(tree)).reason
+            )
+
+    def test_a_nested_socket_is_refused_before_it_is_read(self):
+        import socket
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "c"
+            tree.mkdir()
+            (tree / "a.toml").write_text("x\n", encoding="utf-8")
+            listener = socket.socket(socket.AF_UNIX)
+            try:
+                listener.bind(str(tree / "z.sock"))
+                reads: list = []
+                original = _read_member
+
+                def spying_read(path):
+                    reads.append(str(path))
+                    return original(path)
+
+                globals()["_read_member"] = spying_read
+                try:
+                    refusal = self._refusal(lambda: _digest_of_tree(tree))
+                finally:
+                    globals()["_read_member"] = original
+            finally:
+                listener.close()
+        self.assertEqual(
+            ("unsupported-kind", "socket"), (refusal.reason, refusal.subtype)
+        )
+        self.assertNotIn(
+            str(tree / "z.sock"), reads, "the offending path must never be read"
+        )
+
+    def test_a_nested_device_is_refused_and_named(self):
+        """A device node needs root to create, so its KIND is injected through `_lstat`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "c"
+            tree.mkdir()
+            (tree / "dev").write_text("x\n", encoding="utf-8")
+            original = _lstat
+
+            def as_device(path):
+                result = original(path)
+                if pathlib.Path(path).name == "dev":
+                    return os.stat_result((stat.S_IFCHR | 0o644, *tuple(result)[1:]))
+                return result
+
+            globals()["_lstat"] = as_device
+            try:
+                refusal = self._refusal(lambda: _digest_of_tree(tree))
+            finally:
+                globals()["_lstat"] = original
+        self.assertEqual(
+            ("unsupported-kind", "char-device"), (refusal.reason, refusal.subtype)
+        )
+
+    def test_a_nested_FIFO_is_refused_in_a_subprocess_under_a_timeout(self):
+        """A fall-through to `read_bytes()` on a FIFO blocks forever. Run in-process, that would HANG the
+        suite instead of reddening it; a timeout here is a FAILURE, never a pass."""
+        if not hasattr(os, "mkfifo"):
+            self.fail("os.mkfifo is required to exercise this refusal")
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp) / "c"
+            tree.mkdir()
+            os.mkfifo(tree / "pipe")
+            probe = (
+                "import sys, pathlib; sys.path.insert(0, sys.argv[1]);"
+                "import test_trunk_check_workflow as t\n"
+                "try:\n    t._digest_of_tree(pathlib.Path(sys.argv[2]))\nexcept t.ConfigFreezeRefusal as r:\n"
+                "    print(r.reason, r.subtype)\n"
+            )
+            try:
+                done = subprocess.run(  # noqa: PLW1510 — exit status is not the oracle; stdout is
+                    [
+                        sys.executable,
+                        "-c",
+                        probe,
+                        str(pathlib.Path(__file__).parent),
+                        str(tree),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                self.fail("the freeze BLOCKED on a FIFO instead of refusing it")
+        self.assertEqual("unsupported-kind fifo", done.stdout.strip(), done.stderr)
+
+
+def _excluded_entries(literal: str) -> frozenset:
+    """The ENTRY SET of a `--filter=-a,-b` literal. Any other shape is refused, never coerced."""
+    prefix = "--filter="
+    if not literal.startswith(prefix) or any(c.isspace() for c in literal):
+        raise ValueError(f"{literal!r} is not a single `--filter=` argument")
+    entries = literal[len(prefix) :].split(",")
+    if not all(entry.startswith("-") and len(entry) > 1 for entry in entries):
+        raise ValueError(f"{literal!r} has an entry that is not a `-name` exclusion")
+    return frozenset(entry[1:] for entry in entries)
+
+
+def exclusion_problems(required: str, canary: str, enabled: frozenset) -> list:
+    """Cell 4 (COREDEV-2850): the required job's exclusion is a frozen SET, nothing security-bearing is
+    in it, and it differs from the canary's by EXACTLY the five formatters, in both directions.
+
+    A substring test is what this replaces: `assertIn("markdown-link-check", literal)` is satisfied
+    by a seven-name literal, by a security exclusion, and by an issue-code suppression alike.
+    """
+    try:
+        req = _excluded_entries(required)
+        can = _excluded_entries(canary)
+    except ValueError as error:
+        return [f"exclusion: malformed literal — {error}"]
+    problems = []
+    if req != EXCLUDED_LINTERS:
+        problems.append(
+            "exclusion: the required job's excluded set is not exactly the six declared entries"
+        )
+    if required == canary:
+        problems.append("exclusion: the required and canary literals are identical")
+    if req - can != THE_FIVE_FORMATTERS or can - req:
+        problems.append(
+            "exclusion: required and canary differ by something other than exactly the five "
+            "formatters"
+        )
+    # `--filter` accepts ISSUE CODES as well as names and does NOT validate codes, so
+    # `-bandit/B602` would silently suppress a security rule that a name-set check cannot see.
+    if any("/" in entry for entry in req | can):
+        problems.append(
+            "exclusion: an excluded entry is an issue code, not a linter name"
+        )
+    if (req | can) & SECURITY_LINTERS:
+        problems.append("exclusion: a security linter is excluded")
+    # `--filter` validates NAMES against `lint.enabled` and aborts with EXIT 2 — an argument error,
+    # not a lint failure — and dropping a formatter from `lint.enabled` is a plausible follow-up edit
+    # precisely because it no longer runs here.
+    if (req | can) - enabled:
+        problems.append(
+            "exclusion: an excluded name is not in `lint.enabled` (trunk aborts with EXIT 2)"
+        )
+    return problems
+
+
+def _exact_int(value, expected: int) -> bool:
+    """An integer OPERAND, by type as well as value. Python's `==` accepts `15.0` for 15 and `False` for
+    0, so a value-only check let `fetch-depth: false` stand in for the canary's full history (codex,
+    r57). `bool` is a subclass of `int`, so it is excluded explicitly."""
+    return type(value) is int and value == expected
 
 
 def contract_problems(
@@ -694,8 +2460,37 @@ def contract_problems(
             problems.append("branches: key is absent")
         if "types" not in on["pull_request"]:
             problems.append("types: key is absent")
-        elif "edited" not in on["pull_request"]["types"]:
-            problems.append("types: `edited` is missing from the activity set")
+        else:
+            types = on["pull_request"]["types"]
+            types = set(types) if isinstance(types, list) else {types}
+            if "edited" not in types:
+                problems.append("types: `edited` is missing from the activity set")
+            # C2 states the set EXACTLY. Checking only for `edited` let `types: [edited]` pass, which
+            # drops `synchronize`, so the gate never re-runs on a new commit (codex, r44).
+            if types != EXPECTED_PR_TYPES:
+                problems.append(
+                    "types: the activity set is not exactly `opened, synchronize, reopened, edited`"
+                )
+
+    # C3 — exactly ONE job. Every check below reads `_job()`, the FIRST job, so a sibling appended under
+    # `jobs:` was never inspected at all, and could emit the required `validate` context (both arms, r47).
+    if len(workflow.get("jobs") or {}) != 1:
+        problems.append(
+            f"jobs: expected exactly one job, found {len(workflow.get('jobs') or {})}"
+        )
+
+    # C3 — the EFFECTIVE context is pinned. `name:` decides which status context a job emits, so an
+    # unconstrained `name` let the canary emit the REQUIRED `validate` context while its job ID, the
+    # only thing checked, stayed `trunk-check-push` (codex, r46).
+    expected_context = CANARY_CONTEXT if is_canary else EXPECTED_CONTEXT
+    # A PRESENT name decides the context, whatever its value. Decided by MEMBERSHIP, not by value:
+    # `name: false` fell back to the job ID through truthiness (codex, r63), and `name: null`, `~` or
+    # an empty `name:` still did through `is None` (codex, r64).
+    effective_context = str(job["name"]) if "name" in job else _job_id(workflow)
+    if effective_context != expected_context:
+        problems.append(
+            f"job: effective context `{effective_context}` is not `{expected_context}`"
+        )
 
     # C3 — the JOB mapping is an allowlist, and nothing skips or masks.
     allowed_job = {"runs-on", "timeout-minutes", "permissions", "steps", "name"}
@@ -724,7 +2519,7 @@ def contract_problems(
         problems.append(
             f"job: expected `runs-on: {EXPECTED_RUNNER}`, found {job.get('runs-on')!r}"
         )
-    if job.get("timeout-minutes") != EXPECTED_TIMEOUT_MINUTES:
+    if not _exact_int(job.get("timeout-minutes"), EXPECTED_TIMEOUT_MINUTES):
         problems.append(
             f"job: expected `timeout-minutes: {EXPECTED_TIMEOUT_MINUTES}`, "
             f"found {job.get('timeout-minutes')!r}"
@@ -759,19 +2554,30 @@ def contract_problems(
             problems.append(
                 "step sequence: `guard-launcher-path` is not immediately before `trunk`"
             )
+        # A DUPLICATE known name escaped all three checks above (codex, r45). `_step()` reads only the
+        # first occurrence, so a second checkout after the guards was never inspected at all.
+        problems.extend(
+            f"step sequence: `{name}` appears {names.count(name)} times"
+            for name in EXPECTED_STEPS
+            if names.count(name) > 1
+        )
+        # And whatever shape is left: ANY sequence unequal to the declared five is a problem, so no
+        # future blind spot in the specific diagnostics above can turn into a pass.
+        problems.append("step sequence: not exactly the five declared steps, in order")
 
     for step in steps:
         label = step.get("name")
+        # C8 freezes the COMPLETE step mapping. This was a six-key blacklist, so any other key
+        # (`timeout-minutes`, say) passed (codex, r44). Keys that change behaviour keep their
+        # specific diagnostic; anything else is unlisted.
+        allowed = RUN_STEP_KEYS if "run" in step else USES_STEP_KEYS
         problems.extend(
             (
-                f"step `{label}`: unlisted key `{key}`"
-                if key == "id"
-                else f"step `{label}`: `{key}:` is prohibited"
+                f"step `{label}`: `{key}:` is prohibited"
+                if key in PROHIBITED_STEP_KEYS
+                else f"step `{label}`: unlisted key `{key}`"
             )
-            for key in sorted(
-                {"if", "continue-on-error", "shell", "working-directory", "env", "id"}
-                & set(step)
-            )
+            for key in sorted(set(step) - allowed)
         )
         body = step.get("run", "")
         if "GITHUB_ENV" in body:
@@ -800,6 +2606,15 @@ def contract_problems(
 
     # C8 — checkout inputs are allowlisted too, with two REQUIRED-PRESENT members.
     if "checkout" in names:
+        # C8: `actions/checkout` (SHA-pinned). Only its inputs were checked, so `@v4` passed (codex,
+        # r44). The exact SHA is left to Dependabot; the FORM is what this contract freezes.
+        if not re.fullmatch(
+            r"actions/checkout@[0-9a-f]{40}",
+            str(_step(workflow, "checkout").get("uses", "")),
+        ):
+            problems.append(
+                "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA"
+            )
         checkout = _step(workflow, "checkout").get("with", {})
         for key in sorted(
             set(checkout) - {"fetch-depth", "lfs", "persist-credentials"}
@@ -809,6 +2624,16 @@ def contract_problems(
             problems.append("checkout inputs: `lfs` is absent")
         elif checkout["lfs"] is not True:
             problems.append("checkout inputs: `lfs` must be true")
+        # `fetch-depth` is an OPERAND, per entry (codex, r56): the required job needs HEAD^1, so 2;
+        # the canary needs the whole history, because `before` is HEAD~N for an N-commit push. The key
+        # was allowlisted with its value unconstrained, so 1, 2 or omission (checkout's default, 1)
+        # passed on both entries.
+        expected_depth = 0 if is_canary else 2
+        if not _exact_int(checkout.get("fetch-depth"), expected_depth):
+            problems.append(
+                f"checkout inputs: `fetch-depth` must be {expected_depth}, "
+                f"found {checkout.get('fetch-depth')!r}"
+            )
         if "persist-credentials" not in checkout:
             problems.append("checkout inputs: `persist-credentials` is absent")
         elif checkout["persist-credentials"] is not False:
@@ -831,7 +2656,9 @@ def contract_problems(
             problems.append(f"action inputs: unlisted input `{key}`")  # noqa: PERF401
         if "arguments" not in used:
             problems.append("action inputs: `arguments` is absent")
-        elif used["arguments"] != ARGUMENTS_LITERAL:
+        elif used["arguments"] != (
+            CANARY_ARGUMENTS_LITERAL if is_canary else ARGUMENTS_LITERAL
+        ):
             problems.append(
                 "action inputs: `arguments` does not equal the declared literal"
             )
@@ -959,9 +2786,12 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
         found = []
         for path, workflow in workflows.items():
             for job_id, job in (workflow.get("jobs") or {}).items():
-                explicit = job.get("name")
-                if explicit is not None and not isinstance(explicit, str):
+                # MEMBERSHIP, not value (codex, r64): a present null fell through `is not None` and
+                # then back to the job ID; it now fails closed like any other non-string name.
+                if "name" in job and not isinstance(job["name"], str):
                     raise AssertionError(f"{path}: job {job_id} has a non-string name")
+                # Safe now: a PRESENT non-string name (null included) has already failed closed above.
+                explicit = job.get("name")
                 if explicit and ("${{" in explicit):
                     # FAIL CLOSED: a static census cannot resolve an expression-valued name.
                     raise AssertionError(
@@ -981,13 +2811,13 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
                         f"{path}: job {job_id} calls a reusable workflow; its check contexts "
                         "cannot be enumerated from this file"
                     )
-                if (explicit or job_id) == EXPECTED_CONTEXT:
+                if (job_id if explicit is None else explicit) == EXPECTED_CONTEXT:
                     found.append(f"{path}:{job_id}")
         return found
 
     def _tree(self) -> dict[str, dict]:
         return {
-            p.name: yaml.safe_load(p.read_text(encoding="utf-8"))
+            p.name: _load_actions_yaml(p.read_text(encoding="utf-8"))
             for p in _workflow_files()
         }
 
@@ -1042,7 +2872,7 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
         """
         found: dict[str, list[str]] = {}
         for path in _workflow_files():
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            document = _load_actions_yaml(path.read_text(encoding="utf-8"))
             for job in (document.get("jobs") or {}).values():
                 for step in job.get("steps") or []:
                     uses = str(step.get("uses", ""))
@@ -1129,11 +2959,36 @@ class Cell15_TargetSetResolution(unittest.TestCase):
                         _resolve_ref_name(ref_name, "main")
 
     def test_the_shipped_workflow_matches_the_live_resolved_set(self):
-        on = _on(_load_workflow())["pull_request"]
-        resolved = _resolved_or_recorded(
-            self, set(on["branches"]), "requiredWorkflowBranches"
+        self.assertEqual([], _target_set_results(self)["required"])
+
+    def test_one_shared_sentinel_governs_both_entries(self):
+        """COREDEV-2869. A comparator can CALL the resolver and ignore its result, or resolve once per
+        entry behind a shared-looking wrapper. One sentinel substituted at the boundary must be the
+        thing BOTH entries are judged against: each verdict and each diagnostic follows it, and the
+        boundary is crossed exactly once."""
+        sentinel = {"sentinel-coredev-2869"}
+        boundary = unittest.mock.patch.object(
+            sys.modules[__name__], "_resolve_once", return_value=sentinel
         )
-        self.assertEqual(resolved, set(on["branches"]))
+        with boundary as resolved:
+            results = _target_set_results(self)
+        resolved.assert_called_once()
+        self.assertEqual({"required", "canary"}, set(results))
+        for entry, problems in results.items():
+            with self.subTest(entry=entry):
+                self.assertEqual(1, len(problems))
+                self.assertIn("sentinel-coredev-2869", problems[0])
+                self.assertTrue(problems[0].startswith(f"{entry}: "))
+        # Governed in the other direction too: a sentinel equal to each entry's branches clears both.
+        shipped = _shipped_branches()
+        self.assertEqual(shipped["required"], shipped["canary"])
+        boundary = unittest.mock.patch.object(
+            sys.modules[__name__],
+            "_resolve_once",
+            return_value=set(shipped["required"]),
+        )
+        with boundary:
+            self.assertEqual({"required": [], "canary": []}, _target_set_results(self))
 
 
 class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
@@ -1150,17 +3005,88 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         self.assertEqual(set(), EXPECTED_LINTERS - self.names)
 
     def test_no_unlisted_linter_appears(self):
-        self.assertEqual(set(), self.names - EXPECTED_LINTERS - {EXCLUDED_LINTER})
+        self.assertEqual(set(), self.names - EXPECTED_LINTERS - EXCLUDED_LINTERS)
 
-    def test_the_declared_exclusion_is_configured_but_filtered_from_the_required_job(
-        self,
-    ):
-        self.assertIn(EXCLUDED_LINTER, self.names)
+    def _shipped(self):
+        required = _step(_load_workflow(), "trunk")["with"]["arguments"]
+        canary = _step(
+            _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")), "trunk"
+        )["with"]["arguments"]
+        return required, canary
+
+    def test_the_shipped_literals_are_the_declared_ones(self):
+        """Both surfaces, whole-string: the required job's AND the canary's."""
+        self.assertEqual((ARGUMENTS_LITERAL, CANARY_ARGUMENTS_LITERAL), self._shipped())
+
+    def test_the_shipped_exclusion_passes_every_cell_4_check(self):
+        """(a)-(e) on what ships — the passing positive control for every mutant below."""
+        required, canary = self._shipped()
         self.assertEqual(
-            ARGUMENTS_LITERAL,
-            _step(_load_workflow(), "trunk")["with"]["arguments"],
+            [], exclusion_problems(required, canary, frozenset(self.names))
         )
-        self.assertIn(EXCLUDED_LINTER, ARGUMENTS_LITERAL)
+
+    def test_every_cell_4_mutant_fails_with_its_own_diagnostic(self):
+        """(f). Each mutant must produce ITS OWN diagnostic — a cell that reds for any reason is not
+        evidence that it reds for this one."""
+        names = frozenset(self.names)
+        req, can = ARGUMENTS_LITERAL, CANARY_ARGUMENTS_LITERAL
+        cases = [
+            (
+                "a seventh entry",
+                req + ",-yamllint",
+                can,
+                names,
+                "exclusion: the required job's excluded set is not exactly the six declared entries",
+            ),
+            (
+                "a formatter dropped",
+                req.replace(",-taplo", ""),
+                can,
+                names,
+                "exclusion: the required job's excluded set is not exactly the six declared entries",
+            ),
+            (
+                "a security name added",
+                req + ",-gitleaks",
+                can,
+                names,
+                "exclusion: a security linter is excluded",
+            ),
+            (
+                "a code-scoped entry added",
+                req + ",-bandit/B602",
+                can,
+                names,
+                "exclusion: an excluded entry is an issue code, not a linter name",
+            ),
+            (
+                "the two literals collapsed",
+                can,
+                can,
+                names,
+                "exclusion: the required and canary literals are identical",
+            ),
+            (
+                "the two literals swapped",
+                can,
+                req,
+                names,
+                (
+                    "exclusion: required and canary differ by something other than exactly the five "
+                    "formatters"
+                ),
+            ),
+            (
+                "an excluded name dropped from lint.enabled",
+                req,
+                can,
+                names - {"taplo"},
+                "exclusion: an excluded name is not in `lint.enabled` (trunk aborts with EXIT 2)",
+            ),
+        ]
+        for label, required, canary, enabled, diagnostic in cases:
+            with self.subTest(mutant=label):
+                self.assertIn(diagnostic, exclusion_problems(required, canary, enabled))
 
     def test_a_reduced_configuration_is_detected(self):
         """The revision-5 wording — "the configured set minus the exclusions" — could not do this."""
@@ -1476,6 +3402,120 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
 
             return apply
 
+        def append_to(step, line):
+            def apply(w):
+                _step(w, step)["run"] = _step(w, step)["run"] + "\n" + line
+
+            return apply
+
+        def set_on(step, key, value):
+            def apply(w):
+                _step(w, step)[key] = value
+
+            return apply
+
+        def per_step():
+            """Cell 11's PER-STEP minimum (codex, r44): the registry declared the four injection forms
+            and the shell/working-directory changes on `guard-empty-diff` only, no step-level `if:` at
+            all, and `continue-on-error` on `trunk` only. One case per (step, form), each named.
+            """
+            run_steps = (
+                "guard-resolver-digest",
+                "guard-empty-diff",
+                "guard-launcher-path",
+            )
+            all_steps = ("checkout", *run_steps, "trunk")
+            injections = (
+                (
+                    "creates-c6-path",
+                    "install -D /bin/true tools/trunk",
+                    "creates a prohibited launcher path",
+                ),
+                (
+                    "github-env-trunk-path",
+                    'echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"',
+                    "writes to $GITHUB_ENV",
+                ),
+                (
+                    "github-env-bash-env",
+                    'echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"',
+                    "writes to $GITHUB_ENV",
+                ),
+                ("github-path", 'echo X >> "$GITHUB_PATH"', "writes to $GITHUB_PATH"),
+            )
+            cases = []
+            for step in ("guard-resolver-digest", "guard-launcher-path"):
+                for form, line, message in injections:
+                    # Only the C6 guard may NAME a launcher path, so in that step the planted path is
+                    # caught by the body digest rather than by the path census.
+                    exempt = step == "guard-launcher-path" and form == "creates-c6-path"
+                    diagnostic = "run body digest mismatch" if exempt else message
+                    cases.append(
+                        (
+                            f"C8.run-bodies-frozen/{form}-{step}",
+                            append_to(step, line),
+                            f"step `{step}`: {diagnostic}",
+                        )
+                    )
+                cases.append(
+                    (
+                        f"C8.run-bodies-frozen/changed-shell-{step}",
+                        set_on(step, "shell", "sh"),
+                        f"step `{step}`: `shell:` is prohibited",
+                    )
+                )
+                cases.append(
+                    (
+                        f"C8.run-bodies-frozen/changed-working-directory-{step}",
+                        set_on(step, "working-directory", "/tmp"),
+                        f"step `{step}`: `working-directory:` is prohibited",
+                    )
+                )
+            # "Omission" as a VALID workflow: removing or emptying `run:` is a schema error, so each
+            # guard is neutralised with a no-op body instead.
+            cases.extend(
+                (
+                    f"C8.run-bodies-frozen/no-op-body-{step}",
+                    set_on(step, "run", ":"),
+                    f"step `{step}`: run body digest mismatch",
+                )
+                for step in run_steps
+            )
+            for step in all_steps:
+                cases.append(
+                    (
+                        f"C3.nothing-skips-or-masks/step-if-{step}",
+                        set_on(step, "if", "false"),
+                        f"step `{step}`: `if:` is prohibited",
+                    )
+                )
+                if step != "trunk":
+                    cases.append(
+                        (
+                            f"C3.nothing-skips-or-masks/step-continue-on-error-{step}",
+                            set_on(step, "continue-on-error", True),
+                            f"step `{step}`: `continue-on-error:` is prohibited",
+                        )
+                    )
+            # A DUPLICATE known step (codex, r45): the sequence check diagnosed missing, unknown and
+            # reordered names, so a second `checkout` (with `ref: main`) placed AFTER the guards
+            # passed, and replaced the PR tree behind them. `_step()` only ever sees the first one.
+            for step in all_steps:
+
+                def duplicate(w, step=step):
+                    extra = copy.deepcopy(_step(w, step))
+                    position = len(_steps(w)) if step == "trunk" else len(_steps(w)) - 1
+                    _steps(w).insert(position, extra)
+
+                cases.append(
+                    (
+                        f"C8.step-sequence-allowlist/duplicate-{step}",
+                        duplicate,
+                        f"step sequence: `{step}` appears 2 times",
+                    )
+                )
+            return cases
+
         return [
             (
                 "C0.permissions-pinned-at-root/write-all",
@@ -1499,8 +3539,8 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C0.root-mapping-allowlist/arbitrary-key",
-                at_root("schedule", []),
-                "root mapping: unlisted key `schedule`",
+                at_root("run-name", "drift"),
+                "root mapping: unlisted key `run-name`",
             ),
             (
                 "C1.single-event/add-workflow-dispatch",
@@ -1509,7 +3549,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C1.single-event/arbitrary-event",
-                lambda w: _on(w).update({"schedule": []}),
+                lambda w: _on(w).update({"schedule": [{"cron": "0 0 * * *"}]}),
                 "event set: unlisted event `schedule`",
             ),
             (
@@ -1524,7 +3564,9 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C1.event-option-allowlist/arbitrary-option",
-                at_event("branches-ignore", ["x"]),
+                lambda w: _on(w)["pull_request"].update(
+                    {"branches-ignore": _on(w)["pull_request"].pop("branches")}
+                ),
                 "pull_request options: unlisted option `branches-ignore`",
             ),
             (
@@ -1549,7 +3591,17 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C3.job-mapping-allowlist/needs",
-                at_job("needs", ["support"]),
+                lambda w: (
+                    w["jobs"].update(
+                        {
+                            "support": {
+                                "runs-on": "ubuntu-latest",
+                                "steps": [{"run": "exit 1"}],
+                            }
+                        }
+                    ),
+                    _job(w).update({"needs": ["support"]}),
+                ),
                 "job mapping: unlisted key `needs`",
             ),
             (
@@ -1708,7 +3760,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _step(w, "guard-empty-diff").update(
                     {
                         "run": _step(w, "guard-empty-diff")["run"]
-                        + '\necho X >> "$GITHUB_ENV"'
+                        + '\necho TRUNK_PATH=/bin/true >> "$GITHUB_ENV"'
                     }
                 ),
                 "step `guard-empty-diff`: writes to $GITHUB_ENV",
@@ -1763,7 +3815,10 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             ),
             (
                 "C1.single-event/remove-pull-request",
-                lambda w: _on(w).pop("pull_request"),
+                lambda w: (
+                    _on(w).pop("pull_request"),
+                    _on(w).update({"push": {"branches": ["main"]}}),
+                ),
                 "event set: `pull_request` is absent",
             ),
             (
@@ -1776,7 +3831,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             # formulation is vacuous, because the unmutated workflow is clean and a checker that had
             # stopped looking would pass it just as happily.
             (
-                "C3.nothing-skips-or-masks/job-continue-on-error",
+                "C3.no-job-continue-on-error/present",
                 lambda w: w["jobs"][EXPECTED_CONTEXT].update(
                     {"continue-on-error": True}
                 ),
@@ -1866,6 +3921,99 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 ),
                 "step `guard-launcher-path`: run body digest mismatch",
             ),
+            # ---- three SURVIVORS of the shipped checker (codex, r44), each reproduced first --------
+            (
+                "C2.types-required/not-the-exact-set",
+                lambda w: _on(w)["pull_request"].update(
+                    {"types": ["opened", "reopened", "edited"]}
+                ),
+                "types: the activity set is not exactly `opened, synchronize, reopened, edited`",
+            ),
+            (
+                "C8.step-sequence-allowlist/sibling-key",
+                set_on("guard-empty-diff", "timeout-minutes", 1),
+                "step `guard-empty-diff`: unlisted key `timeout-minutes`",
+            ),
+            (
+                "C8.checkout-sha-pinned/tag",
+                set_on("checkout", "uses", "actions/checkout@v4"),
+                "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA",
+            ),
+            *per_step(),
+            # ---- the EFFECTIVE context (codex, r46): `name:` decides what context a job emits ------
+            (
+                "C3.effective-context-pinned-required/named-validate",
+                lambda w: _job(w).update({"name": "validate"}),
+                "job: effective context `validate` is not `trunk-check`",
+            ),
+            (
+                "C3.effective-context-pinned-required/named-as-canary",
+                lambda w: _job(w).update({"name": CANARY_CONTEXT}),
+                "job: effective context `trunk-check-push` is not `trunk-check`",
+            ),
+            (
+                # A PRESENT null name fell back to the job ID through `is None` (codex, r64).
+                "C3.effective-context-pinned-required/named-null",
+                lambda w: _job(w).update({"name": None}),
+                "job: effective context `None` is not `trunk-check`",
+            ),
+            (
+                # A PRESENT but falsey name fell back to the job ID by truthiness (codex, r63).
+                "C3.effective-context-pinned-required/named-false",
+                lambda w: _job(w).update({"name": False}),
+                "job: effective context `False` is not `trunk-check`",
+            ),
+            # The runner and the timeout as OPERANDS (codex, r50): both are enforced, but the registry had
+            # no case for either, so the timeout-360 survivor was bound to an unrelated container key.
+            (
+                "C3.runner-and-timeout-pinned/timeout-360",
+                lambda w: _job(w).update({"timeout-minutes": 360}),
+                "job: expected `timeout-minutes: 15`, found 360",
+            ),
+            (
+                "C3.runner-and-timeout-pinned/other-runner",
+                lambda w: _job(w).update({"runs-on": "macos-latest"}),
+                "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'",
+            ),
+            (
+                "C3.runner-and-timeout-pinned/timeout-absent",
+                lambda w: _job(w).pop("timeout-minutes"),
+                "job: expected `timeout-minutes: 15`, found None",
+            ),
+            # TYPE is part of the operand (codex, r57): `15.0 == 15` in Python.
+            (
+                "C3.runner-and-timeout-pinned/timeout-float",
+                lambda w: _job(w).update({"timeout-minutes": 15.0}),
+                "job: expected `timeout-minutes: 15`, found 15.0",
+            ),
+            # fetch-depth is an OPERAND, per entry (codex, r56): the required job needs HEAD^1 (2),
+            # and depth 1 or omission (checkout's default is 1) leaves it absent.
+            (
+                "C8.checkout-fetch-depth-required/absent",
+                lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
+                "checkout inputs: `fetch-depth` must be 2, found None",
+            ),
+            (
+                "C8.checkout-fetch-depth-required/one",
+                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": 1}),
+                "checkout inputs: `fetch-depth` must be 2, found 1",
+            ),
+            # A SIBLING job (both arms, r47): every check reads `_job()`, the FIRST job, so a second
+            # job appended under `jobs:` was never inspected, and could emit `validate`.
+            (
+                "C3.single-job/required-sibling-named-validate",
+                lambda w: w["jobs"].update(
+                    {
+                        "context-decoy": {
+                            "name": "validate",
+                            "runs-on": "ubuntu-latest",
+                            "timeout-minutes": 15,
+                            "steps": [{"name": "Context decoy", "run": "true"}],
+                        }
+                    }
+                ),
+                "jobs: expected exactly one job, found 2",
+            ),
         ]
 
     def _canary_mutants(self):
@@ -1889,10 +4037,112 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 move_to_step,
                 "step `trunk`: `continue-on-error:` is prohibited",
             ),
+            (
+                # COREDEV-2850: `contract_problems` now selects the canary's literal on `is_canary`.
+                # Without a canary case that branch has no mutant at all.
+                "C4.arguments-canary-literal/appended",
+                lambda w: _step(w, "trunk")["with"].__setitem__(
+                    "arguments", CANARY_ARGUMENTS_LITERAL + " --fix"
+                ),
+                "action inputs: `arguments` does not equal the declared literal",
+            ),
+            (
+                # A passing canary named `validate` would emit a REQUIRED context without running the
+                # contract suites (codex, r46). The job ID never changed, so the ID check passed.
+                "C3.effective-context-pinned-canary/named-validate",
+                lambda w: _job(w).update({"name": "validate"}),
+                "job: effective context `validate` is not `trunk-check-push`",
+            ),
+            (
+                "C3.effective-context-pinned-canary/named-as-required",
+                lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
+                "job: effective context `trunk-check` is not `trunk-check-push`",
+            ),
+            (
+                "C3.effective-context-pinned-canary/named-null",
+                lambda w: _job(w).update({"name": None}),
+                "job: effective context `None` is not `trunk-check-push`",
+            ),
+            (
+                "C3.effective-context-pinned-canary/named-false",
+                lambda w: _job(w).update({"name": False}),
+                "job: effective context `False` is not `trunk-check-push`",
+            ),
+            # ---- the canary's OWN event contract (codex, r52): C1's required-entry cases are written
+            # against `pull_request`, so nothing in the registry could test the canary's `push`.
+            (
+                "C1.canary-single-event/add-workflow-dispatch",
+                lambda w: _on(w).update({"workflow_dispatch": {}}),
+                "event set: unlisted event `workflow_dispatch`",
+            ),
+            (
+                "C1.canary-single-event/add-pull-request",
+                lambda w: _on(w).update({"pull_request": {"branches": ["main"]}}),
+                "event set: unlisted event `pull_request`",
+            ),
+            (
+                "C1.canary-single-event/arbitrary-event",
+                lambda w: _on(w).update({"schedule": [{"cron": "0 0 * * *"}]}),
+                "event set: unlisted event `schedule`",
+            ),
+            (
+                "C4.arguments-canary-literal/absent",
+                lambda w: _step(w, "trunk")["with"].pop("arguments"),
+                "action inputs: `arguments` is absent",
+            ),
+            # The canary needs FULL history: `before` is HEAD~N for an N-commit push, and at depth 2
+            # that object is absent and the guard reads an EMPTY DIFF (codex, r56).
+            (
+                "C8.checkout-fetch-depth-canary/absent",
+                lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
+                "checkout inputs: `fetch-depth` must be 0, found None",
+            ),
+            (
+                # `False == 0` in Python, so the canary's depth check accepted `false` (codex, r57).
+                "C8.checkout-fetch-depth-canary/boolean-false",
+                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": False}),
+                "checkout inputs: `fetch-depth` must be 0, found False",
+            ),
+            (
+                "C8.checkout-fetch-depth-canary/two",
+                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": 2}),
+                "checkout inputs: `fetch-depth` must be 0, found 2",
+            ),
+            (
+                "C1.canary-push-option-allowlist/paths",
+                lambda w: _on(w)["push"].update({"paths": ["**.py"]}),
+                "push options: unlisted option `paths`",
+            ),
+            (
+                "C1.canary-push-option-allowlist/tags",
+                lambda w: _on(w)["push"].update({"tags": ["v*"]}),
+                "push options: unlisted option `tags`",
+            ),
+            (
+                "C1.canary-push-option-allowlist/branches-ignore",
+                lambda w: _on(w)["push"].update(
+                    {"branches-ignore": _on(w)["push"].pop("branches")}
+                ),
+                "push options: unlisted option `branches-ignore`",
+            ),
+            (
+                "C3.single-job/canary-sibling-named-validate",
+                lambda w: w["jobs"].update(
+                    {
+                        "context-decoy": {
+                            "name": "validate",
+                            "runs-on": "ubuntu-latest",
+                            "timeout-minutes": 15,
+                            "steps": [{"name": "Context decoy", "run": "true"}],
+                        }
+                    }
+                ),
+                "jobs: expected exactly one job, found 2",
+            ),
         ]
 
     def test_every_canary_mutant_fails_with_its_own_diagnostic(self):
-        canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+        canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
         self.assertEqual(
             [],
             contract_problems(copy.deepcopy(canary), entry="canary"),
@@ -1959,6 +4209,151 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             with self.subTest(case=case_id):
                 self.assertIn(case_id, declared)
 
+    def test_validate_installs_actionlint_before_the_scripts_suite(self):
+        """COREDEV-2869. Cell 11's validity rule runs inside the scripts suite, so `validate` must have
+        actionlint on PATH by then. It installed it AFTER the suite, which is why the rule was a
+        one-off sweep rather than a test."""
+        steps = [
+            step.get("name", "")
+            for step in yaml.safe_load(
+                (REPO / ".github/workflows/plugin-ci.yml").read_text(encoding="utf-8")
+            )["jobs"]["validate"]["steps"]
+        ]
+        install = next(
+            i for i, name in enumerate(steps) if name.startswith("Install actionlint")
+        )
+        suite = next(
+            i
+            for i, name in enumerate(steps)
+            if name.startswith("Run the scripts test suite")
+        )
+        self.assertLess(install, suite)
+
+    def test_every_mutant_is_a_workflow_github_would_accept(self):
+        """Cell 11's validity rule, EXECUTED (COREDEV-2869; codex, r42). Each mutant must fail its own
+        contract diagnostic, not schema validation, so actionlint must accept it:
+        `actionlint -shellcheck= -pyflakes=` reports nothing for any (case, entry) pair except the
+        kinds that case's `actionlint_allow` declares. An allowance that no longer fires is stale and
+        fails too, so the allowlist cannot become a blanket exemption."""
+        actionlint = shutil.which("actionlint")
+        if actionlint is None:
+            if os.environ.get("GITHUB_JOB") == "validate":
+                self.fail(
+                    "actionlint is not on PATH in `validate`, where cell 11's validity rule must "
+                    "run: install it BEFORE the scripts suite"
+                )
+            self.skipTest(
+                "actionlint is not installed here; `validate` runs this and cannot skip"
+            )
+        recipes = {case[0]: case for case in self._yaml_mutants()} | {
+            case[0]: case for case in self._canary_mutants()
+        }
+        bases = {
+            "required": _load_workflow(),
+            "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
+        }
+        allowed: dict[str, set[str]] = {}
+        names: dict[str, tuple[str, str]] = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            workflows = Path(tmp) / ".github" / "workflows"
+            workflows.mkdir(parents=True)
+            for obligation in self.registry["obligations"]:
+                for case in obligation.get("cases", []):
+                    recipe = recipes.get(case["id"])
+                    if recipe is None:
+                        continue
+                    allowed[case["id"]] = set(case.get("actionlint_allow", []))
+                    for entry in obligation.get("entries", []):
+                        mutant = copy.deepcopy(bases[entry])
+                        recipe[1](mutant)
+                        name = f"m{len(names):03d}.yml"
+                        names[name] = (case["id"], entry)
+                        (workflows / name).write_text(
+                            yaml.safe_dump(mutant, sort_keys=False), encoding="utf-8"
+                        )
+            completed = subprocess.run(
+                [actionlint, "-shellcheck=", "-pyflakes=", "-format", "{{json .}}"],
+                cwd=tmp,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertIn(completed.returncode, (0, 1), completed.stderr)
+        findings = json.loads(completed.stdout.strip() or "null") or []
+        self.assertGreater(
+            len(names), 200, "the mutant set is smaller than the registry declares"
+        )
+        problems: list[str] = []
+        used: set[tuple[str, str]] = set()
+        for finding in findings:
+            case_id, entry = names[Path(finding["filepath"]).name]
+            if finding["kind"] in allowed[case_id]:
+                used.add((case_id, finding["kind"]))
+            else:
+                problems.append(
+                    f"{case_id} on {entry}: actionlint [{finding['kind']}] {finding['message']}"
+                )
+        self.assertEqual([], problems)
+        stale = {
+            (case_id, kind) for case_id, kinds in allowed.items() for kind in kinds
+        } - used
+        self.assertEqual(
+            set(), stale, "an actionlint allowance no longer fires — remove it"
+        )
+
+    def test_every_case_holds_on_every_entry_its_obligation_declares(self):
+        """A registry `entries:` list is a CLAIM that each case applies to each entry (codex, r49 and r52).
+        Run every case on every entry its obligation names. It must change that entry's workflow and
+        produce its OWN diagnostic there, so a generator that follows the registry cannot emit a mutant
+        that changes nothing or reports another entry's diagnostic, and an obligation cannot claim the
+        canary without the canary being tested."""
+        recipes = {case[0]: case for case in self._yaml_mutants()} | {
+            case[0]: case for case in self._canary_mutants()
+        }
+        bases = {
+            "required": _load_workflow(),
+            "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
+        }
+        for obligation in self.registry["obligations"]:
+            for case in obligation.get("cases", []):
+                recipe = recipes.get(case["id"])
+                if recipe is None:
+                    # Not a YAML/body recipe. Account for it per (case, ENTRY), not per case id: a
+                    # fixture case declared for two entries but run against one hid eight canary
+                    # executions behind a covered id (codex, r53).
+                    if case["id"] in FIXTURE_EXECUTED_CASES:
+                        fixture_entries = {
+                            C6AndC6aGuardsExecuteAgainstFixtureTrees.ENTRY,
+                            C6AndC6aGuardsExecuteAgainstTheCanarysOwnBodies.ENTRY,
+                        }
+                        for entry in obligation.get("entries", []):
+                            with self.subTest(case=case["id"], entry=entry):
+                                self.assertIn(entry, fixture_entries)
+                    elif case["id"] in RAW_YAML_CASES:
+                        # The raw-text test runs every case on BOTH entries.
+                        for entry in obligation.get("entries", []):
+                            with self.subTest(case=case["id"], entry=entry):
+                                self.assertIn(entry, {"required", "canary"})
+                    elif case["id"] in CELL16_INJECTED_CASES:
+                        with self.subTest(case=case["id"]):
+                            self.assertEqual(1, len(obligation.get("entries", [])))
+                    continue  # anything else is deferred; the coverage test below accounts for it
+                for entry in obligation.get("entries", []):
+                    with self.subTest(case=case["id"], entry=entry):
+                        mutant = copy.deepcopy(bases[entry])
+                        recipe[1](mutant)
+                        self.assertNotEqual(
+                            yaml.safe_dump(bases[entry], sort_keys=True),
+                            yaml.safe_dump(mutant, sort_keys=True),
+                            "the case changes nothing on this entry",
+                        )
+                        milestone = recipe[3] if len(recipe) > 3 else "M2"
+                        self.assertIn(
+                            recipe[2],
+                            contract_problems(mutant, milestone=milestone, entry=entry),
+                        )
+
     def test_every_declared_case_is_executed_here_or_provably_needs_external_machinery(
         self,
     ):
@@ -1976,6 +4371,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             | {case[0] for case in self._canary_mutants()}
             | CELL16_INJECTED_CASES
             | FIXTURE_EXECUTED_CASES
+            | RAW_YAML_CASES
         )
         declared, deferred = set(), []
         for obligation in self.registry["obligations"]:
@@ -2103,7 +4499,7 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+        cls.canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
 
     def test_the_canary_satisfies_its_whole_contract(self):
         self.assertEqual([], contract_problems(self.canary, entry="canary"))
@@ -2165,11 +4561,7 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
 
     # ---- the remote halves, against INJECTED observations -------------------------------------
     def test_canary_branches_equal_the_resolved_target_set(self):
-        on = _on(self.canary)["push"]
-        resolved = _resolved_or_recorded(
-            self, set(on["branches"]), "canaryWorkflowBranches"
-        )
-        self.assertEqual(resolved, set(on["branches"]))
+        self.assertEqual([], _target_set_results(self)["canary"])
 
     def test_an_injected_divergent_target_set_is_detected(self):
         """C16.canary-branches-equal-resolved-target-set/local-divergence — the resolved set moves
@@ -2213,6 +4605,294 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         self.assertNotIn(CANARY_CONTEXT, _required_contexts(ruleset))
 
 
+class TheLoaderResolvesOnlyTheCoreScalars(unittest.TestCase):
+    """The resolver table is an ALLOWLIST of YAML 1.2's four core scalar tags (r65). Revision 57
+    removed the 1.1 resolvers it named, and that left two more 1.1-only types: `<<` (merge) and `=`
+    (value). `with: {<<: {cache: true}}` loaded as a merged input although GitHub rejects merge keys,
+    and a plain `=` raised although GitHub reads the string "=". The same class, one resolver over.
+    """
+
+    def test_the_table_holds_exactly_the_core_scalar_tags(self):
+        tags = {
+            tag
+            for resolvers in _ActionsYamlLoader.yaml_implicit_resolvers.values()
+            for tag, _ in resolvers
+        }
+        self.assertEqual(set(_CORE_SCALARS), tags)
+
+    def test_the_merge_and_value_indicators_are_plain_strings(self):
+        self.assertEqual({"<<": {"a": 1}}, _load_actions_yaml("<<: {a: 1}\n"))
+        self.assertEqual({"k": "="}, _load_actions_yaml("k: =\n"))
+
+    def test_a_merge_key_among_the_action_inputs_is_an_unlisted_input(self):
+        """On every permitted source, written in the containing mapping's OWN syntax: a block line
+        after a flow entry was a parser error on a flow-style source (codex, r66)."""
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            for spelling, source in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, source=spelling):
+                    root = yaml.compose(source, Loader=_ActionsYamlLoader)
+                    ((key_node, _),) = _pinned_pairs(
+                        root, PINNED_PATHS["save-annotations"]
+                    )
+                    ((_, with_node),) = _with_pairs(root, "trunk")
+                    merge = (
+                        "<<: {cache: true}, "
+                        if with_node.flow_style
+                        else f"<<: {{cache: true}}\n{' ' * key_node.start_mark.column}"
+                    )
+                    at = key_node.start_mark.index
+                    mutated = source[:at] + merge + source[at:]
+                    self.assertIn(
+                        "action inputs: unlisted input `<<`",
+                        contract_problems(
+                            _load_actions_yaml(mutated), milestone="M3", entry=entry
+                        ),
+                    )
+
+
+class TheSourceGeneratorsFailByName(unittest.TestCase):
+    """COREDEV-2871 (codex, r66). The generators splice text at node marks, so they hold only inside
+    `_generator_domain_problems`. Outside it they must refuse BY NAME, and a variant that does not
+    parse must be named too, never surface as a bare parser error."""
+
+    ENTRIES = (("required", WORKFLOW_PATH), ("canary", CANARY_PATH))
+
+    def test_the_shipped_workflows_are_inside_the_domain(self):
+        for entry, path in self.ENTRIES:
+            with self.subTest(entry=entry):
+                self.assertEqual(
+                    [], _generator_domain_problems(path.read_text(encoding="utf-8"))
+                )
+
+    def test_every_permitted_base_fed_back_in_is_generated_or_refused_by_name(self):
+        """codex, r66: the flow and anchored bases, fed back in as the shipped source, raised
+        ParserError and ScannerError. Each base must now either generate cleanly or be refused.
+        """
+        refused = admitted = 0
+        for entry, path in self.ENTRIES:
+            for label, base in _permitted_bases(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, base=label):
+                    if _generator_domain_problems(base):
+                        refused += 1
+                        with self.assertRaisesRegex(AssertionError, "declared domain"):
+                            _all_permitted_sources(base)
+                    else:
+                        admitted += 1
+                        self.assertTrue(_all_permitted_sources(base))
+        # Both branches must run, or this test could not fail one way or the other.
+        self.assertGreater(refused, 0)
+        self.assertGreater(admitted, 0)
+
+    def test_in_domain_layouts_the_splice_must_survive(self):
+        """Inside the domain the generators must not raise. A block scalar's end mark is the START of
+        the following line, so splicing there joined the closing brace to the next line's text. Each
+        layout is followed by a step-level key, because at end of file that join is harmless and the
+        test could not fail."""
+        lit = "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
+        for label, extra in (
+            ("trailing comment on the last input", "  # trailing"),
+            (
+                "block scalar as the last input",
+                "\n{i}post-init: |\n{i}  echo one\n{i}  echo two",
+            ),
+            (
+                "kept block scalar as the last input",
+                "\n{i}post-init: |+\n{i}  echo one\n",
+            ),
+            (
+                "folded plain scalar as the last input",
+                "\n{i}post-init: echo one\n{i}  two",
+            ),
+        ):
+            with self.subTest(layout=label):
+                text = WORKFLOW_PATH.read_text(encoding="utf-8")
+                ((key_node, value_node),) = _pinned_pairs(
+                    yaml.compose(text, Loader=_ActionsYamlLoader),
+                    PINNED_PATHS["save-annotations"],
+                )
+                ((with_key, _),) = _with_pairs(
+                    yaml.compose(text, Loader=_ActionsYamlLoader), "trunk"
+                )
+                at = value_node.end_mark.index
+                source = (
+                    text[:at]
+                    + extra.format(i=" " * key_node.start_mark.column)
+                    + f"\n{' ' * with_key.start_mark.column}id: after-the-inputs"
+                    + text[at:]
+                )
+                self.assertIn(lit, source)
+                self.assertEqual([], _generator_domain_problems(source))
+                self.assertTrue(_all_permitted_sources(source))
+
+    def test_a_variant_that_does_not_parse_is_named(self):
+        """A trailing comment inside a flow collection comments out the rest of the line. Forcing
+        the inline-comment variant onto a flow-style base must name that variant."""
+        flow = yaml.dump(
+            _load_actions_yaml(WORKFLOW_PATH.read_text(encoding="utf-8")),
+            default_flow_style=True,
+            sort_keys=False,
+            width=10**6,
+        )
+        forced = unittest.mock.patch.object(
+            sys.modules[__name__], "_ends_its_line", return_value=True
+        )
+        named = self.assertRaisesRegex(
+            AssertionError, "source variant 'inline comments' does not parse"
+        )
+        with forced, named:
+            _source_variants(flow)
+
+
+class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
+    """GitHub parses workflows as YAML 1.2. Under PyYAML's 1.1 default, `save-annotations: yes` loaded
+    as True and `timeout-minutes: 017` as octal 15, and the checker accepted them while the runner
+    receives the STRING "yes" and the number 17 (codex, r59 and r60). Mutated as raw TEXT, by
+    YAML path, on both entries AND on every permitted spelling of the source (codex, r63).
+    """
+
+    CASES = (
+        (
+            "C3.runner-and-timeout-pinned/yaml-11-octal-017",
+            "timeout-minutes",
+            "017",
+            "job: expected `timeout-minutes: 15`, found 17",
+        ),
+        (
+            "C4.save-annotations-required/yaml-11-synonym-yes",
+            "save-annotations",
+            "yes",
+            "action inputs: `save-annotations` must be true",
+        ),
+        (
+            "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
+            "lfs",
+            "yes",
+            "checkout inputs: `lfs` must be true",
+        ),
+        (
+            "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
+            "persist-credentials",
+            "no",
+            "checkout inputs: `persist-credentials` must be false",
+        ),
+    )
+
+    def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            for spelling, source in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                for case_id, key, replacement, diagnostic in self.CASES:
+                    with self.subTest(case=case_id, entry=entry, source=spelling):
+                        mutated = _respell(source, key, replacement)
+                        self.assertIn(
+                            diagnostic,
+                            contract_problems(
+                                _load_actions_yaml(mutated), milestone="M3", entry=entry
+                            ),
+                        )
+
+
+class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
+    """C0.raw-text-canonical, on BOTH entries and every permitted spelling of the source (codex, r61
+    to r63)."""
+
+    CASES = (
+        (
+            "C0.raw-text-canonical/tag-bool-yes",
+            "save-annotations",
+            "!!bool yes",
+            "workflow: explicit YAML tag `tag:yaml.org,2002:bool` is not permitted",
+        ),
+        (
+            "C0.raw-text-canonical/tag-int-underscore",
+            "timeout-minutes",
+            "!!int 1_5",
+            "workflow: explicit YAML tag `tag:yaml.org,2002:int` is not permitted",
+        ),
+        (
+            "C0.raw-text-canonical/respell-plus-15",
+            "timeout-minutes",
+            "+15",
+            "timeout-minutes: spelled `+15`, not the canonical `15`",
+        ),
+        (
+            "C0.raw-text-canonical/respell-TRUE",
+            "lfs",
+            "TRUE",
+            "lfs: spelled `TRUE`, not the canonical `true`",
+        ),
+    )
+
+    def test_every_permitted_spelling_of_the_source_is_accepted(self):
+        """The positive control the builders were missing: a comment, a quoted key, or flow style
+        changes nothing the contract pins, so BOTH checks must accept every variant."""
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            for spelling, source in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, source=spelling):
+                    self.assertEqual([], raw_workflow_problems(source, entry=entry))
+                    self.assertEqual(
+                        [],
+                        contract_problems(
+                            _load_actions_yaml(source), milestone="M3", entry=entry
+                        ),
+                    )
+
+    def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            for spelling, source in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                for case_id, key, replacement, diagnostic in self.CASES:
+                    with self.subTest(case=case_id, entry=entry, source=spelling):
+                        mutated = _respell(source, key, replacement)
+                        self.assertIn(
+                            diagnostic, raw_workflow_problems(mutated, entry=entry)
+                        )
+
+    def test_a_decoy_line_inside_a_block_string_cannot_launder_a_respelling(self):
+        """codex, r62: a line search accepted `+15` when a decoy `timeout-minutes: 15` sat inside a
+        permitted `cache-key` block string. Only where the trunk inputs are a BLOCK mapping: a block
+        scalar cannot sit in a flow mapping, and a flow mapping may end a line before its closing
+        brace, so whether the value ends its line does not decide it (codex, r65). On the anchored
+        base the decoy duplicates `cache-key`; that source already holds the forbidden `+15`, and the
+        assertion is only that the respelling is reported."""
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            placed = 0
+            for spelling, original in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, source=spelling):
+                    source = _respell(original, "timeout-minutes", "+15")
+                    root = yaml.compose(source, Loader=_ActionsYamlLoader)
+                    ((key_node, value_node),) = _pinned_pairs(
+                        root, PINNED_PATHS["save-annotations"]
+                    )
+                    ((_, with_node),) = _with_pairs(root, "trunk")
+                    if with_node.flow_style:
+                        continue
+                    placed += 1
+                    line_end = _line_end(source, value_node)
+                    indent = " " * key_node.start_mark.column
+                    decoy = (
+                        source[:line_end]
+                        + f"\n{indent}cache-key: |\n{indent}  timeout-minutes: 15"
+                        + source[line_end:]
+                    )
+                    self.assertIn(
+                        "timeout-minutes: spelled `+15`, not the canonical `15`",
+                        raw_workflow_problems(decoy, entry=entry),
+                    )
+            # A skip that took every source would leave this test unable to fail.
+            self.assertGreater(placed, 0, f"{entry}: the decoy was placed in no source")
+
+
 class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     """The remaining registry cases, run by EXECUTING THE SHIPPED GUARD BODIES.
 
@@ -2222,9 +4902,18 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     of it. A test that re-implements the guard proves the test correct, not the guard.
     """
 
+    ENTRY = "required"
+
+    @classmethod
+    def _workflow(cls) -> dict:
+        if cls.ENTRY == "canary":
+            canary: dict = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
+            return canary
+        return _load_workflow()
+
     @classmethod
     def setUpClass(cls):
-        workflow = _load_workflow()
+        workflow = cls._workflow()
         cls.c6_guard = _step(workflow, "guard-launcher-path")["run"]
         cls.c6a_guard = _step(workflow, "guard-resolver-digest")["run"]
 
@@ -2369,10 +5058,20 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
         """ "Verify, then execute" is the property C6a exists for. Under §0's threat model an edited
         resolver still fails closed at the C6 guard, but that is the wrong step reporting it.
         """
-        names = [step.get("name") for step in _steps(_load_workflow())]
+        names = [step.get("name") for step in _steps(self._workflow())]
         self.assertLess(
             names.index("guard-resolver-digest"), names.index("guard-empty-diff")
         )
+
+
+class C6AndC6aGuardsExecuteAgainstTheCanarysOwnBodies(
+    C6AndC6aGuardsExecuteAgainstFixtureTrees
+):
+    """The same shipped-guard execution, against the CANARY's guard bodies. C6 and C6a declare both
+    entries, but only the required workflow's bodies were ever executed: eight declared (case, entry)
+    pairs never ran (codex, r53)."""
+
+    ENTRY = "canary"
 
 
 class TheRemoteReadsSurviveAMachineWithoutGh(unittest.TestCase):

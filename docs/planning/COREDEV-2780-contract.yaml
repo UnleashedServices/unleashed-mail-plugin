@@ -29,7 +29,7 @@ action_pin: trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa
 # harness binds its own extraction to this, and the parity judge requires a recorded artifact to
 # carry it — so evidence generated for DIFFERENT inputs cannot certify the current invocation.
 # ONE copy: this module already refuses a second copy of `action_pin` for the same reason.
-action_inputs_digest: cc125ae649d85ba092aa5a92fe187df6d4d235e896a8b17a267b7f1e6a77cd36
+action_inputs_digest: 2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe
 
 # ---------------------------------------------------------------------------------------------
 # The two workflows this contract governs. Cell 11 runs each obligation against the entries listed
@@ -115,10 +115,13 @@ obligations:
       - id: C0.root-mapping-allowlist/arbitrary-key
         op: add
         side: local
-        target: $.schedule
-        payload: "cron: '0 0 * * *'"
-        validity: a valid workflow root key outside the allowlist, so a blacklist detector passes it
-        diagnostic: "root mapping: unlisted key `schedule`"
+        target: $.run-name
+        payload: drift
+        validity: >-
+          a VALID workflow root key outside the allowlist, so a blacklist detector passes it. It was
+          `schedule`, which is not a workflow root key at all: actionlint rejects it as a syntax error,
+          so the case failed SCHEMA validation, not the contract (codex, r42)
+        diagnostic: "root mapping: unlisted key `run-name`"
 
   - id: C0.permissions-pinned-at-root
     clause: C0
@@ -153,8 +156,10 @@ obligations:
     kind: yaml
     entries: [required, canary]
     statement: >-
-      `concurrency` is prohibited at workflow AND job level. A constant group makes GitHub CANCEL the
-      in-flight run when a new one starts, and a cancelled required check is not a passing one.
+      `concurrency` is prohibited at workflow AND job level. A constant group serialises the runs: a
+      new run waits as PENDING, and a newer run CANCELS any run still pending (only
+      `cancel-in-progress: true` also cancels the in-flight run). A cancelled or pending required check
+      is not a passing one.
     target: $.concurrency, $.jobs.*.concurrency
     cases:
       - id: C0.no-concurrency/workflow
@@ -172,6 +177,47 @@ obligations:
         validity: the level-below site revision 21 left open when it converted the job mapping
         diagnostic: job-level `concurrency` is prohibited
   # ------------------------------------------------------------------ C1: the event --------------
+  - id: C0.raw-text-canonical
+    clause: C0
+    kind: raw_text
+    entries: [required, canary]
+    statement: >-
+      Two properties only the RAW TEXT can show (codex, r61). The workflow carries no explicit YAML tag:
+      `!!bool yes` and `!!int 1_5` bypass the YAML 1.2 implicit resolvers and re-admit the 1.1
+      coercions. And every pinned scalar (timeout-minutes, fetch-depth, lfs, persist-credentials,
+      save-annotations) is spelled canonically, so a respelling such as `+15` or `TRUE` is a declared
+      violation, not an undeclared assumption of a test.
+    target: raw workflow text
+    cases:
+      - id: C0.raw-text-canonical/tag-bool-yes
+        op: edit_bytes
+        side: local
+        target: steps[trunk].with.save-annotations
+        payload: "!!bool yes"
+        validity: an explicit tag bypasses the implicit resolvers; actionlint accepts it
+        diagnostic: "workflow: explicit YAML tag `tag:yaml.org,2002:bool` is not permitted"
+      - id: C0.raw-text-canonical/tag-int-underscore
+        op: edit_bytes
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "!!int 1_5"
+        validity: an explicit tag bypasses the implicit resolvers; actionlint accepts it
+        diagnostic: "workflow: explicit YAML tag `tag:yaml.org,2002:int` is not permitted"
+      - id: C0.raw-text-canonical/respell-plus-15
+        op: edit_bytes
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "+15"
+        validity: parses to the pinned value, but is not the canonical spelling the contract freezes
+        diagnostic: "timeout-minutes: spelled `+15`, not the canonical `15`"
+      - id: C0.raw-text-canonical/respell-TRUE
+        op: edit_bytes
+        side: local
+        target: steps[checkout].with.lfs
+        payload: "TRUE"
+        validity: parses to the pinned value, but is not the canonical spelling the contract freezes
+        diagnostic: "lfs: spelled `TRUE`, not the canonical `true`"
+
   - id: C1.single-event
     clause: C1
     kind: yaml
@@ -194,10 +240,15 @@ obligations:
         validity: the seventh hazard; dispatch autodetects check-mode=all at the pinned SHA
         diagnostic: "event set: unlisted event `workflow_dispatch`"
       - id: C1.single-event/remove-pull-request
-        op: remove
+        op: set
         side: local
-        target: $.on.pull_request
-        validity: omission, whose failure mode a presence-only validator misses
+        target: $.on
+        payload: "{push: {branches: [main]}}"
+        validity: >-
+          omission, whose failure mode a presence-only validator misses. The sole trigger is REPLACED
+          by another valid one, not removed: `on: {}` is not a valid workflow (actionlint: "on" section
+          should not be empty), so plain removal failed schema validation (codex, r42). The
+          replacement's own unlisted-event diagnostic overlaps, which cell 11 permits
         diagnostic: "event set: `pull_request` is absent"
       - id: C1.single-event/arbitrary-event
         op: add
@@ -234,14 +285,79 @@ obligations:
         validity: the sibling narrowing filter; leaves a required context Pending, which blocks
         diagnostic: "pull_request options: `paths-ignore` narrows reachability"
       - id: C1.event-option-allowlist/arbitrary-option
-        op: add
+        op: move
         side: local
-        target: $.on.pull_request.branches-ignore
-        payload: "['wip/**']"
-        validity: a valid unlisted mapping option
+        target: $.on.pull_request.branches
+        payload: to branches-ignore
+        validity: >-
+          a valid unlisted mapping option. GitHub rejects `branches` and `branches-ignore` on one
+          event, so ADDING it beside `branches` failed schema validation (codex, r42); the filter is
+          moved instead, and C2's absent-`branches` diagnostic overlaps, which cell 11 permits
         diagnostic: "pull_request options: unlisted option `branches-ignore`"
 
   # ------------------------------------------------------------------ C2: branches + types -------
+  - id: C1.canary-single-event
+    clause: C1
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary's event set is exactly `push`. The required workflow's C1 cases are written against
+      `pull_request`, so they could not test the canary at all (codex, r52).
+    target: $.on
+    cases:
+      - id: C1.canary-single-event/add-workflow-dispatch
+        op: add
+        side: local
+        target: $.on.workflow_dispatch
+        payload: "{}"
+        validity: dispatch would let the canary run on an arbitrary ref
+        diagnostic: "event set: unlisted event `workflow_dispatch`"
+      - id: C1.canary-single-event/add-pull-request
+        op: add
+        side: local
+        target: $.on.pull_request
+        payload: "{branches: [main]}"
+        validity: the canary would also run on pull requests
+        diagnostic: "event set: unlisted event `pull_request`"
+      - id: C1.canary-single-event/arbitrary-event
+        op: add
+        side: local
+        target: $.on.schedule
+        payload: "- cron: '0 0 * * *'"
+        validity: a valid unlisted event, so a blacklist of known-bad events passes it (codex, r53)
+        diagnostic: "event set: unlisted event `schedule`"
+
+  - id: C1.canary-push-option-allowlist
+    clause: C1
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary's `push` mapping admits `branches` only. A narrowing filter, a tag trigger or a moved
+      branch filter changes which pushes the canary observes (codex, r52).
+    target: $.on.push
+    cases:
+      - id: C1.canary-push-option-allowlist/paths
+        op: add
+        side: local
+        target: $.on.push.paths
+        payload: "['**.py']"
+        validity: narrows which pushes are observed
+        diagnostic: "push options: unlisted option `paths`"
+      - id: C1.canary-push-option-allowlist/tags
+        op: add
+        side: local
+        target: $.on.push.tags
+        payload: "['v*']"
+        validity: adds tag pushes the canary was never meant to run on
+        diagnostic: "push options: unlisted option `tags`"
+      - id: C1.canary-push-option-allowlist/branches-ignore
+        op: move
+        side: local
+        target: $.on.push.branches
+        payload: to branches-ignore
+        validity: inverts which branches are observed
+        diagnostic: "push options: unlisted option `branches-ignore`"
+
   - id: C2.branches-equal-resolved-target-set
     clause: C2
     kind: remote_relation
@@ -287,6 +403,13 @@ obligations:
           Its failure mode is OMISSION. A validator that checks the value only when the key is present
           rejects the reduced-set mutant while ACCEPTING an absent one — both cases are required.
         diagnostic: "types: key is absent"
+      - id: C2.types-required/not-the-exact-set
+        op: set
+        side: local
+        target: $.on.pull_request.types
+        payload: "[opened, reopened, edited]"
+        validity: keeps `edited` but drops `synchronize`, so the gate never re-runs on a new commit; the checker tested only for `edited` and passed it (codex, r44)
+        diagnostic: "types: the activity set is not exactly `opened, synchronize, reopened, edited`"
 
   # ------------------------------------------------------------------ C3: the job ----------------
   - id: C3.job-mapping-allowlist
@@ -295,7 +418,11 @@ obligations:
     entries: [required, canary]
     statement: >-
       The job's keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name`
-      (cell 14's effective check name, which takes precedence over the job id when present).
+      (cell 14's effective check name, which takes precedence over the job id when present). One
+      exception per entry, stated here because the checker implements both: the CANARY additionally
+      carries the permanent job-scoped `continue-on-error: true` that C16 REQUIRES, and the required
+      workflow carries it only at M2 (the advisory exemption). Without the canary exception this
+      allowlist and C16 could not both hold (codex, r49).
     target: $.jobs.<job>
     cases:
       - id: C3.job-mapping-allowlist/arbitrary-key
@@ -367,12 +494,114 @@ obligations:
   - id: C3.nothing-skips-or-masks
     clause: C3
     kind: yaml
+    entries: [required, canary]
+    statement: >-
+      No job-level `if:`, and no `if:` or `continue-on-error:` on ANY of the five steps, in either
+      entry. A job skipped by a conditional REPORTS SUCCESS to a required context; an `if: false` on a
+      GUARD step preserves both the frozen sequence and the frozen body digest while removing the guard
+      entirely. Job-level `continue-on-error` is NOT this obligation's: the canary REQUIRES it (C16), so
+      it lives in C3.no-job-continue-on-error, required entry only (codex, r54).
+    target: $.jobs.<job>.if, $.jobs.<job>.steps[*].if, $.jobs.<job>.steps[*].continue-on-error
+    cases:
+      - id: C3.nothing-skips-or-masks/job-if
+        op: add
+        side: local
+        target: $.jobs.<job>.if
+        payload: github.event_name != 'workflow_dispatch'
+        validity: valid syntax, and strictly worse than the hazard it was written to fix
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
+        diagnostic: "job: `if:` is prohibited (a skipped job reports Success)"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error
+        op: add
+        side: local
+        target: $.jobs.<job>.steps[trunk].continue-on-error
+        payload: "true"
+        validity: step scope rewrites the step's reported conclusion to success
+        diagnostic: "step `trunk`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-checkout
+        op: set
+        side: local
+        target: steps[checkout].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
+        diagnostic: "step `checkout`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-checkout
+        op: set
+        side: local
+        target: steps[checkout].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `checkout`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
+        diagnostic: "step `guard-resolver-digest`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-guard-empty-diff
+        op: set
+        side: local
+        target: steps[guard-empty-diff].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
+        diagnostic: "step `guard-empty-diff`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-empty-diff
+        op: set
+        side: local
+        target: steps[guard-empty-diff].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-empty-diff`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
+        diagnostic: "step `guard-launcher-path`: `if:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].continue-on-error
+        payload: true
+        validity: step scope rewrites the step's conclusion to success; required on EACH of the five steps (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `continue-on-error:` is prohibited"
+      - id: C3.nothing-skips-or-masks/step-if-trunk
+        op: set
+        side: local
+        target: steps[trunk].if
+        payload: false
+        validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
+        diagnostic: "step `trunk`: `if:` is prohibited"
+
+  - id: C3.no-job-continue-on-error
+    clause: C3
+    kind: yaml
     entries: [required]
     statement: >-
-      No `if:` and no `continue-on-error:` on the job OR on ANY of the five steps. A job skipped by a
-      conditional REPORTS SUCCESS to a required context; an `if: false` on a GUARD step preserves both
-      the frozen sequence and the frozen body digest while removing the guard entirely.
-    target: $.jobs.<job>.if, $.jobs.<job>.continue-on-error, $.jobs.<job>.steps[*].if, $.jobs.<job>.steps[*].continue-on-error
+      The REQUIRED workflow's job carries no `continue-on-error` from M3 on. Split from
+      C3.nothing-skips-or-masks because the canary REQUIRES that key at job scope (C16), so the shared
+      skip/mask cases could not be declared for the canary while this one sat beside them (codex, r53).
+    target: $.jobs.<job>.continue-on-error
     milestone_exemption:
       until: M3
       scope: job
@@ -382,27 +611,165 @@ obligations:
         Asserting C3 at M2 would make the suite intentionally red. The cell is WRITTEN at M2 and
         ENABLED at M3.
     cases:
-      - id: C3.nothing-skips-or-masks/job-if
-        op: add
-        side: local
-        target: $.jobs.<job>.if
-        payload: github.event_name != 'workflow_dispatch'
-        validity: valid syntax, and strictly worse than the hazard it was written to fix
-        diagnostic: "job: `if:` is prohibited (a skipped job reports Success)"
-      - id: C3.nothing-skips-or-masks/job-continue-on-error
+      - id: C3.no-job-continue-on-error/present
         op: add
         side: local
         target: $.jobs.<job>.continue-on-error
         payload: "true"
         validity: enabled only from M3, per the exemption above
         diagnostic: "job: `continue-on-error:` is prohibited"
-      - id: C3.nothing-skips-or-masks/step-continue-on-error
+
+  - id: C3.effective-context-pinned-required
+    clause: C3
+    kind: yaml
+    entries: [required]
+    statement: >-
+      The required entry's EFFECTIVE context, its job `name` or else its job ID, equals `trunk-check`. `name:`
+      decides the status context a job emits. Checking only the job ID let a canary renamed `validate` emit
+      a REQUIRED context without running the contract suites (codex, r46). Split per entry because each
+      case's payload and diagnostic are entry-specific: one obligation over both entries made a generated
+      mutant change nothing, or report the other entry's diagnostic (codex, r49).
+    target: $.jobs.<job>.name
+    cases:
+      - id: C3.effective-context-pinned-required/named-validate
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: validate
+        validity: the required job would stop emitting `trunk-check` and would emit `validate` instead
+        diagnostic: "job: effective context `validate` is not `trunk-check`"
+      - id: C3.effective-context-pinned-required/named-as-canary
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: trunk-check-push
+        validity: the two entries would emit the same context
+        diagnostic: "job: effective context `trunk-check-push` is not `trunk-check`"
+      - id: C3.effective-context-pinned-required/named-false
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "false"
+        validity: a PRESENT but falsey name, which a truthiness test replaced with the job ID (codex, r63)
+        diagnostic: "job: effective context `False` is not `trunk-check`"
+      - id: C3.effective-context-pinned-required/named-null
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "null"
+        validity: a PRESENT null name, which an `is None` test treated as absent (codex, r64)
+        diagnostic: "job: effective context `None` is not `trunk-check`"
+
+  - id: C3.effective-context-pinned-canary
+    clause: C3
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary entry's EFFECTIVE context, its job `name` or else its job ID, equals `trunk-check-push`. `name:`
+      decides the status context a job emits. Checking only the job ID let a canary renamed `validate` emit
+      a REQUIRED context without running the contract suites (codex, r46). Split per entry because each
+      case's payload and diagnostic are entry-specific: one obligation over both entries made a generated
+      mutant change nothing, or report the other entry's diagnostic (codex, r49).
+    target: $.jobs.<job>.name
+    cases:
+      - id: C3.effective-context-pinned-canary/named-validate
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: validate
+        validity: a passing canary would satisfy the REQUIRED `validate` context on its SHA
+        diagnostic: "job: effective context `validate` is not `trunk-check-push`"
+      - id: C3.effective-context-pinned-canary/named-as-required
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: trunk-check
+        validity: a second producer of the required `trunk-check` context
+        diagnostic: "job: effective context `trunk-check` is not `trunk-check-push`"
+      - id: C3.effective-context-pinned-canary/named-false
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "false"
+        validity: a PRESENT but falsey name, which a truthiness test replaced with the job ID (codex, r63)
+        diagnostic: "job: effective context `False` is not `trunk-check-push`"
+      - id: C3.effective-context-pinned-canary/named-null
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "null"
+        validity: a PRESENT null name, which an `is None` test treated as absent (codex, r64)
+        diagnostic: "job: effective context `None` is not `trunk-check-push`"
+
+  - id: C3.runner-and-timeout-pinned
+    clause: C3
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      `runs-on: ubuntu-latest` and `timeout-minutes: 15`, each asserted and mutated as an OPERAND. The
+      checker enforced both, but no registry case exercised either, so the timeout-360 survivor was
+      bound to an unrelated container-key case (codex, r50).
+    target: $.jobs.<job>
+    cases:
+      - id: C3.runner-and-timeout-pinned/timeout-360
+        op: set
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "360"
+        validity: GitHub's own six-hour default, a timeout that changes nothing
+        diagnostic: "job: expected `timeout-minutes: 15`, found 360"
+      - id: C3.runner-and-timeout-pinned/other-runner
+        op: set
+        side: local
+        target: $.jobs.<job>.runs-on
+        payload: macos-latest
+        validity: a valid runner other than the declared one
+        diagnostic: "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'"
+      - id: C3.runner-and-timeout-pinned/timeout-absent
+        op: remove
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        validity: OMISSION, which a value check that runs only when the key is present accepts (codex, r56)
+        diagnostic: "job: expected `timeout-minutes: 15`, found None"
+      - id: C3.runner-and-timeout-pinned/timeout-float
+        op: set
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "15.0"
+        validity: the right number with the wrong TYPE, which `==` accepts (codex, r57)
+        diagnostic: "job: expected `timeout-minutes: 15`, found 15.0"
+      - id: C3.runner-and-timeout-pinned/yaml-11-octal-017
+        op: edit_bytes
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "017"
+        validity: a RAW-TEXT leading-zero integer, which YAML 1.1 reads as octal 15 and GitHub's YAML 1.2 reads as decimal 17 (codex, r60)
+        diagnostic: "job: expected `timeout-minutes: 15`, found 17"
+
+  - id: C3.single-job
+    clause: C3
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      Each workflow declares exactly ONE job. Every other C3 and C8 check, and the effective-context pin,
+      reads the first job, so a sibling appended under `jobs:` was never inspected. It could emit the
+      REQUIRED `validate` context without the contract suites running (both arms, r47).
+    target: $.jobs
+    cases:
+      - id: C3.single-job/required-sibling-named-validate
         op: add
         side: local
-        target: $.jobs.<job>.steps[trunk].continue-on-error
-        payload: "true"
-        validity: step scope rewrites the step's reported conclusion to success
-        diagnostic: "step `trunk`: `continue-on-error:` is prohibited"
+        target: $.jobs.context-decoy
+        payload: "{name: validate, runs-on: ubuntu-latest, timeout-minutes: 15, steps: [{name: Context decoy, run: 'true'}]}"
+        validity: a valid second job; it emits a REQUIRED context on the same SHA
+        diagnostic: "jobs: expected exactly one job, found 2"
+      - id: C3.single-job/canary-sibling-named-validate
+        op: add
+        side: local
+        target: $.jobs.context-decoy
+        payload: "{name: validate, runs-on: ubuntu-latest, timeout-minutes: 15, steps: [{name: Context decoy, run: 'true'}]}"
+        validity: a valid second job; it emits a REQUIRED context on the same SHA
+        diagnostic: "jobs: expected exactly one job, found 2"
 
   - id: C3.no-defaults-run
     clause: C3
@@ -487,10 +854,10 @@ obligations:
     kind: yaml
     entries: [required]
     statement: >-
-      `arguments:` must be PRESENT and equal §6.4's declared literal as a WHOLE STRING. Absence is a
-      failure, not a permitted variant: absent means `markdown-link-check` runs in the required job.
-      The literal's bytes are stated only in §6.4 — a derived value written twice goes stale, and two
-      stale copies agree with each other.
+      `arguments:` must be PRESENT and equal §6.4's declared REQUIRED literal as a WHOLE STRING. Absence
+      is a failure, not a permitted variant: absent means `markdown-link-check` AND the five whole-file
+      formatters run in the required job (COREDEV-2850). The literal's bytes are stated only in §6.4 — a
+      derived value written twice goes stale, and two stale copies agree with each other.
     target: $.jobs.<job>.steps[trunk].with.arguments
     literal_source: §6.4
     cases:
@@ -510,13 +877,45 @@ obligations:
           whole-string match kills it.
         diagnostic: "action inputs: `arguments` does not equal the declared literal"
 
+  - id: C4.arguments-canary-literal
+    clause: C4
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The push canary's `arguments:` must be PRESENT and equal §6.4's CANARY literal as a WHOLE STRING. It
+      DIFFERS from the required literal by exactly the five formatters, by design (COREDEV-2850): the
+      required job filters them because trunk evaluates them whole-file and reports pre-existing debt as
+      new, and the canary keeps them so their findings are still observed. Cell 4 is what makes the two
+      literals becoming identical again fail.
+    target: $.jobs.<job>.steps[trunk].with.arguments
+    literal_source: §6.4
+    cases:
+      - id: C4.arguments-canary-literal/appended
+        op: append
+        side: local
+        target: .with.arguments
+        payload: " --fix"
+        validity: >-
+          The canary's own branch of the whole-string check. `contract_problems` selects the canary's
+          literal on `is_canary`; without a canary case, that branch has no mutant at all.
+        diagnostic: "action inputs: `arguments` does not equal the declared literal"
+      - id: C4.arguments-canary-literal/absent
+        op: remove
+        side: local
+        target: steps[trunk].with.arguments
+        validity: OMISSION, since an absent `arguments` runs every linter and a presence-only check misses it (codex, r53)
+        diagnostic: "action inputs: `arguments` is absent"
+
   - id: C4.save-annotations-required
     clause: C4
     kind: yaml
-    entries: [required]
+    entries: [required, canary]
     statement: >-
-      §6.1 chose option (b), so `save-annotations` is REQUIRED-PRESENT and true. Absent, the action
-      falls back to `--github-annotate` and 403s under `contents: read`.
+      §6.1 chose option (b), so `save-annotations` is REQUIRED-PRESENT and true on BOTH entries. The
+      CONSEQUENCE differs by event (codex, r55). On `pull_request`, absent or false falls back to
+      `--github-annotate`, which 403s under `contents: read`. On the canary's `push`, the action passes
+      no annotation argument under either value (§6.1), so there the cases test the pinned input VALUE,
+      not an annotation outcome.
     target: $.jobs.<job>.steps[trunk].with.save-annotations
     cases:
       - id: C4.save-annotations-required/absent
@@ -530,7 +929,14 @@ obligations:
         side: local
         target: .with.save-annotations
         payload: "false"
-        validity: present but valued so the action takes the annotating branch
+        validity: present but not the pinned value; on `pull_request` the action then takes the annotating branch
+        diagnostic: "action inputs: `save-annotations` must be true"
+      - id: C4.save-annotations-required/yaml-11-synonym-yes
+        op: edit_bytes
+        side: local
+        target: steps[trunk].with.save-annotations
+        payload: "yes"
+        validity: a RAW-TEXT YAML 1.1 boolean synonym; GitHub's YAML 1.2 parse reads it as a STRING, which a 1.1 loader coerced to the pinned boolean (codex, r59)
         diagnostic: "action inputs: `save-annotations` must be true"
 
   # ------------------------------------------------------------------ C5: env -------------------
@@ -685,7 +1091,7 @@ obligations:
   - id: C8.step-sequence-allowlist
     clause: C8
     kind: yaml
-    entries: [required]
+    entries: [required, canary]
     statement: >-
       Exactly, in order: `actions/checkout` (SHA-pinned) -> the C6a resolver-digest guard -> the
       empty-diff guard -> the C6 launcher-path guard -> the action. FIVE steps. The two guards are
@@ -760,11 +1166,68 @@ obligations:
         payload: x
         validity: a valid complete-step key outside the allowlist
         diagnostic: "step `guard-empty-diff`: unlisted key `id`"
+      - id: C8.step-sequence-allowlist/sibling-key
+        op: set
+        side: local
+        target: steps[guard-empty-diff].timeout-minutes
+        payload: 1
+        validity: the COMPLETE step mapping is frozen; a six-key blacklist passed any other key (codex, r44)
+        diagnostic: "step `guard-empty-diff`: unlisted key `timeout-minutes`"
+      - id: C8.step-sequence-allowlist/duplicate-checkout
+        op: duplicate
+        side: local
+        target: steps[checkout]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `checkout` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-guard-resolver-digest
+        op: duplicate
+        side: local
+        target: steps[guard-resolver-digest]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `guard-resolver-digest` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-guard-empty-diff
+        op: duplicate
+        side: local
+        target: steps[guard-empty-diff]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `guard-empty-diff` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-guard-launcher-path
+        op: duplicate
+        side: local
+        target: steps[guard-launcher-path]
+        payload: immediately before `trunk`, AFTER the guards
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `guard-launcher-path` appears 2 times"
+      - id: C8.step-sequence-allowlist/duplicate-trunk
+        op: duplicate
+        side: local
+        target: steps[trunk]
+        payload: at the end
+        validity: >-
+          a duplicate KNOWN name escaped the missing, unknown and reordered checks, and the per-step
+          checks read only the first occurrence; a second checkout after the guards replaced the
+          tree they had inspected (codex, r45)
+        diagnostic: "step sequence: `trunk` appears 2 times"
 
   - id: C8.run-bodies-frozen
     clause: C8
     kind: content_digest
-    entries: [required]
+    entries: [required, canary]
     statement: >-
       ALL THREE permitted `run:` steps are frozen BY CONTENT, and NONE may write to `$GITHUB_ENV` or
       `$GITHUB_PATH` at all. Freezing the SEQUENCE stopped a new step being added; it did nothing about
@@ -848,13 +1311,118 @@ obligations:
           Frozen by C8 while revision 16 mutated it NOWHERE, so a validator checking body digest,
           `if`, `continue-on-error` and `shell` but forgetting `working-directory` passed every case.
         diagnostic: "step `guard-empty-diff`: complete step mapping changed"
+      - id: C8.run-bodies-frozen/creates-c6-path-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: install -D /bin/true tools/trunk
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: creates a prohibited launcher path"
+      - id: C8.run-bodies-frozen/github-env-trunk-path-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-env-bash-env-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-path-guard-resolver-digest
+        op: append
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: echo X >> "$GITHUB_PATH"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: writes to $GITHUB_PATH"
+      - id: C8.run-bodies-frozen/changed-shell-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].shell
+        payload: sh
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `shell:` is prohibited"
+      - id: C8.run-bodies-frozen/changed-working-directory-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].working-directory
+        payload: /tmp
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-resolver-digest`: `working-directory:` is prohibited"
+      - id: C8.run-bodies-frozen/creates-c6-path-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: install -D /bin/true tools/trunk
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: run body digest mismatch"
+      - id: C8.run-bodies-frozen/github-env-trunk-path-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-env-bash-env-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: writes to $GITHUB_ENV"
+      - id: C8.run-bodies-frozen/github-path-guard-launcher-path
+        op: append
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: echo X >> "$GITHUB_PATH"
+        validity: cell 11 requires each injection form in EACH run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: writes to $GITHUB_PATH"
+      - id: C8.run-bodies-frozen/changed-shell-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].shell
+        payload: sh
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `shell:` is prohibited"
+      - id: C8.run-bodies-frozen/changed-working-directory-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].working-directory
+        payload: /tmp
+        validity: on each run step, not only guard-empty-diff (codex, r44)
+        diagnostic: "step `guard-launcher-path`: `working-directory:` is prohibited"
+      - id: C8.run-bodies-frozen/no-op-body-guard-resolver-digest
+        op: set
+        side: local
+        target: steps[guard-resolver-digest].run
+        payload: ":"
+        validity: "the OMISSION of the body, as a valid workflow: removing or emptying run: is a schema error (actionlint), so the guard is neutralised with a no-op"
+        diagnostic: "step `guard-resolver-digest`: run body digest mismatch"
+      - id: C8.run-bodies-frozen/no-op-body-guard-empty-diff
+        op: set
+        side: local
+        target: steps[guard-empty-diff].run
+        payload: ":"
+        validity: "the OMISSION of the body, as a valid workflow: removing or emptying run: is a schema error (actionlint), so the guard is neutralised with a no-op"
+        diagnostic: "step `guard-empty-diff`: run body digest mismatch"
+      - id: C8.run-bodies-frozen/no-op-body-guard-launcher-path
+        op: set
+        side: local
+        target: steps[guard-launcher-path].run
+        payload: ":"
+        validity: "the OMISSION of the body, as a valid workflow: removing or emptying run: is a schema error (actionlint), so the guard is neutralised with a no-op"
+        diagnostic: "step `guard-launcher-path`: run body digest mismatch"
 
   - id: C8.checkout-inputs-allowlist
     clause: C8
     kind: yaml
     entries: [required, canary]
     statement: >-
-      `actions/checkout`'s own inputs are allowlisted: `fetch-depth` (optional), `lfs: true`
+      `actions/checkout`'s own inputs are allowlisted: `fetch-depth` (REQUIRED, its value pinned per entry by C8.checkout-fetch-depth-*), `lfs: true`
       (REQUIRED) and `persist-credentials: false` (REQUIRED). Freezing its identity and SHA is not
       enough.
     target: steps[checkout].with
@@ -938,6 +1506,89 @@ obligations:
         payload: "true"
         validity: present but valued to the hazard
         diagnostic: "checkout inputs: `persist-credentials` must be false"
+      - id: C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes
+        op: edit_bytes
+        side: local
+        target: steps[checkout].with.lfs
+        payload: "yes"
+        validity: a RAW-TEXT YAML 1.1 boolean synonym; GitHub's YAML 1.2 parse reads it as a STRING, which a 1.1 loader coerced to the pinned boolean (codex, r59)
+        diagnostic: "checkout inputs: `lfs` must be true"
+      - id: C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no
+        op: edit_bytes
+        side: local
+        target: steps[checkout].with.persist-credentials
+        payload: "no"
+        validity: a RAW-TEXT YAML 1.1 boolean synonym; GitHub's YAML 1.2 parse reads it as a STRING, which a 1.1 loader coerced to the pinned boolean (codex, r59)
+        diagnostic: "checkout inputs: `persist-credentials` must be false"
+
+  - id: C8.checkout-sha-pinned
+    clause: C8
+    kind: yaml
+    entries: [required, canary]
+    statement: >-
+      `actions/checkout` is SHA-pinned (C8: "Exactly: `actions/checkout` (SHA-pinned)"). Only its
+      inputs were checked, so a tag such as `@v4` passed the contract (codex, r44). The FORM is frozen:
+      `actions/checkout@<40 hex>`. The exact SHA is Dependabot's to move.
+    target: steps[checkout].uses
+    cases:
+      - id: C8.checkout-sha-pinned/tag
+        op: set
+        side: local
+        target: steps[checkout].uses
+        payload: actions/checkout@v4
+        validity: a mutable tag where the contract requires a commit SHA
+        diagnostic: "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA"
+
+  - id: C8.checkout-fetch-depth-required
+    clause: C8
+    kind: yaml
+    entries: [required]
+    statement: >-
+      The required checkout's `fetch-depth` is exactly 2. The resolver needs `HEAD^1`, and checkout's default depth of 1 lacks it (codex, r56).
+    target: steps[checkout].with.fetch-depth
+    cases:
+      - id: C8.checkout-fetch-depth-required/absent
+        op: remove
+        side: local
+        target: steps[checkout].with.fetch-depth
+        validity: OMISSION, which leaves checkout's default depth of 1
+        diagnostic: "checkout inputs: `fetch-depth` must be 2, found None"
+      - id: C8.checkout-fetch-depth-required/one
+        op: set
+        side: local
+        target: steps[checkout].with.fetch-depth
+        payload: "1"
+        validity: a shallower depth without `HEAD^1`
+        diagnostic: "checkout inputs: `fetch-depth` must be 2, found 1"
+
+  - id: C8.checkout-fetch-depth-canary
+    clause: C8
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary checkout's `fetch-depth` is exactly 0. A push of N commits has `before` = HEAD~N, which can be arbitrarily far back; at depth 2 it is absent and the guard reads an EMPTY diff (codex, r56).
+    target: steps[checkout].with.fetch-depth
+    cases:
+      - id: C8.checkout-fetch-depth-canary/absent
+        op: remove
+        side: local
+        target: steps[checkout].with.fetch-depth
+        validity: OMISSION, which leaves checkout's default depth of 1
+        diagnostic: "checkout inputs: `fetch-depth` must be 0, found None"
+      - id: C8.checkout-fetch-depth-canary/two
+        op: set
+        side: local
+        target: steps[checkout].with.fetch-depth
+        payload: "2"
+        validity: the required job's depth, which is too shallow for a multi-commit push
+        diagnostic: "checkout inputs: `fetch-depth` must be 0, found 2"
+      - id: C8.checkout-fetch-depth-canary/boolean-false
+        op: set
+        side: local
+        target: steps[checkout].with.fetch-depth
+        payload: false
+        validity: a boolean, and `False == 0` in Python, so a value-only check accepts it (codex, r57)
+        diagnostic: "checkout inputs: `fetch-depth` must be 0, found False"
 
   # ------------------------------------------------------------------ C9: the action pin ---------
   - id: C9.action-pinned-by-sha

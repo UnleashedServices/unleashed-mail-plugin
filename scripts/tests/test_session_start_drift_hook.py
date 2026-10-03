@@ -400,7 +400,8 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
 
     def test_filename_hostile_session_ids_still_warn(self):
         """`session_id` is documented as OPAQUE with no filename-safety contract. Raw, these make
-        marker creation fail — and a detector that fails open warns on every single session start.
+        marker creation fail, and this detector's OSError branch then exits SILENTLY: the warning is
+        LOST on every session start (codex, plan r60, corrected "fails open, warns every start").
         """
         for session_id in ("a/b/c", "../../escape", "x" * 400, ""):
             with self.subTest(session_id=session_id[:16]):
@@ -427,16 +428,18 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
             f"{digest}.1", self._markers(), "the prior-window marker must be swept"
         )
 
-    def test_cleanup_removes_any_prior_window_not_just_seven_day_old_ones(self):
-        """Not the same statement: just after a boundary, a marker SECONDS old belongs to a prior
-        bucket and goes."""
+    def test_cleanup_is_by_BUCKET_not_by_age(self):
+        """Cleanup is decided by the bucket in the NAME, never by the file's age: a marker written
+        SECONDS ago in an old bucket still goes. "Old" means older than current-1. The previous bucket
+        is kept, so a delayed invocation cannot re-create it (COREDEV-2868; see the test above).
+        """
         directory = self.state / "unleashed-mail/drift-warned"
         directory.mkdir(parents=True)
-        digest = hashlib.sha256(b"fresh-but-prior").hexdigest()
+        digest = hashlib.sha256(b"fresh-but-old-bucket").hexdigest()
         window = int(time.time()) // BUCKET_SECONDS
-        (directory / f"{digest}.{window - 1}").write_text("", encoding="utf-8")
-        self.session_start("fresh-but-prior")
-        self.assertNotIn(f"{digest}.{window - 1}", self._markers())
+        (directory / f"{digest}.{window - 2}").write_text("", encoding="utf-8")
+        self.session_start("fresh-but-old-bucket")
+        self.assertNotIn(f"{digest}.{window - 2}", self._markers())
 
     def test_the_bucket_constant_is_604800_as_an_operand(self):
         """A different constant puts the marker in a different bucket — which is what makes this a
@@ -488,11 +491,30 @@ class TheRetentionPromiseIsKept(_DetectorFixture):
         directory, window = self._dir(), self._window()
         abandoned = [hashlib.sha256(f"gone-{n}".encode()).hexdigest() for n in range(5)]
         for digest in abandoned:
-            (directory / f"{digest}.{window - 1}").write_text("", encoding="utf-8")
+            (directory / f"{digest}.{window - 2}").write_text("", encoding="utf-8")
         self.assertIn("systemMessage", self.session_start("the-sweeper").stdout)
         survivors = [n for n in self._markers() if n.split(".")[0] in abandoned]
         self.assertEqual(
             [], survivors, "another session's expired markers must be swept"
+        )
+
+    def test_a_PREVIOUS_bucket_marker_survives_the_sweep(self):
+        """COREDEV-2868 (codex, plan r56, reproduced against this body). C captures bucket w and
+        pauses; A creates w and warns; B runs in w+1, warns, and swept w; C resumed, recreated w and
+        warned AGAIN. Keeping the previous bucket makes C's O_EXCL fail. The sweep removes only
+        buckets older than current-1, so the marker A wrote in w must still be there after B runs.
+        """
+        directory, window = self._dir(), self._window()
+        just_before_boundary = hashlib.sha256(b"session-a").hexdigest()
+        (directory / f"{just_before_boundary}.{window - 1}").write_text(
+            "", encoding="utf-8"
+        )
+        self.session_start("session-b")
+        self.assertIn(
+            f"{just_before_boundary}.{window - 1}",
+            self._markers(),
+            "a previous-bucket marker is LIVE for a delayed invocation; sweeping it lets that "
+            "invocation re-create it and warn twice in one bucket",
         )
 
     def test_it_does_not_touch_another_session_s_LIVE_marker(self):
@@ -526,7 +548,7 @@ class TheRetentionPromiseIsKept(_DetectorFixture):
         to produce — and the hook is declared with `timeout: 5`, so cleanup must never be on the
         critical path to the output."""
         directory, window = self._dir(), self._window()
-        (directory / f"{'a' * 64}.{window - 1}").mkdir()
+        (directory / f"{'a' * 64}.{window - 2}").mkdir()
         self.assertIn("systemMessage", self.session_start("undeletable").stdout)
 
 
