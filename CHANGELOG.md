@@ -152,6 +152,19 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   `[[rules]]` entry beside `useDefault = false`, or no `[extend]` table at all, switched off every
   default secret detector, and both `trunk-check` and `secret-scan` stayed green. The string
   `"true"` is refused as well. Each spelling failed the test before the fix.
+- **The gitleaks content check reads keys the way gitleaks does: case-insensitively (audit, PR #104).**
+  Each of these spellings stopped the pinned gitleaks 8.30.1 detecting a planted key, and the
+  case-sensitive check accepted all of them:
+  - `disabledrules`;
+  - `UseDefault = false` beside `useDefault = true`;
+  - `Regexes` or `Paths` blanket allowlists;
+  - a custom `[[rules]]` entry reusing a built-in id with a never-matching regex.
+
+  Keys are now lowercased before checking, two keys of one table that differ only by case are
+  refused, and any custom rule outside `ALLOWED_CUSTOM_RULE_IDS` (empty) is refused. A custom rule
+  REPLACES a built-in rule with the same id. Each spelling failed the test before the fix, and every
+  config that gitleaks stops detecting under is now refused.
+
 - **Security-linter configs outside the frozen tree (COREDEV-2860).** gitleaks reads `.gitleaks.toml`
   and zizmor reads `.github/zizmor.yml`, neither of which was frozen, so a blanket allowlist appended to
   `.gitleaks.toml` disarmed both `trunk-check` and the separate `secret-scan` required context with the

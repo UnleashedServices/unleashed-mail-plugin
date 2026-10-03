@@ -1459,6 +1459,31 @@ def _allowlist_is_blanket(entry: dict) -> bool:
     return any(criteria)
 
 
+# Rule ids this repository defines for itself — none today. A custom `[[rules]]` entry whose id
+# matches a built-in rule REPLACES it: a never-matching regex under `aws-access-token` switched AWS
+# detection off (audit, PR #104, measured against gitleaks 8.30.1). This is an allowlist of OUR ids,
+# not a list of gitleaks' built-in ids, which changes with every gitleaks release.
+ALLOWED_CUSTOM_RULE_IDS: frozenset = frozenset()
+
+
+def _casefold_keys(node, where: str, collisions: list):
+    """gitleaks reads its config through viper, which IGNORES THE CASE of keys: `disabledrules`,
+    `UseDefault` and `Regexes` all take effect, and a case-sensitive check saw none of them (audit,
+    PR #104). Lowercase every key, as gitleaks does, and record any two keys of one table that
+    differ only by case, since which of them wins is not what the file says."""
+    if isinstance(node, dict):
+        folded: dict = {}
+        for key, value in node.items():
+            lowered = str(key).lower()
+            if lowered in folded:
+                collisions.append(f"{where}{lowered}")
+            folded[lowered] = _casefold_keys(value, f"{where}{lowered}.", collisions)
+        return folded
+    if isinstance(node, list):
+        return [_casefold_keys(item, where, collisions) for item in node]
+    return node
+
+
 def gitleaks_content_problems(toml_text: str) -> list:
     """No blanket allowlist anywhere — global, legacy global, or per-rule — and the default ruleset
     neither switched off nor thinned. Each problem names what it found."""
@@ -1470,18 +1495,24 @@ def gitleaks_content_problems(toml_text: str) -> list:
         config = tomllib.loads(toml_text)
     except tomllib.TOMLDecodeError as error:
         return [f"gitleaks content: unparseable — {error}"]
-    problems = []
+    collisions: list = []
+    config = _casefold_keys(config, "", collisions)
+    problems = [
+        f"gitleaks content: two keys differ only by case at `{path}` — gitleaks ignores key case, "
+        "so which one applies is not what the file says"
+        for path in collisions
+    ]
     extend = config.get("extend") or {}
     # EXACTLY true, whatever custom rules exist (codex, PR #104 P1). Without it gitleaks REPLACES its
     # built-in rules with this file's, so `useDefault = false` beside one narrow dummy rule, or no
     # `[extend]` table at all, left every default secret detector off with both scans green. The
     # earlier condition only refused the case where NO rules were defined.
-    if extend.get("useDefault") is not True:
+    if extend.get("usedefault") is not True:
         problems.append(
             "gitleaks content: `[extend] useDefault` is not exactly true — gitleaks then REPLACES its "
             "built-in rules with this file's, whatever custom rules it defines"
         )
-    if extend.get("disabledRules"):
+    if extend.get("disabledrules"):
         problems.append(
             "gitleaks content: `[extend] disabledRules` removes inherited detection rules"
         )
@@ -1489,6 +1520,12 @@ def gitleaks_content_problems(toml_text: str) -> list:
     if isinstance(config.get("allowlist"), dict):
         entries.append(config["allowlist"])  # the legacy single global table
     for rule in config.get("rules") or []:
+        if rule.get("id") not in ALLOWED_CUSTOM_RULE_IDS:
+            problems.append(
+                f"gitleaks content: custom rule {rule.get('id')!r} — a custom rule REPLACES any "
+                "built-in rule with the same id, and this repository defines none "
+                "(ALLOWED_CUSTOM_RULE_IDS)"
+            )
         entries.extend(rule.get("allowlists") or [])
         if isinstance(rule.get("allowlist"), dict):
             entries.append(rule["allowlist"])
@@ -1674,6 +1711,46 @@ class Cell7_TheB1MutantNowReds(unittest.TestCase):
                     'useDefault = true\ndisabledRules = ["aws-access-token"]',
                 ),
                 "gitleaks content: `[extend] disabledRules` removes inherited detection rules",
+            ),
+            # KEY CASE (audit, PR #104; each measured against gitleaks 8.30.1, which then stopped
+            # detecting a planted key). gitleaks reads its config case-insensitively.
+            (
+                "lowercase `disabledrules`",
+                shipped.replace(
+                    "useDefault = true",
+                    'useDefault = true\ndisabledrules = ["aws-access-token"]',
+                ),
+                "gitleaks content: `[extend] disabledRules` removes inherited detection rules",
+            ),
+            (
+                "`UseDefault = false` beside `useDefault = true`",
+                shipped.replace(
+                    "useDefault = true", "useDefault = true\nUseDefault = false"
+                ),
+                "gitleaks content: two keys differ only by case",
+            ),
+            (
+                "`[Extend] UseDefault = false`",
+                shipped.replace(
+                    "[extend]\nuseDefault = true", "[Extend]\nUseDefault = false"
+                ),
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "capitalised `Regexes` blanket",
+                shipped + "\n[[allowlists]]\nRegexes = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "capitalised `Paths` blanket",
+                shipped + "\n[[allowlists]]\nPaths = ['''.*''']\n",
+                blanket,
+            ),
+            (
+                "a custom rule reusing the built-in id `aws-access-token`",
+                shipped
+                + "\n[[rules]]\nid = \"aws-access-token\"\nregex = '''XYZZY-NEVER-MATCHES'''\n",
+                "gitleaks content: custom rule 'aws-access-token'",
             ),
         ]
         for label, text, diagnostic in cases:
