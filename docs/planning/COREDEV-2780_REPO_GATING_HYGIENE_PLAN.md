@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 54
+**Status:** Planning, revision 55
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -56,7 +56,7 @@ one bucket (COREDEV-2868). Cell 11's per-step minimum is
 now declared in the registry and executed: 54 cases added in revisions 43-54 (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
 survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
-apart from the permitted `if-cond` notes. The survivor corpus records all six forms, as §1 requires; it
+apart from the permitted `if-cond` notes. The survivor corpus records all eight forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
 and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
@@ -409,6 +409,17 @@ assignment; until revision 44 all three appended `echo X`.
 > directory-error test to `window−2` so it reaches the unlink. The actionlint sweep now runs per (case,
 > entry) PAIR, including cross-entry applications: 216 pairs, 0 invalid apart from the permitted
 > `if-cond`. 126 recipes, 216 combinations, 0 failing.
+> **r58** `a8444e1` (revision 54), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2, both P2). codex
+> confirmed the exact-integer checks, the removed invalid case, the retention wording, and all 216
+> pairs. It **constructed no new mutant that escapes the whole suite**. P2: the timing assumption
+> bounded each invocation but not the clock BETWEEN invocations, so a clock set back two buckets
+> re-warns. P2: the integer-type survivor was missing from the corpus, and the header still said "all
+> six forms". It also made six non-blocking file-claim corrections. **Revision 55** states both halves
+> of the timing assumption and records the survivor (eight forms now). It corrects §3b's
+> "fails open" (this detector fails SILENT), records M5a's `180` in the plan, and corrects the
+> detector's "unreachable" and two-bucket-residue comments and the corpus header's registry claim.
+> The `find -L` comment inside both workflows' digest-frozen run bodies is wrong but comment-only,
+> and is ticketed rather than re-pinned.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1406,10 +1417,12 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     bucket w and paused before its `O_EXCL`; meanwhile a session in w+1 swept w; the paused invocation
     re-created w and warned a second time in w. Keeping w makes its `O_EXCL` fail. The accepted
     boundary behaviour below is therefore exactly two warnings, never three. **That guarantee carries
-    a TIMING ASSUMPTION, stated rather than hidden** (codex, r57): each invocation completes within one
-    bucket of its own start. The hook's 5-second timeout bounds an invocation's duration, so only a
-    wall-clock jump of more than one bucket (seven days) during a single invocation can break it.
-    Such a jump is out of scope. Keeping more buckets would only move the counterexample one bucket
+    a TIMING ASSUMPTION, stated rather than hidden** (codex, r57 and r58), in two parts. First, each
+    invocation completes within one bucket of its own start: the hook's 5-second timeout bounds an
+    invocation's duration. Second, the wall clock does not move BACKWARD by a bucket or more BETWEEN
+    invocations. A session that warned in bucket 1000, a sweep from bucket 1002, and then a clock set
+    back to 1000 (a restored VM snapshot, say) warns again in bucket 1000, with every call fast and
+    stable. Both conditions are out of scope. Keeping more buckets would only move the counterexample one bucket
     further; it would not remove it.
     **Accepted boundary behaviour, stated rather than discovered later:** a session live across a
     bucket boundary may warn twice, seconds apart. That is the honest reading of "at most one warning
@@ -1418,7 +1431,9 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     repeated invocation *within* a bucket (one warning) and *across* a boundary at well under seven
     elapsed days (a second warning, expected). *Hashed*: `session_id` is documented as an opaque identifier
     with **no filename-safety contract**, so using it raw makes marker creation fail on a `/` or an
-    over-long component — and this dedup fails **open**, warning on every invocation. — **not**
+    over-long component. This detector's `OSError` branch then exits SILENTLY, so the failure mode is a
+    LOST warning on every invocation, not a repeated one; revision 54 said "fails open, warning on every
+    invocation", which this code never did (codex, r58). — **not**
     `${CLAUDE_PLUGIN_DATA}`, which revision 10 used and which is scoped to *plugin*-associated hooks
     while this hook deliberately lives in project `.claude/settings.json` (codex, r10). The chosen
     path needs no plugin identity and matches the convention this repo already uses for review
@@ -1771,7 +1786,10 @@ alternative turned out to be complementary rather than competing.
       timeout changes shipped behaviour. **M5a's first step is to measure a representative upper
       envelope** (cold cache, largest realistic staged set); the measured value, **plus explicit
       headroom for slower hardware**, is then **recorded in this plan and becomes the authoritative
-      constant**, which cell 13 asserts and mutates. **The headroom is not optional** (kimi, third
+      constant**, which cell 13 asserts and mutates. **Recorded: `180` seconds**, from a 30.8-second
+      cold-bootstrap envelope with about 5.8x headroom, measured 2026-09-01 and recorded in
+      `evidence/COREDEV-2780-m5a-timeout-measurement.json`. Until revision 55 the value appeared only
+      in the hook and that record, and this paragraph promised it here (codex, r58). **The headroom is not optional** (kimi, third
       lens): the envelope is measured on one developer Mac while the constant is asserted in CI across
       a Linux leg and different Darwin hardware, so a value fitted tightly to the measurement makes
       cell 13's clean slow-path case **fail against a correct implementation** on a slower runner.

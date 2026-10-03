@@ -298,10 +298,11 @@ fi
 # Same hazard inside the fallback, which is evaluated only when XDG_STATE_HOME is unset.
 #
 # DEFENSIVE, AND NOT SEPARATELY TESTED — said plainly rather than implied. With HOME unset the
-# record read above resolves to `/.claude/...`, fails, and takes row 2's silent path, so this
-# line is unreachable through either shipped caller; a mutation reverting it stays green and no
-# test here would be honest. It is fixed for CONSISTENCY: the same expansion, the same hazard,
-# and a future caller that sets XDG_STATE_HOME while HOME is unset would reach it.
+# record read above resolves to `/.claude/...` and takes row 2's silent path UNLESS
+# CLAUDE_CONFIG_DIR is set, which roots the record elsewhere. So this line IS reachable, but only
+# with CLAUDE_CONFIG_DIR set while HOME and XDG_STATE_HOME are both unset (codex, plan r58,
+# corrected "unreachable"). No test here exercises that combination, so a mutation reverting it
+# stays green. It is fixed for CONSISTENCY: the same expansion, and the same hazard.
 state_base="${XDG_STATE_HOME:-${HOME-}/.local/state}"
 marker_dir="${state_base}/unleashed-mail/drift-warned"
 
@@ -386,7 +387,8 @@ print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
 # Bounds growth only WHILE THE INSTALL IS STALE: the silent path exits before this block by contract
 # (SILENT MEANS SILENT), so markers left by an install that is then updated are swept by nothing and
 # remain. That residue is bounded by TWO windows' sessions (the current bucket and the kept previous
-# one), and is stated rather than fixed here.
+# one) WHEN A SWEEP COMPLETES. A sweep interrupted after the warning is emitted leaves more, until
+# a later stale-install invocation sweeps again. Stated rather than fixed here (codex, plan r58).
 marker_name = re.compile(r"\A[0-9a-f]{64}\.([0-9]+)\Z")
 for stale in marker_dir.glob("*.*"):
     matched = marker_name.match(stale.name)

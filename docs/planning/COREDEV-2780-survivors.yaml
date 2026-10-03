@@ -15,7 +15,9 @@
 # the failure it exists to detect.
 #
 # THE OTHER THING THAT CATCHES A WRONG REGISTRY is the end-to-end behaviour cells (1, 2, 3, 5, 12 and
-# 17), which observe real runs and consult no registry at all — cell 17 most of all, since it observes
+# 17), which observe real runs and do not take the BEHAVIOUR they assert from the registry (the parity
+# harness and its judge do read the registry's pin and input digest, as the plan's §1 says) — cell 17
+# most of all, since it observes
 # the ruleset's BEHAVIOUR rather than any file's contents. What remains genuinely unmechanisable is
 # ARBITRARY completeness, and what guards that is this file and the registry being small, diffable and
 # reviewed.
@@ -356,3 +358,17 @@ survivors:
       On the canary, a multi-commit push whose `before` (HEAD~N) is absent from a depth-2 clone, so
       the guard reads an EMPTY diff and Trunk never runs. On the required job, a missing `HEAD^1`.
     must_fail_because: C8 pins `fetch-depth` per entry, 2 on the required job and 0 on the canary.
+
+  - id: survivor/integer-operand-by-value
+    covered_by:
+      - C8.checkout-fetch-depth-canary/boolean-false
+      - C3.runner-and-timeout-pinned/timeout-float
+    found_in_round: r57
+    survived_formulation: >-
+      Both integer operands were compared by VALUE with `==`, and Python's `==` treats `False` as 0
+      and `15.0` as 15.
+    mutant: "the canary's `fetch-depth: 0` as `fetch-depth: false`, or `timeout-minutes: 15.0`"
+    would_have_shipped: >-
+      A checker that certified a value of the wrong TYPE as the pinned operand. The depth-unpinned
+      survivor's cases do not cover this, because a value-only check rejects them correctly.
+    must_fail_because: C3 and C8 pin each integer operand by type as well as value.
