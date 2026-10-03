@@ -168,6 +168,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   a disabled zizmor audit, or an ignore covering every workflow is now refused outright.
 - **A mutant battery runs against the real code**: 29 single-decision operators over 30 rows, each
   failing exactly its recorded rows, proven to discriminate by weakening the production allowlist.
+  A row-21 child that CRASHES now raises with its stderr (gemini, PR #104). It used to be counted as
+  row 21 failing, which is what any operator recording row 21 expects. None of the 30 children exits
+  non-zero today, so this changes no result.
 
 ## [2.8.26] — 2026-09-07
 

@@ -685,7 +685,7 @@ def _row_21_in_child(name: str | None) -> bool:
                 sys.executable,
                 "-c",
                 code,
-                str(pathlib.Path(__file__).parent),
+                str(pathlib.Path(__file__).resolve().parent),
                 name or "",
             ],
             capture_output=True,
@@ -694,6 +694,13 @@ def _row_21_in_child(name: str | None) -> bool:
         )
     except subprocess.TimeoutExpired:
         return False
+    # A CRASH IS NOT AN OBSERVATION (gemini, PR #104). Measured: none of the 30 children (the baseline
+    # and every operator) exits non-zero, so a non-zero exit is an infrastructure fault. Counted as
+    # row 21 failing, it matched any operator whose recorded rows include 21.
+    if done.returncode != 0:
+        raise AssertionError(
+            f"row 21's child crashed (exit {done.returncode}), so it observed nothing:\n{done.stderr}"
+        )
     return done.stdout.strip() == "OK"
 
 
@@ -854,6 +861,13 @@ class Cell8f_TheAdjudicationBatteryRunsAgainstTheRealCode(unittest.TestCase):
 
     def test_the_correct_procedure_passes_the_baseline_and_every_row(self):
         self.assertEqual((True, []), self.results[None])
+
+    def test_a_crashed_row_21_child_is_an_error_not_a_failing_row(self):
+        """gemini, PR #104. A crashed child printed no `OK` and was counted as row 21 FAILING, which is
+        what any operator recording row 21 expects, so an infrastructure fault read as confirmation.
+        A child that cannot even resolve its operator must RAISE, with its stderr."""
+        with self.assertRaisesRegex(AssertionError, "row 21's child crashed"):
+            _row_21_in_child("no-such-operator")
 
     def test_the_fixture_anchor_has_a_symlinked_ancestor_on_this_platform(self):
         """The discrimination between `resolve-alike` and `resolve-one-side` exists ONLY when an
