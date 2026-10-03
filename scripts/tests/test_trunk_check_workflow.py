@@ -91,6 +91,10 @@ FIXTURE_EXECUTED_CASES = {
 # Raw-TEXT mutants (codex, r59): a YAML 1.1 boolean synonym is a property of the BYTES, so a mutation of an
 # already-parsed dictionary cannot express it. Executed per entry by `RawYamlSynonymsAreNotThePinnedBooleans`.
 RAW_YAML_CASES = {
+    "C0.raw-text-canonical/tag-bool-yes",
+    "C0.raw-text-canonical/tag-int-underscore",
+    "C0.raw-text-canonical/respell-plus-15",
+    "C0.raw-text-canonical/respell-TRUE",
     "C3.runner-and-timeout-pinned/yaml-11-octal-017",
     "C4.save-annotations-required/yaml-11-synonym-yes",
     "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
@@ -340,6 +344,41 @@ def _construct_core_int(loader, node) -> int:
 
 
 _ActionsYamlLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
+
+
+def raw_workflow_problems(text: str, *, entry: str = "required") -> list[str]:
+    """What only the RAW TEXT can show (codex, r61). (1) No explicit YAML tags: `!!bool yes` and
+    `!!int 1_5` bypass every implicit resolver, so they re-admit the YAML 1.1 coercions the loader
+    removed. (2) Every pinned scalar is spelled CANONICALLY, so `+15`, `015` and `TRUE` are declared
+    violations rather than an undeclared assumption a test happened to make."""
+    problems = [
+        f"workflow: explicit YAML tag `{event.tag}` is not permitted"
+        for event in yaml.parse(text, Loader=_ActionsYamlLoader)
+        if isinstance(
+            event, (yaml.ScalarEvent, yaml.MappingStartEvent, yaml.SequenceStartEvent)
+        )
+        and event.tag is not None
+    ]
+    canonical = {
+        "timeout-minutes": "15",
+        "fetch-depth": "0" if entry == "canary" else "2",
+        "lfs": "true",
+        "persist-credentials": "false",
+        "save-annotations": "true",
+    }
+    for key, spelling in canonical.items():
+        found = re.findall(
+            rf"^\s*{re.escape(key)}:\s*(.*?)\s*(?:#.*)?$", text, flags=re.MULTILINE
+        )
+        if len(found) != 1:
+            problems.append(
+                f"{key}: expected exactly one occurrence, found {len(found)}"
+            )
+        elif found[0] != spelling:
+            problems.append(
+                f"{key}: spelled `{found[0]}`, not the canonical `{spelling}`"
+            )
+    return problems
 
 
 def _load_actions_yaml(text: str):
@@ -4085,6 +4124,74 @@ class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
                         contract_problems(
                             _load_actions_yaml(mutated), milestone="M3", entry=entry
                         ),
+                    )
+
+
+class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
+    """C0.raw-text-canonical, on BOTH entries (codex, r61)."""
+
+    CASES = (
+        (
+            "C0.raw-text-canonical/tag-bool-yes",
+            "save-annotations",
+            "true",
+            "!!bool yes",
+            "workflow: explicit YAML tag `tag:yaml.org,2002:bool` is not permitted",
+        ),
+        (
+            "C0.raw-text-canonical/tag-int-underscore",
+            "timeout-minutes",
+            "15",
+            "!!int 1_5",
+            "workflow: explicit YAML tag `tag:yaml.org,2002:int` is not permitted",
+        ),
+        (
+            "C0.raw-text-canonical/respell-plus-15",
+            "timeout-minutes",
+            "15",
+            "+15",
+            "timeout-minutes: spelled `+15`, not the canonical `15`",
+        ),
+        (
+            "C0.raw-text-canonical/respell-TRUE",
+            "lfs",
+            "true",
+            "TRUE",
+            "lfs: spelled `TRUE`, not the canonical `true`",
+        ),
+    )
+
+    def test_the_shipped_workflows_are_untagged_and_canonical(self):
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            with self.subTest(entry=entry):
+                self.assertEqual(
+                    [],
+                    raw_workflow_problems(
+                        path.read_text(encoding="utf-8"), entry=entry
+                    ),
+                )
+
+    def test_each_case_is_rejected_on_both_entries(self):
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            text = path.read_text(encoding="utf-8")
+            for case_id, key, pinned, replacement, diagnostic in self.CASES:
+                with self.subTest(case=case_id, entry=entry):
+
+                    def substitute(
+                        match: re.Match[str], value: str = replacement
+                    ) -> str:
+                        # A function, not a replacement string: `!!` and `+` must stay literal.
+                        return match.group(1) + value + match.group(2)
+
+                    mutated, count = re.subn(
+                        rf"^(\s*{re.escape(key)}:\s*){re.escape(pinned)}(\s*(?:#.*)?)$",
+                        substitute,
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                    self.assertEqual(1, count)
+                    self.assertIn(
+                        diagnostic, raw_workflow_problems(mutated, entry=entry)
                     )
 
 

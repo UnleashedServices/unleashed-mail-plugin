@@ -175,6 +175,47 @@ obligations:
         validity: the level-below site revision 21 left open when it converted the job mapping
         diagnostic: job-level `concurrency` is prohibited
   # ------------------------------------------------------------------ C1: the event --------------
+  - id: C0.raw-text-canonical
+    clause: C0
+    kind: raw_text
+    entries: [required, canary]
+    statement: >-
+      Two properties only the RAW TEXT can show (codex, r61). The workflow carries no explicit YAML tag:
+      `!!bool yes` and `!!int 1_5` bypass the YAML 1.2 implicit resolvers and re-admit the 1.1
+      coercions. And every pinned scalar (timeout-minutes, fetch-depth, lfs, persist-credentials,
+      save-annotations) is spelled canonically, so a respelling such as `+15` or `TRUE` is a declared
+      violation, not an undeclared assumption of a test.
+    target: raw workflow text
+    cases:
+      - id: C0.raw-text-canonical/tag-bool-yes
+        op: edit_bytes
+        side: local
+        target: steps[trunk].with.save-annotations
+        payload: "!!bool yes"
+        validity: an explicit tag bypasses the implicit resolvers; actionlint accepts it
+        diagnostic: "workflow: explicit YAML tag `tag:yaml.org,2002:bool` is not permitted"
+      - id: C0.raw-text-canonical/tag-int-underscore
+        op: edit_bytes
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "!!int 1_5"
+        validity: an explicit tag bypasses the implicit resolvers; actionlint accepts it
+        diagnostic: "workflow: explicit YAML tag `tag:yaml.org,2002:int` is not permitted"
+      - id: C0.raw-text-canonical/respell-plus-15
+        op: edit_bytes
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "+15"
+        validity: parses to the pinned value, but is not the canonical spelling the contract freezes
+        diagnostic: "timeout-minutes: spelled `+15`, not the canonical `15`"
+      - id: C0.raw-text-canonical/respell-TRUE
+        op: edit_bytes
+        side: local
+        target: steps[checkout].with.lfs
+        payload: "TRUE"
+        validity: parses to the pinned value, but is not the canonical spelling the contract freezes
+        diagnostic: "lfs: spelled `TRUE`, not the canonical `true`"
+
   - id: C1.single-event
     clause: C1
     kind: yaml

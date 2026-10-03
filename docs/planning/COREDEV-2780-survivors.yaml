@@ -378,14 +378,37 @@ survivors:
       - C4.save-annotations-required/yaml-11-synonym-yes
       - C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes
       - C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no
-      - C3.runner-and-timeout-pinned/yaml-11-octal-017
     found_in_round: r59
     survived_formulation: >-
       Workflows were parsed with PyYAML's YAML 1.1 default, which reads unquoted `yes`/`no` as
-      booleans while GitHub parses YAML 1.2, where they are strings. Revision 56 fixed only the
-      booleans, and `timeout-minutes: 017` (1.1 octal 15, 1.2 decimal 17) survived it (codex, r60).
+      booleans, while GitHub parses YAML 1.2, where they are strings.
     mutant: "`save-annotations: yes`, `lfs: yes`, or `persist-credentials: no`, as raw text"
     would_have_shipped: >-
       A checker that certified inputs the runner never receives. `save-annotations: yes` reaches the
       action as the string "yes", not the pinned `true`.
     must_fail_because: the checker parses workflows as GitHub does (YAML 1.2 booleans), so a synonym is not the pinned value.
+
+  - id: survivor/yaml-11-octal-integer
+    covered_by:
+      - C3.runner-and-timeout-pinned/yaml-11-octal-017
+    found_in_round: r60
+    survived_formulation: >-
+      Revision 56 replaced only PyYAML's BOOLEAN resolver, so integers were still resolved as YAML 1.1,
+      where a leading zero means OCTAL.
+    mutant: "`timeout-minutes: 017`, as raw text"
+    would_have_shipped: >-
+      A checker that read 15 where GitHub's YAML 1.2 parse reads 17.
+    must_fail_because: the checker parses with the WHOLE YAML 1.2 core scalar schema.
+
+  - id: survivor/explicit-yaml-tag
+    covered_by:
+      - C0.raw-text-canonical/tag-bool-yes
+      - C0.raw-text-canonical/tag-int-underscore
+    found_in_round: r61
+    survived_formulation: >-
+      The loader replaced the IMPLICIT resolvers, but an explicit tag bypasses implicit resolution
+      entirely, and the constructors behind it still accepted 1.1 forms.
+    mutant: "`save-annotations: !!bool yes`, or `timeout-minutes: !!int 1_5`, as raw text"
+    would_have_shipped: >-
+      The YAML 1.1 coercions re-admitted through one prefix, accepted by the checker and by actionlint.
+    must_fail_because: C0.raw-text-canonical forbids explicit tags in a workflow.

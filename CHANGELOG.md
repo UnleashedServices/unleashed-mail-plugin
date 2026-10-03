@@ -23,7 +23,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema. Replacing only the booleans
   left `timeout-minutes: 017` passing as YAML 1.1 octal 15 where GitHub reads 17 (codex, plan r60).
   The synonyms and the octal form are mutated as raw text on both entries, and every case failed
-  under the loader it replaces.
+  under the loader it replaces. An explicit tag (`!!bool yes`, `!!int 1_5`) bypassed implicit resolution
+  altogether (codex, plan r61). Workflows may now carry no explicit tags, and the pinned scalars must be
+  spelled canonically. Both are checked over the raw text.
 - **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
   sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
   before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,

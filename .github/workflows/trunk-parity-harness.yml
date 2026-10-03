@@ -222,8 +222,10 @@ jobs:
       # They are equal when autofix is off, and equally equal when the fixture was never in the
       # linted range at all, which is the failure mode that would make cell 5 certify a blind sensor.
       #
-      # Same pinned action, same recorder, same resolved range — only `--fix` differs, so a change in
-      # the fixture's bytes is attributable to autofix and nothing else. It records into its OWN argv
+      # Same pinned action, same recorder, same resolved range. `--fix` differs, and so does
+      # `save-annotations` (false here, true in the shipped job; codex, plan r61, corrected "only
+      # `--fix` differs"). Annotation output cannot rewrite the fixture, so a change in the fixture's
+      # bytes is still attributable to autofix and nothing else. It records into its OWN argv
       # file: cell 1 compares the invocation the shipped configuration produced, and a second set of
       # argv in that stream would be evidence of a run the shipped workflow never makes.
       #

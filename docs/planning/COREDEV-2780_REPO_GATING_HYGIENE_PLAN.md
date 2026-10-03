@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 57
+**Status:** Planning, revision 58
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-57, not outstanding** (r44 to r60): ten checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-58, not outstanding** (r44 to r61): eleven checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -53,13 +53,14 @@ operands were compared by VALUE only, so `fetch-depth: false` and `timeout-minut
 (`False == 0` and `15.0 == 15` in Python; revision 54); and workflows were parsed as YAML 1.1, so
 `save-annotations: yes` passed while GitHub's YAML 1.2 parse delivers the string "yes" (revision 56); and
 revision 56 fixed only the booleans, so `timeout-minutes: 017` passed as octal 15 where GitHub reads 17
-(revision 57, the whole core schema). Also fixed in
+(revision 57, the whole core schema); and an explicit tag (`!!bool yes`, `!!int 1_5`) bypassed the
+implicit resolvers altogether (revision 58, C0.raw-text-canonical). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
 one bucket (COREDEV-2868). Cell 11's per-step minimum is
-now declared in the registry and executed: 58 cases added in revisions 43-57, four of them RAW-TEXT (the runner and timeout
+now declared in the registry and executed: 62 cases added in revisions 43-58, eight of them RAW-TEXT (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
 survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
-apart from the permitted `if-cond` notes. The survivor corpus records all nine forms, as §1 requires; it
+apart from the permitted `if-cond` notes. The survivor corpus records all eleven forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
 and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
@@ -445,6 +446,16 @@ assignment; until revision 44 all three appended `echo X`.
 > and adds a raw `017` case on both entries, which failed under the boolean-only loader. Of the forms
 > tried, only `017` is both a valid workflow and divergent: actionlint rejects `0o17`, `0xF` and `0:15`.
 > The mutation now keeps inline comments, and three stale residues are fixed.
+> **r61** `a042c4a` (revision 57), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2). codex confirmed
+> bare `017` now resolves to 17 and fails with its own diagnostic. P2: **an ELEVENTH checker survivor,
+> reproduced here on both entries.** An EXPLICIT tag bypasses implicit resolution, so `!!bool yes` and
+> `!!int 1_5` re-admitted the 1.1 coercions, and both the checker and actionlint accepted them. P2: the
+> raw-text tests located values by their canonical spelling, so a correct `+15` or `TRUE` failed them
+> falsely: an undeclared formatting requirement. **Revision 58** adds `raw_workflow_problems`, which
+> forbids explicit tags and requires canonical spellings of the pinned scalars, DECLARED as
+> C0.raw-text-canonical. Four raw cases run on both entries, and all eight executions were accepted by
+> `contract_problems` alone. It also splits the octal survivor from the boolean one and records the tag
+> survivor (eleven forms), and corrects the harness's "only `--fix` differs".
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1046,7 +1057,15 @@ own non-required context.
   case survived it. Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema (booleans,
   integers, floats, null). The synonym and octal cases are mutated as RAW TEXT on both entries, because
   the defect is in the parse and a mutation of an already-parsed dictionary happens after it. The
-  mutation keeps any inline comment, which the contract permits. The parity
+  mutation keeps any inline comment, which the contract permits.
+
+  **C0.raw-text-canonical: two properties only the RAW TEXT can show** (codex, r61). First, **no explicit
+  YAML tag**. `!!bool yes` and `!!int 1_5` bypass every implicit resolver, so they re-admitted exactly
+  the 1.1 coercions revision 57 removed, and the checker and actionlint both accepted them. Second,
+  **every pinned scalar is spelled canonically** (`15`, `2`/`0`, `true`, `false`, `true`). A respelling
+  such as `+15` or `TRUE` parses to the pinned value. The raw-text mutation tests had silently assumed
+  canonical spellings, so a correct-but-respelled workflow failed them; the assumption is now a
+  declared contract rule, checked by `raw_workflow_problems` on both entries. The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 
