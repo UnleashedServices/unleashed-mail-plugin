@@ -17,6 +17,13 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2780 cell 15: target-set resolution is ONCE, before entry selection (COREDEV-2869).** The
+  registry declared it, but the required and canary comparisons each resolved on their own. Two
+  resolution calls leave two places for a per-entry resolver to hide. A single boundary now resolves
+  once and checks every entry's recorded branches. One entry-parameterised comparator receives the
+  result. A sentinel test substitutes one value at that boundary and requires both entries' verdicts
+  and diagnostics to follow it. It fails on a comparator that ignores the result and on one that
+  resolves per entry.
 - **COREDEV-2850 plan §6 step 3: the probe-PR cells are observed and JUDGED.**
   Probe PR #103 was never merged. It ran the bundle's six-entry required literal and observed the cells
   that no unit test can show:

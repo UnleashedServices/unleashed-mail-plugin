@@ -275,26 +275,73 @@ def _recorded_remote_halves():
         ) from error
 
 
-def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set:
-    """The live resolved set, or the committed evidence BOUND TO THIS WORKFLOW.
+# Each entry's own record of its `branches:` in the committed evidence, keyed by registry entry id.
+_RECORDED_BRANCHES_KEY = {
+    "required": "requiredWorkflowBranches",
+    "canary": "canaryWorkflowBranches",
+}
 
-    The offline path is not a weaker version of the online one: it additionally requires the
-    artifact's own record of this workflow's branches to match what the workflow now says, so
-    evidence recorded for a different branch set cannot certify the current one.
+
+def _shipped_branches() -> dict[str, set[str]]:
+    """Each entry's `branches:`, keyed by registry entry id."""
+    canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
+    return {
+        "required": set(_on(_load_workflow())["pull_request"]["branches"]),
+        "canary": set(_on(canary)["push"]["branches"]),
+    }
+
+
+def _resolve_once(test, shipped: dict[str, set[str]]) -> set[str]:
+    """THE BOUNDARY (cell 15; COREDEV-2869): the ruleset's target set, resolved ONCE, before any entry
+    is selected. Live when `gh` can read the ruleset, otherwise the committed evidence, and then ONLY
+    if its record of EVERY entry's branches still matches what that entry ships. Evidence recorded for
+    a different branch set cannot certify the current one.
+
+    Revision 37's registry declared `resolved_once_before_entry_selection`, while each entry's test
+    resolved on its own. Two calls are two places a per-entry resolver can hide, so the shape is
+    removed: this is called once, and `_target_set_problems` receives its result and resolves nothing.
     """
     resolved = _resolve_target_set()
     if resolved is not None:
         return resolved
-    # No `is None` branch: the reader now fails closed, so a missing or corrupt artifact raises
-    # here instead of turning this cell into a skip.
+    # The reader fails closed: a missing or corrupt artifact raises instead of skipping.
     recorded = _recorded_remote_halves()
-    test.assertEqual(
-        set(recorded[recorded_key]),
-        shipped_branches,
-        f"{ROLLOUT_EVIDENCE.name} records {recorded[recorded_key]} for this workflow, which no "
-        "longer matches its `branches:` — the evidence predates the change and must be re-recorded",
-    )
+    for entry, branches in shipped.items():
+        key = _RECORDED_BRANCHES_KEY[entry]
+        test.assertEqual(
+            set(recorded[key]),
+            branches,
+            f"{ROLLOUT_EVIDENCE.name} records {recorded[key]} for the {entry} workflow, which no "
+            "longer matches its `branches:` — the evidence predates the change and must be "
+            "re-recorded",
+        )
     return set(recorded["resolvedTargetSet"])
+
+
+def _target_set_problems(
+    resolved: set[str], entry: str, branches: set[str]
+) -> list[str]:
+    """THE comparator, ONE function parameterised by registry entry (C2 and C16). It is handed the one
+    resolved set and never resolves, so it has no second resolver path to drift along.
+    """
+    if branches == resolved:
+        return []
+    return [
+        (
+            f"{entry}: `branches:` {sorted(branches)} is not the ruleset's resolved target set "
+            f"{sorted(resolved)}"
+        )
+    ]
+
+
+def _target_set_results(test) -> dict[str, list[str]]:
+    """Resolve once, then compare every entry against that single result."""
+    shipped = _shipped_branches()
+    resolved = _resolve_once(test, shipped)
+    return {
+        entry: _target_set_problems(resolved, entry, branches)
+        for entry, branches in shipped.items()
+    }
 
 
 class _ActionsYamlLoader(yaml.SafeLoader):  # type: ignore[misc]  # PyYAML is untyped
@@ -2809,11 +2856,36 @@ class Cell15_TargetSetResolution(unittest.TestCase):
                         _resolve_ref_name(ref_name, "main")
 
     def test_the_shipped_workflow_matches_the_live_resolved_set(self):
-        on = _on(_load_workflow())["pull_request"]
-        resolved = _resolved_or_recorded(
-            self, set(on["branches"]), "requiredWorkflowBranches"
+        self.assertEqual([], _target_set_results(self)["required"])
+
+    def test_one_shared_sentinel_governs_both_entries(self):
+        """COREDEV-2869. A comparator can CALL the resolver and ignore its result, or resolve once per
+        entry behind a shared-looking wrapper. One sentinel substituted at the boundary must be the
+        thing BOTH entries are judged against: each verdict and each diagnostic follows it, and the
+        boundary is crossed exactly once."""
+        sentinel = {"sentinel-coredev-2869"}
+        boundary = mock.patch.object(
+            sys.modules[__name__], "_resolve_once", return_value=sentinel
         )
-        self.assertEqual(resolved, set(on["branches"]))
+        with boundary as resolved:
+            results = _target_set_results(self)
+        resolved.assert_called_once()
+        self.assertEqual({"required", "canary"}, set(results))
+        for entry, problems in results.items():
+            with self.subTest(entry=entry):
+                self.assertEqual(1, len(problems))
+                self.assertIn("sentinel-coredev-2869", problems[0])
+                self.assertTrue(problems[0].startswith(f"{entry}: "))
+        # Governed in the other direction too: a sentinel equal to each entry's branches clears both.
+        shipped = _shipped_branches()
+        self.assertEqual(shipped["required"], shipped["canary"])
+        boundary = mock.patch.object(
+            sys.modules[__name__],
+            "_resolve_once",
+            return_value=set(shipped["required"]),
+        )
+        with boundary:
+            self.assertEqual({"required": [], "canary": []}, _target_set_results(self))
 
 
 class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
@@ -4293,11 +4365,7 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
 
     # ---- the remote halves, against INJECTED observations -------------------------------------
     def test_canary_branches_equal_the_resolved_target_set(self):
-        on = _on(self.canary)["push"]
-        resolved = _resolved_or_recorded(
-            self, set(on["branches"]), "canaryWorkflowBranches"
-        )
-        self.assertEqual(resolved, set(on["branches"]))
+        self.assertEqual([], _target_set_results(self)["canary"])
 
     def test_an_injected_divergent_target_set_is_detected(self):
         """C16.canary-branches-equal-resolved-target-set/local-divergence — the resolved set moves

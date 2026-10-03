@@ -1,8 +1,8 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 63 (ungated; see its log entry). The re-gate opened at revision 38
-(COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT passed.** See the
-**r66** log entry. Every edit after revision 62 is ungated by construction.
+**Status:** Planning, revision 64 (ungated; see the revision 63 and 64 log entries). The re-gate opened
+at revision 38 (COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT
+passed.** See the **r66** log entry. Every edit after revision 62 is ungated by construction.
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -12,10 +12,6 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
   revision 52 said 19, COREDEV-2870); the case-validity
   rule is not executed; the `(side, form)` resolver family runs as hard-coded helper tests, not as the
   24 registry-expanded executions;
-* cell 11 / cell 15 — resolution is not "once, before entry selection": the required and canary
-  comparisons each call `_resolved_or_recorded`, which re-resolves on every call; and cell 15's
-  sentinel data-flow test does not exist. The resolver itself IS entry-agnostic
-  (`_resolve_ref_name(ref_name, default_branch)`);
 * cell 8 — the pre-commit half is not proved through Git's entry point: no test makes a real
   `git commit` that a stale install warns on and still permits, or runs the silent rows that way; the
   r33 root-operand controls are source assertions and direct detector calls; the bucket boundary is
@@ -41,6 +37,14 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
   (codex, r56);
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
+
+**Implemented in revision 64 (COREDEV-2869), no longer outstanding:** resolution now happens
+ONCE, before entry selection. `_resolve_once` is the single boundary, and `_target_set_problems` is
+one comparator, parameterised by entry, that receives the result and never resolves. Cell 15's
+sentinel test exists. It substitutes one sentinel at the boundary and requires both entries' verdicts
+and diagnostics to follow it, with the boundary crossed exactly once. It goes red on a comparator that
+ignores the resolver's result and on one that resolves per entry. The resolver itself was already
+entry-agnostic (`_resolve_ref_name(ref_name, default_branch)`).
 
 **Fixed in revisions 43-62, not outstanding** (r44 to r65): twelve checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
@@ -485,6 +489,11 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **Revision 64** (2026-10-03; ungated): COREDEV-2869 part 3, cell 15's sharing enforcement. The
+> registry declared `resolved_once_before_entry_selection`, while the required and canary
+> comparisons each resolved on their own. `_resolve_once` now resolves once and checks EVERY entry's
+> recorded branches. One comparator receives the result, and a sentinel test enforces the shape
+> (details in the header).
 > **Revision 63** (2026-10-03; no review round, so ungated by construction): **COREDEV-2871**, the
 > r66 instrument findings, fixed at the maintainer's direction. `_relaid_trunk_inputs` now holds only
 > inside a declared domain, `_generator_domain_problems` (no anchor or alias; the trunk inputs one
