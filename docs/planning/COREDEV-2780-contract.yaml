@@ -642,6 +642,18 @@ obligations:
         payload: macos-latest
         validity: a valid runner other than the declared one
         diagnostic: "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'"
+      - id: C3.runner-and-timeout-pinned/timeout-absent
+        op: remove
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        validity: OMISSION, which a value check that runs only when the key is present accepts (codex, r56)
+        diagnostic: "job: expected `timeout-minutes: 15`, found None"
+      - id: C3.runner-and-timeout-pinned/runner-absent
+        op: remove
+        side: local
+        target: $.jobs.<job>.runs-on
+        validity: OMISSION of a required-present key
+        diagnostic: "job: expected `runs-on: ubuntu-latest`, found None"
 
   - id: C3.single-job
     clause: C3
@@ -808,8 +820,11 @@ obligations:
     kind: yaml
     entries: [required, canary]
     statement: >-
-      §6.1 chose option (b), so `save-annotations` is REQUIRED-PRESENT and true. Absent, the action
-      falls back to `--github-annotate` and 403s under `contents: read`.
+      §6.1 chose option (b), so `save-annotations` is REQUIRED-PRESENT and true on BOTH entries. The
+      CONSEQUENCE differs by event (codex, r55). On `pull_request`, absent or false falls back to
+      `--github-annotate`, which 403s under `contents: read`. On the canary's `push`, the action passes
+      no annotation argument under either value (§6.1), so there the cases test the pinned input VALUE,
+      not an annotation outcome.
     target: $.jobs.<job>.steps[trunk].with.save-annotations
     cases:
       - id: C4.save-annotations-required/absent
@@ -823,7 +838,7 @@ obligations:
         side: local
         target: .with.save-annotations
         payload: "false"
-        validity: present but valued so the action takes the annotating branch
+        validity: present but not the pinned value; on `pull_request` the action then takes the annotating branch
         diagnostic: "action inputs: `save-annotations` must be true"
 
   # ------------------------------------------------------------------ C5: env -------------------
@@ -1411,6 +1426,50 @@ obligations:
         payload: actions/checkout@v4
         validity: a mutable tag where the contract requires a commit SHA
         diagnostic: "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA"
+
+  - id: C8.checkout-fetch-depth-required
+    clause: C8
+    kind: yaml
+    entries: [required]
+    statement: >-
+      The required checkout's `fetch-depth` is exactly 2. The resolver needs `HEAD^1`, and checkout's default depth of 1 lacks it (codex, r56).
+    target: steps[checkout].with.fetch-depth
+    cases:
+      - id: C8.checkout-fetch-depth-required/absent
+        op: remove
+        side: local
+        target: steps[checkout].with.fetch-depth
+        validity: OMISSION, which leaves checkout's default depth of 1
+        diagnostic: "checkout inputs: `fetch-depth` must be 2, found None"
+      - id: C8.checkout-fetch-depth-required/one
+        op: set
+        side: local
+        target: steps[checkout].with.fetch-depth
+        payload: "1"
+        validity: a shallower depth without `HEAD^1`
+        diagnostic: "checkout inputs: `fetch-depth` must be 2, found 1"
+
+  - id: C8.checkout-fetch-depth-canary
+    clause: C8
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary checkout's `fetch-depth` is exactly 0. A push of N commits has `before` = HEAD~N, which can be arbitrarily far back; at depth 2 it is absent and the guard reads an EMPTY diff (codex, r56).
+    target: steps[checkout].with.fetch-depth
+    cases:
+      - id: C8.checkout-fetch-depth-canary/absent
+        op: remove
+        side: local
+        target: steps[checkout].with.fetch-depth
+        validity: OMISSION, which leaves checkout's default depth of 1
+        diagnostic: "checkout inputs: `fetch-depth` must be 0, found None"
+      - id: C8.checkout-fetch-depth-canary/two
+        op: set
+        side: local
+        target: steps[checkout].with.fetch-depth
+        payload: "2"
+        validity: the required job's depth, which is too shallow for a multi-commit push
+        diagnostic: "checkout inputs: `fetch-depth` must be 0, found 2"
 
   # ------------------------------------------------------------------ C9: the action pin ---------
   - id: C9.action-pinned-by-sha

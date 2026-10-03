@@ -342,3 +342,17 @@ survivors:
       A required `validate` context satisfied on the PR's head SHA by a job that runs `true`, with the
       contract suites `validate` exists to run never run.
     must_fail_because: each workflow declares exactly one job (C3).
+
+  - id: survivor/checkout-depth-unpinned
+    covered_by:
+      - C8.checkout-fetch-depth-required/absent
+      - C8.checkout-fetch-depth-canary/two
+    found_in_round: r56
+    survived_formulation: >-
+      `fetch-depth` was allowlisted as OPTIONAL with its value unconstrained, so depth 1, depth 2 and
+      omission (checkout's default, 1) all passed, on both entries.
+    mutant: "the canary's `fetch-depth: 0` changed to `fetch-depth: 2`, or the required job's removed"
+    would_have_shipped: >-
+      On the canary, a multi-commit push whose `before` (HEAD~N) is absent from a depth-2 clone, so
+      the guard reads an EMPTY diff and Trunk never runs. On the required job, a missing `HEAD^1`.
+    must_fail_because: C8 pins `fetch-depth` per entry, 2 on the required job and 0 on the canary.

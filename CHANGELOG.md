@@ -17,6 +17,12 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
+  sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
+  before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,
+  re-create it, and warn again. codex reproduced three warnings against the detector's own body (plan
+  r56). The sweep now keeps the previous bucket, so that `O_EXCL` fails, and a combined
+  concurrent-boundary test failed against the old sweep.
 - **COREDEV-2850: the parity harness fixture failed CI's repo-wide actionlint.** Its `printf` writes a
   literal, unexpanded `$name`, because that unbraced reference IS the fixture's finding. ShellCheck reports
   that as info-level SC2016, and CI's actionlint fails on any ShellCheck finding. A scoped
@@ -35,7 +41,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   requires exactly `opened, synchronize, reopened, edited`. **C8** blacklisted six step keys instead of
   freezing the complete step mapping, so a sibling key such as `timeout-minutes` passed. It is now a
   per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
-  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **A duplicate
+  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **`fetch-depth`'s
+  value** (codex, plan r56) was never checked, so depth 1, depth 2 or omission passed. It is now exactly
+  2 on the required job and 0 on the canary, which needs full history for a multi-commit push. **A duplicate
   step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
   the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
   `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
@@ -43,7 +51,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
   first job. Each workflow must now declare exactly one. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
-  and `continue-on-error` on every step) is now declared in the registry and executed: 47 new cases,
+  and `continue-on-error` on every step) is now declared in the registry and executed: 53 new cases,
   all valid workflows. A standing test now runs every registry case on every entry its obligation
   declares, so an `entries:` claim cannot outrun what is tested. That test found the canary's own
   event and guard-body obligations missing from the registry (codex, plan r52), and they are now added. The C6/C6a launcher and resolver

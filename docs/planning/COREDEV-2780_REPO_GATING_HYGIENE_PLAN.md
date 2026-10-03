@@ -1,13 +1,13 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 52
+**Status:** Planning, revision 53
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
 respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
 * cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
-  asserted diagnostics differ from the registry's (ten required-entry, one canary: 19 executions once
-  each case runs on every entry it declares); the case-validity
+  asserted diagnostics differ from the registry's (ten that now run on both entries, one canary-only: 10 x 2 + 1 = 21 executions;
+  revision 52 said 19, COREDEV-2870); the case-validity
   rule is not executed; the `(side, form)` resolver family runs as hard-coded helper tests, not as the
   24 registry-expanded executions;
 * cell 11 / cell 15 — resolution is not "once, before entry selection": the required and canary
@@ -34,19 +34,26 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
   this cell prescribes. The evidence record says so and lists what the fork exercise still needs.
   Accepting that substitution is the maintainer's decision. Until then the fork exercise is outstanding
   (codex, r47);
+* cell 16 — no test drives a MULTI-COMMIT push through the canary's checkout and guard. Revision 53 pins
+  `fetch-depth: 0` statically, and the runtime proof that a deep `before` is linted is outstanding
+  (codex, r56);
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-46, not outstanding** (r44 to r47): six checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-53, not outstanding** (r44 to r56): seven checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
 `actions/checkout` after the guards could replace the tree they had inspected (revision 44); and only
 the job ID was checked, never the job `name` that decides the emitted context, so a canary named
 `validate` passed (revision 45); and every check read only the FIRST job, so a sibling job named
-`validate` appended under `jobs:` passed (revision 46, found by both arms). Cell 11's per-step minimum is
-now declared in the registry and executed: 47 cases added in revisions 43-51 (the runner and timeout
-operands and the canary's C1 and C4 cases close coverage gaps rather than survivors), every one actionlint-clean
+`validate` appended under `jobs:` passed (revision 46, found by both arms); and `fetch-depth`'s VALUE was
+never checked, so depth 1, depth 2 or omission passed on both entries (revision 53). Also fixed in
+revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
+one bucket (COREDEV-2868). Cell 11's per-step minimum is
+now declared in the registry and executed: 53 cases added in revisions 43-53 (the runner and timeout
+operands and their omissions, and the canary's C1 and C4 cases, close coverage gaps rather than
+survivors), every one actionlint-clean
 apart from the permitted `if-cond` notes. The survivor corpus records all six forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
@@ -370,6 +377,21 @@ assignment; until revision 44 all three appended `echo X`.
 > freshly resolved targets at every deciding read, narrows the shared C3 obligation and moves its
 > exemption, declares the canary for `save-annotations`, scopes the "every pair executes" claim, and
 > fixes stale `plugin-ci.yml` locators. 119 recipes, 207 combinations, 0 failing.
+> **r55** `f3120b6` (revision 52), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES` (four notes,
+> ticketed as COREDEV-2870 so the reproduction could stay byte-identical). **r56, the byte-identical
+> REPRODUCTION** with neutral prompts: agy `APPROVE` again, **codex `REQUEST_CHANGES` (3)**. It did not
+> reproduce, the THIRD time this campaign (r42, r49, r56). Two findings were real defects in SHIPPED
+> code, the first since r47. (1) **`fetch-depth` was never pinned**: the checker accepted depth 1, depth
+> 2 and omission on both entries, while the canary needs full history or a multi-commit push lints
+> nothing. (2) **The detector's dedup race** (COREDEV-2868, which I had ticketed as low): codex
+> reproduced THREE warnings for one session against the detector's own body. (3) There was no
+> timeout-OMISSION case, so a value check that runs only when the key is present passed every mutant.
+> **Revision 53** pins `fetch-depth` per entry. The detector's sweep now keeps the previous bucket,
+> with a combined concurrent-boundary test that failed against the old sweep. It adds timeout and
+> runner omission cases, and applies all four COREDEV-2870 notes: C4's rationale is per event, M4a
+> requires resolved-set EQUALITY, the mismatch count is 21, and §2's locators are cited by content
+> with the current line as a hint. It also narrows the registry-independence claim and corrects M4's
+> fork-refresh disposition. 125 recipes, 215 combinations, 0 failing.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -723,8 +745,10 @@ own non-required context.
     ever survived a round of this gate stays in a corpus that must keep failing. A registry edit that
     silently drops an obligation reddens the corpus even though the rendering lint is happy;
   * **the end-to-end behaviour cells** (1, 2, 3, 5, 12 **and 17**), which observe real runs and do not
-    consult the registry at all — cell 17 most of all, since it observes the ruleset's behaviour rather
-    than any file's contents.
+    take the BEHAVIOUR they assert from the registry — cell 17 most of all, since it observes the
+    ruleset's behaviour rather than any file's contents. They are not wholly registry-free (codex, r56).
+    The parity harness reads the registry's action pin and input digest to run the action as shipped,
+    and cells 1 and 5's judge reads the same, as §6.1 describes.
 
   What remains genuinely unmechanisable is *arbitrary* completeness, and what guards that is the
   registry being small, diffable and reviewed.
@@ -952,8 +976,13 @@ own non-required context.
   well-meaning sparse-checkout optimisation can leave changed files **absent from disk** while git
   metadata still yields a non-empty range — so the empty-diff guard passes and Trunk lints files that
   are not there. That is an *accident*, squarely inside §0's threat model. The permitted set is
-  **`fetch-depth` (optional), `lfs: true` (required), and `persist-credentials: false` (required)**;
-  every other input must be absent.
+  **`fetch-depth` (REQUIRED, exactly `2` on the required job and `0` on the canary), `lfs: true`
+  (required), and `persist-credentials: false` (required)**; every other input must be absent.
+  `fetch-depth` was "optional" with its value unconstrained until revision 53 (codex, r56), so depth 1,
+  depth 2 and omission passed on both entries. The required resolver needs `HEAD^1`, which checkout's
+  default depth of 1 lacks. The canary needs the WHOLE history, because a push of N commits has
+  `before` = HEAD~N. At depth 2 that object is absent, and the guard reads an EMPTY diff, so Trunk never
+  runs.
 
   **`persist-credentials: false` is required, and revision 20 forbade it (sweep).** `actions/checkout`
   persists the job's credential by default — **in `.git/config` below v6, and in `$RUNNER_TEMP` from
@@ -1097,7 +1126,8 @@ rejected it: that fails against a currently-correct tree.
 | `quote-keep` (`CHANGELOG.md:2140`) | the source line itself | **match exactly once** |
 | `rewrite` (`README.md:187` → dest 292) | `destination.payloads` | **match NOTHING** — the legacy source was deliberately deleted |
 
-`test_transcript_path_inventory.py:349` already enforces source-absence for rewrites.
+`test_transcript_path_inventory.py` already enforces source-absence for rewrites (`_legacy_source_survives`,
+`:487` today; `:349` at this plan's baseline).
 
 **The fix, per class:**
 
@@ -1110,8 +1140,9 @@ rejected it: that fails against a currently-correct tree.
   its line assertion.
 
 **Two existing line dependencies must change with it** (codex, r2): the observed-site set comparison
-at `test_transcript_path_inventory.py:342` (`quote_keep_sites = {_site_key(site) …}`) and the
-fixed-line hash check at **`:358`** (`_sha256(lines[site["line"] - 1]) != site["sourceSha256"]`).
+at `test_transcript_path_inventory.py` (`quote_keep_sites = {_site_key(site) …}`, `:448` today, `:342`
+at baseline) and the fixed-line hash check (`_sha256(lines[site["line"] - 1]) != site["sourceSha256"]`,
+`:482` today, **`:358`** at baseline; COREDEV-2870).
 **Cited by content, with the line as a hint** — `:355` is the enclosing `class == "quote-keep"` guard,
 not the hash, and this plan carried that wrong pin from revision 2 through the gate. Line pins rot;
 that is COREDEV-2798's entire thesis, one section above.
@@ -1352,7 +1383,12 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     **`window` is `floor(unix_time / 604800)`** — fixed seven-day buckets from the epoch, declared
     because revision 14 named the field without defining it, and *daily* buckets under a seven-day
     cleanup would have passed every stated test while warning the same session **every day**
-    (codex, r14). Cleanup removes markers whose window is strictly less than the current one.
+    (codex, r14). **Cleanup removes markers whose window is older than current−1; the PREVIOUS bucket
+    is kept** (COREDEV-2868; codex r56, which reproduced three warnings against the detector's own
+    body). Sweeping everything older than the CURRENT bucket let this happen: an invocation captured
+    bucket w and paused before its `O_EXCL`; meanwhile a session in w+1 swept w; the paused invocation
+    re-created w and warned a second time in w. Keeping w makes its `O_EXCL` fail. The accepted
+    boundary behaviour below is therefore exactly two warnings, never three.
     **Accepted boundary behaviour, stated rather than discovered later:** a session live across a
     bucket boundary may warn twice, seconds apart. That is the honest reading of "at most one warning
     per session per retention window", and the alternative — a rolling window anchored on the marker's
@@ -1569,8 +1605,10 @@ alternative turned out to be complementary rather than competing.
       or a push. Two dispositions follow, both implied by the merge-ref model and neither previously
       stated: **stale same-repo PR branches do NOT need a rebase**, because the `pull_request` merge ref
       picks the workflow up from the base — close/reopen suffices; and a **fork PR with maintainer-edits
-      disabled cannot be refreshed by the maintainer at all**, which under `bypass_actors: []` means the
-      disposition is "close it, or wait for the author". Decide that before M4 blocks on one — it is the
+      disabled cannot be refreshed by a maintainer PUSH**, but close/reopen still re-triggers its
+      workflow, because it edits no fork branch, subject to the repository's fork-run approval (codex,
+      r56 corrected "cannot be refreshed at all"). If that approval is withheld, under
+      `bypass_actors: []` the disposition is "close it, or wait for the author". Decide that before M4 blocks on one — it is the
       exact incident class (unmergeable PRs, no bypass) this plan cites as its motivation.
 
       **Qualify by workflow PROVENANCE, not by timestamp** (codex, r27): a maintainer can "refresh" an
@@ -1657,7 +1695,9 @@ alternative turned out to be complementary rather than competing.
         "contains". **An exact state means the WHOLE canonical document, not only the two context
         entries** (codex, r54). At every transition read, the remainder (everything except `trunk-check`
         and the placeholder) must equal the saved pre-M4a canonical remainder, and the target conditions,
-        freshly resolved per C2's `resolve()`, must still cover both witness bases. Otherwise an
+        freshly resolved per C2's `resolve()`, must EQUAL the saved resolved set. Equality, not
+        coverage: an include of `~DEFAULT_BRANCH` can widen the set while the bytes stay unchanged, and
+        C2 requires exact equality (codex, r55; COREDEV-2870). Otherwise an
         administrator who retargets an ACTIVE `Control` mid-rehearsal produces "placeholder present"
         with the red witness no longer covered, and resuming the restore would preserve that drift and
         pass §6.2a's remainder check. **Any discrepancy at a deciding read closes both witnesses and
@@ -1997,7 +2037,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
        promise is per-window rather than per-session (codex, r11);
      * **the retention constant, discriminated in the terms the design actually uses**: repeated
        invocation **within one bucket** warns once, invocation **across a bucket boundary** warns
-       again *even minutes apart*, and the **bucket-width constant `604800` is mutated**. An
+       again *even minutes apart*, and the **bucket-width constant `604800` is mutated**. **The
+       combined concurrent-boundary control** (codex, r56): a previous-bucket marker survives a sweep
+       made from the next bucket, so a delayed same-bucket invocation's `O_EXCL` still fails. Testing
+       concurrency and the boundary separately had certified a detector that warned three times. An
        aged-marker test alone is satisfied by a detector sweeping at six days — covering the line
        without covering its operand (codex, r12) — while the age-threshold phrasing that replaced it
        ("just under seven days must NOT sweep") described a mechanism §3b **abandoned at revision 13**

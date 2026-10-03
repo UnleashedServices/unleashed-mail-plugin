@@ -372,9 +372,11 @@ print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
 # sessions that never resume accumulated forever, one inode per session, on exactly the machines a
 # persistently stale install keeps warning. The retention promise was stated and not kept.
 #
-# Safe against the O_EXCL protocol precisely because the window is in the NAME: only buckets STRICTLY
-# OLDER than the current one are removed, so no live marker of any session is touched, and there is
-# nothing to race with a concurrent create.
+# Safe against the O_EXCL protocol because the window is in the NAME, and because the PREVIOUS bucket
+# is kept too: only buckets older than current-1 are removed. Sweeping everything older than CURRENT
+# was not enough (COREDEV-2868; codex, plan r56, reproduced against this body). An invocation that
+# captured bucket w before a boundary, and paused before its O_EXCL, could find w swept by a session
+# already in w+1, re-create it, and warn a second time in w. Keeping w makes that O_EXCL fail.
 #
 # THE SHAPE GUARD IS LOAD-BEARING NOW THAT THE GLOB IS WIDE. Scoped to one digest, the name was its
 # own filter; unscoped, this loop unlinks in a directory it no longer wholly owns. Only names this
@@ -390,7 +392,7 @@ for stale in marker_dir.glob("*.*"):
     if matched is None:
         continue
     try:
-        if int(matched.group(1)) < window:
+        if int(matched.group(1)) < window - 1:
             stale.unlink()
     except (ValueError, OSError):
         pass

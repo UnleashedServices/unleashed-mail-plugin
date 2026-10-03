@@ -2117,6 +2117,16 @@ def contract_problems(
             problems.append("checkout inputs: `lfs` is absent")
         elif checkout["lfs"] is not True:
             problems.append("checkout inputs: `lfs` must be true")
+        # `fetch-depth` is an OPERAND, per entry (codex, r56): the required job needs HEAD^1, so 2;
+        # the canary needs the whole history, because `before` is HEAD~N for an N-commit push. The key
+        # was allowlisted with its value unconstrained, so 1, 2 or omission (checkout's default, 1)
+        # passed on both entries.
+        expected_depth = 0 if is_canary else 2
+        if checkout.get("fetch-depth") != expected_depth:
+            problems.append(
+                f"checkout inputs: `fetch-depth` must be {expected_depth}, "
+                f"found {checkout.get('fetch-depth')}"
+            )
         if "persist-credentials" not in checkout:
             problems.append("checkout inputs: `persist-credentials` is absent")
         elif checkout["persist-credentials"] is not False:
@@ -3418,6 +3428,28 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _job(w).update({"runs-on": "macos-latest"}),
                 "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'",
             ),
+            (
+                "C3.runner-and-timeout-pinned/timeout-absent",
+                lambda w: _job(w).pop("timeout-minutes"),
+                "job: expected `timeout-minutes: 15`, found None",
+            ),
+            (
+                "C3.runner-and-timeout-pinned/runner-absent",
+                lambda w: _job(w).pop("runs-on"),
+                "job: expected `runs-on: ubuntu-latest`, found None",
+            ),
+            # fetch-depth is an OPERAND, per entry (codex, r56): the required job needs HEAD^1 (2),
+            # and depth 1 or omission (checkout's default is 1) leaves it absent.
+            (
+                "C8.checkout-fetch-depth-required/absent",
+                lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
+                "checkout inputs: `fetch-depth` must be 2, found None",
+            ),
+            (
+                "C8.checkout-fetch-depth-required/one",
+                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": 1}),
+                "checkout inputs: `fetch-depth` must be 2, found 1",
+            ),
             # A SIBLING job (both arms, r47): every check reads `_job()`, the FIRST job, so a second
             # job appended under `jobs:` was never inspected, and could emit `validate`.
             (
@@ -3499,6 +3531,18 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "C4.arguments-canary-literal/absent",
                 lambda w: _step(w, "trunk")["with"].pop("arguments"),
                 "action inputs: `arguments` is absent",
+            ),
+            # The canary needs FULL history: `before` is HEAD~N for an N-commit push, and at depth 2
+            # that object is absent and the guard reads an EMPTY DIFF (codex, r56).
+            (
+                "C8.checkout-fetch-depth-canary/absent",
+                lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
+                "checkout inputs: `fetch-depth` must be 0, found None",
+            ),
+            (
+                "C8.checkout-fetch-depth-canary/two",
+                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": 2}),
+                "checkout inputs: `fetch-depth` must be 0, found 2",
             ),
             (
                 "C1.canary-push-option-allowlist/paths",
