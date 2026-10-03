@@ -44,6 +44,16 @@ EXPECTED = {
     "cell2": ("failure", "lint"),
     "cell3": ("failure", "security"),
 }
+# The stimulus each red cell PLANTED, pinned so that an unrelated finding in the same run cannot stand
+# in for it: every finding must be on the fixture, and the fixture's own diagnostic must be among
+# them (codex, PR #104).
+PROBE_FIXTURES = {
+    "cell2": ("harness-fixtures/2850-lint-probe.sh", frozenset({"shellcheck/SC2086"})),
+    "cell3": (
+        "harness_fixtures/probe_2850_security.py",
+        frozenset({"bandit/B602"}),
+    ),
+}
 
 
 def _reproduction() -> dict:
@@ -82,6 +92,14 @@ def _red_problems(key: str, category: str, obs: dict) -> list[str]:
     if not findings:
         problems.append(
             f"{key}: a red bound to no finding could be an infrastructure failure"
+        )
+    fixture, required = PROBE_FIXTURES[key]
+    if any(finding.get("path") != fixture for finding in findings):
+        problems.append(f"{key}: a finding is not on the planted fixture {fixture!r}")
+    missing = required - {finding.get("linter") for finding in findings}
+    if missing:
+        problems.append(
+            f"{key}: the planted fixture's {sorted(missing)} was not observed"
         )
     for finding in findings:
         linter = str(finding.get("linter", ""))
@@ -153,12 +171,36 @@ def probe_problems(record: dict) -> list[str]:
         )
 
     cell5 = (record.get("localObservations") or {}).get("cell5") or {}
+    hook_findings = cell5.get("findings") or []
     if not (cell5.get("hookBlocked") and cell5.get("otherChecksPassed")):
         problems.append(
             "cell5: the hook did not block the staged commit on formatting alone"
         )
-    if not {f.get("linter") for f in cell5.get("findings") or []} <= FORMATTERS:
+    if not hook_findings:
+        problems.append("cell5: the hook block records no finding")
+    if not {f.get("linter") for f in hook_findings} <= FORMATTERS:
         problems.append("cell5: the hook blocked on something other than formatting")
+
+    # Cell 2b's stimulus is REQUIRED, and bound to an observation: the green alone cannot show the
+    # format-only defect was there, but the hook's formatter finding on that file does (codex, PR #104).
+    combined = observations.get("cell1and2b") or {}
+    if combined.get("cells") != ["1", "2b"]:
+        problems.append(
+            f"cell1and2b: claims cells {combined.get('cells')}, not ['1', '2b']"
+        )
+    cell2b = (combined.get("probeEdits") or {}).get("cell2b") or {}
+    if not (cell2b.get("path") and cell2b.get("formatterCleanOn")):
+        problems.append(
+            "cell2b: no format-only stimulus or formatter-clean baseline recorded"
+        )
+    elif not any(
+        f.get("path") == cell2b["path"] and f.get("linter") in FORMATTERS
+        for f in hook_findings
+    ):
+        problems.append(
+            f"cell2b: the hook block shows no formatter finding on {cell2b['path']!r}, so the "
+            "format-only defect is not shown to have been planted"
+        )
 
     for cell in ("cell6", "cell2bCanaryHalf"):
         if "DEFERRED" not in str((record.get("deferred") or {}).get(cell, "")):
@@ -284,6 +326,69 @@ class TheProbeObservationsCertifyTheShippedGate(unittest.TestCase):
 
         self.assertIn(
             "cell5: the hook blocked on something other than formatting",
+            self._mutated(mutate),
+        )
+
+    def test_a_green_without_the_cell_2b_stimulus_is_refused(self):
+        """codex, PR #104: the judge read only cell 1's edit, so deleting cell 2b's let a green run of
+        the cell-1 edit alone certify the format-only defect as well."""
+
+        def drop_edit(r):
+            del r["observations"]["cell1and2b"]["probeEdits"]["cell2b"]
+
+        def drop_claim(r):
+            r["observations"]["cell1and2b"]["cells"] = ["1"]
+
+        self.assertTrue(any(p.startswith("cell2b:") for p in self._mutated(drop_edit)))
+        self.assertTrue(
+            any(p.startswith("cell1and2b: claims") for p in self._mutated(drop_claim))
+        )
+
+    def test_a_cell_2b_stimulus_the_hook_never_saw_is_refused(self):
+        """The hook's formatter finding on the 2b file is what shows the defect was planted."""
+
+        def mutate(r):
+            r["observations"]["cell1and2b"]["probeEdits"]["cell2b"][
+                "path"
+            ] = "README.md"
+
+        self.assertTrue(
+            any(
+                "no formatter finding on 'README.md'" in p
+                for p in self._mutated(mutate)
+            )
+        )
+
+    def test_a_hook_block_with_no_finding_is_refused(self):
+        """codex, PR #104: an empty finding list is a subset of the formatters, so the two booleans
+        alone certified the block."""
+
+        def mutate(r):
+            r["localObservations"]["cell5"]["findings"] = []
+
+        self.assertIn("cell5: the hook block records no finding", self._mutated(mutate))
+
+    def test_a_red_on_a_file_other_than_the_planted_fixture_is_refused(self):
+        """codex, PR #104: an unrelated finding in the same run could stand in for the planted one."""
+
+        def mutate(r):
+            for finding in r["observations"]["cell2"]["boundDiagnostic"]["findings"]:
+                finding["path"] = "scripts/unrelated.sh"
+
+        self.assertTrue(
+            any(
+                p.startswith("cell2: a finding is not on the planted fixture")
+                for p in self._mutated(mutate)
+            )
+        )
+
+    def test_a_red_missing_the_planted_diagnostic_is_refused(self):
+        def mutate(r):
+            findings = r["observations"]["cell3"]["boundDiagnostic"]["findings"]
+            findings[:] = [f for f in findings if f["linter"] != "bandit/B602"]
+
+        self.assertIn(
+            "cell3: the planted fixture's ['bandit/B602'] was not observed",
             self._mutated(mutate),
         )
 

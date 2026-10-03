@@ -1472,10 +1472,14 @@ def gitleaks_content_problems(toml_text: str) -> list:
         return [f"gitleaks content: unparseable — {error}"]
     problems = []
     extend = config.get("extend") or {}
-    if extend.get("useDefault") is not True and not config.get("rules"):
+    # EXACTLY true, whatever custom rules exist (codex, PR #104 P1). Without it gitleaks REPLACES its
+    # built-in rules with this file's, so `useDefault = false` beside one narrow dummy rule, or no
+    # `[extend]` table at all, left every default secret detector off with both scans green. The
+    # earlier condition only refused the case where NO rules were defined.
+    if extend.get("useDefault") is not True:
         problems.append(
-            "gitleaks content: `[extend] useDefault` is not true and no rules are defined — "
-            "the scanner has nothing to find"
+            "gitleaks content: `[extend] useDefault` is not exactly true — gitleaks then REPLACES its "
+            "built-in rules with this file's, whatever custom rules it defines"
         )
     if extend.get("disabledRules"):
         problems.append(
@@ -1552,6 +1556,15 @@ class Cell7_TheB1MutantNowReds(unittest.TestCase):
     # them into the declared list, this cell keeps holding the line instead of moving with it.
     GITLEAKS = ".gitleaks.toml"
     ZIZMOR = ".github/zizmor.yml"
+    # A custom configuration REPLACES gitleaks' built-in rules unless `[extend] useDefault = true`;
+    # one narrow rule is enough to leave every default secret detector switched off (codex, PR #104).
+    DEFAULTS_DROPPED = (
+        "gitleaks content: `[extend] useDefault` is not exactly true — gitleaks then REPLACES its "
+        "built-in rules with this file's"
+    )
+    DUMMY_RULE = (
+        "\n[[rules]]\nid = \"probe-dummy\"\nregex = '''XYZZY-NEVER-MATCHES'''\n"
+    )
     BLANKET_ALLOWLIST = (
         "\n[[allowlists]]\ndescription = \"everything\"\nregexes = ['''.*''']\n"
     )
@@ -1636,10 +1649,23 @@ class Cell7_TheB1MutantNowReds(unittest.TestCase):
             (
                 "useDefault switched off",
                 shipped.replace("useDefault = true", "useDefault = false"),
-                (
-                    "gitleaks content: `[extend] useDefault` is not true and no rules are defined — "
-                    "the scanner has nothing to find"
-                ),
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "useDefault switched off BESIDE a narrow custom rule (codex, PR #104 P1)",
+                shipped.replace("useDefault = true", "useDefault = false")
+                + self.DUMMY_RULE,
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                "no [extend] table at all, with a narrow custom rule",
+                shipped.replace("[extend]\nuseDefault = true\n", "") + self.DUMMY_RULE,
+                self.DEFAULTS_DROPPED,
+            ),
+            (
+                'useDefault as the STRING "true"',
+                shipped.replace("useDefault = true", 'useDefault = "true"'),
+                self.DEFAULTS_DROPPED,
             ),
             (
                 "disabledRules",

@@ -47,6 +47,12 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - cell 1 used the recorded reproduction;
   - the canary cells are marked DEFERRED.
 
+  After review (codex, PR #104), the judge also requires three things:
+  - cell 2b's format-only stimulus, bound to the hook's formatter finding on that file;
+  - at least one finding in the hook block;
+  - every red finding on its planted fixture, including that fixture's own diagnostic (`SC2086`,
+    `B602`).
+
 - **COREDEV-2780: the contract checker parsed workflows as YAML 1.1; GitHub parses YAML 1.2.**
   PyYAML's default reads unquoted `yes`/`no` as booleans, so `save-annotations: yes`, `lfs: yes` and
   `persist-credentials: no` passed the checker while the runner received the STRINGS (codex, plan r59).
@@ -140,6 +146,12 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Security
 
+- **`[extend] useDefault` must be exactly `true`, whatever custom rules exist (codex, PR #104 P1).**
+  The content check refused `useDefault = false` only when the file defined NO rules. Gitleaks
+  replaces its built-in rules with a custom file's unless `useDefault = true`. So one narrow dummy
+  `[[rules]]` entry beside `useDefault = false`, or no `[extend]` table at all, switched off every
+  default secret detector, and both `trunk-check` and `secret-scan` stayed green. The string
+  `"true"` is refused as well. Each spelling failed the test before the fix.
 - **Security-linter configs outside the frozen tree (COREDEV-2860).** gitleaks reads `.gitleaks.toml`
   and zizmor reads `.github/zizmor.yml`, neither of which was frozen, so a blanket allowlist appended to
   `.gitleaks.toml` disarmed both `trunk-check` and the separate `secret-scan` required context with the
