@@ -638,6 +638,13 @@ obligations:
         payload: "false"
         validity: a PRESENT but falsey name, which a truthiness test replaced with the job ID (codex, r63)
         diagnostic: "job: effective context `False` is not `trunk-check`"
+      - id: C3.effective-context-pinned-required/named-null
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "null"
+        validity: a PRESENT null name, which an `is None` test treated as absent (codex, r64)
+        diagnostic: "job: effective context `None` is not `trunk-check`"
 
   - id: C3.effective-context-pinned-canary
     clause: C3
@@ -672,6 +679,13 @@ obligations:
         payload: "false"
         validity: a PRESENT but falsey name, which a truthiness test replaced with the job ID (codex, r63)
         diagnostic: "job: effective context `False` is not `trunk-check-push`"
+      - id: C3.effective-context-pinned-canary/named-null
+        op: set
+        side: local
+        target: $.jobs.<job>.name
+        payload: "null"
+        validity: a PRESENT null name, which an `is None` test treated as absent (codex, r64)
+        diagnostic: "job: effective context `None` is not `trunk-check-push`"
 
   - id: C3.runner-and-timeout-pinned
     clause: C3

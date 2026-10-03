@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 60
+**Status:** Planning, revision 61
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-60, not outstanding** (r44 to r63): twelve checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-61, not outstanding** (r44 to r64): twelve checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -56,12 +56,13 @@ revision 56 fixed only the booleans, so `timeout-minutes: 017` passed as octal 1
 (revision 57, the whole core schema); and an explicit tag (`!!bool yes`, `!!int 1_5`) bypassed the
 implicit resolvers altogether (revision 58, C0.raw-text-canonical); and the effective context used Python
 truthiness, so `name: false` fell back to the job ID (revision 60; cell 14 caught it at suite level, but
-the comparator did not). Also fixed in
+the comparator did not), and the `is None` repair still let a present null do so, in BOTH the
+comparator and cell 14's census (revision 61, decided by key membership). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
 one bucket (COREDEV-2868). Cell 11's per-step minimum is
-now declared in the registry and executed: 64 cases added in revisions 43-60, eight of them RAW-TEXT (the runner and timeout
+now declared in the registry and executed: 66 cases added in revisions 43-61, eight of them RAW-TEXT (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
-survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
+survivors). Every one of the 220 (case, entry) pairs is actionlint-clean
 apart from the permitted `if-cond` notes. The survivor corpus records all twelve forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
@@ -479,6 +480,18 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **r64** `01b5794` (revision 60), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2). codex
+> confirmed `_respell`, the `named-false` cases and their survivor records. P2: **revision 60's variant
+> generator was not layout-valid.** A trailing comment after a value inside a flow collection comments
+> out the commas and braces after it, so a flow-style shipped file would have produced 24 errors. The
+> decoy test also assumed block layout from a variant's LABEL, and errored without a final newline.
+> P2: **the `name` repair was half done.** `is None` conflates ABSENT with a PRESENT `name: null`, `~`
+> or empty `name:`. Those still fell back to the job ID in the comparator and in cell 14's census. Three
+> non-blocking text corrections were also made. **Revision 61** decides the context by key MEMBERSHIP in
+> both places, and the census fails closed on a present null. It adds `named-null` cases per entry, which
+> revision 60's `is None` accepted. Sources now come from three bases (as shipped, flow, no final
+> newline) with layout-valid variants, and the decoy is placed by LAYOUT and EOF-safe: 22 permitted
+> sources, all actionlint-clean. 130 recipes, 220 combinations, 0 failing.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1002,8 +1015,10 @@ own non-required context.
   implemented the exception; the authority omitted it.
   **Each workflow declares exactly ONE job** (both arms, r47): every check here reads the first job, so
   without this a sibling appended under `jobs:` is never inspected at all.
-  **The EFFECTIVE context is pinned per entry** (codex, r46): a PRESENT `name`, whatever its value
-  (a truthiness test let `name: false` fall back to the job ID; codex, r63), or else the job ID, must
+  **The EFFECTIVE context is pinned per entry** (codex, r46): a PRESENT `name`, whatever its value,
+  decided by MEMBERSHIP (a truthiness test let `name: false` fall back to the job ID, codex r63; an
+  `is None` test then still let `name: null`, `~` or an empty `name:` do so, codex r64), or else the job
+  ID, must
   equal `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
   which status context a job emits. Checking only the job ID let a canary renamed `validate` emit a
   REQUIRED context, satisfying it on its SHA without the contract suites ever running. **With
@@ -1097,9 +1112,12 @@ own non-required context.
   composed node graph, and its spelling read from that node's own source span. A quoted key and a
   flow-style document are accepted; the decoy is not. **The mutation BUILDERS locate values the same
   way** (codex, r63). They had kept line regexes, so a permitted inline comment or quoted key in the
-  shipped file would have failed the standing tests. Every raw case now runs on four permitted
-  spellings of each source (as shipped, inline comments, quoted keys, flow style), and all four are a
-  positive control for both checks. The parity
+  shipped file would have failed the standing tests. Every raw case now runs on every permitted
+  spelling of each source: three BASES (as shipped, the whole file in flow style, no final newline),
+  each with its quoted-key and flow-style variants, and an inline-comment variant only where every
+  pinned value ends its line. Inside a flow collection a trailing comment would comment out the commas
+  and braces after it (codex, r64). All 22 are actionlint-clean and a positive control for both
+  checks. The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 
@@ -1230,7 +1248,8 @@ it: reading the expectation out of `.trunk/trunk.yaml` makes a **silently reduce
 authoritative over the assertion meant to detect it**, which is the primary hazard this ticket exists
 to close. §1 is the declared authority, so an implementer following this paragraph built exactly the
 blind oracle. Cell 4 instead carries **the 19 expected linter names as frozen literals plus a digest
-over the `lint:` block with version specifiers normalised out**, and fails if a name is missing, an
+over the WHOLE `.trunk/trunk.yaml` with version specifiers normalised out** (the implementation freezes
+the whole configuration, not only its `lint:` block; codex, r64), and fails if a name is missing, an
 unlisted linter appears, either §6.4 literal's excluded set grows, or the block changes other than by a
 version pin. The 19 are CONFIGURED membership: since COREDEV-2850, five of them do not run in the
 REQUIRED job (cell 4).
@@ -1299,7 +1318,8 @@ single-caller claim (codex, r7).
 **Why that one, and why it survives the bootstrap problem.** A session bound to 2.7.0 cannot execute
 a detector shipped only in 2.8.4+. The hook is not shipped by the plugin — it lives in the
 **checkout** and runs from it, so it is current regardless of which install a session loaded. It
-compares `~/.claude/plugins/installed_plugins.json` against
+compares `installed_plugins.json` under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/` (Claude Code
+roots its plugin state in `CLAUDE_CONFIG_DIR` when it is set; codex, r64) against
 **`.claude-plugin/plugin.json` as of `origin/main`**, needing no plugin code and no reviewer session.
 
 **The git operation is ANCHORED, and the ROOT IS AN EXPLICIT OPERAND SUPPLIED BY EACH CALLER**
@@ -2024,8 +2044,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    expectation out of `.trunk/trunk.yaml` — **making a silently reduced configuration authoritative
    over the assertion meant to detect it**, the exact shape this plan's Overview names. The cell
    instead carries **the 19 expected linter names as literals** (20 enabled, minus
-   `markdown-link-check`) **and a frozen digest over the `lint:` block with VERSION SPECIFIERS
-   NORMALISED OUT**. Fails if any of the 19 is missing, if an unlisted linter appears, if either
+   `markdown-link-check`) **and a frozen digest over the WHOLE `.trunk/trunk.yaml` with VERSION
+   SPECIFIERS NORMALISED OUT** (`_normalised_trunk_config`; revisions before 61 said "the `lint:`
+   block", codex r64). Fails if any of the 19 is missing, if an unlisted linter appears, if either
    §6.4 literal's excluded set grows, or if the block changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
    could not.
 

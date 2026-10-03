@@ -416,28 +416,61 @@ def _respell(text: str, key: str, replacement: str) -> str:
     return text[: value.start_mark.index] + replacement + text[value.end_mark.index :]
 
 
+def _ends_its_line(text: str, node) -> bool:
+    """True when only spaces or tabs separate the node from the end of its line, or from EOF."""
+    return re.match(r"[ \t]*(?:\n|$)", text[node.end_mark.index :]) is not None
+
+
 def _source_variants(text: str) -> dict:
-    """The SAME workflow in four permitted spellings: as shipped; an inline comment after every
-    pinned value; every pinned key quoted; and the whole document in flow style."""
+    """The SAME workflow in permitted spellings: as given; every pinned key quoted; the whole document
+    in flow style; and, ONLY where every pinned value ends its line, an inline comment after each.
+    Inside a flow collection a trailing comment would comment out the commas and braces after it, so
+    that variant would not be the same workflow (codex, r64)."""
     root = yaml.compose(text, Loader=_ActionsYamlLoader)
     pairs = [
         pair for path in PINNED_PATHS.values() for pair in _pinned_pairs(root, path)
     ]
-    commented, quoted = text, text
-    for _key_node, value_node in sorted(pairs, key=lambda p: -p[1].end_mark.index):
-        at = value_node.end_mark.index
-        commented = commented[:at] + "  # pinned" + commented[at:]
+    quoted = text
     for key_node, _ in sorted(pairs, key=lambda p: -p[0].start_mark.index):
         start, end = key_node.start_mark.index, key_node.end_mark.index
         quoted = quoted[:start] + f'"{key_node.value}"' + quoted[end:]
-    flow = yaml.dump(
-        _load_actions_yaml(text), default_flow_style=True, sort_keys=False, width=10**6
-    )
-    return {
-        "as shipped": text,
-        "inline comments": commented,
+    variants = {
+        "as given": text,
         "quoted keys": quoted,
-        "flow style": flow,
+        "flow style": yaml.dump(
+            _load_actions_yaml(text),
+            default_flow_style=True,
+            sort_keys=False,
+            width=10**6,
+        ),
+    }
+    if all(_ends_its_line(text, value) for _, value in pairs):
+        commented = text
+        for _, value_node in sorted(pairs, key=lambda p: -p[1].end_mark.index):
+            at = value_node.end_mark.index
+            commented = commented[:at] + "  # pinned" + commented[at:]
+        variants["inline comments"] = commented
+    return variants
+
+
+def _all_permitted_sources(text: str) -> dict:
+    """Every variant of every BASE a shipped workflow may legitimately have: as it is, entirely in
+    flow style, and without a final newline. The standing tests must not fail on any of them
+    (codex, r64)."""
+    bases = {
+        "shipped": text,
+        "shipped in flow style": yaml.dump(
+            _load_actions_yaml(text),
+            default_flow_style=True,
+            sort_keys=False,
+            width=10**6,
+        ),
+        "no final newline": text.rstrip("\n"),
+    }
+    return {
+        f"{base_label} / {variant_label}": variant
+        for base_label, base in bases.items()
+        for variant_label, variant in _source_variants(base).items()
     }
 
 
@@ -2190,11 +2223,10 @@ def contract_problems(
     # unconstrained `name` let the canary emit the REQUIRED `validate` context while its job ID, the
     # only thing checked, stayed `trunk-check-push` (codex, r46).
     expected_context = CANARY_CONTEXT if is_canary else EXPECTED_CONTEXT
-    # A PRESENT name decides the context, whatever its value: `name: false` or `name: 0` fell back to
-    # the job ID through Python truthiness (codex, r63).
-    effective_context = str(
-        _job_id(workflow) if job.get("name") is None else job["name"]
-    )
+    # A PRESENT name decides the context, whatever its value. Decided by MEMBERSHIP, not by value:
+    # `name: false` fell back to the job ID through truthiness (codex, r63), and `name: null`, `~` or
+    # an empty `name:` still did through `is None` (codex, r64).
+    effective_context = str(job["name"]) if "name" in job else _job_id(workflow)
     if effective_context != expected_context:
         problems.append(
             f"job: effective context `{effective_context}` is not `{expected_context}`"
@@ -2494,9 +2526,12 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
         found = []
         for path, workflow in workflows.items():
             for job_id, job in (workflow.get("jobs") or {}).items():
-                explicit = job.get("name")
-                if explicit is not None and not isinstance(explicit, str):
+                # MEMBERSHIP, not value (codex, r64): a present null fell through `is not None` and
+                # then back to the job ID; it now fails closed like any other non-string name.
+                if "name" in job and not isinstance(job["name"], str):
                     raise AssertionError(f"{path}: job {job_id} has a non-string name")
+                # Safe now: a PRESENT non-string name (null included) has already failed closed above.
+                explicit = job.get("name")
                 if explicit and ("${{" in explicit):
                     # FAIL CLOSED: a static census cannot resolve an expression-valued name.
                     raise AssertionError(
@@ -2516,7 +2551,7 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
                         f"{path}: job {job_id} calls a reusable workflow; its check contexts "
                         "cannot be enumerated from this file"
                     )
-                if (explicit or job_id) == EXPECTED_CONTEXT:
+                if (job_id if explicit is None else explicit) == EXPECTED_CONTEXT:
                     found.append(f"{path}:{job_id}")
         return found
 
@@ -3632,6 +3667,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "job: effective context `trunk-check-push` is not `trunk-check`",
             ),
             (
+                # A PRESENT null name fell back to the job ID through `is None` (codex, r64).
+                "C3.effective-context-pinned-required/named-null",
+                lambda w: _job(w).update({"name": None}),
+                "job: effective context `None` is not `trunk-check`",
+            ),
+            (
                 # A PRESENT but falsey name fell back to the job ID by truthiness (codex, r63).
                 "C3.effective-context-pinned-required/named-false",
                 lambda w: _job(w).update({"name": False}),
@@ -3731,6 +3772,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "C3.effective-context-pinned-canary/named-as-required",
                 lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
                 "job: effective context `trunk-check` is not `trunk-check-push`",
+            ),
+            (
+                "C3.effective-context-pinned-canary/named-null",
+                lambda w: _job(w).update({"name": None}),
+                "job: effective context `None` is not `trunk-check-push`",
             ),
             (
                 "C3.effective-context-pinned-canary/named-false",
@@ -4221,7 +4267,7 @@ class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
 
     def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            for spelling, source in _source_variants(
+            for spelling, source in _all_permitted_sources(
                 path.read_text(encoding="utf-8")
             ).items():
                 for case_id, key, replacement, diagnostic in self.CASES:
@@ -4270,7 +4316,7 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
         """The positive control the builders were missing: a comment, a quoted key, or flow style
         changes nothing the contract pins, so BOTH checks must accept every variant."""
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            for spelling, source in _source_variants(
+            for spelling, source in _all_permitted_sources(
                 path.read_text(encoding="utf-8")
             ).items():
                 with self.subTest(entry=entry, source=spelling):
@@ -4284,7 +4330,7 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
 
     def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            for spelling, source in _source_variants(
+            for spelling, source in _all_permitted_sources(
                 path.read_text(encoding="utf-8")
             ).items():
                 for case_id, key, replacement, diagnostic in self.CASES:
@@ -4299,15 +4345,19 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
         permitted `cache-key` block string. Block-style variants only: a block scalar cannot sit in a
         flow mapping."""
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            variants = _source_variants(path.read_text(encoding="utf-8"))
-            for spelling in ("as shipped", "inline comments", "quoted keys"):
+            for spelling, original in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
                 with self.subTest(entry=entry, source=spelling):
-                    source = _respell(variants[spelling], "timeout-minutes", "+15")
+                    source = _respell(original, "timeout-minutes", "+15")
                     ((key_node, value_node),) = _pinned_pairs(
                         yaml.compose(source, Loader=_ActionsYamlLoader),
                         PINNED_PATHS["save-annotations"],
                     )
-                    line_end = source.index("\n", value_node.end_mark.index)
+                    if not _ends_its_line(source, value_node):
+                        continue  # a block scalar cannot be placed inside a flow mapping
+                    found = source.find("\n", value_node.end_mark.index)
+                    line_end = len(source) if found == -1 else found
                     indent = " " * key_node.start_mark.column
                     decoy = (
                         source[:line_end]
