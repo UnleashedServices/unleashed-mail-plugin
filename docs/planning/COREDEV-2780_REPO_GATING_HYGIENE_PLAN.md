@@ -1,6 +1,8 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 62
+**Status:** Planning, revision 62. The re-gate opened at revision 38 (COREDEV-2850) was **CLOSED BY
+MAINTAINER DECISION after round 66 (2026-10-02); NOT passed.** See the **r66** log entry. Every edit
+after revision 62 is ungated by construction.
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -483,6 +485,24 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **r66** `296c516` (revision 62): agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2 and one non-blocking
+> text item). Both P2s are in source-generator code revision 62 itself added, and both were reproduced
+> here on both entries. `_relaid_trunk_inputs` splices at the last VALUE node rather than the containing
+> mapping, so a flow-style or anchored base fed back in as the shipped source raises. The merge-key
+> loader test inserts block syntax whatever the source's layout. codex: "I found no additional
+> actionlint-valid workflow that the checker accepts contrary to the contract, or rejects despite the
+> contract permitting it." **Shipped-checker survivors: r65 0, r66 0.** That is two consecutive
+> zero-survivor rounds, so the stopping rule applies: instrument findings are ticketed, not fixed in
+> flight. **COREDEV-2871** carries the three generator defects and the text item (an IN-FLIGHT run is
+> cancelled only with `cancel-in-progress: true`, which C0's wording and contract line 158 omit).
+> **OUTCOME: CLOSED BY MAINTAINER DECISION, NOT PASSED** (2026-10-02, after round 66, revision 62).
+> The re-gate ran from revision 38 to revision 62. Three double approvals in it were re-run on
+> byte-identical bytes with a neutral prompt (r42, r49, r56), and none reproduced. No Combined verdict
+> exists for revisions 38-62, and `review-synthesis` was not run, because there is no approving pair to
+> synthesise. The Combined verdict persisted at r29 covers revision 27 only. The maintainer treated the
+> CHECKER as settled. The last checker survivor was the present `name: null` r64 found and revision 61
+> fixed; r65 and r66 found none, and every finding since has been in the standing tests' own generators. Every edit
+> to this document after revision 62 is ungated by construction.
 > **r65** `bed7400` (revision 61): codex `REQUEST_CHANGES` (2 P2); agy's first run produced no review
 > (a `read_file` permission headless mode cannot grant, 307 B), and its re-run on the same frozen tree
 > returned `APPROVE`. codex confirmed the key-membership repair, the three bases and the three text
