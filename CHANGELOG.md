@@ -43,7 +43,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
   pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **`fetch-depth`'s
   value** (codex, plan r56) was never checked, so depth 1, depth 2 or omission passed. It is now exactly
-  2 on the required job and 0 on the canary, which needs full history for a multi-commit push. **A duplicate
+  2 on the required job and 0 on the canary, which needs full history for a multi-commit push. Both
+  integer operands are now checked by TYPE as well as value (codex, plan r57), because
+  `fetch-depth: false` and `timeout-minutes: 15.0` had passed (`False == 0`, `15.0 == 15`). **A duplicate
   step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
   the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
   `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
@@ -51,8 +53,8 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
   first job. Each workflow must now declare exactly one. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
-  and `continue-on-error` on every step) is now declared in the registry and executed: 53 new cases,
-  all valid workflows. A standing test now runs every registry case on every entry its obligation
+  and `continue-on-error` on every step) is now declared in the registry and executed: 54 new cases,
+  all valid workflows (216 case x entry pairs, each checked with actionlint). A standing test now runs every registry case on every entry its obligation
   declares, so an `entries:` claim cannot outrun what is tested. That test found the canary's own
   event and guard-body obligations missing from the registry (codex, plan r52), and they are now added. The C6/C6a launcher and resolver
   guard fixtures now also run against the CANARY's own guard bodies (codex, plan r53). Its resolver

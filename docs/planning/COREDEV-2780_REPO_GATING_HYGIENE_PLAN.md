@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 53
+**Status:** Planning, revision 54
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-53, not outstanding** (r44 to r56): seven checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-54, not outstanding** (r44 to r57): eight checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -48,12 +48,14 @@ checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequ
 the job ID was checked, never the job `name` that decides the emitted context, so a canary named
 `validate` passed (revision 45); and every check read only the FIRST job, so a sibling job named
 `validate` appended under `jobs:` passed (revision 46, found by both arms); and `fetch-depth`'s VALUE was
-never checked, so depth 1, depth 2 or omission passed on both entries (revision 53). Also fixed in
+never checked, so depth 1, depth 2 or omission passed on both entries (revision 53); and both integer
+operands were compared by VALUE only, so `fetch-depth: false` and `timeout-minutes: 15.0` passed
+(`False == 0` and `15.0 == 15` in Python; revision 54). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
 one bucket (COREDEV-2868). Cell 11's per-step minimum is
-now declared in the registry and executed: 53 cases added in revisions 43-53 (the runner and timeout
-operands and their omissions, and the canary's C1 and C4 cases, close coverage gaps rather than
-survivors), every one actionlint-clean
+now declared in the registry and executed: 54 cases added in revisions 43-54 (the runner and timeout
+operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
+survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
 apart from the permitted `if-cond` notes. The survivor corpus records all six forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
@@ -392,6 +394,21 @@ assignment; until revision 44 all three appended `echo X`.
 > requires resolved-set EQUALITY, the mismatch count is 21, and §2's locators are cited by content
 > with the current line as a hint. It also narrows the registry-independence claim and corrects M4's
 > fork-refresh disposition. 125 recipes, 215 combinations, 0 failing.
+> **r57** `2f6494a` (revision 53), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (4).
+> codex confirmed the four depth cases, the timeout omission, and all four COREDEV-2870 notes. **Three
+> findings were defects revision 53 introduced**, partly because I skipped my own actionlint sweep for
+> it. (1) The new `runner-absent` case was a workflow GitHub rejects, which breaks cell 11's validity
+> rule. (2) §3b and the detector's comments kept "sweep any PRIOR window" beside the new keep-previous
+> rule, so a correct implementation could not satisfy both. (3) The registry's C8 inputs obligation
+> still called `fetch-depth` optional. (4) An eighth checker SURVIVOR, reproduced here: integer operands
+> were compared by value only, so `fetch-depth: false` and `timeout-minutes: 15.0` passed. codex also
+> showed the dedup guarantee needs an explicit timing assumption, since a delay of two buckets still
+> yields three warnings. **Revision 54** checks both operands as exact integers, drops
+> `runner-absent`, and adds boolean and float cases. It states the timing assumption and says what the
+> boundary test does not do, removes the obsolete retention text in all four places, and moves the
+> directory-error test to `window−2` so it reaches the unlink. The actionlint sweep now runs per (case,
+> entry) PAIR, including cross-entry applications: 216 pairs, 0 invalid apart from the permitted
+> `if-cond`. 126 recipes, 216 combinations, 0 failing.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1377,7 +1394,7 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     stat an aged marker, A unlinks and recreates it, B's already-decided unlink removes A's *fresh*
     marker, and B's `O_EXCL` create then succeeds, so both warn in the same new window. Encoding the
     window in the **name** means a live marker is never unlinked at all: the sweep removes only buckets
-    strictly older than the current one, and the decision is a single `O_EXCL` create with no
+    older than current−1 (revision 53, below), and the decision is a single `O_EXCL` create with no
     unlink-then-create sequence to lose.
 
     **`window` is `floor(unix_time / 604800)`** — fixed seven-day buckets from the epoch, declared
@@ -1388,7 +1405,12 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     body). Sweeping everything older than the CURRENT bucket let this happen: an invocation captured
     bucket w and paused before its `O_EXCL`; meanwhile a session in w+1 swept w; the paused invocation
     re-created w and warned a second time in w. Keeping w makes its `O_EXCL` fail. The accepted
-    boundary behaviour below is therefore exactly two warnings, never three.
+    boundary behaviour below is therefore exactly two warnings, never three. **That guarantee carries
+    a TIMING ASSUMPTION, stated rather than hidden** (codex, r57): each invocation completes within one
+    bucket of its own start. The hook's 5-second timeout bounds an invocation's duration, so only a
+    wall-clock jump of more than one bucket (seven days) during a single invocation can break it.
+    Such a jump is out of scope. Keeping more buckets would only move the counterexample one bucket
+    further; it would not remove it.
     **Accepted boundary behaviour, stated rather than discovered later:** a session live across a
     bucket boundary may warn twice, seconds apart. That is the honest reading of "at most one warning
     per session per retention window", and the alternative — a rolling window anchored on the marker's
@@ -1402,10 +1424,11 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     path needs no plugin identity and matches the convention this repo already uses for review
     transcripts. It is created with `O_EXCL` **before** the warning is
     emitted, so two concurrent invocations cannot both warn and a crash between create and emit fails
-    silent rather than warning twice. **Cleanup removes markers from any PRIOR window**, which is not the
-    same statement as "older than 7 days" (codex, r17): just after a bucket boundary a marker seconds
-    old belongs to the previous window and is swept. The window-comparison form is the implementable
-    one; the age phrasing described a mechanism this design deliberately does not use.
+    silent rather than warning twice. **Cleanup is by BUCKET, never by age** (codex, r17): it removes
+    markers older than current−1, so a marker written seconds ago two buckets back is swept, and the
+    previous bucket is kept (COREDEV-2868). Revisions up to 52 said "any PRIOR window", and revision 53
+    left that sentence standing beside its new rule (codex, r57). The window-comparison form is the
+    implementable one; the age phrasing described a mechanism this design deliberately does not use.
   * **Output protocol** — the warning is emitted as **`{"systemMessage": "…"}`**, not bare stdout
     (agy, r8). A `SessionStart` hook's plain stdout is injected into the **agent's context**, so a
     warning printed that way is read by the model and never seen by the developer — a detector whose
@@ -2040,12 +2063,15 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
        again *even minutes apart*, and the **bucket-width constant `604800` is mutated**. **The
        combined concurrent-boundary control** (codex, r56): a previous-bucket marker survives a sweep
        made from the next bucket, so a delayed same-bucket invocation's `O_EXCL` still fails. Testing
-       concurrency and the boundary separately had certified a detector that warned three times. An
+       concurrency and the boundary separately had certified a detector that warned three times. **What
+       that test does and does not do** (codex, r57): it kills the old sweep predicate by observing the
+       previous-bucket marker survive. It does NOT execute paused concurrent invocations across a
+       controlled boundary; that executed interleaving is outstanding (COREDEV-2869). An
        aged-marker test alone is satisfied by a detector sweeping at six days — covering the line
        without covering its operand (codex, r12) — while the age-threshold phrasing that replaced it
        ("just under seven days must NOT sweep") described a mechanism §3b **abandoned at revision 13**
-       for epoch buckets, and would fail against a correct implementation: under buckets a marker
-       created shortly before a boundary is swept while hours old.
+       for epoch buckets, and would fail against a correct implementation: under buckets a marker is
+       swept by its BUCKET, never by its age, even one created hours earlier.
 
      **The real session-start invocation** is recorded once as a **committed evidence artifact**, the
      same standing cells 10 and 12 have. Claiming a CI proof this repo's pipeline cannot produce would

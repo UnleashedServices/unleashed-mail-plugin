@@ -364,8 +364,8 @@ except OSError:
 # nothing but the cleanup — the warning it was run to produce has already been written.
 print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
 
-# Cleanup removes markers from any PRIOR window — which is not the same statement as "older than
-# seven days": just after a boundary a marker seconds old belongs to a prior bucket and goes.
+# Cleanup is by BUCKET, never by age: it removes markers older than the PREVIOUS bucket, so a marker
+# written seconds ago two buckets back goes, and the previous bucket is kept (COREDEV-2868, below).
 #
 # SWEEP EVERY SESSION'S MARKERS, not just this one's (codex, PR #84). Each session has a distinct
 # digest, so a per-digest glob only ever tidied a session that RESUMED in a later window — markers for
@@ -385,7 +385,8 @@ print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
 #
 # Bounds growth only WHILE THE INSTALL IS STALE: the silent path exits before this block by contract
 # (SILENT MEANS SILENT), so markers left by an install that is then updated are swept by nothing and
-# remain. That residue is bounded by one window's sessions, and is stated rather than fixed here.
+# remain. That residue is bounded by TWO windows' sessions (the current bucket and the kept previous
+# one), and is stated rather than fixed here.
 marker_name = re.compile(r"\A[0-9a-f]{64}\.([0-9]+)\Z")
 for stale in marker_dir.glob("*.*"):
     matched = marker_name.match(stale.name)

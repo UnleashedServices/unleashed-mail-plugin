@@ -648,12 +648,13 @@ obligations:
         target: $.jobs.<job>.timeout-minutes
         validity: OMISSION, which a value check that runs only when the key is present accepts (codex, r56)
         diagnostic: "job: expected `timeout-minutes: 15`, found None"
-      - id: C3.runner-and-timeout-pinned/runner-absent
-        op: remove
+      - id: C3.runner-and-timeout-pinned/timeout-float
+        op: set
         side: local
-        target: $.jobs.<job>.runs-on
-        validity: OMISSION of a required-present key
-        diagnostic: "job: expected `runs-on: ubuntu-latest`, found None"
+        target: $.jobs.<job>.timeout-minutes
+        payload: "15.0"
+        validity: the right number with the wrong TYPE, which `==` accepts (codex, r57)
+        diagnostic: "job: expected `timeout-minutes: 15`, found 15.0"
 
   - id: C3.single-job
     clause: C3
@@ -1324,7 +1325,7 @@ obligations:
     kind: yaml
     entries: [required, canary]
     statement: >-
-      `actions/checkout`'s own inputs are allowlisted: `fetch-depth` (optional), `lfs: true`
+      `actions/checkout`'s own inputs are allowlisted: `fetch-depth` (REQUIRED, its value pinned per entry by C8.checkout-fetch-depth-*), `lfs: true`
       (REQUIRED) and `persist-credentials: false` (REQUIRED). Freezing its identity and SHA is not
       enough.
     target: steps[checkout].with
@@ -1470,6 +1471,13 @@ obligations:
         payload: "2"
         validity: the required job's depth, which is too shallow for a multi-commit push
         diagnostic: "checkout inputs: `fetch-depth` must be 0, found 2"
+      - id: C8.checkout-fetch-depth-canary/boolean-false
+        op: set
+        side: local
+        target: steps[checkout].with.fetch-depth
+        payload: false
+        validity: a boolean, and `False == 0` in Python, so a value-only check accepts it (codex, r57)
+        diagnostic: "checkout inputs: `fetch-depth` must be 0, found False"
 
   # ------------------------------------------------------------------ C9: the action pin ---------
   - id: C9.action-pinned-by-sha

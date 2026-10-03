@@ -547,7 +547,7 @@ class TheRetentionPromiseIsKept(_DetectorFixture):
         to produce — and the hook is declared with `timeout: 5`, so cleanup must never be on the
         critical path to the output."""
         directory, window = self._dir(), self._window()
-        (directory / f"{'a' * 64}.{window - 1}").mkdir()
+        (directory / f"{'a' * 64}.{window - 2}").mkdir()
         self.assertIn("systemMessage", self.session_start("undeletable").stdout)
 
 

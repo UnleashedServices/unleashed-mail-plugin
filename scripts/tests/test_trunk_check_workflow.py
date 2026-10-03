@@ -1889,6 +1889,13 @@ def exclusion_problems(required: str, canary: str, enabled: frozenset) -> list:
     return problems
 
 
+def _exact_int(value, expected: int) -> bool:
+    """An integer OPERAND, by type as well as value. Python's `==` accepts `15.0` for 15 and `False` for
+    0, so a value-only check let `fetch-depth: false` stand in for the canary's full history (codex,
+    r57). `bool` is a subclass of `int`, so it is excluded explicitly."""
+    return type(value) is int and value == expected
+
+
 def contract_problems(
     workflow: dict, *, milestone: str = "M2", entry: str = "required"
 ) -> list[str]:
@@ -2012,7 +2019,7 @@ def contract_problems(
         problems.append(
             f"job: expected `runs-on: {EXPECTED_RUNNER}`, found {job.get('runs-on')!r}"
         )
-    if job.get("timeout-minutes") != EXPECTED_TIMEOUT_MINUTES:
+    if not _exact_int(job.get("timeout-minutes"), EXPECTED_TIMEOUT_MINUTES):
         problems.append(
             f"job: expected `timeout-minutes: {EXPECTED_TIMEOUT_MINUTES}`, "
             f"found {job.get('timeout-minutes')!r}"
@@ -2122,10 +2129,10 @@ def contract_problems(
         # was allowlisted with its value unconstrained, so 1, 2 or omission (checkout's default, 1)
         # passed on both entries.
         expected_depth = 0 if is_canary else 2
-        if checkout.get("fetch-depth") != expected_depth:
+        if not _exact_int(checkout.get("fetch-depth"), expected_depth):
             problems.append(
                 f"checkout inputs: `fetch-depth` must be {expected_depth}, "
-                f"found {checkout.get('fetch-depth')}"
+                f"found {checkout.get('fetch-depth')!r}"
             )
         if "persist-credentials" not in checkout:
             problems.append("checkout inputs: `persist-credentials` is absent")
@@ -3433,10 +3440,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _job(w).pop("timeout-minutes"),
                 "job: expected `timeout-minutes: 15`, found None",
             ),
+            # TYPE is part of the operand (codex, r57): `15.0 == 15` in Python.
             (
-                "C3.runner-and-timeout-pinned/runner-absent",
-                lambda w: _job(w).pop("runs-on"),
-                "job: expected `runs-on: ubuntu-latest`, found None",
+                "C3.runner-and-timeout-pinned/timeout-float",
+                lambda w: _job(w).update({"timeout-minutes": 15.0}),
+                "job: expected `timeout-minutes: 15`, found 15.0",
             ),
             # fetch-depth is an OPERAND, per entry (codex, r56): the required job needs HEAD^1 (2),
             # and depth 1 or omission (checkout's default is 1) leaves it absent.
@@ -3538,6 +3546,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "C8.checkout-fetch-depth-canary/absent",
                 lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
                 "checkout inputs: `fetch-depth` must be 0, found None",
+            ),
+            (
+                # `False == 0` in Python, so the canary's depth check accepted `false` (codex, r57).
+                "C8.checkout-fetch-depth-canary/boolean-false",
+                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": False}),
+                "checkout inputs: `fetch-depth` must be 0, found False",
             ),
             (
                 "C8.checkout-fetch-depth-canary/two",
