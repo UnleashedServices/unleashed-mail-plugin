@@ -379,6 +379,7 @@ def _pinned_pairs(root, path: tuple) -> list:
     ]
 
 
+
 def _with_pairs(root, step_name: str) -> list:
     """Every (`with` key node, `with` value node) of every step named `step_name`, in every job."""
     found = []
