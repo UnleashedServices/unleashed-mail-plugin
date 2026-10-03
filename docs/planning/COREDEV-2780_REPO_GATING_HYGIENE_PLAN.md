@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 55
+**Status:** Planning, revision 56
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-54, not outstanding** (r44 to r57): eight checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-56, not outstanding** (r44 to r59): nine checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -50,13 +50,14 @@ the job ID was checked, never the job `name` that decides the emitted context, s
 `validate` appended under `jobs:` passed (revision 46, found by both arms); and `fetch-depth`'s VALUE was
 never checked, so depth 1, depth 2 or omission passed on both entries (revision 53); and both integer
 operands were compared by VALUE only, so `fetch-depth: false` and `timeout-minutes: 15.0` passed
-(`False == 0` and `15.0 == 15` in Python; revision 54). Also fixed in
+(`False == 0` and `15.0 == 15` in Python; revision 54); and workflows were parsed as YAML 1.1, so
+`save-annotations: yes` passed while GitHub's YAML 1.2 parse delivers the string "yes" (revision 56). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
 one bucket (COREDEV-2868). Cell 11's per-step minimum is
-now declared in the registry and executed: 54 cases added in revisions 43-54 (the runner and timeout
+now declared in the registry and executed: 57 cases added in revisions 43-56, three of them RAW-TEXT (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
 survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
-apart from the permitted `if-cond` notes. The survivor corpus records all eight forms, as §1 requires; it
+apart from the permitted `if-cond` notes. The survivor corpus records all nine forms, as §1 requires; it
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
 and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
@@ -420,6 +421,17 @@ assignment; until revision 44 all three appended `echo X`.
 > detector's "unreachable" and two-bucket-residue comments and the corpus header's registry claim.
 > The `find -L` comment inside both workflows' digest-frozen run bodies is wrong but comment-only,
 > and is ticketed rather than re-pinned.
+> **r59** `46e801b` (revision 55), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2, both P2). codex
+> confirmed every revision-55 correction against disk. P2: **a NINTH checker survivor, reproduced here
+> on both entries.** Workflows were parsed as YAML 1.1, so `save-annotations: yes`, `lfs: yes` and
+> `persist-credentials: no` loaded as booleans and passed, while GitHub's YAML 1.2 parse delivers
+> strings. The checker parsed differently from the system it guards. P2: revision 55's timing
+> assumption bounded each backward clock move, but several moves each shorter than a bucket still
+> sum to three warnings. **Revision 56** parses workflows with a YAML 1.2 boolean schema, adds three
+> RAW-TEXT synonym cases run on both entries (all six failed under the old loader), and records the
+> survivor. It states the timing assumption over the WHOLE history (the sampled bucket index never
+> decreases), and fixes four residues: cell 8's "fails open", two obsolete detector comments, and the
+> cell 7 and cell 13 locators.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1012,6 +1024,15 @@ own non-required context.
   `before` = HEAD~N. At depth 2 that object is absent, and the guard reads an EMPTY diff, so Trunk never
   runs.
 
+  **The contract is over GITHUB'S parse, YAML 1.2** (codex, r59). Its core schema has only `true` and
+  `false` as booleans, and `yes`/`no`/`on`/`off` are STRINGS. The checker parsed with PyYAML's YAML 1.1
+  default, which reads `yes` as True, so `save-annotations: yes`, `lfs: yes` and
+  `persist-credentials: no` all passed while the runner received strings. Workflows are now parsed
+  with a YAML 1.2 boolean schema, and the synonyms are mutated as RAW TEXT on both entries, because the
+  defect is in the parse and a mutation of an already-parsed dictionary happens after it. The parity
+  harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
+  accepts, so its coercion stays unexercised.
+
   **`persist-credentials: false` is required, and revision 20 forbade it (sweep).** `actions/checkout`
   persists the job's credential by default — **in `.git/config` below v6, and in `$RUNNER_TEMP` from
   v6** (codex, r21: revision 21 stated the storage location categorically while the plan pins no
@@ -1419,10 +1440,14 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     boundary behaviour below is therefore exactly two warnings, never three. **That guarantee carries
     a TIMING ASSUMPTION, stated rather than hidden** (codex, r57 and r58), in two parts. First, each
     invocation completes within one bucket of its own start: the hook's 5-second timeout bounds an
-    invocation's duration. Second, the wall clock does not move BACKWARD by a bucket or more BETWEEN
-    invocations. A session that warned in bucket 1000, a sweep from bucket 1002, and then a clock set
-    back to 1000 (a restored VM snapshot, say) warns again in bucket 1000, with every call fast and
-    stable. Both conditions are out of scope. Keeping more buckets would only move the counterexample one bucket
+    invocation's duration. Second, **the bucket index sampled by every invocation is never smaller than
+    the bucket index sampled by any EARLIER invocation**: the clock is non-decreasing at bucket
+    granularity over the whole history, not merely between two adjacent calls (codex, r59).
+    Revision 55 said "backward by a bucket or more between invocations". codex then produced three
+    warnings from several backward moves, each SHORTER than a bucket, that summed past one. A
+    session that warned in bucket 1000, a sweep from bucket 1002, and then a clock set back to 1000 (a
+    restored VM snapshot, say) warns again in 1000, with every call fast and stable. Any history in
+    which the sampled bucket index decreases is out of scope. Keeping more buckets would only move the counterexample one bucket
     further; it would not remove it.
     **Accepted boundary behaviour, stated rather than discovered later:** a session live across a
     bucket boundary may warn twice, seconds apart. That is the honest reading of "at most one warning
@@ -2025,7 +2050,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
    **The control was CONFOUNDED (codex, r3).** Restoring the legacy README source reintroduces both
    fixed transcript literals, so the *independent* observed-literal check at
-   `test_transcript_path_inventory.py:326` fails **first** — codex reproduced both diagnostics
+   `test_transcript_path_inventory.py` (`:458` today, `:326` at baseline) fails **first** — codex reproduced both diagnostics
    (`README.md:591: output literal survives outside the quote-keep set` **and** `README.md:187:
    legacy source payload survives`). A test that reds for a different reason than the one under test
    proves reachability, not discrimination: deleting the source-absence assertion at `:362` would
@@ -2072,7 +2097,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
        length limit — with a mutation that removes the hashing. The contract requires
        `sha256(session_id)` precisely because the identifier is opaque, and revision 16 tested that
        nowhere: an implementation using the raw id passes the matcher, concurrency and aged-marker
-       cases and then **fails open** (codex, r17);
+       cases and then **loses its warning** — this detector's `OSError` branch exits SILENTLY, so the
+       failure is a lost warning on every invocation, not a repeated one (codex, r17; r59 corrected
+       "fails open");
      * the `O_EXCL` marker under **concurrent invocation** and under **aged-marker resumption** — a
        session whose marker was swept past the retention window warns again, which is exactly why the
        promise is per-window rather than per-session (codex, r11);
@@ -2359,8 +2386,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       must complete without tripping it, and the mechanism must be **macOS-portable**, exercised against a sleeping
       fake `trunk` on the PATH;
     * the hook's **exit code aggregates**, asserted by making an *earlier* hook command fail while
-      the trunk check succeeds — appending a passing command after `.githooks/pre-commit:7` would
-      otherwise mask its nonzero result.
+      the trunk check succeeds — appending a passing command after an earlier failing one would
+      otherwise mask its nonzero result. (A `.githooks/pre-commit:7` locator stood here, and that line
+      is now a comment; codex, r59.)
 
     Fails if the hook is advisory, scopes to the whole tree, checks the worktree instead of the
     index, mutates either, is unbounded, or swallows a prior failure.

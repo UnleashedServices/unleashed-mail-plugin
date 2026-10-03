@@ -290,11 +290,13 @@ fi
 # races with itself: two invocations of the same session both stat an aged marker, A unlinks and
 # recreates it, B's already-decided unlink removes A's FRESH marker, and B's O_EXCL create then
 # succeeds — so both warn in the same new window. With the window in the name the sweep removes only
-# strictly older buckets and the decision is a single O_EXCL create.
+# buckets older than current-1 (the previous one is kept; see the sweep below), and the decision is
+# a single O_EXCL create.
 #
 # `session_id` is documented as OPAQUE with no filename-safety contract, so it is HASHED: raw, a `/`
-# or an over-long component makes marker creation fail, and a detector that fails open warns on every
-# single session start.
+# or an over-long component makes marker creation fail. This detector's OSError branch then exits
+# SILENTLY, so the failure would be a LOST warning on every session start, not a repeated one
+# (codex, plan r59, corrected "fails open").
 # Same hazard inside the fallback, which is evaluated only when XDG_STATE_HOME is unset.
 #
 # DEFENSIVE, AND NOT SEPARATELY TESTED — said plainly rather than implied. With HOME unset the

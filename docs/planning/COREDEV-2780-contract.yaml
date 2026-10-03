@@ -841,6 +841,13 @@ obligations:
         payload: "false"
         validity: present but not the pinned value; on `pull_request` the action then takes the annotating branch
         diagnostic: "action inputs: `save-annotations` must be true"
+      - id: C4.save-annotations-required/yaml-11-synonym-yes
+        op: edit_bytes
+        side: local
+        target: steps[trunk].with.save-annotations
+        payload: "yes"
+        validity: a RAW-TEXT YAML 1.1 boolean synonym; GitHub's YAML 1.2 parse reads it as a STRING, which a 1.1 loader coerced to the pinned boolean (codex, r59)
+        diagnostic: "action inputs: `save-annotations` must be true"
 
   # ------------------------------------------------------------------ C5: env -------------------
   - id: C5.no-env-any-scope
@@ -1408,6 +1415,20 @@ obligations:
         target: steps[checkout].with.persist-credentials
         payload: "true"
         validity: present but valued to the hazard
+        diagnostic: "checkout inputs: `persist-credentials` must be false"
+      - id: C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes
+        op: edit_bytes
+        side: local
+        target: steps[checkout].with.lfs
+        payload: "yes"
+        validity: a RAW-TEXT YAML 1.1 boolean synonym; GitHub's YAML 1.2 parse reads it as a STRING, which a 1.1 loader coerced to the pinned boolean (codex, r59)
+        diagnostic: "checkout inputs: `lfs` must be true"
+      - id: C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no
+        op: edit_bytes
+        side: local
+        target: steps[checkout].with.persist-credentials
+        payload: "no"
+        validity: a RAW-TEXT YAML 1.1 boolean synonym; GitHub's YAML 1.2 parse reads it as a STRING, which a 1.1 loader coerced to the pinned boolean (codex, r59)
         diagnostic: "checkout inputs: `persist-credentials` must be false"
 
   - id: C8.checkout-sha-pinned

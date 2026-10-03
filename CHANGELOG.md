@@ -17,6 +17,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2780: the contract checker parsed workflows as YAML 1.1; GitHub parses YAML 1.2.**
+  PyYAML's default reads unquoted `yes`/`no` as booleans, so `save-annotations: yes`, `lfs: yes` and
+  `persist-credentials: no` passed the checker while the runner received the STRINGS (codex, plan r59).
+  Workflows are now parsed with a YAML 1.2 boolean schema (only `true`/`false`). The synonyms are
+  mutated as raw text on both entries, and all six cases failed under the old loader.
 - **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
   sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
   before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,

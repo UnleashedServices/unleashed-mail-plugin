@@ -88,6 +88,13 @@ FIXTURE_EXECUTED_CASES = {
     "C6.no-repository-supplied-launcher/user-trunk-yaml",
     "C6a.resolver-pinned-by-digest/edit-resolver",
 }
+# Raw-TEXT mutants (codex, r59): a YAML 1.1 boolean synonym is a property of the BYTES, so a mutation of an
+# already-parsed dictionary cannot express it. Executed per entry by `RawYamlSynonymsAreNotThePinnedBooleans`.
+RAW_YAML_CASES = {
+    "C4.save-annotations-required/yaml-11-synonym-yes",
+    "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
+    "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
+}
 CELL16_INJECTED_CASES = {
     "C16.canary-not-required/present",
     "C16.canary-branches-equal-resolved-target-set/local-divergence",
@@ -284,8 +291,32 @@ def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set
     return set(recorded["resolvedTargetSet"])
 
 
+class _ActionsYamlLoader(yaml.SafeLoader):  # type: ignore[misc]  # PyYAML is untyped
+    """Parse a WORKFLOW the way GitHub Actions does, as YAML 1.2, whose core schema has only `true` and
+    `false` as booleans. PyYAML's YAML 1.1 default also reads `yes`/`no`/`on`/`off` as booleans, so
+    `save-annotations: yes` loaded as True and passed this checker while the runner received the STRING
+    "yes" (codex, r59). A checker that parses differently from the system it guards certifies inputs
+    that system never sees."""
+
+
+_ActionsYamlLoader.yaml_implicit_resolvers = {
+    first: [r for r in resolvers if r[0] != "tag:yaml.org,2002:bool"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_ActionsYamlLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
+
+
+def _load_actions_yaml(text: str):
+    # A SafeLoader subclass: no arbitrary construction, only the 1.2 boolean schema.
+    return yaml.load(text, Loader=_ActionsYamlLoader)
+
+
 def _load_workflow() -> dict:
-    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    document = _load_actions_yaml(WORKFLOW_PATH.read_text(encoding="utf-8"))
     assert isinstance(document, dict), "the workflow must parse to a mapping"
     return document
 
@@ -2314,7 +2345,7 @@ class Cell14_ExactlyOneProducerOfTheContext(unittest.TestCase):
 
     def _tree(self) -> dict[str, dict]:
         return {
-            p.name: yaml.safe_load(p.read_text(encoding="utf-8"))
+            p.name: _load_actions_yaml(p.read_text(encoding="utf-8"))
             for p in _workflow_files()
         }
 
@@ -2369,7 +2400,7 @@ class Cell15_RunnerTimeoutAndRegistryAgreement(unittest.TestCase):
         """
         found: dict[str, list[str]] = {}
         for path in _workflow_files():
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            document = _load_actions_yaml(path.read_text(encoding="utf-8"))
             for job in (document.get("jobs") or {}).values():
                 for step in job.get("steps") or []:
                     uses = str(step.get("uses", ""))
@@ -2482,7 +2513,7 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
     def _shipped(self):
         required = _step(_load_workflow(), "trunk")["with"]["arguments"]
         canary = _step(
-            yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8")), "trunk"
+            _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")), "trunk"
         )["with"]["arguments"]
         return required, canary
 
@@ -3592,7 +3623,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         ]
 
     def test_every_canary_mutant_fails_with_its_own_diagnostic(self):
-        canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+        canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
         self.assertEqual(
             [],
             contract_problems(copy.deepcopy(canary), entry="canary"),
@@ -3670,7 +3701,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         }
         bases = {
             "required": _load_workflow(),
-            "canary": yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8")),
+            "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
         }
         for obligation in self.registry["obligations"]:
             for case in obligation.get("cases", []):
@@ -3687,6 +3718,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                         for entry in obligation.get("entries", []):
                             with self.subTest(case=case["id"], entry=entry):
                                 self.assertIn(entry, fixture_entries)
+                    elif case["id"] in RAW_YAML_CASES:
+                        # The raw-text test runs every case on BOTH entries.
+                        for entry in obligation.get("entries", []):
+                            with self.subTest(case=case["id"], entry=entry):
+                                self.assertIn(entry, {"required", "canary"})
                     elif case["id"] in CELL16_INJECTED_CASES:
                         with self.subTest(case=case["id"]):
                             self.assertEqual(1, len(obligation.get("entries", [])))
@@ -3723,6 +3759,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             | {case[0] for case in self._canary_mutants()}
             | CELL16_INJECTED_CASES
             | FIXTURE_EXECUTED_CASES
+            | RAW_YAML_CASES
         )
         declared, deferred = set(), []
         for obligation in self.registry["obligations"]:
@@ -3850,7 +3887,7 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.canary = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+        cls.canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
 
     def test_the_canary_satisfies_its_whole_contract(self):
         self.assertEqual([], contract_problems(self.canary, entry="canary"))
@@ -3960,6 +3997,58 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         self.assertNotIn(CANARY_CONTEXT, _required_contexts(ruleset))
 
 
+class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
+    """GitHub parses workflows as YAML 1.2, whose core schema has ONLY `true`/`false` as booleans. Under
+    PyYAML's YAML 1.1 default, `save-annotations: yes` loaded as True and the checker accepted it, while
+    the runner receives the STRING "yes" (codex, r59). Mutated as raw TEXT, on both entries, because
+    the defect is in the parse, and a dictionary mutation happens after it."""
+
+    CASES = (
+        (
+            "C4.save-annotations-required/yaml-11-synonym-yes",
+            "save-annotations",
+            "true",
+            "yes",
+            "action inputs: `save-annotations` must be true",
+        ),
+        (
+            "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
+            "lfs",
+            "true",
+            "yes",
+            "checkout inputs: `lfs` must be true",
+        ),
+        (
+            "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
+            "persist-credentials",
+            "false",
+            "no",
+            "checkout inputs: `persist-credentials` must be false",
+        ),
+    )
+
+    def test_each_synonym_is_rejected_on_both_entries(self):
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            text = path.read_text(encoding="utf-8")
+            for case_id, key, pinned, synonym, diagnostic in self.CASES:
+                with self.subTest(case=case_id, entry=entry):
+                    mutated, count = re.subn(
+                        rf"^(\s*{re.escape(key)}:\s*){pinned}\s*$",
+                        rf"\g<1>{synonym}",
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                    self.assertEqual(
+                        1, count, f"{key}: {pinned} must appear exactly once"
+                    )
+                    self.assertIn(
+                        diagnostic,
+                        contract_problems(
+                            _load_actions_yaml(mutated), milestone="M3", entry=entry
+                        ),
+                    )
+
+
 class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     """The remaining registry cases, run by EXECUTING THE SHIPPED GUARD BODIES.
 
@@ -3974,7 +4063,7 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     @classmethod
     def _workflow(cls) -> dict:
         if cls.ENTRY == "canary":
-            canary: dict = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+            canary: dict = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
             return canary
         return _load_workflow()
 

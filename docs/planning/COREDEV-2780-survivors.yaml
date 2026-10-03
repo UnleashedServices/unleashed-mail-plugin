@@ -372,3 +372,18 @@ survivors:
       A checker that certified a value of the wrong TYPE as the pinned operand. The depth-unpinned
       survivor's cases do not cover this, because a value-only check rejects them correctly.
     must_fail_because: C3 and C8 pin each integer operand by type as well as value.
+
+  - id: survivor/yaml-11-boolean-synonym
+    covered_by:
+      - C4.save-annotations-required/yaml-11-synonym-yes
+      - C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes
+      - C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no
+    found_in_round: r59
+    survived_formulation: >-
+      Workflows were parsed with PyYAML's YAML 1.1 default, which reads unquoted `yes`/`no` as
+      booleans, while GitHub parses YAML 1.2, where they are strings.
+    mutant: "`save-annotations: yes`, `lfs: yes`, or `persist-credentials: no`, as raw text"
+    would_have_shipped: >-
+      A checker that certified inputs the runner never receives. `save-annotations: yes` reaches the
+      action as the string "yes", not the pinned `true`.
+    must_fail_because: the checker parses workflows as GitHub does (YAML 1.2 booleans), so a synonym is not the pinned value.
