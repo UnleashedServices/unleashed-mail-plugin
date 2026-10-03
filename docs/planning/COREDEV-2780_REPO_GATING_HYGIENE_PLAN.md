@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 51
+**Status:** Planning, revision 52
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -51,7 +51,11 @@ apart from the permitted `if-cond` notes. The survivor corpus records all six fo
 is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
 and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
-different bytes from the required workflow's, and those eight pairs had never run (codex, r53). Its `TRUNK_PATH` cases now write that
+different bytes from the required workflow's, and those eight pairs had never run (codex, r53). **Scope
+of that claim** (codex, r54): every YAML/body pair and every fixture pair executes. The three
+remote-relation pairs are injected per single entry, and `C16.canary-not-required/present` can skip on
+a machine without authenticated `gh`. Its remote half then rests on the recorded rollout read, not on
+this run. Its `TRUNK_PATH` cases now write that
 assignment; until revision 44 all three appended `echo X`.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
@@ -354,6 +358,18 @@ assignment; until revision 44 all three appended `echo X`.
 > It runs the C6/C6a fixtures on the canary's own bodies (its C6a guard is different bytes), accounts
 > per (case, entry) pair, splits `C3.no-job-continue-on-error` out so skip/mask cases can name the
 > canary, and adds the two canary cases. 119 recipes, 205 combinations, 0 failing.
+> **r54** `4377cec` (revision 51), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (2). codex
+> confirmed the scoped guarantee, the green-witness handling, the both-present stop, and the canary
+> C6/C6a fixtures, and found no new checker survivor. P1: the classifier's "exact state" checked the
+> two context entries and `enforcement` but not the REST of the document. An administrator retargeting
+> an active `Control` mid-rehearsal would be resumed through, not stopped. P2: **revision 51's split was
+> half-done.** It moved the job-`continue-on-error` CASE out, but the shared obligation's statement,
+> target and M2 exemption still prohibited the key that C16 requires on the canary. Both arms also noted
+> that `C4.save-annotations-required` omitted the canary, which the checker enforces. agy raised that in
+> r53, and revision 51 did not act on it. **Revision 52** compares the whole canonical remainder and the
+> freshly resolved targets at every deciding read, narrows the shared C3 obligation and moves its
+> exemption, declares the canary for `save-annotations`, scopes the "every pair executes" claim, and
+> fixes stale `plugin-ci.yml` locators. 119 recipes, 207 combinations, 0 failing.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -565,7 +581,7 @@ running, that is either absent, self-invalidating, or authoritative over the tru
 They are planned together because they are one review's worth of argument. **They do not sequence**
 — revision 1 claimed COREDEV-2798 gated COREDEV-2780; both arms showed that false, since `trunk check`
 never executes `test_transcript_path_inventory.py`, which already runs in the existing `validate` job
-(`plugin-ci.yml:86`, `:588` on Darwin). M1 and M2 are independent.
+(the scripts-suite steps at `plugin-ci.yml:139`, and `:701` on Darwin; earlier locators drifted, codex r54). M1 and M2 are independent.
 
 ## §1 — COREDEV-2780: trunk gates the DIFF, never the tree
 
@@ -1638,7 +1654,14 @@ alternative turned out to be complementary rather than competing.
         placeholder and kept `trunk-check`). It is blocking, but no planned write reaches a known state
         whose readback can pass from it, so **STOP exactly as for a not-blocking state: close the
         witnesses and hand it to the maintainer** (codex, r53). The classifier matches EXACT states, not
-        "contains";
+        "contains". **An exact state means the WHOLE canonical document, not only the two context
+        entries** (codex, r54). At every transition read, the remainder (everything except `trunk-check`
+        and the placeholder) must equal the saved pre-M4a canonical remainder, and the target conditions,
+        freshly resolved per C2's `resolve()`, must still cover both witness bases. Otherwise an
+        administrator who retargets an ACTIVE `Control` mid-rehearsal produces "placeholder present"
+        with the red witness no longer covered, and resuming the restore would preserve that drift and
+        pass §6.2a's remainder check. **Any discrepancy at a deciding read closes both witnesses and
+        stops.** That is drift visible AT the read, distinct from the unavoidable read-to-write race;
         **neither present = the repository is UNGATED**, which the substitution model should never
         produce. **Every one of these reads also requires `enforcement: active`** (codex, r50). A
         placeholder under an inactive ruleset protects nothing.

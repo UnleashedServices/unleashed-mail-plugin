@@ -453,18 +453,12 @@ obligations:
     kind: yaml
     entries: [required, canary]
     statement: >-
-      No `if:` and no `continue-on-error:` on the job OR on ANY of the five steps. A job skipped by a
-      conditional REPORTS SUCCESS to a required context; an `if: false` on a GUARD step preserves both
-      the frozen sequence and the frozen body digest while removing the guard entirely.
-    target: $.jobs.<job>.if, $.jobs.<job>.continue-on-error, $.jobs.<job>.steps[*].if, $.jobs.<job>.steps[*].continue-on-error
-    milestone_exemption:
-      until: M3
-      scope: job
-      key: continue-on-error
-      why: >-
-        M2 deliberately ships job-scoped `continue-on-error: true` so cell 2's M2 half is observable.
-        Asserting C3 at M2 would make the suite intentionally red. The cell is WRITTEN at M2 and
-        ENABLED at M3.
+      No job-level `if:`, and no `if:` or `continue-on-error:` on ANY of the five steps, in either
+      entry. A job skipped by a conditional REPORTS SUCCESS to a required context; an `if: false` on a
+      GUARD step preserves both the frozen sequence and the frozen body digest while removing the guard
+      entirely. Job-level `continue-on-error` is NOT this obligation's: the canary REQUIRES it (C16), so
+      it lives in C3.no-job-continue-on-error, required entry only (codex, r54).
+    target: $.jobs.<job>.if, $.jobs.<job>.steps[*].if, $.jobs.<job>.steps[*].continue-on-error
     cases:
       - id: C3.nothing-skips-or-masks/job-if
         op: add
@@ -553,6 +547,14 @@ obligations:
       C3.nothing-skips-or-masks because the canary REQUIRES that key at job scope (C16), so the shared
       skip/mask cases could not be declared for the canary while this one sat beside them (codex, r53).
     target: $.jobs.<job>.continue-on-error
+    milestone_exemption:
+      until: M3
+      scope: job
+      key: continue-on-error
+      why: >-
+        M2 deliberately ships job-scoped `continue-on-error: true` so cell 2's M2 half is observable.
+        Asserting C3 at M2 would make the suite intentionally red. The cell is WRITTEN at M2 and
+        ENABLED at M3.
     cases:
       - id: C3.no-job-continue-on-error/present
         op: add
@@ -804,7 +806,7 @@ obligations:
   - id: C4.save-annotations-required
     clause: C4
     kind: yaml
-    entries: [required]
+    entries: [required, canary]
     statement: >-
       §6.1 chose option (b), so `save-annotations` is REQUIRED-PRESENT and true. Absent, the action
       falls back to `--github-annotate` and 403s under `contents: read`.
