@@ -43,8 +43,10 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
   first job. Each workflow must now declare exactly one. Cell 11's
   per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
-  and `continue-on-error` on every step) is now declared in the registry and executed: 40 new cases,
-  all valid workflows.
+  and `continue-on-error` on every step) is now declared in the registry and executed: 45 new cases,
+  all valid workflows. A standing test now runs every registry case on every entry its obligation
+  declares, so an `entries:` claim cannot outrun what is tested. That test found the canary's own
+  event and guard-body obligations missing from the registry (codex, plan r52), and they are now added.
 - **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
   Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry
   prescribed three that GitHub would reject outright: a root-level `schedule` (not a root key),

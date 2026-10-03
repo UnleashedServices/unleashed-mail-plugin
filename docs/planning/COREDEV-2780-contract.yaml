@@ -253,6 +253,61 @@ obligations:
         diagnostic: "pull_request options: unlisted option `branches-ignore`"
 
   # ------------------------------------------------------------------ C2: branches + types -------
+  - id: C1.canary-single-event
+    clause: C1
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary's event set is exactly `push`. The required workflow's C1 cases are written against
+      `pull_request`, so they could not test the canary at all (codex, r52).
+    target: $.on
+    cases:
+      - id: C1.canary-single-event/add-workflow-dispatch
+        op: add
+        side: local
+        target: $.on.workflow_dispatch
+        payload: "{}"
+        validity: dispatch would let the canary run on an arbitrary ref
+        diagnostic: "event set: unlisted event `workflow_dispatch`"
+      - id: C1.canary-single-event/add-pull-request
+        op: add
+        side: local
+        target: $.on.pull_request
+        payload: "{branches: [main]}"
+        validity: the canary would also run on pull requests
+        diagnostic: "event set: unlisted event `pull_request`"
+
+  - id: C1.canary-push-option-allowlist
+    clause: C1
+    kind: yaml
+    entries: [canary]
+    statement: >-
+      The canary's `push` mapping admits `branches` only. A narrowing filter, a tag trigger or a moved
+      branch filter changes which pushes the canary observes (codex, r52).
+    target: $.on.push
+    cases:
+      - id: C1.canary-push-option-allowlist/paths
+        op: add
+        side: local
+        target: $.on.push.paths
+        payload: "['**.py']"
+        validity: narrows which pushes are observed
+        diagnostic: "push options: unlisted option `paths`"
+      - id: C1.canary-push-option-allowlist/tags
+        op: add
+        side: local
+        target: $.on.push.tags
+        payload: "['v*']"
+        validity: adds tag pushes the canary was never meant to run on
+        diagnostic: "push options: unlisted option `tags`"
+      - id: C1.canary-push-option-allowlist/branches-ignore
+        op: move
+        side: local
+        target: $.on.push.branches
+        payload: to branches-ignore
+        validity: inverts which branches are observed
+        diagnostic: "push options: unlisted option `branches-ignore`"
+
   - id: C2.branches-equal-resolved-target-set
     clause: C2
     kind: remote_relation
@@ -897,7 +952,7 @@ obligations:
   - id: C8.step-sequence-allowlist
     clause: C8
     kind: yaml
-    entries: [required]
+    entries: [required, canary]
     statement: >-
       Exactly, in order: `actions/checkout` (SHA-pinned) -> the C6a resolver-digest guard -> the
       empty-diff guard -> the C6 launcher-path guard -> the action. FIVE steps. The two guards are
@@ -1033,7 +1088,7 @@ obligations:
   - id: C8.run-bodies-frozen
     clause: C8
     kind: content_digest
-    entries: [required]
+    entries: [required, canary]
     statement: >-
       ALL THREE permitted `run:` steps are frozen BY CONTENT, and NONE may write to `$GITHUB_ENV` or
       `$GITHUB_PATH` at all. Freezing the SEQUENCE stopped a new step being added; it did nothing about

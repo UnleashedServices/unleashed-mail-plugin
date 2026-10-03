@@ -3478,6 +3478,35 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
                 "job: effective context `trunk-check` is not `trunk-check-push`",
             ),
+            # ---- the canary's OWN event contract (codex, r52): C1's required-entry cases are written
+            # against `pull_request`, so nothing in the registry could test the canary's `push`.
+            (
+                "C1.canary-single-event/add-workflow-dispatch",
+                lambda w: _on(w).update({"workflow_dispatch": {}}),
+                "event set: unlisted event `workflow_dispatch`",
+            ),
+            (
+                "C1.canary-single-event/add-pull-request",
+                lambda w: _on(w).update({"pull_request": {"branches": ["main"]}}),
+                "event set: unlisted event `pull_request`",
+            ),
+            (
+                "C1.canary-push-option-allowlist/paths",
+                lambda w: _on(w)["push"].update({"paths": ["**.py"]}),
+                "push options: unlisted option `paths`",
+            ),
+            (
+                "C1.canary-push-option-allowlist/tags",
+                lambda w: _on(w)["push"].update({"tags": ["v*"]}),
+                "push options: unlisted option `tags`",
+            ),
+            (
+                "C1.canary-push-option-allowlist/branches-ignore",
+                lambda w: _on(w)["push"].update(
+                    {"branches-ignore": _on(w)["push"].pop("branches")}
+                ),
+                "push options: unlisted option `branches-ignore`",
+            ),
             (
                 "C3.single-job/canary-sibling-named-validate",
                 lambda w: w["jobs"].update(
@@ -3561,6 +3590,39 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         for case_id in sorted(FIXTURE_EXECUTED_CASES | CELL16_INJECTED_CASES):
             with self.subTest(case=case_id):
                 self.assertIn(case_id, declared)
+
+    def test_every_case_holds_on_every_entry_its_obligation_declares(self):
+        """A registry `entries:` list is a CLAIM that each case applies to each entry (codex, r49 and r52).
+        Run every case on every entry its obligation names. It must change that entry's workflow and
+        produce its OWN diagnostic there, so a generator that follows the registry cannot emit a mutant
+        that changes nothing or reports another entry's diagnostic, and an obligation cannot claim the
+        canary without the canary being tested."""
+        recipes = {case[0]: case for case in self._yaml_mutants()} | {
+            case[0]: case for case in self._canary_mutants()
+        }
+        bases = {
+            "required": _load_workflow(),
+            "canary": yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8")),
+        }
+        for obligation in self.registry["obligations"]:
+            for case in obligation.get("cases", []):
+                recipe = recipes.get(case["id"])
+                if recipe is None:
+                    continue  # deferred cases: the coverage test below accounts for them
+                for entry in obligation.get("entries", []):
+                    with self.subTest(case=case["id"], entry=entry):
+                        mutant = copy.deepcopy(bases[entry])
+                        recipe[1](mutant)
+                        self.assertNotEqual(
+                            yaml.safe_dump(bases[entry], sort_keys=True),
+                            yaml.safe_dump(mutant, sort_keys=True),
+                            "the case changes nothing on this entry",
+                        )
+                        milestone = recipe[3] if len(recipe) > 3 else "M2"
+                        self.assertIn(
+                            recipe[2],
+                            contract_problems(mutant, milestone=milestone, entry=entry),
+                        )
 
     def test_every_declared_case_is_executed_here_or_provably_needs_external_machinery(
         self,

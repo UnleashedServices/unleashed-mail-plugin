@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 49
+**Status:** Planning, revision 50
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -45,10 +45,11 @@ checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequ
 the job ID was checked, never the job `name` that decides the emitted context, so a canary named
 `validate` passed (revision 45); and every check read only the FIRST job, so a sibling job named
 `validate` appended under `jobs:` passed (revision 46, found by both arms). Cell 11's per-step minimum is
-now declared in the registry and executed: 40 cases added in revisions 43-48 (two of them, the runner
-and timeout operands, close a coverage gap rather than a survivor), every one actionlint-clean
+now declared in the registry and executed: 45 cases added in revisions 43-50 (the runner and timeout
+operands and the canary's five C1 cases close coverage gaps rather than survivors), every one actionlint-clean
 apart from the permitted `if-cond` notes. The survivor corpus records all six forms, as §1 requires; it
-is still not EXECUTED (above). Its `TRUNK_PATH` cases now write that
+is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
+(revision 50). Its `TRUNK_PATH` cases now write that
 assignment; until revision 44 all three appended `echo X`.
 **Created:** 2026-08-28
 **Last Updated:** 2026-10-02
@@ -326,6 +327,18 @@ assignment; until revision 44 all three appended `echo X`.
 > combination counts. *Revisions 47-49 fixed the same recovery hole three times, one branch at a time.
 > The rule had to be stated over the CONDITION (the gate is not blocking), not over the cause that
 > happened to be named.*
+> **r52** `a216fe9` (revision 49), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (3). codex confirmed
+> MV, §3 and the counts, and that the NORMAL substitution is blocking across any interruption. P1:
+> recovery closed only the RED witness, but cell 17 also opens a green one, mergeable by design, and
+> M4's "roll back" restores a snapshot without `trunk-check`. P2: an automated repair from an unplanned
+> state cannot satisfy §6.2a's readbacks, which describe planned writes. P3: the registry named the
+> required entry only for C1's events and C8's sequence and body freeze, so a generator could not test
+> the canary's own. **Revision 50** stops extending recovery branch by branch, which three rounds had
+> done. It SCOPES M4a's guarantee (no witness is merged, and the red one is never left mergeable), makes
+> any not-blocking read close BOTH witnesses and STOP for the maintainer, times M4's rollback before
+> any witness exists, and limits §6.2a's readbacks to planned writes. In the registry it adds the
+> canary's C1 obligations, extends C8 to the canary, and adds a STANDING cross-entry test (117 recipes,
+> 192 combinations, 0 failing; it reds on an injected false entry claim).
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1464,6 +1477,10 @@ alternative turned out to be complementary rather than competing.
       which meant either the pre-read failed or every successful edit was rolled back — a checklist
       that could not pass (codex, r25).
 
+      **Rolling M4 back means restoring its pre-read snapshot, which lacks `trunk-check`.** That is
+      safe only because **no witness PR exists yet**: cell 17's witnesses are opened only after M4's
+      readback has passed (codex, r52). A rollback with any witness open follows M4a's rule instead:
+      close the witnesses first.
       **Must be UNCHANGED across both reads** — roll back if any differs:
       1. both base tips still carry a byte-equivalent strict job;
       2. the effective check name;
@@ -1565,7 +1582,12 @@ alternative turned out to be complementary rather than competing.
       neither `trunk-check` nor the placeholder. That is the ungated state, reached with the deliberately
       red PR still open and its other required checks green, so it reopened the merge race the
       substitution exists to close, auto-merge included.
-      1. **If cell 17 failed, close the sacrificial PR FIRST.** The red PR observed as mergeable means the
+      **What M4a guarantees, scoped** (codex, r52 showed the broader reading cannot hold): **no witness PR
+      is ever merged, and the deliberately red one is never left mergeable.** Other open PRs are governed
+      by the repository's ordinary rules. A window without the `trunk-check` requirement is the pre-M4
+      status quo, not an exposure M4a creates. "The witnesses" means BOTH cell-17 PRs, the red one and
+      the green one, because the green one is mergeable BY DESIGN, and that is cell 17's observation.
+      1. **If cell 17 failed, close BOTH witness PRs FIRST.** The red PR observed as mergeable means the
          gate is NOT enforcing, so restoring that same state is not "fail-closed" (codex, r50). Nothing in
          the ruleset can be relied on to protect the witness, and an interruption before closure leaves
          it mergeable. Otherwise, for a rehearsal failure under a ruleset verified `enforcement: active`,
@@ -1573,9 +1595,9 @@ alternative turned out to be complementary rather than competing.
          state (`trunk-check` present, no placeholder). Either way, under §6.2a's readback for that
          write, with `enforcement: active` verified in it. Both are blocking states, and the write
          between them is one atomic PUT. **If the read before that write finds the repository NOT
-         blocking, the ONE RULE below governs instead: close the sacrificial PR first.**
-      2. **Close the sacrificial PR** if it is still open, and confirm it is closed, before any write
-         that could ungate.
+         blocking, the ONE RULE below governs instead: close both witnesses, and stop.**
+      2. **Close both witness PRs** if either is still open, and confirm both are closed, before any
+         write that could ungate.
       3. **Only then**, and only if the failure shows the gate itself is broken, perform §6.2a's incident
          rollback to the pre-M4 state (its one-entry readback), and return to M3.
 
@@ -1594,14 +1616,17 @@ alternative turned out to be complementary rather than competing.
         produce. **Every one of these reads also requires `enforcement: active`** (codex, r50). A
         placeholder under an inactive ruleset protects nothing.
         **ONE RULE for every read that finds the repository NOT blocking** — `enforcement` anything
-        but `active`, or neither `trunk-check` nor the placeholder required — **close the sacrificial PR
-        and confirm it is closed, FIRST.** Only then restore `trunk-check` from the recorded pre-M4a
-        canonical document and re-enter at step 1. Revision 48 applied close-first to the inactive case
-        only, so the neither-present branch still restored first: an interrupted or failed restore left
-        the open, otherwise-green witness PR mergeable (codex, r51).
+        but `active`, or neither `trunk-check` nor the placeholder required — **close BOTH witness PRs
+        and confirm both are closed, FIRST. Then STOP M4a: record the state and hand it to the
+        maintainer.** An unplanned state has no planned write. §6.2a's readbacks are defined for the
+        planned transitions only, and a repair from an arbitrary state cannot satisfy them: from "neither
+        present" the placeholder cannot disappear, and from inactive enforcement, restoring changes the
+        remainder (codex, r52). So M4a does not auto-repair. Revision 48 applied close-first to the
+        inactive case only, and revision 49 still restored automatically and closed only the red
+        witness (codex, r51 and r52).
         **The guarantee this buys, stated with its limit:** interruption-safety is a property of the
         ACTIVE, blocking states, which the substitution keeps the ruleset in. A fresh read that finds the
-        gate NOT blocking DETECTS the exposure; it cannot protect the witness during the window before
+        gate NOT blocking DETECTS the exposure; it cannot protect the witnesses during the window before
         closure. That is why closure is always the first action, and why the window is bounded by one
         read.
       * **Preflight, and RE-READ immediately before each PUT.** Enumerate open PRs against both bases
@@ -1620,7 +1645,7 @@ alternative turned out to be complementary rather than competing.
       * **The mandatory final state is: `trunk-check` present with its expected `integration_id`, no
         placeholder context, the canonical ruleset otherwise identical to its pre-M4a bytes, and cell
         17 re-observed.** M4a is not complete until that is read back and recorded.
-      * **The sacrificial PR is closed before M4a exits.**
+      * **Both witness PRs, red and green, are closed before M4a exits.**
       * **Afterwards, verify both protected base tips are where they were.** M4a merges nothing, so any
         movement is another actor's — an incident, not a footnote.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
@@ -2252,7 +2277,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     equal to the ruleset's **resolved** target set (C2's `resolve()`, `include` minus `exclude`); the C4/C8/C9 action and checkout pins; C5's `env:` prohibition;
     C6's repository-launcher guard; the empty-diff and zero-`before` guards, both invoking C6a's shared
     resolver; `permissions: contents: read`; `continue-on-error: true` **at job scope**; and that
-    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list. **The three-item
+    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list. **Each is a
+    registry obligation whose `entries:` names the canary, executed ON the canary** by the cross-entry
+    test (revision 50). Before that, C1's event cases and C8's sequence and body-freeze obligations named
+    the required entry only, so a registry-driven generator could not have tested the canary's own
+    events or guard bodies (codex, r52). The canary's `push` events now have their own C1 obligations. **The three-item
     form this instruction previously carried — existence, `continue-on-error`, ruleset absence — is
     exactly what r24 proved insufficient**, and it survived directly beneath the paragraph saying so — revision 20 required the
     file to exist while no milestone created it and no inventory listed it. This is the cell that
@@ -2309,8 +2338,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
     **This is the only cell that tests the ruleset's BEHAVIOUR rather than its bytes, and the plan
     reached revision 27 without it** (kimi, third lens). Every other observation here, except cell 2's
-    M4 rule-satisfaction half, is *pre-requirement*: M3's green and red runs, cell 12's provenance-bound check runs, M4's canonical
-    readback — all of them verify what the workflow and the rule *contain*, and none of them verifies
+    M4 rule-satisfaction half, verifies CONTENT: M3's green and red runs, cell 12's provenance-bound
+    check runs, and M4's canonical readbacks (one of them taken after the edit, so "pre-requirement" was
+    the wrong word, codex r52). All of them verify what the workflow and the rule *contain*, and none verifies
     the property the entire plan exists to produce. It is also the cheapest cell in the document. An
     absence like this cannot surface in a diff, which is why twenty-nine rounds of incremental review
     did not find it.
@@ -2464,6 +2494,10 @@ head while `main` is unmergeable. This repository has already shipped that incid
     disappears AND `trunk-check-rollback-rehearsal` appears;
   * **M4a's restore PUT** — the reverse pair: the placeholder disappears AND `trunk-check` reappears
     with its expected `integration_id`.
+
+  **These readbacks cover the PLANNED writes only.** A state M4a did not plan for — not blocking — gets
+  no automated write at all. M4a closes its witnesses and stops, and the maintainer decides the repair
+  (codex, r52).
 
   Revision 32 made the rehearsal a substitution and left this bullet demanding one difference for both
   writes. A correct rehearsal therefore failed its own comparison: subtracting `trunk-check` alone
