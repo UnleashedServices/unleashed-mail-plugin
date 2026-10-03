@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 48
+**Status:** Planning, revision 49
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -298,7 +298,7 @@ assignment; until revision 44 all three appended `echo X`.
 > four combinations failing, and nothing else. Three file claims were also false (the Overview's
 > "today", §3b's "no mode operand", and §7's "only PyYAML"). **Revision 47** orders M4a's recovery
 > fail-closed first, closes the PR before any ungating write, states the canary exception in the clause
-> and the registry, and splits the context obligation per entry, so that 0 of 110 combinations fail. It
+> and the registry, and splits the context obligation per entry, so that 0 of the 145 combinations from those 110 recipes fail. It
 > also corrects the three claims.
 > **r50** `2ab37ea` (revision 47), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1). codex confirmed
 > revision 47's recovery order, its canary exception, and the per-entry context split. Its one blocker
@@ -310,7 +310,22 @@ assignment; until revision 44 all three appended `echo X`.
 > It also fixes two residues the r49 corrections left (§3b's "the operand is removed", cell 8's "only
 > PyYAML"), rebinds the timeout-360 survivor (it was bound to an unrelated container-key case, because
 > no registry case exercised the timeout), adds the runner/timeout cases, and records the C6/C6a message
-> gap. 0 of 112 mutant x entry combinations fail. CI was fully green at `96c2f94`.
+> gap. 0 of 149 recipe x entry combinations fail (112 recipes; first logged as "112 combinations",
+> codex r51). CI was fully green at `96c2f94`.
+> **r51** `2e6917a` (revision 48), both arms: agy `APPROVE_WITH_NOTES` (no path to a mergeable PR while
+> ungated or not enforcing), codex `REQUEST_CHANGES` (2). codex confirmed revision 48's fresh
+> `enforcement: active` and its cell-17 close-first, within their branches. **P1: the general form of the
+> same hole.** M4a's "neither context present" branch still restored before closing, so an interrupted
+> restore left the otherwise-green witness PR mergeable under an ACTIVE but ungated ruleset, and the
+> rollout evidence itself records that exact MERGEABLE combination. **P2: MV's bump omitted
+> `marketplace.json`**, and §7 still said it "carries no version field". It has carried one since
+> COREDEV-2801's follow-up, as a fifth sync point that strict CI enforces. **Revision 49** makes
+> close-first ONE rule for every not-blocking read and states the guarantee's limit, adds the fifth
+> site to MV and §7, and records §3's root-caused SELECTION apart from its still-unproven REBUILD
+> trigger. It also qualifies cell 17's "every other observation", and corrects the logs' recipe and
+> combination counts. *Revisions 47-49 fixed the same recovery hole three times, one branch at a time.
+> The rule had to be stated over the CONDITION (the gate is not blocking), not over the cause that
+> happened to be named.*
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1062,8 +1077,13 @@ implementations; §5 cells 6–7 now carry the negative controls that kill them.
 
 ## §3 — COREDEV-2801: a diagnostic and a detector, not a remedy
 
-**Cause not identified. Four hypotheses tested and eliminated** (stale scopes; stale fork; a
-release/tag pin; VS Code caching) — on the ticket, so they are not re-tried. Established: `2.7.0`
+**The SELECTION is root-caused; the REBUILD is not** (codex, r51, matching
+`COREDEV-2780_GATING_FOLLOWUP_PLAN.md`). With no `version` in `marketplace.json`, the installed version
+was resolved from the FIRST entry of a raw directory read of the plugin cache, with no sort and no
+semver comparison. That `version` is now declared and enforced as a fifth sync point. What triggers the
+wholesale registry REBUILD that kept reinstating the stale entry is still unproven, and the detector
+below still instruments it. Before that finding, four hypotheses were tested and eliminated (stale
+scopes; stale fork; a release/tag pin; VS Code caching) — on the ticket, so they are not re-tried. Established: `2.7.0`
 exists in exactly one file; `main` has not served it since `13d5c2b` (Aug 7); that file **is**
 rewritten by updates and the stale entries survive the rewrite; four live sessions were bound to it.
 
@@ -1551,7 +1571,9 @@ alternative turned out to be complementary rather than competing.
          it mergeable. Otherwise, for a rehearsal failure under a ruleset verified `enforcement: active`,
          **stay fail-closed**: mid-rehearsal keep the placeholder, or else restore the pre-M4a canonical
          state (`trunk-check` present, no placeholder). Either way, under §6.2a's readback for that
-         write, with `enforcement: active` verified in it.
+         write, with `enforcement: active` verified in it. Both are blocking states, and the write
+         between them is one atomic PUT. **If the read before that write finds the repository NOT
+         blocking, the ONE RULE below governs instead: close the sacrificial PR first.**
       2. **Close the sacrificial PR** if it is still open, and confirm it is closed, before any write
          that could ungate.
       3. **Only then**, and only if the failure shows the gate itself is broken, perform §6.2a's incident
@@ -1569,10 +1591,19 @@ alternative turned out to be complementary rather than competing.
         by what it contains**: `trunk-check` present and no placeholder = the start (or finished)
         state; **placeholder present = interrupted mid-rehearsal**, resume at the restore PUT;
         **neither present = the repository is UNGATED**, which the substitution model should never
-        produce — stop, restore `trunk-check` from the recorded pre-M4a canonical document, and
-        re-enter at step 1 rather than continuing. **Every one of these reads also requires
-        `enforcement: active`** (codex, r50). A placeholder under an inactive ruleset protects nothing.
-        Any other value means no ruleset state is blocking: close the sacrificial PR first, and stop.
+        produce. **Every one of these reads also requires `enforcement: active`** (codex, r50). A
+        placeholder under an inactive ruleset protects nothing.
+        **ONE RULE for every read that finds the repository NOT blocking** — `enforcement` anything
+        but `active`, or neither `trunk-check` nor the placeholder required — **close the sacrificial PR
+        and confirm it is closed, FIRST.** Only then restore `trunk-check` from the recorded pre-M4a
+        canonical document and re-enter at step 1. Revision 48 applied close-first to the inactive case
+        only, so the neither-present branch still restored first: an interrupted or failed restore left
+        the open, otherwise-green witness PR mergeable (codex, r51).
+        **The guarantee this buys, stated with its limit:** interruption-safety is a property of the
+        ACTIVE, blocking states, which the substitution keeps the ruleset in. A fresh read that finds the
+        gate NOT blocking DETECTS the exposure; it cannot protect the witness during the window before
+        closure. That is why closure is always the first action, and why the window is bounded by one
+        read.
       * **Preflight, and RE-READ immediately before each PUT.** Enumerate open PRs against both bases
         and confirm none has auto-merge enabled or sits in a merge queue. The entry preflight is a
         snapshot; the read that decides is the one taken immediately before the write, because the
@@ -1617,22 +1648,24 @@ alternative turned out to be complementary rather than competing.
       reported — and `.githooks/pre-commit` (§6.3 decided: wire it). Runtime behaviour per **Table
       A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
 
-- [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
+- [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the version bump in
       §7's file inventory and in no milestone, and this plan lands **eight shipping PRs** —
       **M0a**, M1, M2+M2b+**M2c**, M2a, **M3 on `main` and M3 on `alpha` (two)**, M5a, M6 — one bump
       cannot serve them; M0a ships the registry and survivor corpus, and M2c ships the harness workflow
       and its fixture refs.
       M3 edits the workflow on **both** bases and the plan specifies no single-PR mechanism for that,
       so it is two landings, not one (codex, r23). **Each PR that changes a
-      shipped asset carries its own bump**: `plugin.json`, the README H1, the README's newest
-      `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. **M3 belongs on that list**
+      shipped asset carries its own bump**: `plugin.json`, **`.claude-plugin/marketplace.json`'s
+      `version`** (the fifth sync point, enforced in strict CI; omitting it fails `validate`, codex
+      r51), the README H1, the README's newest `### vX.Y.Z`, the README asset counts, and a
+      `CHANGELOG.md` section. **M3 belongs on that list**
       — it edits the workflow on both bases to remove `continue-on-error`, a shipped-asset change that
       revision 21 omitted while demanding a bump on every such PR (codex, r21). **M0, M4, M4a and M5 are the
       only exceptions** — a branch sync, a ruleset edit, a ruleset rehearsal and running the §3a
       experiment ship no plugin asset. **This list is closed, so every milestone added later must be
       placed on one side of it explicitly**; M2c and M4a were both added without it being revisited; revision 21 listed M0
       as shipping and then exempted it two lines later. `validate-version-sync.sh`
-      only checks the four sites **agree**, not that they **moved**, so agreement at a stale version
+      only checks the five sites **agree**, not that they **moved**, so agreement at a stale version
       passes: the bump is a milestone obligation, not something the validator will catch.
 
 M3 and M4 are gated on evidence, not schedule.
@@ -2275,8 +2308,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     deliberately: an unproved 405 is cheaper than a red PR merged into `main`.
 
     **This is the only cell that tests the ruleset's BEHAVIOUR rather than its bytes, and the plan
-    reached revision 27 without it** (kimi, third lens). Every other observation here is
-    *pre-requirement*: M3's green and red runs, cell 12's provenance-bound check runs, M4's canonical
+    reached revision 27 without it** (kimi, third lens). Every other observation here, except cell 2's
+    M4 rule-satisfaction half, is *pre-requirement*: M3's green and red runs, cell 12's provenance-bound check runs, M4's canonical
     readback — all of them verify what the workflow and the rule *contain*, and none of them verifies
     the property the entire plan exists to produce. It is also the cheapest cell in the document. An
     absence like this cannot surface in a diff, which is why twenty-nine rounds of incremental review
@@ -2585,13 +2618,14 @@ hook and the canary still run `taplo lint`.
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
   anchor lines demoted to hints for prepend-only sites
 * `CLAUDE.md` — gate-list update
-* **`.claude-plugin/plugin.json`, `README.md` (H1 + newest `### vX.Y.Z` + bold asset counts), and
-  `CHANGELOG.md` — THE VERSION BUMP, which revision 19 omitted entirely** (codex, r20). This repo's
-  rule is that **every change that ships bumps the version**, because `marketplace.json` carries no
-  version field and `plugin.json` is the only signal an installed plugin has that anything changed —
-  an unbumped fix is a fix nobody receives. The `.githooks/pre-commit` and detector changes here are
+* **`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`'s `version`, `README.md` (H1 +
+  newest `### vX.Y.Z` + bold asset counts), and `CHANGELOG.md` — THE VERSION BUMP, which revision 19
+  omitted entirely** (codex, r20). This repo's rule is that **every change that ships bumps the
+  version**, because the version is the only signal an installed plugin has that anything changed. An
+  unbumped fix is a fix nobody receives. Revision 48 still said `marketplace.json` "carries no version
+  field". It has carried one since COREDEV-2801's follow-up, as the fifth sync point (codex, r51). The `.githooks/pre-commit` and detector changes here are
   exactly that kind of change, and as planned they could have landed without the signal consumers use
-  to pull them. `validate-version-sync.sh` asserts all four sites (`warn` in pre-commit, `strict` in
+  to pull them. `validate-version-sync.sh` asserts all five sites (`warn` in pre-commit, `strict` in
   CI, so a partial bump commits cleanly and fails CI).
 * `.githooks/pre-commit` — the `--index`-scoped, `--no-fix`, bounded, exit-code-aggregating trunk
   check (§6.3 decided: wire it), **and** the §3b detector call
