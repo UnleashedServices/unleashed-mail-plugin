@@ -33,7 +33,12 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   generators failed on two permitted, actionlint-clean layouts: a flow mapping that ends a line before
   its closing brace (4 errors), and an anchored key, whose anchor the quoting replaced (20 errors;
   codex, plan r65). Both layouts are now bases of every raw test, and any generated variant that does
-  not load equal to its base raises by name.
+  not load equal to its base raises by name. Fed back in as the shipped source, three of those bases
+  were parser errors (codex, plan r66; COREDEV-2871). The builder now declares its domain (no anchor or
+  alias, the trunk inputs one block mapping of scalars, no `cache-key` yet) and refuses anything outside
+  it by name. Its splice ends at the last input's line, not its end mark, which for a block scalar is the
+  next line's start. The merge-key test is written in the mapping's own syntax and runs on all 38
+  sources, and a variant that fails to parse is named. Each test failed with its fix undone.
 - **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
   sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
   before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,

@@ -1,8 +1,8 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 62. The re-gate opened at revision 38 (COREDEV-2850) was **CLOSED BY
-MAINTAINER DECISION after round 66 (2026-10-02); NOT passed.** See the **r66** log entry. Every edit
-after revision 62 is ungated by construction.
+**Status:** Planning, revision 63 (ungated; see its log entry). The re-gate opened at revision 38
+(COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT passed.** See the
+**r66** log entry. Every edit after revision 62 is ungated by construction.
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -485,6 +485,19 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **Revision 63** (2026-10-03; no review round, so ungated by construction): **COREDEV-2871**, the
+> r66 instrument findings, fixed at the maintainer's direction. `_relaid_trunk_inputs` now holds only
+> inside a declared domain, `_generator_domain_problems` (no anchor or alias; the trunk inputs one
+> block mapping of scalars; no `cache-key` yet), and refuses any other source BY NAME. Every permitted
+> base fed back in must either generate or be refused: codex's three are refused, and the shipped and
+> no-final-newline bases generate. The splice now ends at the last input's LINE, not its end mark. A
+> block scalar's end mark is the START of the following line, so the closing brace was joined onto the
+> next line. That was latent only because the trunk step ends both files, and the new test caught it
+> only once a step-level key followed. The merge-key test now writes the key in the containing
+> mapping's own syntax and runs on all 38 sources. A variant that fails to parse is now named. Undoing
+> each fix turns its test red (6, 1, 2 and 38 failures). §1 C0 and the registry's `C0.no-concurrency`
+> now state GitHub's documented behaviour. A constant group makes a new run wait as `pending` and
+> cancels any run still pending; only `cancel-in-progress: true` cancels the in-flight run.
 > **r66** `296c516` (revision 62): agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2 and one non-blocking
 > text item). Both P2s are in source-generator code revision 62 itself added, and both were reproduced
 > here on both entries. `_relaid_trunk_inputs` splices at the last VALUE node rather than the containing
@@ -931,10 +944,13 @@ own non-required context.
   happily (codex, r24). Cell 10 is therefore **hybrid** — the evidence artifact keeps the runtime
   observation, and a static assertion pins the value, with `write-all`, a widened single scope, and
   an absent `permissions` key each mutated.
-  **`concurrency` is prohibited at workflow and job level** (codex, r21): a constant concurrency group
-  makes GitHub **cancel the in-flight run** when a new one starts, and a cancelled required check is
-  not a passing one — a rapid second push would leave the context `cancelled` or pending on the SHA a
-  merge is waiting on. Converting the job mapping to an allowlist in revision 21 left the root open,
+  **`concurrency` is prohibited at workflow and job level** (codex, r21). A constant concurrency group
+  serialises the runs. A new run waits as **`pending`** while one is in progress, and a newer run
+  **cancels any run still pending**. With `cancel-in-progress: true` the in-flight run is cancelled
+  too, but the group alone does not cancel it (GitHub's documented behaviour; codex, r66 corrected
+  revision 21's wording). A cancelled required check is not a passing one, and a pending one is not
+  either: a rapid sequence of pushes would leave the context `cancelled` or pending on a SHA a merge
+  is waiting on. Converting the job mapping to an allowlist in revision 21 left the root open,
   which is the same level-above defect one level further out.
 
   **C1 — one event, and its OPTIONS are an allowlist.** `.github/workflows/trunk-check.yml` is
@@ -1162,7 +1178,13 @@ own non-required context.
   its own text, keeping any anchor, and any variant that does not load equal to its base raises by
   name (codex, r65). The decoy is placed only where the trunk inputs are a BLOCK mapping, decided by
   that mapping's style, and it must be placed at least once on each entry. All 38 sources (19 per
-  entry) are actionlint-clean and a positive control for both checks. The parity
+  entry) are actionlint-clean and a positive control for both checks. The two trunk-input bases are
+  built by splicing text at node marks, so that builder is defined only inside a declared DOMAIN,
+  `_generator_domain_problems` (COREDEV-2871). The domain requires no anchor or alias, the trunk
+  inputs to be one block mapping of scalars, and no `cache-key` yet. The shipped files must be inside
+  it, and a source outside it is refused BY NAME. A permitted re-layout of a shipped file outside the
+  domain therefore fails the standing tests loudly and by name; that is a declared limit, never a pass.
+  Every base, fed back in as the shipped source, either generates or is refused (codex, r66). The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 

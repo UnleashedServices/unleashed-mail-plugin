@@ -33,6 +33,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -468,16 +469,69 @@ def _source_variants(text: str) -> dict:
     # as a parser error, or a pass, three tests later (codex, r65).
     expected = _load_actions_yaml(text)
     for label, variant in variants.items():
-        if _load_actions_yaml(variant) != expected:
+        try:
+            loaded = _load_actions_yaml(variant)
+        except yaml.YAMLError as exc:  # named too, not a bare parser error (codex, r66)
+            raise AssertionError(
+                f"source variant {label!r} does not parse: {exc}"
+            ) from exc
+        if loaded != expected:
             raise AssertionError(f"source variant {label!r} is not the same workflow")
     return variants
+
+
+def _line_end(text: str, node) -> int:
+    """The index of the newline ending the node's LAST line, or the end of the text. Not the node's
+    end mark: a block scalar's end mark is the START of the following line, so splicing there joins
+    whatever comes next onto that line (COREDEV-2871)."""
+    found = text.find("\n", node.end_mark.index - 1)
+    return len(text) if found == -1 else found
+
+
+def _generator_domain_problems(text: str) -> list[str]:
+    """What `_relaid_trunk_inputs` needs of its INPUT, stated as a predicate rather than assumed
+    (COREDEV-2871). It splices text at node marks, which is sound only when no anchor or alias exists
+    (an alias node carries its ANCHOR's marks), the trunk inputs are ONE BLOCK mapping (a flow
+    mapping's closing brace is not at its last value; codex, r66), each input is a scalar (a nested
+    block collection ends at the next token, not on its own line), and there is no `cache-key` yet
+    (the anchored base adds one). The shipped files must satisfy it. A source outside it is refused
+    BY NAME: a declared limit that fails loudly, never a parser error and never a pass.
+    """
+    problems = [
+        f"line {event.start_mark.line + 1}: an anchor or alias"
+        for event in yaml.parse(text, Loader=_ActionsYamlLoader)
+        if getattr(event, "anchor", None) is not None
+    ]
+    pairs = _with_pairs(yaml.compose(text, Loader=_ActionsYamlLoader), "trunk")
+    if len(pairs) != 1:
+        return [*problems, f"expected one trunk `with` mapping, found {len(pairs)}"]
+    ((_, with_node),) = pairs
+    if not isinstance(with_node, yaml.MappingNode) or with_node.flow_style:
+        return [*problems, "the trunk inputs are not a block mapping"]
+    problems += [
+        f"trunk input `{key.value}` is not a scalar"
+        for key, value in with_node.value
+        if not isinstance(value, yaml.ScalarNode)
+    ]
+    if _mapping_pairs(with_node, "cache-key"):
+        problems.append("the trunk inputs already have a `cache-key`")
+    return problems
 
 
 def _relaid_trunk_inputs(text: str) -> dict:
     """Two more permitted layouts of the trunk step's inputs, both actionlint-clean (codex, r65):
     a FLOW mapping whose last entry ends its line before the closing brace, so ending a line does not
     make a mapping block; and an ANCHORED key whose alias is a permitted `cache-key`, so a key's node
-    span is not its spelling. Both are built at node positions, never by text search."""
+    span is not its spelling. Both are built at node positions, never by text search, and only inside
+    `_generator_domain_problems`: fed one of its own flow or anchored outputs, the splice raised a
+    parser error (codex, r66), so a source outside the domain is refused by name instead.
+    """
+    problems = _generator_domain_problems(text)
+    if problems:
+        raise AssertionError(
+            "source is outside the generators' declared domain (COREDEV-2871): "
+            + "; ".join(problems)
+        )
     root = yaml.compose(text, Loader=_ActionsYamlLoader)
     ((with_key, with_node),) = _with_pairs(root, "trunk")
     indent = " " * with_key.start_mark.column
@@ -486,10 +540,9 @@ def _relaid_trunk_inputs(text: str) -> dict:
         for key, value in _step(_load_actions_yaml(text), "trunk")["with"].items()
     ]
     flow = "with: {" + f",\n{indent}  ".join(entries) + f"\n{indent}}}"
-    end = with_node.value[-1][1].end_mark.index
+    end = _line_end(text, with_node.value[-1][1])
     ((key_node, value_node),) = _pinned_pairs(root, PINNED_PATHS["save-annotations"])
-    found = text.find("\n", value_node.end_mark.index)
-    line_end = len(text) if found == -1 else found
+    line_end = _line_end(text, value_node)
     at = key_node.start_mark.index
     return {
         "trunk inputs in a multi-line flow mapping": (
@@ -505,11 +558,11 @@ def _relaid_trunk_inputs(text: str) -> dict:
     }
 
 
-def _all_permitted_sources(text: str) -> dict:
-    """Every variant of every BASE a shipped workflow may legitimately have: as it is, entirely in
-    flow style, without a final newline (codex, r64), and with its trunk inputs re-laid out in the
-    two ways codex found at r65. The standing tests must not fail on any of them."""
-    bases = {
+def _permitted_bases(text: str) -> dict:
+    """Every BASE a shipped workflow may legitimately have: as it is, entirely in flow style, without
+    a final newline (codex, r64), and with its trunk inputs re-laid out in the two ways codex found at
+    r65."""
+    return {
         "shipped": text,
         "shipped in flow style": yaml.dump(
             _load_actions_yaml(text),
@@ -520,9 +573,13 @@ def _all_permitted_sources(text: str) -> dict:
         "no final newline": text.rstrip("\n"),
         **_relaid_trunk_inputs(text),
     }
+
+
+def _all_permitted_sources(text: str) -> dict:
+    """Every variant of every permitted base. The standing tests must not fail on any of them."""
     return {
         f"{base_label} / {variant_label}": variant
-        for base_label, base in bases.items()
+        for base_label, base in _permitted_bases(text).items()
         for variant_label, variant in _source_variants(base).items()
     }
 
@@ -4304,25 +4361,126 @@ class TheLoaderResolvesOnlyTheCoreScalars(unittest.TestCase):
         self.assertEqual({"k": "="}, _load_actions_yaml("k: =\n"))
 
     def test_a_merge_key_among_the_action_inputs_is_an_unlisted_input(self):
+        """On every permitted source, written in the containing mapping's OWN syntax: a block line
+        after a flow entry was a parser error on a flow-style source (codex, r66)."""
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            for spelling, source in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, source=spelling):
+                    root = yaml.compose(source, Loader=_ActionsYamlLoader)
+                    ((key_node, _),) = _pinned_pairs(
+                        root, PINNED_PATHS["save-annotations"]
+                    )
+                    ((_, with_node),) = _with_pairs(root, "trunk")
+                    merge = (
+                        "<<: {cache: true}, "
+                        if with_node.flow_style
+                        else f"<<: {{cache: true}}\n{' ' * key_node.start_mark.column}"
+                    )
+                    at = key_node.start_mark.index
+                    mutated = source[:at] + merge + source[at:]
+                    self.assertIn(
+                        "action inputs: unlisted input `<<`",
+                        contract_problems(
+                            _load_actions_yaml(mutated), milestone="M3", entry=entry
+                        ),
+                    )
+
+
+class TheSourceGeneratorsFailByName(unittest.TestCase):
+    """COREDEV-2871 (codex, r66). The generators splice text at node marks, so they hold only inside
+    `_generator_domain_problems`. Outside it they must refuse BY NAME, and a variant that does not
+    parse must be named too, never surface as a bare parser error."""
+
+    ENTRIES = (("required", WORKFLOW_PATH), ("canary", CANARY_PATH))
+
+    def test_the_shipped_workflows_are_inside_the_domain(self):
+        for entry, path in self.ENTRIES:
             with self.subTest(entry=entry):
-                text = path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    [], _generator_domain_problems(path.read_text(encoding="utf-8"))
+                )
+
+    def test_every_permitted_base_fed_back_in_is_generated_or_refused_by_name(self):
+        """codex, r66: the flow and anchored bases, fed back in as the shipped source, raised
+        ParserError and ScannerError. Each base must now either generate cleanly or be refused.
+        """
+        refused = admitted = 0
+        for entry, path in self.ENTRIES:
+            for label, base in _permitted_bases(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with self.subTest(entry=entry, base=label):
+                    if _generator_domain_problems(base):
+                        refused += 1
+                        with self.assertRaisesRegex(AssertionError, "declared domain"):
+                            _all_permitted_sources(base)
+                    else:
+                        admitted += 1
+                        self.assertTrue(_all_permitted_sources(base))
+        # Both branches must run, or this test could not fail one way or the other.
+        self.assertGreater(refused, 0)
+        self.assertGreater(admitted, 0)
+
+    def test_in_domain_layouts_the_splice_must_survive(self):
+        """Inside the domain the generators must not raise. A block scalar's end mark is the START of
+        the following line, so splicing there joined the closing brace to the next line's text. Each
+        layout is followed by a step-level key, because at end of file that join is harmless and the
+        test could not fail."""
+        lit = "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
+        for label, extra in (
+            ("trailing comment on the last input", "  # trailing"),
+            (
+                "block scalar as the last input",
+                "\n{i}post-init: |\n{i}  echo one\n{i}  echo two",
+            ),
+            (
+                "kept block scalar as the last input",
+                "\n{i}post-init: |+\n{i}  echo one\n",
+            ),
+            (
+                "folded plain scalar as the last input",
+                "\n{i}post-init: echo one\n{i}  two",
+            ),
+        ):
+            with self.subTest(layout=label):
+                text = WORKFLOW_PATH.read_text(encoding="utf-8")
                 ((key_node, value_node),) = _pinned_pairs(
                     yaml.compose(text, Loader=_ActionsYamlLoader),
                     PINNED_PATHS["save-annotations"],
                 )
+                ((with_key, _),) = _with_pairs(
+                    yaml.compose(text, Loader=_ActionsYamlLoader), "trunk"
+                )
                 at = value_node.end_mark.index
-                mutated = (
+                source = (
                     text[:at]
-                    + f"\n{' ' * key_node.start_mark.column}<<: {{cache: true}}"
+                    + extra.format(i=" " * key_node.start_mark.column)
+                    + f"\n{' ' * with_key.start_mark.column}id: after-the-inputs"
                     + text[at:]
                 )
-                self.assertIn(
-                    "action inputs: unlisted input `<<`",
-                    contract_problems(
-                        _load_actions_yaml(mutated), milestone="M3", entry=entry
-                    ),
-                )
+                self.assertIn(lit, source)
+                self.assertEqual([], _generator_domain_problems(source))
+                self.assertTrue(_all_permitted_sources(source))
+
+    def test_a_variant_that_does_not_parse_is_named(self):
+        """A trailing comment inside a flow collection comments out the rest of the line. Forcing
+        the inline-comment variant onto a flow-style base must name that variant."""
+        flow = yaml.dump(
+            _load_actions_yaml(WORKFLOW_PATH.read_text(encoding="utf-8")),
+            default_flow_style=True,
+            sort_keys=False,
+            width=10**6,
+        )
+        forced = mock.patch.object(
+            sys.modules[__name__], "_ends_its_line", return_value=True
+        )
+        named = self.assertRaisesRegex(
+            AssertionError, "source variant 'inline comments' does not parse"
+        )
+        with forced, named:
+            _source_variants(flow)
 
 
 class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
@@ -4456,8 +4614,7 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
                     if with_node.flow_style:
                         continue
                     placed += 1
-                    found = source.find("\n", value_node.end_mark.index)
-                    line_end = len(source) if found == -1 else found
+                    line_end = _line_end(source, value_node)
                     indent = " " * key_node.start_mark.column
                     decoy = (
                         source[:line_end]

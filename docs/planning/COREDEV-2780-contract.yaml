@@ -156,8 +156,10 @@ obligations:
     kind: yaml
     entries: [required, canary]
     statement: >-
-      `concurrency` is prohibited at workflow AND job level. A constant group makes GitHub CANCEL the
-      in-flight run when a new one starts, and a cancelled required check is not a passing one.
+      `concurrency` is prohibited at workflow AND job level. A constant group serialises the runs: a
+      new run waits as PENDING, and a newer run CANCELS any run still pending (only
+      `cancel-in-progress: true` also cancels the in-flight run). A cancelled or pending required check
+      is not a passing one.
     target: $.concurrency, $.jobs.*.concurrency
     cases:
       - id: C0.no-concurrency/workflow
