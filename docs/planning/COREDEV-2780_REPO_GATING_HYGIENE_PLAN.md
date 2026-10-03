@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 61
+**Status:** Planning, revision 62
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-61, not outstanding** (r44 to r64): twelve checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-62, not outstanding** (r44 to r65): twelve checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -59,7 +59,10 @@ truthiness, so `name: false` fell back to the job ID (revision 60; cell 14 caugh
 the comparator did not), and the `is None` repair still let a present null do so, in BOTH the
 comparator and cell 14's census (revision 61, decided by key membership). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
-one bucket (COREDEV-2868). Cell 11's per-step minimum is
+one bucket (COREDEV-2868). Also fixed in revision 62, in the checker's LOADER, and NOT counted as a
+survivor because actionlint rejects merge keys, so no actionlint-valid mutant reached it: the resolver
+table filtered PyYAML's 1.1 table and so kept 1.1's merge (`<<`) and value (`=`) types; it is now an
+allowlist of the four core scalars. Cell 11's per-step minimum is
 now declared in the registry and executed: 66 cases added in revisions 43-61, eight of them RAW-TEXT (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
 survivors). Every one of the 220 (case, entry) pairs is actionlint-clean
@@ -480,6 +483,22 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **r65** `bed7400` (revision 61): codex `REQUEST_CHANGES` (2 P2); agy's first run produced no review
+> (a `read_file` permission headless mode cannot grant, 307 B), and its re-run on the same frozen tree
+> returned `APPROVE`. codex confirmed the key-membership repair, the three bases and the three text
+> corrections, and found **no checker survivor**: both P2s are defects in the standing tests' own
+> source generators, each reproduced here. The decoy decided block layout by whether a value ENDS ITS
+> LINE, and a flow mapping can end a line before its closing brace (4 ParserErrors). Quoting a key
+> replaced its whole node SPAN, which includes the node's properties, so `&a save-annotations` lost its
+> anchor and every `*a` was left undefined (20 ComposerErrors). **Revision 62** places the decoy by the
+> containing mapping's STYLE and requires it to be placed on each entry. It quotes only a plain key's
+> own text, raises by name on any generated variant that does not load equal to its base, and adds
+> codex's two layouts as BASES. Every raw test now runs on 19 sources per entry, all actionlint-clean.
+> Swept for the class before review: the loader FILTERED PyYAML's 1.1 resolver table, which left 1.1's
+> merge (`<<`) and value (`=`) types; the table is now an allowlist of the four core scalars. Two text
+> corrections: §1's kind table still scoped cell 4's digest to the `lint:` block, and §3b's silence
+> rule omitted the missing-`python3` notice. Shipped-checker survivors this round: **0**; instrument
+> defects: 2.
 > **r64** `01b5794` (revision 60), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2). codex
 > confirmed `_respell`, the `named-false` cases and their survivor records. P2: **revision 60's variant
 > generator was not layout-valid.** A trailing comment after a value inside a flow collection comments
@@ -817,7 +836,7 @@ own non-required context.
   |---|---|---|
   | `yaml` | a workflow key that must be present with a value, or absent | set / clear / alter the key at its path |
   | `repo_fixture` | a path that must not exist in the checked-out tree (C6) | materialise it — and for `.trunk/setup-ci`, as a **valid composite action that exits green**, not a bare executable |
-  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block, **C6a's shared resolver script**) | edit the bytes while preserving the surrounding shape |
+  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's whole `.trunk/trunk.yaml` with version specifiers normalised out, **C6a's shared resolver script**) | edit the bytes while preserving the surrounding shape |
   | `remote_relation` | local content that must equal live remote state (C2) | diverge the local half, and separately the remote half |
   | `raw_text` | a property only the source TEXT can show: no explicit YAML tag, and canonical spellings of pinned scalars, read at their YAML PATHS (C0.raw-text-canonical, revision 58; codex r62) | edit the bytes of the workflow source, then check the text and its parse |
 
@@ -1095,7 +1114,9 @@ own non-required context.
   `persist-credentials: no` passed. It also reads a leading zero as OCTAL, so `timeout-minutes: 017`
   passed as 15 where GitHub reads 17. Revision 56 replaced only the boolean resolver, and the integer
   case survived it. Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema (booleans,
-  integers, floats, null). The synonym and octal cases are mutated as RAW TEXT on both entries, because
+  integers, floats, null), and the resolver table is an ALLOWLIST of those four (revision 62): it had
+  been PyYAML's 1.1 table with the named resolvers removed, which kept 1.1's merge key `<<` and value
+  `=`. The synonym and octal cases are mutated as RAW TEXT on both entries, because
   the defect is in the parse and a mutation of an already-parsed dictionary happens after it. The
   mutation keeps any inline comment, which the contract permits.
 
@@ -1113,11 +1134,15 @@ own non-required context.
   flow-style document are accepted; the decoy is not. **The mutation BUILDERS locate values the same
   way** (codex, r63). They had kept line regexes, so a permitted inline comment or quoted key in the
   shipped file would have failed the standing tests. Every raw case now runs on every permitted
-  spelling of each source: three BASES (as shipped, the whole file in flow style, no final newline),
-  each with its quoted-key and flow-style variants, and an inline-comment variant only where every
-  pinned value ends its line. Inside a flow collection a trailing comment would comment out the commas
-  and braces after it (codex, r64). All 22 are actionlint-clean and a positive control for both
-  checks. The parity
+  spelling of each source. There are five BASES: as shipped, the whole file in flow style, no final
+  newline (codex, r64), the trunk inputs as a multi-line flow mapping, and an anchored pinned key
+  aliased by `cache-key` (codex, r65). Each base has quoted-key and flow-style variants, plus an
+  inline-comment variant only where every pinned value ends its line. Inside a flow collection a
+  trailing comment would comment out the commas and braces after it (codex, r64). A key is quoted by
+  its own text, keeping any anchor, and any variant that does not load equal to its base raises by
+  name (codex, r65). The decoy is placed only where the trunk inputs are a BLOCK mapping, decided by
+  that mapping's style, and it must be placed at least once on each entry. All 38 sources (19 per
+  entry) are actionlint-clean and a positive control for both checks. The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 
@@ -1250,8 +1275,8 @@ to close. §1 is the declared authority, so an implementer following this paragr
 blind oracle. Cell 4 instead carries **the 19 expected linter names as frozen literals plus a digest
 over the WHOLE `.trunk/trunk.yaml` with version specifiers normalised out** (the implementation freezes
 the whole configuration, not only its `lint:` block; codex, r64), and fails if a name is missing, an
-unlisted linter appears, either §6.4 literal's excluded set grows, or the block changes other than by a
-version pin. The 19 are CONFIGURED membership: since COREDEV-2850, five of them do not run in the
+unlisted linter appears, either §6.4 literal's excluded set grows, or the configuration changes other
+than by a version pin. The 19 are CONFIGURED membership: since COREDEV-2850, five of them do not run in the
 REQUIRED job (cell 4).
 
 ## §2 — COREDEV-2798: identity is CLASS-SPECIFIC
@@ -1420,6 +1445,10 @@ observed shape" while cell 8 required silent rows to produce *no output* — a c
 could satisfy by exiting quietly and recording nothing, passing every cell while violating the table.
 Recording belongs to **Table B**, the one-time §3a experiment, whose observations are written to the
 evidence artifact by a human-run measurement. The per-session detector has no sink and needs none.
+**One notice precedes the table, and it is not a row** (codex, r65): when `python3` is absent the
+detector can evaluate no row at all, so it says once that the drift check did NOT run (a
+`systemMessage` in session mode, stderr otherwise) and exits 0. That guard sits before the
+`origin/main` read, because "I cannot run" must not be reported as "there is nothing to compare".
 
 **Table B — what the §3a experiment establishes.** The experiment runs `claude plugin update` at
 **user scope** and re-reads the record; `u` and `p` are the user and project entries.
@@ -2047,7 +2076,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    `markdown-link-check`) **and a frozen digest over the WHOLE `.trunk/trunk.yaml` with VERSION
    SPECIFIERS NORMALISED OUT** (`_normalised_trunk_config`; revisions before 61 said "the `lint:`
    block", codex r64). Fails if any of the 19 is missing, if an unlisted linter appears, if either
-   §6.4 literal's excluded set grows, or if the block changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
+   §6.4 literal's excluded set grows, or if the configuration changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
    could not.
 
    **Since COREDEV-2850 (revision 38) the 19 are CONFIGURED membership, not the REQUIRED job's run set**

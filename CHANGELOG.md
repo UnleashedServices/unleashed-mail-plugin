@@ -28,6 +28,12 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   spelled canonically. The tags are checked
   over the raw text, and each pinned value at its YAML PATH, from its own source span. A line regex
   had accepted a forbidden `+15` behind a decoy line inside a block string (codex, plan r62).
+  The resolver table is now an allowlist of the four core scalars: it had filtered PyYAML's 1.1 table,
+  which kept 1.1's merge key `<<` and value `=` (plan r65). The standing raw-text tests' own source
+  generators failed on two permitted, actionlint-clean layouts: a flow mapping that ends a line before
+  its closing brace (4 errors), and an anchored key, whose anchor the quoting replaced (20 errors;
+  codex, plan r65). Both layouts are now bases of every raw test, and any generated variant that does
+  not load equal to its base raises by name.
 - **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
   sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
   before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,

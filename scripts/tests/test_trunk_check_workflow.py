@@ -304,7 +304,9 @@ class _ActionsYamlLoader(yaml.SafeLoader):  # type: ignore[misc]  # PyYAML is un
     STRING "yes"; codex, r59). It reads a leading-zero integer as OCTAL (`timeout-minutes: 017`
     loaded as 15 while 1.2 reads 17; codex, r60). It also takes `1_5` and sexagesimal `1:30` as
     integers, and dates as timestamps. Replacing only the booleans fixed one class and left the next,
-    so this implements the whole core schema: booleans, integers, floats and null."""
+    so this implements the whole core schema: booleans, integers, floats and null. The resolver table
+    is REBUILT from those four, not filtered: filtering left 1.1's merge key `<<` and value `=` (r65).
+    """
 
 
 _CORE_SCALARS = {
@@ -322,15 +324,10 @@ _CORE_SCALARS = {
     ),
     "tag:yaml.org,2002:null": (r"^(?:~|null|Null|NULL|)$", ["~", "n", "N", ""]),
 }
-_ActionsYamlLoader.yaml_implicit_resolvers = {
-    first: [
-        resolver
-        for resolver in resolvers
-        if resolver[0] not in _CORE_SCALARS
-        and resolver[0] != "tag:yaml.org,2002:timestamp"
-    ]
-    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
+# AN ALLOWLIST (r65): every implicit type the loader knows is named below. The table this replaced
+# started from PyYAML's 1.1 resolvers and removed the ones it named, so 1.1's merge (`<<`) and value
+# (`=`) types survived it, one resolver over from the booleans and integers it had already fixed.
+_ActionsYamlLoader.yaml_implicit_resolvers = {}
 for _tag, (_pattern, _first) in _CORE_SCALARS.items():
     _ActionsYamlLoader.add_implicit_resolver(_tag, re.compile(_pattern), _first)
 
@@ -374,18 +371,29 @@ def _pinned_pairs(root, path: tuple) -> list:
     if len(path) == 1:
         return [pair for job in jobs for pair in _mapping_pairs(job, path[0])]
     step_name, key = path
+    return [
+        pair
+        for _, with_node in _with_pairs(root, step_name)
+        for pair in _mapping_pairs(with_node, key)
+    ]
+
+
+def _with_pairs(root, step_name: str) -> list:
+    """Every (`with` key node, `with` value node) of every step named `step_name`, in every job."""
     found = []
-    for job in jobs:
-        for steps in _mapping_values(job, "steps"):
-            for step in steps.value if isinstance(steps, yaml.SequenceNode) else []:
-                names = _mapping_values(step, "name")
-                if (
-                    names
-                    and isinstance(names[0], yaml.ScalarNode)
-                    and names[0].value == step_name
-                ):
-                    for with_node in _mapping_values(step, "with"):
-                        found.extend(_mapping_pairs(with_node, key))
+    for jobs_node in _mapping_values(root, "jobs"):
+        for _, job in (
+            jobs_node.value if isinstance(jobs_node, yaml.MappingNode) else []
+        ):
+            for steps in _mapping_values(job, "steps"):
+                for step in steps.value if isinstance(steps, yaml.SequenceNode) else []:
+                    names = _mapping_values(step, "name")
+                    if (
+                        names
+                        and isinstance(names[0], yaml.ScalarNode)
+                        and names[0].value == step_name
+                    ):
+                        found.extend(_mapping_pairs(step, "with"))
     return found
 
 
@@ -432,8 +440,14 @@ def _source_variants(text: str) -> dict:
     ]
     quoted = text
     for key_node, _ in sorted(pairs, key=lambda p: -p[0].start_mark.index):
-        start, end = key_node.start_mark.index, key_node.end_mark.index
-        quoted = quoted[:start] + f'"{key_node.value}"' + quoted[end:]
+        # A node's span INCLUDES its properties: `&a save-annotations` lost its anchor when the whole
+        # span was replaced, leaving every `*a` undefined (codex, r65). Only a PLAIN key whose span ends
+        # in its own text is re-spelled, and only that text; a key already quoted, or written as a
+        # block scalar, is left as it is.
+        end = key_node.end_mark.index
+        start = end - len(key_node.value)
+        if key_node.style is None and quoted[start:end] == key_node.value:
+            quoted = quoted[:start] + f'"{key_node.value}"' + quoted[end:]
     variants = {
         "as given": text,
         "quoted keys": quoted,
@@ -450,13 +464,51 @@ def _source_variants(text: str) -> dict:
             at = value_node.end_mark.index
             commented = commented[:at] + "  # pinned" + commented[at:]
         variants["inline comments"] = commented
+    # A variant that is not the SAME workflow is a generator defect, reported here by name rather than
+    # as a parser error, or a pass, three tests later (codex, r65).
+    expected = _load_actions_yaml(text)
+    for label, variant in variants.items():
+        if _load_actions_yaml(variant) != expected:
+            raise AssertionError(f"source variant {label!r} is not the same workflow")
     return variants
+
+
+def _relaid_trunk_inputs(text: str) -> dict:
+    """Two more permitted layouts of the trunk step's inputs, both actionlint-clean (codex, r65):
+    a FLOW mapping whose last entry ends its line before the closing brace, so ending a line does not
+    make a mapping block; and an ANCHORED key whose alias is a permitted `cache-key`, so a key's node
+    span is not its spelling. Both are built at node positions, never by text search."""
+    root = yaml.compose(text, Loader=_ActionsYamlLoader)
+    ((with_key, with_node),) = _with_pairs(root, "trunk")
+    indent = " " * with_key.start_mark.column
+    entries = [
+        f"{key}: {json.dumps(value)}"
+        for key, value in _step(_load_actions_yaml(text), "trunk")["with"].items()
+    ]
+    flow = "with: {" + f",\n{indent}  ".join(entries) + f"\n{indent}}}"
+    end = with_node.value[-1][1].end_mark.index
+    ((key_node, value_node),) = _pinned_pairs(root, PINNED_PATHS["save-annotations"])
+    found = text.find("\n", value_node.end_mark.index)
+    line_end = len(text) if found == -1 else found
+    at = key_node.start_mark.index
+    return {
+        "trunk inputs in a multi-line flow mapping": (
+            text[: with_key.start_mark.index] + flow + text[end:]
+        ),
+        "anchored key, aliased by cache-key": (
+            text[:at]
+            + "&pinned "
+            + text[at:line_end]
+            + f"\n{' ' * key_node.start_mark.column}cache-key: *pinned"
+            + text[line_end:]
+        ),
+    }
 
 
 def _all_permitted_sources(text: str) -> dict:
     """Every variant of every BASE a shipped workflow may legitimately have: as it is, entirely in
-    flow style, and without a final newline. The standing tests must not fail on any of them
-    (codex, r64)."""
+    flow style, without a final newline (codex, r64), and with its trunk inputs re-laid out in the
+    two ways codex found at r65. The standing tests must not fail on any of them."""
     bases = {
         "shipped": text,
         "shipped in flow style": yaml.dump(
@@ -466,6 +518,7 @@ def _all_permitted_sources(text: str) -> dict:
             width=10**6,
         ),
         "no final newline": text.rstrip("\n"),
+        **_relaid_trunk_inputs(text),
     }
     return {
         f"{base_label} / {variant_label}": variant
@@ -4231,6 +4284,47 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         self.assertNotIn(CANARY_CONTEXT, _required_contexts(ruleset))
 
 
+class TheLoaderResolvesOnlyTheCoreScalars(unittest.TestCase):
+    """The resolver table is an ALLOWLIST of YAML 1.2's four core scalar tags (r65). Revision 57
+    removed the 1.1 resolvers it named, and that left two more 1.1-only types: `<<` (merge) and `=`
+    (value). `with: {<<: {cache: true}}` loaded as a merged input although GitHub rejects merge keys,
+    and a plain `=` raised although GitHub reads the string "=". The same class, one resolver over.
+    """
+
+    def test_the_table_holds_exactly_the_core_scalar_tags(self):
+        tags = {
+            tag
+            for resolvers in _ActionsYamlLoader.yaml_implicit_resolvers.values()
+            for tag, _ in resolvers
+        }
+        self.assertEqual(set(_CORE_SCALARS), tags)
+
+    def test_the_merge_and_value_indicators_are_plain_strings(self):
+        self.assertEqual({"<<": {"a": 1}}, _load_actions_yaml("<<: {a: 1}\n"))
+        self.assertEqual({"k": "="}, _load_actions_yaml("k: =\n"))
+
+    def test_a_merge_key_among_the_action_inputs_is_an_unlisted_input(self):
+        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            with self.subTest(entry=entry):
+                text = path.read_text(encoding="utf-8")
+                ((key_node, value_node),) = _pinned_pairs(
+                    yaml.compose(text, Loader=_ActionsYamlLoader),
+                    PINNED_PATHS["save-annotations"],
+                )
+                at = value_node.end_mark.index
+                mutated = (
+                    text[:at]
+                    + f"\n{' ' * key_node.start_mark.column}<<: {{cache: true}}"
+                    + text[at:]
+                )
+                self.assertIn(
+                    "action inputs: unlisted input `<<`",
+                    contract_problems(
+                        _load_actions_yaml(mutated), milestone="M3", entry=entry
+                    ),
+                )
+
+
 class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
     """GitHub parses workflows as YAML 1.2. Under PyYAML's 1.1 default, `save-annotations: yes` loaded
     as True and `timeout-minutes: 017` as octal 15, and the checker accepted them while the runner
@@ -4342,20 +4436,26 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
 
     def test_a_decoy_line_inside_a_block_string_cannot_launder_a_respelling(self):
         """codex, r62: a line search accepted `+15` when a decoy `timeout-minutes: 15` sat inside a
-        permitted `cache-key` block string. Block-style variants only: a block scalar cannot sit in a
-        flow mapping."""
+        permitted `cache-key` block string. Only where the trunk inputs are a BLOCK mapping: a block
+        scalar cannot sit in a flow mapping, and a flow mapping may end a line before its closing
+        brace, so whether the value ends its line does not decide it (codex, r65). On the anchored
+        base the decoy duplicates `cache-key`; that source already holds the forbidden `+15`, and the
+        assertion is only that the respelling is reported."""
         for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
+            placed = 0
             for spelling, original in _all_permitted_sources(
                 path.read_text(encoding="utf-8")
             ).items():
                 with self.subTest(entry=entry, source=spelling):
                     source = _respell(original, "timeout-minutes", "+15")
+                    root = yaml.compose(source, Loader=_ActionsYamlLoader)
                     ((key_node, value_node),) = _pinned_pairs(
-                        yaml.compose(source, Loader=_ActionsYamlLoader),
-                        PINNED_PATHS["save-annotations"],
+                        root, PINNED_PATHS["save-annotations"]
                     )
-                    if not _ends_its_line(source, value_node):
-                        continue  # a block scalar cannot be placed inside a flow mapping
+                    ((_, with_node),) = _with_pairs(root, "trunk")
+                    if with_node.flow_style:
+                        continue
+                    placed += 1
                     found = source.find("\n", value_node.end_mark.index)
                     line_end = len(source) if found == -1 else found
                     indent = " " * key_node.start_mark.column
@@ -4368,6 +4468,8 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
                         "timeout-minutes: spelled `+15`, not the canonical `15`",
                         raw_workflow_problems(decoy, entry=entry),
                     )
+            # A skip that took every source would leave this test unable to fail.
+            self.assertGreater(placed, 0, f"{entry}: the decoy was placed in no source")
 
 
 class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
