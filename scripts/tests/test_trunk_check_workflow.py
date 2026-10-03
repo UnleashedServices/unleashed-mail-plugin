@@ -91,6 +91,7 @@ FIXTURE_EXECUTED_CASES = {
 # Raw-TEXT mutants (codex, r59): a YAML 1.1 boolean synonym is a property of the BYTES, so a mutation of an
 # already-parsed dictionary cannot express it. Executed per entry by `RawYamlSynonymsAreNotThePinnedBooleans`.
 RAW_YAML_CASES = {
+    "C3.runner-and-timeout-pinned/yaml-11-octal-017",
     "C4.save-annotations-required/yaml-11-synonym-yes",
     "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
     "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
@@ -292,22 +293,53 @@ def _resolved_or_recorded(test, shipped_branches: set, recorded_key: str) -> set
 
 
 class _ActionsYamlLoader(yaml.SafeLoader):  # type: ignore[misc]  # PyYAML is untyped
-    """Parse a WORKFLOW the way GitHub Actions does, as YAML 1.2, whose core schema has only `true` and
-    `false` as booleans. PyYAML's YAML 1.1 default also reads `yes`/`no`/`on`/`off` as booleans, so
-    `save-annotations: yes` loaded as True and passed this checker while the runner received the STRING
-    "yes" (codex, r59). A checker that parses differently from the system it guards certifies inputs
-    that system never sees."""
+    """Parse a WORKFLOW the way GitHub Actions does: YAML 1.2's CORE schema, for every scalar kind.
+
+    PyYAML's default is YAML 1.1, and the two disagree on values this contract pins. 1.1 reads
+    `yes`/`no`/`on`/`off` as booleans (`save-annotations: yes` passed while the runner got the
+    STRING "yes"; codex, r59). It reads a leading-zero integer as OCTAL (`timeout-minutes: 017`
+    loaded as 15 while 1.2 reads 17; codex, r60). It also takes `1_5` and sexagesimal `1:30` as
+    integers, and dates as timestamps. Replacing only the booleans fixed one class and left the next,
+    so this implements the whole core schema: booleans, integers, floats and null."""
 
 
+_CORE_SCALARS = {
+    "tag:yaml.org,2002:bool": (r"^(?:true|True|TRUE|false|False|FALSE)$", list("tTfF")),
+    "tag:yaml.org,2002:int": (
+        r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$",
+        list("-+0123456789"),
+    ),
+    "tag:yaml.org,2002:float": (
+        (
+            r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?"
+            r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+        ),
+        list("-+.0123456789"),
+    ),
+    "tag:yaml.org,2002:null": (r"^(?:~|null|Null|NULL|)$", ["~", "n", "N", ""]),
+}
 _ActionsYamlLoader.yaml_implicit_resolvers = {
-    first: [r for r in resolvers if r[0] != "tag:yaml.org,2002:bool"]
+    first: [
+        resolver
+        for resolver in resolvers
+        if resolver[0] not in _CORE_SCALARS
+        and resolver[0] != "tag:yaml.org,2002:timestamp"
+    ]
     for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
-_ActionsYamlLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool",
-    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
-    list("tTfF"),
-)
+for _tag, (_pattern, _first) in _CORE_SCALARS.items():
+    _ActionsYamlLoader.add_implicit_resolver(_tag, re.compile(_pattern), _first)
+
+
+def _construct_core_int(loader, node) -> int:
+    """YAML 1.2 core: decimal unless prefixed `0o` or `0x`. A leading zero is NOT octal."""
+    text = loader.construct_scalar(node)
+    if text.startswith(("0o", "0x")):
+        return int(text, 0)
+    return int(text, 10)
+
+
+_ActionsYamlLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
 
 
 def _load_actions_yaml(text: str):
@@ -4005,6 +4037,13 @@ class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
 
     CASES = (
         (
+            "C3.runner-and-timeout-pinned/yaml-11-octal-017",
+            "timeout-minutes",
+            "15",
+            "017",
+            "job: expected `timeout-minutes: 15`, found 17",
+        ),
+        (
             "C4.save-annotations-required/yaml-11-synonym-yes",
             "save-annotations",
             "true",
@@ -4033,8 +4072,8 @@ class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
             for case_id, key, pinned, synonym, diagnostic in self.CASES:
                 with self.subTest(case=case_id, entry=entry):
                     mutated, count = re.subn(
-                        rf"^(\s*{re.escape(key)}:\s*){pinned}\s*$",
-                        rf"\g<1>{synonym}",
+                        rf"^(\s*{re.escape(key)}:\s*){pinned}(\s*(?:#.*)?)$",
+                        rf"\g<1>{synonym}\g<2>",
                         text,
                         flags=re.MULTILINE,
                     )

@@ -655,6 +655,13 @@ obligations:
         payload: "15.0"
         validity: the right number with the wrong TYPE, which `==` accepts (codex, r57)
         diagnostic: "job: expected `timeout-minutes: 15`, found 15.0"
+      - id: C3.runner-and-timeout-pinned/yaml-11-octal-017
+        op: edit_bytes
+        side: local
+        target: $.jobs.<job>.timeout-minutes
+        payload: "017"
+        validity: a RAW-TEXT leading-zero integer, which YAML 1.1 reads as octal 15 and GitHub's YAML 1.2 reads as decimal 17 (codex, r60)
+        diagnostic: "job: expected `timeout-minutes: 15`, found 17"
 
   - id: C3.single-job
     clause: C3

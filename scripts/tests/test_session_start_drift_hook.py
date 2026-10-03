@@ -400,7 +400,8 @@ class TheOutputProtocolAndDedup(_DetectorFixture):
 
     def test_filename_hostile_session_ids_still_warn(self):
         """`session_id` is documented as OPAQUE with no filename-safety contract. Raw, these make
-        marker creation fail — and a detector that fails open warns on every single session start.
+        marker creation fail, and this detector's OSError branch then exits SILENTLY: the warning is
+        LOST on every session start (codex, plan r60, corrected "fails open, warns every start").
         """
         for session_id in ("a/b/c", "../../escape", "x" * 400, ""):
             with self.subTest(session_id=session_id[:16]):

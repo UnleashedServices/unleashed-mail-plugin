@@ -378,10 +378,12 @@ survivors:
       - C4.save-annotations-required/yaml-11-synonym-yes
       - C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes
       - C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no
+      - C3.runner-and-timeout-pinned/yaml-11-octal-017
     found_in_round: r59
     survived_formulation: >-
       Workflows were parsed with PyYAML's YAML 1.1 default, which reads unquoted `yes`/`no` as
-      booleans, while GitHub parses YAML 1.2, where they are strings.
+      booleans while GitHub parses YAML 1.2, where they are strings. Revision 56 fixed only the
+      booleans, and `timeout-minutes: 017` (1.1 octal 15, 1.2 decimal 17) survived it (codex, r60).
     mutant: "`save-annotations: yes`, `lfs: yes`, or `persist-credentials: no`, as raw text"
     would_have_shipped: >-
       A checker that certified inputs the runner never receives. `save-annotations: yes` reaches the

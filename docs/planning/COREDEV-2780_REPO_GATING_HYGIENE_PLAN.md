@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 56
+**Status:** Planning, revision 57
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
@@ -40,7 +40,7 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
 
-**Fixed in revisions 43-56, not outstanding** (r44 to r59): nine checker SURVIVORS, each reproduced first:
+**Fixed in revisions 43-57, not outstanding** (r44 to r60): ten checker SURVIVORS, each reproduced first:
 C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
 keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
 checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
@@ -51,10 +51,12 @@ the job ID was checked, never the job `name` that decides the emitted context, s
 never checked, so depth 1, depth 2 or omission passed on both entries (revision 53); and both integer
 operands were compared by VALUE only, so `fetch-depth: false` and `timeout-minutes: 15.0` passed
 (`False == 0` and `15.0 == 15` in Python; revision 54); and workflows were parsed as YAML 1.1, so
-`save-annotations: yes` passed while GitHub's YAML 1.2 parse delivers the string "yes" (revision 56). Also fixed in
+`save-annotations: yes` passed while GitHub's YAML 1.2 parse delivers the string "yes" (revision 56); and
+revision 56 fixed only the booleans, so `timeout-minutes: 017` passed as octal 15 where GitHub reads 17
+(revision 57, the whole core schema). Also fixed in
 revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
 one bucket (COREDEV-2868). Cell 11's per-step minimum is
-now declared in the registry and executed: 57 cases added in revisions 43-56, three of them RAW-TEXT (the runner and timeout
+now declared in the registry and executed: 58 cases added in revisions 43-57, four of them RAW-TEXT (the runner and timeout
 operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
 survivors). Every one of the 216 (case, entry) pairs is actionlint-clean
 apart from the permitted `if-cond` notes. The survivor corpus records all nine forms, as §1 requires; it
@@ -432,6 +434,17 @@ assignment; until revision 44 all three appended `echo X`.
 > survivor. It states the timing assumption over the WHOLE history (the sampled bucket index never
 > decreases), and fixes four residues: cell 8's "fails open", two obsolete detector comments, and the
 > cell 7 and cell 13 locators.
+> **r60** `9529d70` (revision 56), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1 P2, 1 P3). codex
+> confirmed the boolean repair, the §3b timing argument, and the residue fixes. P2: **a TENTH checker
+> survivor, reproduced here on both entries.** Revision 56 replaced only PyYAML's BOOLEAN resolver, so
+> `timeout-minutes: 017` still loaded as YAML 1.1 octal 15, while GitHub's 1.2 reads decimal 17.
+> *Fixing one scalar kind left the next, the same class one resolver over.* P3: the raw-text regex
+> required the value to end its line, so a valid inline comment made it match nothing, and the
+> subtests failed falsely. **Revision 57** implements the WHOLE YAML 1.2 core scalar schema (booleans,
+> integers with only `0o`/`0x` prefixes, floats, null; no 1.1 timestamps, underscores or sexagesimals)
+> and adds a raw `017` case on both entries, which failed under the boolean-only loader. Of the forms
+> tried, only `017` is both a valid workflow and divergent: actionlint rejects `0o17`, `0xF` and `0:15`.
+> The mutation now keeps inline comments, and three stale residues are fixed.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -1024,12 +1037,16 @@ own non-required context.
   `before` = HEAD~N. At depth 2 that object is absent, and the guard reads an EMPTY diff, so Trunk never
   runs.
 
-  **The contract is over GITHUB'S parse, YAML 1.2** (codex, r59). Its core schema has only `true` and
-  `false` as booleans, and `yes`/`no`/`on`/`off` are STRINGS. The checker parsed with PyYAML's YAML 1.1
-  default, which reads `yes` as True, so `save-annotations: yes`, `lfs: yes` and
-  `persist-credentials: no` all passed while the runner received strings. Workflows are now parsed
-  with a YAML 1.2 boolean schema, and the synonyms are mutated as RAW TEXT on both entries, because the
-  defect is in the parse and a mutation of an already-parsed dictionary happens after it. The parity
+  **The contract is over GITHUB'S parse, YAML 1.2** (codex, r59 and r60). Its core schema has only
+  `true` and `false` as booleans; `yes`/`no`/`on`/`off` are STRINGS; an integer is decimal unless
+  prefixed `0o` or `0x`; and `1_5`, `1:30` and dates are strings. The checker parsed with PyYAML's YAML
+  1.1 default, which reads `yes` as True, so `save-annotations: yes`, `lfs: yes` and
+  `persist-credentials: no` passed. It also reads a leading zero as OCTAL, so `timeout-minutes: 017`
+  passed as 15 where GitHub reads 17. Revision 56 replaced only the boolean resolver, and the integer
+  case survived it. Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema (booleans,
+  integers, floats, null). The synonym and octal cases are mutated as RAW TEXT on both entries, because
+  the defect is in the parse and a mutation of an already-parsed dictionary happens after it. The
+  mutation keeps any inline comment, which the contract permits. The parity
   harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
   accepts, so its coercion stays unexercised.
 
@@ -2053,7 +2070,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    `test_transcript_path_inventory.py` (`:458` today, `:326` at baseline) fails **first** — codex reproduced both diagnostics
    (`README.md:591: output literal survives outside the quote-keep set` **and** `README.md:187:
    legacy source payload survives`). A test that reds for a different reason than the one under test
-   proves reachability, not discrimination: deleting the source-absence assertion at `:362` would
+   proves reachability, not discrimination: deleting the source-absence assertion (`_legacy_source_survives`, `:486` today, `:362` at baseline) would
    still leave the case red, and the control would still "pass".
 
    **The control as it must be written:** assert the **specific diagnostic** `legacy source payload

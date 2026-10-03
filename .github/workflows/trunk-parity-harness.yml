@@ -52,8 +52,8 @@ jobs:
 
       # DECLARED, NOT INHERITED. The step below parses YAML, and PyYAML is not in the stdlib. It
       # happens to be present on the current ubuntu image, which is why this has never failed — but
-      # this harness has never actually run (no `parity-*.json` exists yet), so "it works" is
-      # untested rather than established, and a runner image change would take M2c's evidence with
+      # when this was written the harness had never run (the `parity-*.json` records now exist), so
+      # "it works" was untested rather than established, and a runner image change would take M2c's evidence with
       # it. Two lines, copied verbatim from plugin-ci.yml, remove the question.
       #
       # NOT `actions/setup-python`: that prepends a CLEAN toolcache interpreter with no PyYAML and
