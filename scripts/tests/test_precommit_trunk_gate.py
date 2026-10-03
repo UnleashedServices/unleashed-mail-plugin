@@ -350,8 +350,15 @@ class Cell13_TheLocalTrunkGate(unittest.TestCase):
         self.assertIn("--no-fix", argv)
 
     def test_it_passes_the_declared_exclusion_literal(self):
-        """§6.4's literal is required on BOTH surfaces. A literal required in two places and checked
-        in one is a declaration, not a control."""
+        """The HOOK's literal: `--filter=-markdown-link-check`, which KEEPS the formatters.
+
+        COREDEV-2850 made the two surfaces differ BY DESIGN. The required CI job also filters the five
+        whole-file formatters, because trunk reports pre-existing formatting debt as NEW on any touched
+        file; the pre-commit hook does not, because it runs over the author's own staged diff, where
+        formatting the files you touched is exactly what is wanted. This asserts the hook's half; the
+        required job's half, and the requirement that the two stay DIFFERENT, are cell 4's.
+        A literal required in two places and checked in one is a declaration, not a control.
+        """
         _, argv = self._run()
         self.assertIn("--filter=-markdown-link-check", argv)
 

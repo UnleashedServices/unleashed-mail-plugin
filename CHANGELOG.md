@@ -13,6 +13,178 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.27] — 2026-10-02
+
+### Fixed
+
+- **COREDEV-2780 cell 11: the mutant validity rule is a standing test (COREDEV-2869).** Each contract
+  mutant must be a workflow GitHub would accept, so that it fails its own diagnostic and not schema
+  validation. The rule ran only as one-off sweeps, because `validate` installed actionlint after the
+  scripts suite. `validate` now installs it first (in `RUNNER_TEMP`), and actionlint runs over all
+  220 (case, entry) pairs. The `if-cond` note on the six `if: false` cases is allowed per case
+  (`actionlint_allow`), and an allowance that stops firing fails as stale. The test refuses to skip
+  in `validate`.
+- **COREDEV-2780 cell 15: target-set resolution is ONCE, before entry selection (COREDEV-2869).** The
+  registry declared it, but the required and canary comparisons each resolved on their own. Two
+  resolution calls leave two places for a per-entry resolver to hide. A single boundary now resolves
+  once and checks every entry's recorded branches. One entry-parameterised comparator receives the
+  result. A sentinel test substitutes one value at that boundary and requires both entries' verdicts
+  and diagnostics to follow it. It fails on a comparator that ignores the result and on one that
+  resolves per entry.
+- **COREDEV-2850 plan §6 step 3: the probe-PR cells are observed and JUDGED.**
+  Probe PR #103 was never merged. It ran the bundle's six-entry required literal and observed the cells
+  that no unit test can show:
+  - A finding-neutral edit to the recorded-unformatted `scripts/validate-hooks.py` went GREEN
+    (cell 1), and so did a format-only defect (arm E).
+  - A new shellcheck finding went RED (cell 2).
+  - A new bandit `B602` finding went RED with no lint finding (cell 3).
+
+  `COREDEV-2850-probe-observations.json` records the runs from their own job logs.
+  `test_coredev_2850_probe_evidence.py` refuses the record if any of these stop holding:
+  - its action inputs still hash to the contract's digest, under the pinned action;
+  - each run's conclusion matches its cell;
+  - each red is bound to findings of a single category;
+  - cell 1 used the recorded reproduction;
+  - the canary cells are marked DEFERRED.
+
+  After review (codex, PR #104), the judge also requires three things:
+  - cell 2b's format-only stimulus, bound to the hook's formatter finding on that file;
+  - at least one finding in the hook block;
+  - every red finding on its planted fixture, including that fixture's own diagnostic (`SC2086`,
+    `B602`).
+
+- **COREDEV-2780: the contract checker parsed workflows as YAML 1.1; GitHub parses YAML 1.2.**
+  PyYAML's default reads unquoted `yes`/`no` as booleans, so `save-annotations: yes`, `lfs: yes` and
+  `persist-credentials: no` passed the checker while the runner received the STRINGS (codex, plan r59).
+  Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema. Replacing only the booleans
+  left `timeout-minutes: 017` passing as YAML 1.1 octal 15 where GitHub reads 17 (codex, plan r60).
+  The synonyms and the octal form are mutated as raw text on both entries, and every case failed
+  under the loader it replaces. An explicit tag (`!!bool yes`, `!!int 1_5`) bypassed implicit resolution
+  altogether (codex, plan r61). Workflows may now carry no explicit tags, and the pinned scalars must be
+  spelled canonically. The tags are checked
+  over the raw text, and each pinned value at its YAML PATH, from its own source span. A line regex
+  had accepted a forbidden `+15` behind a decoy line inside a block string (codex, plan r62).
+  The resolver table is now an allowlist of the four core scalars: it had filtered PyYAML's 1.1 table,
+  which kept 1.1's merge key `<<` and value `=` (plan r65). The standing raw-text tests' own source
+  generators failed on two permitted, actionlint-clean layouts: a flow mapping that ends a line before
+  its closing brace (4 errors), and an anchored key, whose anchor the quoting replaced (20 errors;
+  codex, plan r65). Both layouts are now bases of every raw test, and any generated variant that does
+  not load equal to its base raises by name. Fed back in as the shipped source, three of those bases
+  were parser errors (codex, plan r66; COREDEV-2871). The builder now declares its domain (no anchor or
+  alias, the trunk inputs one block mapping of scalars, no `cache-key` yet) and refuses anything outside
+  it by name. Its splice ends at the last input's line, not its end mark, which for a block scalar is the
+  next line's start. The merge-key test is written in the mapping's own syntax and runs on all 38
+  sources, and a variant that fails to parse is named. Each test failed with its fix undone.
+- **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
+  sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
+  before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,
+  re-create it, and warn again. codex reproduced three warnings against the detector's own body (plan
+  r56). The sweep now keeps the previous bucket, so that `O_EXCL` fails, and a combined
+  concurrent-boundary test failed against the old sweep.
+- **COREDEV-2850: the parity harness fixture failed CI's repo-wide actionlint.** Its `printf` writes a
+  literal, unexpanded `$name`, because that unbraced reference IS the fixture's finding. ShellCheck reports
+  that as info-level SC2016, and CI's actionlint fails on any ShellCheck finding. A scoped
+  `# shellcheck disable=SC2016` states the intent. The job's frozen digest in `test_python39_floor.py`
+  is updated. Behaviour, and therefore the recorded parity evidence, is unchanged.
+- **COREDEV-2860: the config-freeze mutant battery had a macOS-only oracle.** One mutant
+  (`resolve-one-side`) was measured on macOS, where `$TMPDIR` sits under the symlink
+  `/var -> /private/var`. On Linux there is no such link, so resolving one side IS resolving both, and the
+  mutant failed a different set of rows. CI's `validate` job went red (run 37070992110) while
+  `darwin-suite` stayed green. The fixture is now built under an explicit symlinked ancestor on every
+  platform, and a new control fails if that link is ever lost. Reproduced on macOS with a symlink-free
+  `TMPDIR` before fixing.
+- **COREDEV-2780: three gaps in the shipped `trunk-check` contract checker (codex, plan r44).**
+  Each was reproduced before it was fixed. **C2** accepted any `types:` containing `edited`, so
+  `types: [edited]`, which drops `synchronize` so the gate never re-runs on a new commit, passed. It now
+  requires exactly `opened, synchronize, reopened, edited`. **C8** blacklisted six step keys instead of
+  freezing the complete step mapping, so a sibling key such as `timeout-minutes` passed. It is now a
+  per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
+  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **`fetch-depth`'s
+  value** (codex, plan r56) was never checked, so depth 1, depth 2 or omission passed. It is now exactly
+  2 on the required job and 0 on the canary, which needs full history for a multi-commit push. Both
+  integer operands are now checked by TYPE as well as value (codex, plan r57), because
+  `fetch-depth: false` and `timeout-minutes: 15.0` had passed (`False == 0`, `15.0 == 15`). **A duplicate
+  step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
+  the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
+  `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
+  have emitted a REQUIRED context. Each entry's effective context is now pinned, and a
+  PRESENT name decides it whatever its value, by key membership (`name: false` had fallen back to the
+  job ID, codex plan r63, and then `name: null` had too, codex plan r64). **A sibling job**
+  (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
+  first job. Each workflow must now declare exactly one. Cell 11's
+  per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
+  and `continue-on-error` on every step) is now declared in the registry and executed: 54 new cases,
+  all valid workflows (216 case x entry pairs, each checked with actionlint). A standing test now runs every registry case on every entry its obligation
+  declares, so an `entries:` claim cannot outrun what is tested. That test found the canary's own
+  event and guard-body obligations missing from the registry (codex, plan r52), and they are now added. The C6/C6a launcher and resolver
+  guard fixtures now also run against the CANARY's own guard bodies (codex, plan r53). Its resolver
+  guard is different bytes, and had never been executed.
+- **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
+  Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry
+  prescribed three that GitHub would reject outright: a root-level `schedule` (not a root key),
+  `branches-ignore` beside `branches`, and removing the only trigger, which leaves `on: {}`. The
+  hand-written suite had drifted from the registry on two more: an empty `on.schedule`, and `needs:`
+  naming a job that did not exist. All five are corrected in `COREDEV-2780-contract.yaml` and
+  `test_trunk_check_workflow.py`, verified by an actionlint 1.7.12 sweep over all 69 mutants.
+  Generating mutants from the registry and executing that check in CI is COREDEV-2869.
+- **`trunk-check` over-reach (COREDEV-2850): the required gate failed clean edits to files that were
+  already unformatted.** Trunk evaluates its five `formatter: true` linters (black, isort, prettier,
+  shfmt, taplo) whole-file and reports pre-existing formatting debt as NEW on any touched file, so an
+  edit to one of the ~73% of tracked files with such debt went red for debt the author did not
+  introduce. The required job now passes
+  `--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo`; the push canary keeps the
+  formatters, so their findings are still observed. Measured: a genuine new lint defect is still
+  caught under the new filter.
+- **Cell 4 is genuinely strict.** It replaced a substring test — which a seven-name literal, a security
+  exclusion and an issue-code suppression all passed — with a frozen exclusion SET, an exact
+  required-versus-canary difference in both directions, and rejection of issue codes and security
+  linters, each mutant asserted to fail with its own diagnostic.
+- **The parity harness's fixture was replaced by measurement, not by the plan's guess.** The old
+  fixture's only finding was shfmt's, which the new filter silences. `codespell` — the first
+  suggestion — is reported but not autofixed by trunk; an unbraced variable reference
+  (`shellcheck/SC2250`) is both, and leaves the file clean.
+
+### Security
+
+- **`[extend] useDefault` must be exactly `true`, whatever custom rules exist (codex, PR #104 P1).**
+  The content check refused `useDefault = false` only when the file defined NO rules. Gitleaks
+  replaces its built-in rules with a custom file's unless `useDefault = true`. So one narrow dummy
+  `[[rules]]` entry beside `useDefault = false`, or no `[extend]` table at all, switched off every
+  default secret detector, and both `trunk-check` and `secret-scan` stayed green. The string
+  `"true"` is refused as well. Each spelling failed the test before the fix.
+- **The gitleaks content check reads keys the way gitleaks does: case-insensitively (audit, PR #104).**
+  Each of these spellings stopped the pinned gitleaks 8.30.1 detecting a planted key, and the
+  case-sensitive check accepted all of them:
+  - `disabledrules`;
+  - `UseDefault = false` beside `useDefault = true`;
+  - `Regexes` or `Paths` blanket allowlists;
+  - a custom `[[rules]]` entry reusing a built-in id with a never-matching regex.
+
+  Keys are now lowercased before checking, two keys of one table that differ only by case are
+  refused, and any custom rule outside `ALLOWED_CUSTOM_RULE_IDS` (empty) is refused. A custom rule
+  REPLACES a built-in rule with the same id. Each spelling failed the test before the fix, and every
+  config that gitleaks stops detecting under is now refused.
+
+- **Security-linter configs outside the frozen tree (COREDEV-2860).** gitleaks reads `.gitleaks.toml`
+  and zizmor reads `.github/zizmor.yml`, neither of which was frozen, so a blanket allowlist appended to
+  `.gitleaks.toml` disarmed both `trunk-check` and the separate `secret-scan` required context with the
+  test suite green. The freeze now covers the union of every config `.trunk/trunk.yaml` references and
+  every `direct_configs` candidate of every enabled security linter — ten paths, including
+  `.gitleaksignore`, a suppression lever nothing else caught.
+- **References are adjudicated, never resolved.** `..` is refused rather than collapsed, containment is
+  component-wise, and a symlink at ANY path component is refused; every config is recorded as
+  canonical JSON so neither its kind nor a record boundary can be forged, and anything but a regular
+  file or directory is refused before it is read.
+- **Content checks close the hole against intent, not only accident.** A digest only makes a weakening
+  visible — it can be re-pinned in the same commit. A blanket gitleaks allowlist (global, legacy or
+  per-rule; `.*`, `.+`, `\S` and the like, judged behaviourally), `useDefault = false`, `disabledRules`,
+  a disabled zizmor audit, or an ignore covering every workflow is now refused outright.
+- **A mutant battery runs against the real code**: 29 single-decision operators over 30 rows, each
+  failing exactly its recorded rows, proven to discriminate by weakening the production allowlist.
+  A row-21 child that CRASHES now raises with its stderr (gemini, PR #104). It used to be counted as
+  row 21 failing, which is what any operator recording row 21 expects. None of the 30 children exits
+  non-zero today, so this changes no result.
+
 ## [2.8.26] — 2026-09-07
 
 ### Fixed

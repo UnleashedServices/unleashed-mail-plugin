@@ -368,8 +368,10 @@ _WORKFLOW_DIR = REPO / ".github/workflows"
 # BOTH EXTENSIONS. GitHub accepts `.yml` and `.yaml`; globbing only `*.yml` left a `.yaml` workflow
 # invisible, and the ">= 4 files" control still passed (PR #85 round 5).
 _JOB_DIGESTS = {
+    # COREDEV-2869: actionlint is installed BEFORE the scripts suite (in RUNNER_TEMP), so cell 11's
+    # validity rule runs inside the suite instead of being a one-off sweep.
     ("plugin-ci.yml", "validate"): (
-        "873948c744de057ac974f4c6b5813b92c23a01e2f4c58545af4daa67ec9da8e3"
+        "f22bb9d30f57f5c33bea39747fffc26dfa2350441117e0eea3ab4a6dae43d37a"
     ),
     ("plugin-ci.yml", "py39-smoke"): (
         "e87d60109f929643f84ee362d581e4306ab54bf98cf8c3e269e814163b3f7de7"
@@ -396,10 +398,10 @@ _JOB_DIGESTS = {
     # digest moved. The freeze caught the change, which is the point — re-declaring it is the
     # deliberate act.
     ("trunk-check.yml", "trunk-check"): (
-        "791ad3a0dd38cec342756a85e4c2e1bd85cbeeed7a989a50a743f395587cfcbc"
+        "ba363bdaf13c60d1a19c8b5cee9926f73420a495193c764c57b5ec58ec1b9194"
     ),
     ("trunk-parity-harness.yml", "parity"): (
-        "b935e43dc6789b70e9dc4ee1d9fecec0312dfd879df3aaf96086d0dfd80ad799"
+        "147aa579e9517a3bb6996118c76f4af35b313a6f2437b6c13c326523476bbd8a"
     ),
 }
 
