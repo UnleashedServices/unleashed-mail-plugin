@@ -4106,6 +4106,99 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             with self.subTest(case=case_id):
                 self.assertIn(case_id, declared)
 
+    def test_validate_installs_actionlint_before_the_scripts_suite(self):
+        """COREDEV-2869. Cell 11's validity rule runs inside the scripts suite, so `validate` must have
+        actionlint on PATH by then. It installed it AFTER the suite, which is why the rule was a
+        one-off sweep rather than a test."""
+        steps = [
+            step.get("name", "")
+            for step in yaml.safe_load(
+                (REPO / ".github/workflows/plugin-ci.yml").read_text(encoding="utf-8")
+            )["jobs"]["validate"]["steps"]
+        ]
+        install = next(
+            i for i, name in enumerate(steps) if name.startswith("Install actionlint")
+        )
+        suite = next(
+            i
+            for i, name in enumerate(steps)
+            if name.startswith("Run the scripts test suite")
+        )
+        self.assertLess(install, suite)
+
+    def test_every_mutant_is_a_workflow_github_would_accept(self):
+        """Cell 11's validity rule, EXECUTED (COREDEV-2869; codex, r42). Each mutant must fail its own
+        contract diagnostic, not schema validation, so actionlint must accept it:
+        `actionlint -shellcheck= -pyflakes=` reports nothing for any (case, entry) pair except the
+        kinds that case's `actionlint_allow` declares. An allowance that no longer fires is stale and
+        fails too, so the allowlist cannot become a blanket exemption."""
+        actionlint = shutil.which("actionlint")
+        if actionlint is None:
+            if os.environ.get("GITHUB_JOB") == "validate":
+                self.fail(
+                    "actionlint is not on PATH in `validate`, where cell 11's validity rule must "
+                    "run: install it BEFORE the scripts suite"
+                )
+            self.skipTest(
+                "actionlint is not installed here; `validate` runs this and cannot skip"
+            )
+        recipes = {case[0]: case for case in self._yaml_mutants()} | {
+            case[0]: case for case in self._canary_mutants()
+        }
+        bases = {
+            "required": _load_workflow(),
+            "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
+        }
+        allowed: dict[str, set[str]] = {}
+        names: dict[str, tuple[str, str]] = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            workflows = Path(tmp) / ".github" / "workflows"
+            workflows.mkdir(parents=True)
+            for obligation in self.registry["obligations"]:
+                for case in obligation.get("cases", []):
+                    recipe = recipes.get(case["id"])
+                    if recipe is None:
+                        continue
+                    allowed[case["id"]] = set(case.get("actionlint_allow", []))
+                    for entry in obligation.get("entries", []):
+                        mutant = copy.deepcopy(bases[entry])
+                        recipe[1](mutant)
+                        name = f"m{len(names):03d}.yml"
+                        names[name] = (case["id"], entry)
+                        (workflows / name).write_text(
+                            yaml.safe_dump(mutant, sort_keys=False), encoding="utf-8"
+                        )
+            completed = subprocess.run(
+                [actionlint, "-shellcheck=", "-pyflakes=", "-format", "{{json .}}"],
+                cwd=tmp,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertIn(completed.returncode, (0, 1), completed.stderr)
+        findings = json.loads(completed.stdout.strip() or "null") or []
+        self.assertGreater(
+            len(names), 200, "the mutant set is smaller than the registry declares"
+        )
+        problems: list[str] = []
+        used: set[tuple[str, str]] = set()
+        for finding in findings:
+            case_id, entry = names[Path(finding["filepath"]).name]
+            if finding["kind"] in allowed[case_id]:
+                used.add((case_id, finding["kind"]))
+            else:
+                problems.append(
+                    f"{case_id} on {entry}: actionlint [{finding['kind']}] {finding['message']}"
+                )
+        self.assertEqual([], problems)
+        stale = {
+            (case_id, kind) for case_id, kinds in allowed.items() for kind in kinds
+        } - used
+        self.assertEqual(
+            set(), stale, "an actionlint allowance no longer fires — remove it"
+        )
+
     def test_every_case_holds_on_every_entry_its_obligation_declares(self):
         """A registry `entries:` list is a CLAIM that each case applies to each entry (codex, r49 and r52).
         Run every case on every entry its obligation names. It must change that entry's workflow and

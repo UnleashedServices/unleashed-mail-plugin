@@ -17,6 +17,13 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **COREDEV-2780 cell 11: the mutant validity rule is a standing test (COREDEV-2869).** Each contract
+  mutant must be a workflow GitHub would accept, so that it fails its own diagnostic and not schema
+  validation. The rule ran only as one-off sweeps, because `validate` installed actionlint after the
+  scripts suite. `validate` now installs it first (in `RUNNER_TEMP`), and actionlint runs over all
+  220 (case, entry) pairs. The `if-cond` note on the six `if: false` cases is allowed per case
+  (`actionlint_allow`), and an allowance that stops firing fails as stale. The test refuses to skip
+  in `validate`.
 - **COREDEV-2780 cell 15: target-set resolution is ONCE, before entry selection (COREDEV-2869).** The
   registry declared it, but the required and canary comparisons each resolved on their own. Two
   resolution calls leave two places for a per-entry resolver to hide. A single boundary now resolves

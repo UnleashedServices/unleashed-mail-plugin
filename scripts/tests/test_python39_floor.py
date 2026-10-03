@@ -368,8 +368,10 @@ _WORKFLOW_DIR = REPO / ".github/workflows"
 # BOTH EXTENSIONS. GitHub accepts `.yml` and `.yaml`; globbing only `*.yml` left a `.yaml` workflow
 # invisible, and the ">= 4 files" control still passed (PR #85 round 5).
 _JOB_DIGESTS = {
+    # COREDEV-2869: actionlint is installed BEFORE the scripts suite (in RUNNER_TEMP), so cell 11's
+    # validity rule runs inside the suite instead of being a one-off sweep.
     ("plugin-ci.yml", "validate"): (
-        "873948c744de057ac974f4c6b5813b92c23a01e2f4c58545af4daa67ec9da8e3"
+        "f22bb9d30f57f5c33bea39747fffc26dfa2350441117e0eea3ab4a6dae43d37a"
     ),
     ("plugin-ci.yml", "py39-smoke"): (
         "e87d60109f929643f84ee362d581e4306ab54bf98cf8c3e269e814163b3f7de7"

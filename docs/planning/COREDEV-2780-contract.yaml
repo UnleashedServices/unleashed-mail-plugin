@@ -509,6 +509,8 @@ obligations:
         target: $.jobs.<job>.if
         payload: github.event_name != 'workflow_dispatch'
         validity: valid syntax, and strictly worse than the hazard it was written to fix
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
         diagnostic: "job: `if:` is prohibited (a skipped job reports Success)"
       - id: C3.nothing-skips-or-masks/step-continue-on-error
         op: add
@@ -523,6 +525,8 @@ obligations:
         target: steps[checkout].if
         payload: false
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
         diagnostic: "step `checkout`: `if:` is prohibited"
       - id: C3.nothing-skips-or-masks/step-continue-on-error-checkout
         op: set
@@ -537,6 +541,8 @@ obligations:
         target: steps[guard-resolver-digest].if
         payload: false
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
         diagnostic: "step `guard-resolver-digest`: `if:` is prohibited"
       - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-resolver-digest
         op: set
@@ -551,6 +557,8 @@ obligations:
         target: steps[guard-empty-diff].if
         payload: false
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
         diagnostic: "step `guard-empty-diff`: `if:` is prohibited"
       - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-empty-diff
         op: set
@@ -565,6 +573,8 @@ obligations:
         target: steps[guard-launcher-path].if
         payload: false
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
         diagnostic: "step `guard-launcher-path`: `if:` is prohibited"
       - id: C3.nothing-skips-or-masks/step-continue-on-error-guard-launcher-path
         op: set
@@ -579,6 +589,8 @@ obligations:
         target: steps[trunk].if
         payload: false
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
+        # Style-only: the constant `if:` IS the hazard, so actionlint's `if-cond` note is expected.
+        actionlint_allow: [if-cond]
         diagnostic: "step `trunk`: `if:` is prohibited"
 
   - id: C3.no-job-continue-on-error

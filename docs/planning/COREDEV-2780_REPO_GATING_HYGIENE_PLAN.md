@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 64 (ungated; see the revision 63 and 64 log entries). The re-gate opened
+**Status:** Planning, revision 65 (ungated; see the revision 63 to 65 log entries). The re-gate opened
 at revision 38 (COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT
 passed.** See the **r66** log entry. Every edit after revision 62 is ungated by construction.
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
@@ -9,8 +9,7 @@ on both surfaces. Their milestone boxes stay open until their own cells pass (co
 respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
 * cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
   asserted diagnostics differ from the registry's (ten that now run on both entries, one canary-only: 10 x 2 + 1 = 21 executions;
-  revision 52 said 19, COREDEV-2870); the case-validity
-  rule is not executed; the `(side, form)` resolver family runs as hard-coded helper tests, not as the
+  revision 52 said 19, COREDEV-2870); the `(side, form)` resolver family runs as hard-coded helper tests, not as the
   24 registry-expanded executions;
 * cell 8 — the pre-commit half is not proved through Git's entry point: no test makes a real
   `git commit` that a stale install warns on and still permits, or runs the silent rows that way; the
@@ -37,6 +36,11 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
   (codex, r56);
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
+
+**Implemented in revision 65 (COREDEV-2869), no longer outstanding:** cell 11's case-validity rule
+is EXECUTED. `validate` installs actionlint before the scripts suite, and
+`test_every_mutant_is_a_workflow_github_would_accept` runs it over every (case, entry) pair. That test
+refuses to skip in `validate`.
 
 **Implemented in revision 64 (COREDEV-2869), no longer outstanding:** resolution now happens
 ONCE, before entry selection. `_resolve_once` is the single boundary, and `_target_set_problems` is
@@ -489,6 +493,12 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **Revision 65** (2026-10-03; ungated): COREDEV-2869 part 2. Cell 11's validity rule ran only as a
+> one-off sweep, because `validate` installed actionlint AFTER the scripts suite. The install now
+> runs before the suite (in RUNNER_TEMP), and the rule is a standing test. Each case's allowed kinds
+> are declared in the registry (`actionlint_allow`). The test was shown red on a removed allowance
+> and on a stale one. Without actionlint, it fails under `GITHUB_JOB=validate` and skips under
+> `darwin-suite`.
 > **Revision 64** (2026-10-03; ungated): COREDEV-2869 part 3, cell 15's sharing enforcement. The
 > registry declared `resolved_once_before_entry_selection`, while the required and canary
 > comparisons each resolved on their own. `_resolve_once` now resolves once and checks EVERY entry's
@@ -2355,8 +2365,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     the registry; a sweep found two more in the suite): a root-level `schedule`, `branches-ignore`
     beside `branches`, an empty `on:` after removing the only trigger, an empty `on.schedule`, and
     `needs:` naming a job that did not exist. Revision 41 corrects all five. Verified by a one-off
-    sweep, actionlint 1.7.12 over all 69 suite mutants. **The suite does not yet EXECUTE this rule**
-    (COREDEV-2869): `validate` installs actionlint only after the scripts suite runs. It need not
+    sweep, actionlint 1.7.12 over all 69 suite mutants. **The suite EXECUTES this rule**
+    (COREDEV-2869, revision 65). `validate` installs actionlint before the scripts suite, and
+    `test_every_mutant_is_a_workflow_github_would_accept` runs it over every (case, entry) pair. A
+    case may report only the kinds its own `actionlint_allow` declares: `[if-cond]` on the six
+    `if: false` cases. An allowance that no longer fires fails as stale, so the allowlist cannot
+    widen silently. The test refuses to skip in `validate`; it may skip only where actionlint is
+    not installed (`darwin-suite`). It need not
     satisfy every other clause — the
     clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
