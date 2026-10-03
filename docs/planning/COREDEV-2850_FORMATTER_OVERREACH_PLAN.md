@@ -2,7 +2,9 @@
 
 **Tickets:** COREDEV-2850 (High, blocks COREDEV-2780 M4) · COREDEV-2860 (Highest, security)
 **Epic:** COREDEV-2485 · **Branch:** `fix/COREDEV-2850-formatter-overreach` · **Base:** `main` (`5f877ec`)
-**Status:** implementing — plan gate CLOSED BY MAINTAINER DECISION after round 13 (2026-10-02); NOT passed. See §6 step 1.
+**Status:** landing (§6 step 6) — implemented, and step 3's probe cells observed on PR #103 (closed
+unmerged). Plan gate CLOSED BY MAINTAINER DECISION after round 13 (2026-10-02); NOT passed. See §6
+step 1.
 
 ---
 
@@ -1078,7 +1080,16 @@ meant.
       anyway, so the cell-3 supersession rides the same re-gate at no added cost (step 4(d)).
       Adding an inert key to a registry that has nowhere to put it would be the `backed_by` residue
       of COREDEV-2811 repeated exactly — an unvalidated field nothing reads.
-5. Version bump (four sync points + CHANGELOG).
+   **OUTCOME (2026-10-02/03).** Steps 4(a)–(c) are done: the cell-3 entry in
+   `COREDEV-2780-rollout.json` carries the behavioural `discriminator`, the hybrid `closureRoute`
+   and `closesWhen`, and a re-worded `whatIsNOTObserved`, which now also counts cell 1 as observed.
+   For 4(d), route (ii) was taken, but the re-gate it budgeted **did not pass**. COREDEV-2780's
+   re-gate (its revisions 38–62) was **CLOSED BY MAINTAINER DECISION after round 66**. §6.4's two
+   literals and the cell-3 supersession therefore rest on bytes the maintainer accepted without a
+   passing gate. That plan's header records the decision, and its later edits are ungated by
+   construction.
+5. Version bump (four sync points + CHANGELOG). **DONE:** 2.8.27, all sync points validated by
+   `validate-version-sync.sh --strict`, with the CHANGELOG `[2.8.27]` section.
 6. **LAND ATOMICALLY** (codex, r1). Step 2 orders IMPLEMENTATION A→B; it did not order MERGES.
    Part A, Part B, §4's cells and the accepted evidence land together, in one PR. **If they are ever
    split, Part B goes FIRST** — landing A first removes formatter and TOML-lint enforcement from the
@@ -1086,4 +1097,8 @@ meant.
    that makes the gate weaker in both directions simultaneously. The maintainer asked for this work
    bundled; this step is what makes "bundled" mean something at merge time rather than only in the
    plan document.
+   **LANDING (2026-10-03).** The bundle is one PR, `fix/COREDEV-2850-formatter-overreach` → `main`,
+   which carries Part A, Part B, §4's cells and the judged step-3 evidence together. It is not merged
+   without the maintainer's explicit word. Anything added to the branch before the merge lands with
+   it.
 7. Only then is M4 unblocked, and M4 still needs its own maintainer decisions.
