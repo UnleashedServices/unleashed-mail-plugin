@@ -3,15 +3,15 @@
     "controlOutcome": "success",
     "outcome": "failure",
     "primaryDiagnostic": {
-      "column": null,
-      "line": null,
-      "linter": "shfmt",
+      "column": 7,
+      "line": 3,
+      "linter": "shellcheck/SC2250",
       "path": "harness-fixtures/fixable.sh"
     }
   },
   "actionInputs": {
-    "canonical": "{\"arguments\":\"--filter=-markdown-link-check\",\"save-annotations\":true}",
-    "digest": "cc125ae649d85ba092aa5a92fe187df6d4d235e896a8b17a267b7f1e6a77cd36",
+    "canonical": "{\"arguments\":\"--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo\",\"save-annotations\":true}",
+    "digest": "2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe",
     "uses": "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
   },
   "event": "pull_request",
@@ -23,11 +23,11 @@
       "--upstream",
       "c17c73084aef2943bd1ffa1a1d0538fa7755a281",
       "--github-commit",
-      "78b0a4e425da9c75d813d83e27ce4215cc71c6fb",
+      "e71b0bfec92cd14bafce75de6be40d44f3a9e1ac",
       "--github-label",
       "",
-      "--github-annotate-file=/tmp/tmp.Nu9grZSyWb/annotations.bin",
-      "--filter=-markdown-link-check"
+      "--github-annotate-file=/tmp/tmp.VCZknTOok3/annotations.bin",
+      "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
     ]
   ],
   "ref": "89/merge",
@@ -35,13 +35,13 @@
     "raw": "upstream=c17c73084aef2943bd1ffa1a1d0538fa7755a281"
   },
   "schemaVersion": 1,
-  "sha": "61adcf9cd00025e44115d1a4dad7f3e8ef1f3e0c",
+  "sha": "25bb1803c049320912bd66758f0d4fe128bb1cda",
   "tree": {
-    "controlPost": "7e32ebfa83c65c86a1f18e58828559a421672182ae3cc02083a97e4fb69449ba",
+    "controlPost": "2737ee88e44dc626917348223153f7d3ec140443d1293490e4b5b08c7ddbca73",
     "fixture": "harness-fixtures/fixable.sh",
-    "fixturePost": "c2ff8748b2a77b4f4c8884d58625ac3ba042776632b185beb1e6bb73e69bab24",
-    "fixturePre": "c2ff8748b2a77b4f4c8884d58625ac3ba042776632b185beb1e6bb73e69bab24",
-    "post": "e370e6eb25a3bcc48a0634a1c7d8eab7925ede78c547de349d3bb599211616b3",
-    "pre": "e370e6eb25a3bcc48a0634a1c7d8eab7925ede78c547de349d3bb599211616b3"
+    "fixturePost": "77337cf6c62d90487d4590ae648ad07ebd8fad998a5465f2a2b362512ded9a54",
+    "fixturePre": "77337cf6c62d90487d4590ae648ad07ebd8fad998a5465f2a2b362512ded9a54",
+    "post": "811f197742c9e63fa3b141fb83bf95a3094a5284681bc983ec4074b19c91019b",
+    "pre": "811f197742c9e63fa3b141fb83bf95a3094a5284681bc983ec4074b19c91019b"
   }
 }

@@ -290,18 +290,21 @@ fi
 # races with itself: two invocations of the same session both stat an aged marker, A unlinks and
 # recreates it, B's already-decided unlink removes A's FRESH marker, and B's O_EXCL create then
 # succeeds — so both warn in the same new window. With the window in the name the sweep removes only
-# strictly older buckets and the decision is a single O_EXCL create.
+# buckets older than current-1 (the previous one is kept; see the sweep below), and the decision is
+# a single O_EXCL create.
 #
 # `session_id` is documented as OPAQUE with no filename-safety contract, so it is HASHED: raw, a `/`
-# or an over-long component makes marker creation fail, and a detector that fails open warns on every
-# single session start.
+# or an over-long component makes marker creation fail. This detector's OSError branch then exits
+# SILENTLY, so the failure would be a LOST warning on every session start, not a repeated one
+# (codex, plan r59, corrected "fails open").
 # Same hazard inside the fallback, which is evaluated only when XDG_STATE_HOME is unset.
 #
 # DEFENSIVE, AND NOT SEPARATELY TESTED — said plainly rather than implied. With HOME unset the
-# record read above resolves to `/.claude/...`, fails, and takes row 2's silent path, so this
-# line is unreachable through either shipped caller; a mutation reverting it stays green and no
-# test here would be honest. It is fixed for CONSISTENCY: the same expansion, the same hazard,
-# and a future caller that sets XDG_STATE_HOME while HOME is unset would reach it.
+# record read above resolves to `/.claude/...` and takes row 2's silent path UNLESS
+# CLAUDE_CONFIG_DIR is set, which roots the record elsewhere. So this line IS reachable, but only
+# with CLAUDE_CONFIG_DIR set while HOME and XDG_STATE_HOME are both unset (codex, plan r58,
+# corrected "unreachable"). No test here exercises that combination, so a mutation reverting it
+# stays green. It is fixed for CONSISTENCY: the same expansion, and the same hazard.
 state_base="${XDG_STATE_HOME:-${HOME-}/.local/state}"
 marker_dir="${state_base}/unleashed-mail/drift-warned"
 
@@ -364,17 +367,19 @@ except OSError:
 # nothing but the cleanup — the warning it was run to produce has already been written.
 print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
 
-# Cleanup removes markers from any PRIOR window — which is not the same statement as "older than
-# seven days": just after a boundary a marker seconds old belongs to a prior bucket and goes.
+# Cleanup is by BUCKET, never by age: it removes markers older than the PREVIOUS bucket, so a marker
+# written seconds ago two buckets back goes, and the previous bucket is kept (COREDEV-2868, below).
 #
 # SWEEP EVERY SESSION'S MARKERS, not just this one's (codex, PR #84). Each session has a distinct
 # digest, so a per-digest glob only ever tidied a session that RESUMED in a later window — markers for
 # sessions that never resume accumulated forever, one inode per session, on exactly the machines a
 # persistently stale install keeps warning. The retention promise was stated and not kept.
 #
-# Safe against the O_EXCL protocol precisely because the window is in the NAME: only buckets STRICTLY
-# OLDER than the current one are removed, so no live marker of any session is touched, and there is
-# nothing to race with a concurrent create.
+# Safe against the O_EXCL protocol because the window is in the NAME, and because the PREVIOUS bucket
+# is kept too: only buckets older than current-1 are removed. Sweeping everything older than CURRENT
+# was not enough (COREDEV-2868; codex, plan r56, reproduced against this body). An invocation that
+# captured bucket w before a boundary, and paused before its O_EXCL, could find w swept by a session
+# already in w+1, re-create it, and warn a second time in w. Keeping w makes that O_EXCL fail.
 #
 # THE SHAPE GUARD IS LOAD-BEARING NOW THAT THE GLOB IS WIDE. Scoped to one digest, the name was its
 # own filter; unscoped, this loop unlinks in a directory it no longer wholly owns. Only names this
@@ -383,14 +388,16 @@ print(json.dumps({"systemMessage": os.environ["WARNING"]}), flush=True)
 #
 # Bounds growth only WHILE THE INSTALL IS STALE: the silent path exits before this block by contract
 # (SILENT MEANS SILENT), so markers left by an install that is then updated are swept by nothing and
-# remain. That residue is bounded by one window's sessions, and is stated rather than fixed here.
+# remain. That residue is bounded by TWO windows' sessions (the current bucket and the kept previous
+# one) WHEN A SWEEP COMPLETES. A sweep interrupted after the warning is emitted leaves more, until
+# a later stale-install invocation sweeps again. Stated rather than fixed here (codex, plan r58).
 marker_name = re.compile(r"\A[0-9a-f]{64}\.([0-9]+)\Z")
 for stale in marker_dir.glob("*.*"):
     matched = marker_name.match(stale.name)
     if matched is None:
         continue
     try:
-        if int(matched.group(1)) < window:
+        if int(matched.group(1)) < window - 1:
             stale.unlink()
     except (ValueError, OSError):
         pass

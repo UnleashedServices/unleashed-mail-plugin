@@ -1,8 +1,93 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 37
+**Status:** Planning, revision 65 (ungated; see the revision 63 to 65 log entries). The re-gate opened
+at revision 38 (COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT
+passed.** See the **r66** log entry. Every edit after revision 62 is ungated by construction.
+**Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
+independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
+on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
+respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
+* cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
+  asserted diagnostics differ from the registry's (ten that now run on both entries, one canary-only: 10 x 2 + 1 = 21 executions;
+  revision 52 said 19, COREDEV-2870); the `(side, form)` resolver family runs as hard-coded helper tests, not as the
+  24 registry-expanded executions;
+* cell 8 — the pre-commit half is not proved through Git's entry point: no test makes a real
+  `git commit` that a stale install warns on and still permits, or runs the silent rows that way; the
+  r33 root-operand controls are source assertions and direct detector calls; the bucket boundary is
+  tested by planting prior-bucket markers, not by invoking one session across a controlled boundary;
+  and the SessionStart runtime half has not witnessed the DISPATCHER invoking the detector (see cell 8);
+* cell 13 — its tests use an empty repository and a fake Trunk with configured exit statuses. The
+  clean-index/dirty-worktree pair, the index and worktree mutation checks, and a representative clean
+  slow path are not implemented. The "slow path" is a one-second fake sleep;
+* C6 and C6a — their fixture tests accept a path fragment or `digest mismatch`, not the registry's own
+  diagnostic messages (codex, r50);
+* cells 3 and 5 — `scripts/tests/test_trunk_check_behaviour.py`, which §7 names as the owner of their
+  constructible fixture halves, does not exist (codex, r45);
+* cell 11 — the survivor corpus (`COREDEV-2780-survivors.yaml`) is read for metadata and registry
+  references, and its mutants are never executed independently (codex, r45);
+* cell 13 — §6.4 says cell 13 runs "the same mutants (appended flag, absent argument)" against the HOOK
+  literal. The hook suite freezes the argument vector but implements neither mutant (codex, r45);
+* cell 16 — the runtime control was observed on a PRODUCTION `alpha` push, not on the disposable fork
+  this cell prescribes. The evidence record says so and lists what the fork exercise still needs.
+  Accepting that substitution is the maintainer's decision. Until then the fork exercise is outstanding
+  (codex, r47);
+* cell 16 — no test drives a MULTI-COMMIT push through the canary's checkout and guard. Revision 53 pins
+  `fetch-depth: 0` statically, and the runtime proof that a deep `before` is linted is outstanding
+  (codex, r56);
+* **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
+  plan.
+
+**Implemented in revision 65 (COREDEV-2869), no longer outstanding:** cell 11's case-validity rule
+is EXECUTED. `validate` installs actionlint before the scripts suite, and
+`test_every_mutant_is_a_workflow_github_would_accept` runs it over every (case, entry) pair. That test
+refuses to skip in `validate`.
+
+**Implemented in revision 64 (COREDEV-2869), no longer outstanding:** resolution now happens
+ONCE, before entry selection. `_resolve_once` is the single boundary, and `_target_set_problems` is
+one comparator, parameterised by entry, that receives the result and never resolves. Cell 15's
+sentinel test exists. It substitutes one sentinel at the boundary and requires both entries' verdicts
+and diagnostics to follow it, with the boundary crossed exactly once. It goes red on a comparator that
+ignores the resolver's result and on one that resolves per entry. The resolver itself was already
+entry-agnostic (`_resolve_ref_name(ref_name, default_branch)`).
+
+**Fixed in revisions 43-62, not outstanding** (r44 to r65): twelve checker SURVIVORS, each reproduced first:
+C2 accepted any `types` containing `edited` (so `[edited]` dropped `synchronize`); C8 blacklisted six step
+keys instead of freezing the complete step mapping (`timeout-minutes` passed); and the checkout was never
+checked for a SHA pin (`@v4` passed); and a DUPLICATE known step passed the sequence check, so a second
+`actions/checkout` after the guards could replace the tree they had inspected (revision 44); and only
+the job ID was checked, never the job `name` that decides the emitted context, so a canary named
+`validate` passed (revision 45); and every check read only the FIRST job, so a sibling job named
+`validate` appended under `jobs:` passed (revision 46, found by both arms); and `fetch-depth`'s VALUE was
+never checked, so depth 1, depth 2 or omission passed on both entries (revision 53); and both integer
+operands were compared by VALUE only, so `fetch-depth: false` and `timeout-minutes: 15.0` passed
+(`False == 0` and `15.0 == 15` in Python; revision 54); and workflows were parsed as YAML 1.1, so
+`save-annotations: yes` passed while GitHub's YAML 1.2 parse delivers the string "yes" (revision 56); and
+revision 56 fixed only the booleans, so `timeout-minutes: 017` passed as octal 15 where GitHub reads 17
+(revision 57, the whole core schema); and an explicit tag (`!!bool yes`, `!!int 1_5`) bypassed the
+implicit resolvers altogether (revision 58, C0.raw-text-canonical); and the effective context used Python
+truthiness, so `name: false` fell back to the job ID (revision 60; cell 14 caught it at suite level, but
+the comparator did not), and the `is None` repair still let a present null do so, in BOTH the
+comparator and cell 14's census (revision 61, decided by key membership). Also fixed in
+revision 53, in the shipped DETECTOR: the dedup sweep let a delayed invocation warn a second time in
+one bucket (COREDEV-2868). Also fixed in revision 62, in the checker's LOADER, and NOT counted as a
+survivor because actionlint rejects merge keys, so no actionlint-valid mutant reached it: the resolver
+table filtered PyYAML's 1.1 table and so kept 1.1's merge (`<<`) and value (`=`) types; it is now an
+allowlist of the four core scalars. Cell 11's per-step minimum is
+now declared in the registry and executed: 66 cases added in revisions 43-61, eight of them RAW-TEXT (the runner and timeout
+operands, the timeout's omission, and the canary's C1 and C4 cases close coverage gaps rather than
+survivors). Every one of the 220 (case, entry) pairs is actionlint-clean
+apart from the permitted `if-cond` notes. The survivor corpus records all twelve forms, as §1 requires; it
+is still not EXECUTED (above). A standing test now runs every case on every entry its obligation declares
+(revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
+and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
+different bytes from the required workflow's, and those eight pairs had never run (codex, r53). **Scope
+of that claim** (codex, r54): every YAML/body pair and every fixture pair executes. The three
+remote-relation pairs are injected per single entry, and `C16.canary-not-required/present` can skip on
+a machine without authenticated `gh`. Its remote half then rests on the recorded rollout read, not on
+this run. Its `TRUNK_PATH` cases now write that
+assignment; until revision 44 all three appended `echo X`.
 **Created:** 2026-08-28
-**Last Updated:** 2026-09-01
+**Last Updated:** 2026-10-02
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
 
 > **r1** `04048c7`: codex + agy both `REQUEST_CHANGES`. Concordant: §2's fix was wrong for
@@ -118,6 +203,366 @@
 > M4 and §7, with sharing enforcement the only item still open. *Three encodings were needed here
 > because the first two asserted something about the implementation; the third deletes the argument
 > that would let divergence be written.*
+> **Revision 38 (2026-10-02, COREDEV-2850) — NOT yet reviewed; revision 37 was never reviewed either.**
+> COREDEV-2850 split the formatter exclusion: the REQUIRED `trunk-check` job now filters the five
+> whole-file formatters as well as `markdown-link-check`, while the pre-commit hook and the push canary
+> keep them. §6.4 therefore declares TWO literals and why they differ, and every reference that named
+> "§6.4's literal" — §1's contract, C4, M5a, cells 9 and 11 — now names WHICH. Cell 3(b) is superseded IN
+> PART: its first conjunct becomes true for formatters and its second becomes FALSE for them by design,
+> recorded as the written-narrowing closure, not as a fix. §6.4 gains the second losing cost. Revision 37's
+> sharing-enforcement fix (r38's one open item) is re-reviewed in the same round.
+> **r39** `39139a3` (revisions 37 + 38), **both arms, concurrently**, `TREE=clean`: codex
+> `REQUEST_CHANGES` (1 blocker), agy `REQUEST_CHANGES` (2). **Both confirmed revision 37 closes the
+> dispatch shape**, and both confirmed byte-for-byte that the two declared literals match the workflow,
+> canary, hook and test. codex's blocker: **`-taplo` removes TOML LINTING, not only TOML formatting.**
+> `--filter` denies by linter NAME, and taplo's v1.11.0 definition carries a non-formatter `taplo lint`
+> command, so cell 3(b)'s "for LINT findings both conjuncts hold unchanged" was false for TOML.
+> COREDEV-2850's plan §A4 had already accepted that loss, and this plan did not inherit it.
+> **Concordant (both arms):** §7 still said "the `arguments:` literal" twice, once wrapped across a line
+> break, so revision 38's sweep keyed on "§6.4's literal" missed it. *The same shape r37 recorded: a grep
+> for one phrasing is not a sweep of the concept.* agy also misread §6.4's "COREDEV-2850's cell 4" as this
+> plan's cell 4, a real ambiguity, and this plan's cell 4 said "the exclusion list grows" without
+> saying which list. codex also found that cell 5's formatter fixture is no stimulus under the REQUIRED
+> literal, and that cells 2-3 still said job-scope `continue-on-error` makes the job green, which
+> contradicts cell 16's r30 correction.
+> **Revision 39** narrows cell 3(b) to the lint commands the REQUIRED literal retains, and records the TOML
+> lint loss in §6.4, with what limits it: COREDEV-2860 freezes both tracked `.toml` files. It qualifies
+> every remaining literal reference, including §6.4's own heading, says WHICH cell 4, defines the 19 as
+> CONFIGURED membership, rebinds cell 5 to a finding the REQUIRED literal keeps (ShellCheck SC2250), and
+> corrects cells 2-3's premise. The sweep now runs on whitespace-joined text and was tested against a
+> re-inserted wrapped residue.
+> **r40** `5a0c2b0` (revision 39), both arms, concurrently, `TREE=clean`: **agy `APPROVE`**, codex
+> `REQUEST_CHANGES` (1). **Both confirmed all five revision-39 repairs against the files on disk**, and
+> codex found no round-39 finding still open. codex re-derived the TOML freeze membership, the cell-5
+> SC2250 hashes and the continue-on-error semantics independently. Its one blocker is OLDER than
+> revisions 37-39: §6.2a held M4a's rollback rehearsal to M4's "exactly one semantic difference (the
+> `trunk-check` entry appearing or disappearing)". But revision 32 had made the rehearsal a
+> SUBSTITUTION, two named entries per PUT, so a correct rehearsal could not pass its own mandatory
+> comparison — the cell that cannot pass, eight revisions undetected. **Revision 40** gives each write
+> its own named difference: one entry for an incident rollback, the substitution pair and its reverse
+> for the rehearsal's two PUTs, and makes the DIRECTION of each named entry a separate assertion:
+> executed against sample payloads, a subtract-and-compare rule alone passed a PUT that left the
+> repository UNGATED. M4a's existing net-zero final-state check is unchanged.
+> **r41** `c9499c6` (revision 40), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES` — **the first
+> double approval since r28/r29**, which gated revision 27 (revision 41's log said "since r16", which
+> was false). Both confirmed §6.2a's direction-plus-remainder rule passes each
+> correct write and fails every wrong payload they constructed. codex's note, a delayed same-bucket
+> invocation re-creating a just-swept dedup marker, is low-impact and ticketed as COREDEV-2868.
+> **r42**, a byte-identical REPRODUCTION of r41 with neutral prompts: agy `APPROVE` again, **codex
+> `REQUEST_CHANGES`**. The double approval did not reproduce, the fourth time this rule has caught one.
+> codex's blocker: the authoritative registry prescribed three mutants GitHub would reject, which
+> breaks cell 11's own case-validity rule (r17, r21). Verified by actionlint. **A sweep of all 69
+> suite mutants found two more**, where the suite had drifted from the registry. codex also found
+> §1's "Python suites run only in `validate`" false (`darwin-suite` runs them, unrequired), and §3b/§7
+> summarising cell 8's declared `timeout: 5` as a runtime "timeout against a sleeping detector".
+> It also identified that cells 11 and 15 are respecified but not implemented. **Revision 41** fixes
+> the five recipes in the registry AND the suite, defines "constructible" as actionlint-clean, corrects
+> §1, §3b and §7, and states the implementation status at the top, tracked as COREDEV-2869.
+> **r43** `c2ee5ce` (revision 41), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (1).
+> Both confirmed that the five corrected mutants are valid workflows, that each still produces its own
+> diagnostic, and that the registry and suite now agree on all five. **codex's blocker was revision
+> 41's own rule.** It said "actionlint reports nothing", while the sweep that verified it ran
+> `-shellcheck= -pyflakes=`. With ShellCheck on, three `shell: sh` mutants report SC3040/SC3001, so the
+> rule as written was stricter than what had been measured. *Harness and spec disagreed again, in the
+> other direction.* agy found ten registry-versus-suite diagnostic mismatches, added to COREDEV-2869.
+> codex found the implementation-status list incomplete (four more gaps, one older than revision 33),
+> and three document claims false: `plugin-ci.yml` "unchanged", §6.1's "one-line" mechanism switch,
+> and cell 8 naming the rollout record for a SessionStart invocation that lives in a different
+> artifact and does not witness the dispatcher. It also caught a false chronology claim in r41's
+> entry. **Revision 42** names the actionlint invocation in the rule and corrects all of these.
+> **r44** `540ceba` (revision 42), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2). codex confirmed
+> revision 42's actionlint and evidence corrections. Its two blockers were these. **Cell 11 demanded
+> per-step coverage the registry could not generate**: the four injection forms, `shell` and
+> `working-directory` on one run step only, no step-level `if:`, and `continue-on-error` on one step.
+> And **§6.1's new switch recipe was still incomplete**: it missed C3's own permissions pin, the
+> `action_inputs_digest` and the parity harness. It also reported **three checker SURVIVORS, which
+> reproduced here before any fix**: `types: [edited]`, a sibling `timeout-minutes` step key, and
+> `actions/checkout@v4` all returned no contract problems. Those are real gaps in shipped enforcement,
+> not document drift. **Revision 43** fixes the checker (exact activity set; complete step mapping as a
+> per-kind allowlist; checkout SHA pin), declares and executes the 27 cases cell 11 requires (the three
+> survivor cases failed against the UNFIXED checker before the fix; the 24 per-step cases were already
+> killed by it, so that gap was coverage, not enforcement), and stops giving §6.1 a recipe. It also lists codex's
+> further unimplemented items (cell 8 through Git's entry point and across a real bucket boundary;
+> cell 13's behavioural fixtures), and settles "omission" as a no-op body and cell 2's M3/M4 split.
+> **r45** `98b69cb` (revision 43), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2). codex confirmed
+> the three fixes reject the r44 survivors without rejecting either shipped workflow, and that the 27
+> cases agree between registry and suite. **P1, a fourth survivor, reproduced here on both entries**: a
+> DUPLICATE known step. The sequence check diagnosed missing, unknown and reordered names, so a second
+> `actions/checkout@v4` with `ref: main` inserted after the guards returned no problems. `_step()` reads
+> only the first occurrence, so the duplicate was never inspected at all. **P2**: cell 11 requires
+> `TRUNK_PATH=/bin/true` written to `$GITHUB_ENV`. All three executed cases appended `echo X`, and
+> revision 43's two new declarations copied it. codex also listed three more unimplemented items.
+> **Revision 44** reports every duplicate and adds a catch-all, so any sequence unequal to the declared
+> five is a problem, whatever its shape. It adds a duplicate case for each step (all five failed against
+> the unfixed checker), corrects the three payloads, and extends the status block.
+> *Each round since r43 has found a real shipped-checker gap that the plan's text already prohibited:
+> the plan was right, and the implementation had not been held to it.*
+> **r46** `2b9fb78` (revision 44), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1). codex confirmed all
+> 32 additions agree between registry and suite, and that the r45 repairs held across 181 forbidden
+> probes. **P1, a fifth survivor, reproduced here on both entries**: `name:` decides a job's emitted
+> context, but only the job ID was checked, so the canary renamed `validate` returned no problems. The
+> shipped producer census guards `trunk-check` alone, so nothing guarded `validate`, a REQUIRED context. A
+> passing canary could have satisfied it without the contract suites running. codex also found the
+> survivor corpus missing all four recent survivor forms, which §1's maintenance rule requires.
+> **Revision 45** pins each entry's effective context, adds four collision cases (all failed against the
+> unfixed checker), and records five survivors in the corpus. agy's round-46 "surviving mutants"
+> (`branches:` values, any 40-hex checkout SHA, `fetch-depth`'s value) are by design. C2's target set is
+> enforced on the shipped file by cell 15's resolved-set comparison, the checkout SHA's VALUE is
+> Dependabot's, and `fetch-depth` is allowlisted without a value constraint.
+> **r47** `500afa4` (revision 45), both arms, **CONCORDANT**: agy `REQUEST_CHANGES` and codex
+> `REQUEST_CHANGES`, one blocker each, and it was the SAME blocker. A **sixth survivor, reproduced here on
+> both entries**: every check read `_job()`, the FIRST job, and nothing limited how many jobs `jobs:`
+> held. A sibling job named `validate`, appended after the shipped one, returned no problems, passed
+> actionlint, and left the producer census unchanged. Revision 45's context pin was right about the job it
+> looked at, and it looked at only one. codex also confirmed the 36 additions agree, and added two
+> status clarifications: M5a and M6 already exist, and cell 16's runtime control used production `alpha`
+> rather than the prescribed fork. **Revision 46** requires exactly one job, adds a sibling-job case per
+> entry (both failed against the unfixed checker), records the survivor, and states both clarifications.
+> *Three survivors in a row (r45-r47) have the same root: a check that inspected the FIRST occurrence and
+> never asked how many there were. For a duplicate step, a sibling job, and the job `name` behind the job
+> ID, the fix was the same: count what can repeat, and pin what selects.*
+> **r48** `96c2f94` (revision 46), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES`, a double approval.
+> codex constructed no further bypass and confirmed all 38 additions. CI was fully green at `500afa4`,
+> `darwin-suite` included. **r49, a byte-identical REPRODUCTION with neutral prompts**: agy `APPROVE`
+> again, **codex `REQUEST_CHANGES` (3)**. It did not reproduce, the second time this campaign (after r42).
+> (1) **M4a's failure recovery reopened the merge race**: "roll back to pre-M4" is the ungated state,
+> reached with the red PR still open. (2) **C3's job allowlist and C16 could not both hold**: the
+> registry applied "and nothing else" to the canary, which C16 requires to carry job-scoped
+> `continue-on-error`. The checker had the exception and the authority did not. (3) **Revision 45's
+> context obligation was not generatable**: its four cases were entry-specific under an obligation
+> declaring both entries. A sweep of all 110 mutants across every declared entry found exactly those
+> four combinations failing, and nothing else. Three file claims were also false (the Overview's
+> "today", §3b's "no mode operand", and §7's "only PyYAML"). **Revision 47** orders M4a's recovery
+> fail-closed first, closes the PR before any ungating write, states the canary exception in the clause
+> and the registry, and splits the context obligation per entry, so that 0 of the 145 combinations from those 110 recipes fail. It
+> also corrects the three claims.
+> **r50** `2ab37ea` (revision 47), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1). codex confirmed
+> revision 47's recovery order, its canary exception, and the per-entry context split. Its one blocker
+> refined the first: **M4a's "stay fail-closed" step could restore an INEFFECTIVE gate.** M4 preserved
+> `enforcement` across its comparison but never required it to be `active`, so an inactive ruleset
+> passed M4. Cell 17 would then see the red PR mergeable, and recovery would restore that same
+> ineffective state before closing the PR. **Revision 48** requires a fresh `enforcement: active` in M4's
+> reads and in every M4a transition read. When cell 17 fails, recovery now closes the witness PR FIRST.
+> It also fixes two residues the r49 corrections left (§3b's "the operand is removed", cell 8's "only
+> PyYAML"), rebinds the timeout-360 survivor (it was bound to an unrelated container-key case, because
+> no registry case exercised the timeout), adds the runner/timeout cases, and records the C6/C6a message
+> gap. 0 of 149 recipe x entry combinations fail (112 recipes; first logged as "112 combinations",
+> codex r51). CI was fully green at `96c2f94`.
+> **r51** `2e6917a` (revision 48), both arms: agy `APPROVE_WITH_NOTES` (no path to a mergeable PR while
+> ungated or not enforcing), codex `REQUEST_CHANGES` (2). codex confirmed revision 48's fresh
+> `enforcement: active` and its cell-17 close-first, within their branches. **P1: the general form of the
+> same hole.** M4a's "neither context present" branch still restored before closing, so an interrupted
+> restore left the otherwise-green witness PR mergeable under an ACTIVE but ungated ruleset, and the
+> rollout evidence itself records that exact MERGEABLE combination. **P2: MV's bump omitted
+> `marketplace.json`**, and §7 still said it "carries no version field". It has carried one since
+> COREDEV-2801's follow-up, as a fifth sync point that strict CI enforces. **Revision 49** makes
+> close-first ONE rule for every not-blocking read and states the guarantee's limit, adds the fifth
+> site to MV and §7, and records §3's root-caused SELECTION apart from its still-unproven REBUILD
+> trigger. It also qualifies cell 17's "every other observation", and corrects the logs' recipe and
+> combination counts. *Revisions 47-49 fixed the same recovery hole three times, one branch at a time.
+> The rule had to be stated over the CONDITION (the gate is not blocking), not over the cause that
+> happened to be named.*
+> **r52** `a216fe9` (revision 49), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (3). codex confirmed
+> MV, §3 and the counts, and that the NORMAL substitution is blocking across any interruption. P1:
+> recovery closed only the RED witness, but cell 17 also opens a green one, mergeable by design, and
+> M4's "roll back" restores a snapshot without `trunk-check`. P2: an automated repair from an unplanned
+> state cannot satisfy §6.2a's readbacks, which describe planned writes. P3: the registry named the
+> required entry only for C1's events and C8's sequence and body freeze, so a generator could not test
+> the canary's own. **Revision 50** stops extending recovery branch by branch, which three rounds had
+> done. It SCOPES M4a's guarantee (no witness is merged, and the red one is never left mergeable), makes
+> any not-blocking read close BOTH witnesses and STOP for the maintainer, times M4's rollback before
+> any witness exists, and limits §6.2a's readbacks to planned writes. In the registry it adds the
+> canary's C1 obligations, extends C8 to the canary, and adds a STANDING cross-entry test (117 recipes,
+> 192 combinations, 0 failing; it reds on an injected false entry claim).
+> **r53** `2d0e371` (revision 50), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (4). codex
+> confirmed M4's rollback timing, close-both-first, and the atomic substitution and restore. **No finding
+> was a shipped-checker survivor**: every probe was rejected by the shipped checker. P1: "no witness is
+> ever merged" still over-promised, because the green witness is mergeable by design and a human can
+> merge it. P2: "placeholder present" also matched BOTH-present, which no readback can recover from.
+> P3: the standing test skipped fixture-typed cases, so the eight canary C6/C6a pairs never ran,
+> masked by per-id accounting. P4: three canary cases were missing (an arbitrary event, `arguments`
+> absent, and the per-step skip/mask cases, which the job-level `continue-on-error` prohibition held
+> required-only). **Revision 51** scopes the guarantee to M4a's OWN actions, with the green witness's
+> exposure accepted and bounded, and makes the classifier match EXACT states, with both-present a stop.
+> It runs the C6/C6a fixtures on the canary's own bodies (its C6a guard is different bytes), accounts
+> per (case, entry) pair, splits `C3.no-job-continue-on-error` out so skip/mask cases can name the
+> canary, and adds the two canary cases. 119 recipes, 205 combinations, 0 failing.
+> **r54** `4377cec` (revision 51), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (2). codex
+> confirmed the scoped guarantee, the green-witness handling, the both-present stop, and the canary
+> C6/C6a fixtures, and found no new checker survivor. P1: the classifier's "exact state" checked the
+> two context entries and `enforcement` but not the REST of the document. An administrator retargeting
+> an active `Control` mid-rehearsal would be resumed through, not stopped. P2: **revision 51's split was
+> half-done.** It moved the job-`continue-on-error` CASE out, but the shared obligation's statement,
+> target and M2 exemption still prohibited the key that C16 requires on the canary. Both arms also noted
+> that `C4.save-annotations-required` omitted the canary, which the checker enforces. agy raised that in
+> r53, and revision 51 did not act on it. **Revision 52** compares the whole canonical remainder and the
+> freshly resolved targets at every deciding read, narrows the shared C3 obligation and moves its
+> exemption, declares the canary for `save-annotations`, scopes the "every pair executes" claim, and
+> fixes stale `plugin-ci.yml` locators. 119 recipes, 207 combinations, 0 failing.
+> **r55** `f3120b6` (revision 52), both arms: agy `APPROVE`, codex `APPROVE_WITH_NOTES` (four notes,
+> ticketed as COREDEV-2870 so the reproduction could stay byte-identical). **r56, the byte-identical
+> REPRODUCTION** with neutral prompts: agy `APPROVE` again, **codex `REQUEST_CHANGES` (3)**. It did not
+> reproduce, the THIRD time this campaign (r42, r49, r56). Two findings were real defects in SHIPPED
+> code, the first since r47. (1) **`fetch-depth` was never pinned**: the checker accepted depth 1, depth
+> 2 and omission on both entries, while the canary needs full history or a multi-commit push lints
+> nothing. (2) **The detector's dedup race** (COREDEV-2868, which I had ticketed as low): codex
+> reproduced THREE warnings for one session against the detector's own body. (3) There was no
+> timeout-OMISSION case, so a value check that runs only when the key is present passed every mutant.
+> **Revision 53** pins `fetch-depth` per entry. The detector's sweep now keeps the previous bucket,
+> with a combined concurrent-boundary test that failed against the old sweep. It adds timeout and
+> runner omission cases, and applies all four COREDEV-2870 notes: C4's rationale is per event, M4a
+> requires resolved-set EQUALITY, the mismatch count is 21, and §2's locators are cited by content
+> with the current line as a hint. It also narrows the registry-independence claim and corrects M4's
+> fork-refresh disposition. 125 recipes, 215 combinations, 0 failing.
+> **r57** `2f6494a` (revision 53), both arms: agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` (4).
+> codex confirmed the four depth cases, the timeout omission, and all four COREDEV-2870 notes. **Three
+> findings were defects revision 53 introduced**, partly because I skipped my own actionlint sweep for
+> it. (1) The new `runner-absent` case was a workflow GitHub rejects, which breaks cell 11's validity
+> rule. (2) §3b and the detector's comments kept "sweep any PRIOR window" beside the new keep-previous
+> rule, so a correct implementation could not satisfy both. (3) The registry's C8 inputs obligation
+> still called `fetch-depth` optional. (4) An eighth checker SURVIVOR, reproduced here: integer operands
+> were compared by value only, so `fetch-depth: false` and `timeout-minutes: 15.0` passed. codex also
+> showed the dedup guarantee needs an explicit timing assumption, since a delay of two buckets still
+> yields three warnings. **Revision 54** checks both operands as exact integers, drops
+> `runner-absent`, and adds boolean and float cases. It states the timing assumption and says what the
+> boundary test does not do, removes the obsolete retention text in all four places, and moves the
+> directory-error test to `window−2` so it reaches the unlink. The actionlint sweep now runs per (case,
+> entry) PAIR, including cross-entry applications: 216 pairs, 0 invalid apart from the permitted
+> `if-cond`. 126 recipes, 216 combinations, 0 failing.
+> **r58** `a8444e1` (revision 54), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2, both P2). codex
+> confirmed the exact-integer checks, the removed invalid case, the retention wording, and all 216
+> pairs. It **constructed no new mutant that escapes the whole suite**. P2: the timing assumption
+> bounded each invocation but not the clock BETWEEN invocations, so a clock set back two buckets
+> re-warns. P2: the integer-type survivor was missing from the corpus, and the header still said "all
+> six forms". It also made six non-blocking file-claim corrections. **Revision 55** states both halves
+> of the timing assumption and records the survivor (eight forms now). It corrects §3b's
+> "fails open" (this detector fails SILENT), records M5a's `180` in the plan, and corrects the
+> detector's "unreachable" and two-bucket-residue comments and the corpus header's registry claim.
+> The `find -L` comment inside both workflows' digest-frozen run bodies is wrong but comment-only,
+> and is ticketed rather than re-pinned.
+> **r59** `46e801b` (revision 55), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2, both P2). codex
+> confirmed every revision-55 correction against disk. P2: **a NINTH checker survivor, reproduced here
+> on both entries.** Workflows were parsed as YAML 1.1, so `save-annotations: yes`, `lfs: yes` and
+> `persist-credentials: no` loaded as booleans and passed, while GitHub's YAML 1.2 parse delivers
+> strings. The checker parsed differently from the system it guards. P2: revision 55's timing
+> assumption bounded each backward clock move, but several moves each shorter than a bucket still
+> sum to three warnings. **Revision 56** parses workflows with a YAML 1.2 boolean schema, adds three
+> RAW-TEXT synonym cases run on both entries (all six failed under the old loader), and records the
+> survivor. It states the timing assumption over the WHOLE history (the sampled bucket index never
+> decreases), and fixes four residues: cell 8's "fails open", two obsolete detector comments, and the
+> cell 7 and cell 13 locators.
+> **r60** `9529d70` (revision 56), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1 P2, 1 P3). codex
+> confirmed the boolean repair, the §3b timing argument, and the residue fixes. P2: **a TENTH checker
+> survivor, reproduced here on both entries.** Revision 56 replaced only PyYAML's BOOLEAN resolver, so
+> `timeout-minutes: 017` still loaded as YAML 1.1 octal 15, while GitHub's 1.2 reads decimal 17.
+> *Fixing one scalar kind left the next, the same class one resolver over.* P3: the raw-text regex
+> required the value to end its line, so a valid inline comment made it match nothing, and the
+> subtests failed falsely. **Revision 57** implements the WHOLE YAML 1.2 core scalar schema (booleans,
+> integers with only `0o`/`0x` prefixes, floats, null; no 1.1 timestamps, underscores or sexagesimals)
+> and adds a raw `017` case on both entries, which failed under the boolean-only loader. Of the forms
+> tried, only `017` is both a valid workflow and divergent: actionlint rejects `0o17`, `0xF` and `0:15`.
+> The mutation now keeps inline comments, and three stale residues are fixed.
+> **r61** `a042c4a` (revision 57), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2). codex confirmed
+> bare `017` now resolves to 17 and fails with its own diagnostic. P2: **an ELEVENTH checker survivor,
+> reproduced here on both entries.** An EXPLICIT tag bypasses implicit resolution, so `!!bool yes` and
+> `!!int 1_5` re-admitted the 1.1 coercions, and both the checker and actionlint accepted them. P2: the
+> raw-text tests located values by their canonical spelling, so a correct `+15` or `TRUE` failed them
+> falsely: an undeclared formatting requirement. **Revision 58** adds `raw_workflow_problems`, which
+> forbids explicit tags and requires canonical spellings of the pinned scalars, DECLARED as
+> C0.raw-text-canonical. Four raw cases run on both entries, and all eight executions were accepted by
+> `contract_problems` alone. It also splits the octal survivor from the boolean one and records the tag
+> survivor (eleven forms), and corrects the harness's "only `--fix` differs".
+> **r62** `570fe27` (revision 58), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1 P2, 2 P3). codex
+> confirmed tag rejection, the four raw cases, and the corpus split. P2: **revision 58's canonical
+> check was a line REGEX over the text, not a check of YAML values.** It rejected a permitted quoted
+> key, and it accepted a forbidden `+15` when a decoy `timeout-minutes: 15` line sat inside a
+> `cache-key` block string. codex had suggested node positions one round earlier, and I took the
+> shortcut. P3: a second "ONLY `--fix` differs" comment in the harness (inside a run body), and the
+> registry-kind inventory missing `raw_text`. **Revision 59** reads each pinned value at its YAML
+> PATH through the composed node graph, with its spelling from the node's own source span. Standing
+> tests check a quoted key and a flow-style document as positives, on BOTH checks, and the decoy as a
+> negative; the old regex implementation fails six of their subtests. It also corrects the harness
+> comment (and re-pins that job's digest) and adds `raw_text` to the inventory.
+> **r63** `d52ebe8` (revision 59), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (1 P2, 1 P3). codex
+> confirmed the YAML-path check, the harness correction and the digest re-pin. P2: **the fixture
+> builders still used line regexes.** I had fixed the CHECKER and not the TESTS, so a permitted inline
+> comment or quoted key in the shipped file would fail them falsely. P3: `name: false` or `name: 0`
+> fell back to the job ID by truthiness, which the comparator accepted; cell 14 caught it at suite
+> level. **Revision 60** builds every raw mutation from the same node spans the checker reads. It runs
+> every raw case on four permitted spellings of each source (as shipped, inline comments, quoted keys,
+> flow style), all actionlint-clean and all a positive control for both checks. A present `name`
+> decides the context whatever its value, with a `named-false` case per entry; the old expression
+> accepted both. 128 recipes, 218 combinations, 0 failing.
+> **Revision 65** (2026-10-03; ungated): COREDEV-2869 part 2. Cell 11's validity rule ran only as a
+> one-off sweep, because `validate` installed actionlint AFTER the scripts suite. The install now
+> runs before the suite (in RUNNER_TEMP), and the rule is a standing test. Each case's allowed kinds
+> are declared in the registry (`actionlint_allow`). The test was shown red on a removed allowance
+> and on a stale one. Without actionlint, it fails under `GITHUB_JOB=validate` and skips under
+> `darwin-suite`.
+> **Revision 64** (2026-10-03; ungated): COREDEV-2869 part 3, cell 15's sharing enforcement. The
+> registry declared `resolved_once_before_entry_selection`, while the required and canary
+> comparisons each resolved on their own. `_resolve_once` now resolves once and checks EVERY entry's
+> recorded branches. One comparator receives the result, and a sentinel test enforces the shape
+> (details in the header).
+> **Revision 63** (2026-10-03; no review round, so ungated by construction): **COREDEV-2871**, the
+> r66 instrument findings, fixed at the maintainer's direction. `_relaid_trunk_inputs` now holds only
+> inside a declared domain, `_generator_domain_problems` (no anchor or alias; the trunk inputs one
+> block mapping of scalars; no `cache-key` yet), and refuses any other source BY NAME. Every permitted
+> base fed back in must either generate or be refused: codex's three are refused, and the shipped and
+> no-final-newline bases generate. The splice now ends at the last input's LINE, not its end mark. A
+> block scalar's end mark is the START of the following line, so the closing brace was joined onto the
+> next line. That was latent only because the trunk step ends both files, and the new test caught it
+> only once a step-level key followed. The merge-key test now writes the key in the containing
+> mapping's own syntax and runs on all 38 sources. A variant that fails to parse is now named. Undoing
+> each fix turns its test red (6, 1, 2 and 38 failures). §1 C0 and the registry's `C0.no-concurrency`
+> now state GitHub's documented behaviour. A constant group makes a new run wait as `pending` and
+> cancels any run still pending; only `cancel-in-progress: true` cancels the in-flight run.
+> **r66** `296c516` (revision 62): agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2 and one non-blocking
+> text item). Both P2s are in source-generator code revision 62 itself added, and both were reproduced
+> here on both entries. `_relaid_trunk_inputs` splices at the last VALUE node rather than the containing
+> mapping, so a flow-style or anchored base fed back in as the shipped source raises. The merge-key
+> loader test inserts block syntax whatever the source's layout. codex: "I found no additional
+> actionlint-valid workflow that the checker accepts contrary to the contract, or rejects despite the
+> contract permitting it." **Shipped-checker survivors: r65 0, r66 0.** That is two consecutive
+> zero-survivor rounds, so the stopping rule applies: instrument findings are ticketed, not fixed in
+> flight. **COREDEV-2871** carries the three generator defects and the text item (an IN-FLIGHT run is
+> cancelled only with `cancel-in-progress: true`, which C0's wording and contract line 158 omit).
+> **OUTCOME: CLOSED BY MAINTAINER DECISION, NOT PASSED** (2026-10-02, after round 66, revision 62).
+> The re-gate ran from revision 38 to revision 62. Three double approvals in it were re-run on
+> byte-identical bytes with a neutral prompt (r42, r49, r56), and none reproduced. No Combined verdict
+> exists for revisions 38-62, and `review-synthesis` was not run, because there is no approving pair to
+> synthesise. The Combined verdict persisted at r29 covers revision 27 only. The maintainer treated the
+> CHECKER as settled. The last checker survivor was the present `name: null` r64 found and revision 61
+> fixed; r65 and r66 found none, and every finding since has been in the standing tests' own generators. Every edit
+> to this document after revision 62 is ungated by construction.
+> **r65** `bed7400` (revision 61): codex `REQUEST_CHANGES` (2 P2); agy's first run produced no review
+> (a `read_file` permission headless mode cannot grant, 307 B), and its re-run on the same frozen tree
+> returned `APPROVE`. codex confirmed the key-membership repair, the three bases and the three text
+> corrections, and found **no checker survivor**: both P2s are defects in the standing tests' own
+> source generators, each reproduced here. The decoy decided block layout by whether a value ENDS ITS
+> LINE, and a flow mapping can end a line before its closing brace (4 ParserErrors). Quoting a key
+> replaced its whole node SPAN, which includes the node's properties, so `&a save-annotations` lost its
+> anchor and every `*a` was left undefined (20 ComposerErrors). **Revision 62** places the decoy by the
+> containing mapping's STYLE and requires it to be placed on each entry. It quotes only a plain key's
+> own text, raises by name on any generated variant that does not load equal to its base, and adds
+> codex's two layouts as BASES. Every raw test now runs on 19 sources per entry, all actionlint-clean.
+> Swept for the class before review: the loader FILTERED PyYAML's 1.1 resolver table, which left 1.1's
+> merge (`<<`) and value (`=`) types; the table is now an allowlist of the four core scalars. Two text
+> corrections: §1's kind table still scoped cell 4's digest to the `lint:` block, and §3b's silence
+> rule omitted the missing-`python3` notice. Shipped-checker survivors this round: **0**; instrument
+> defects: 2.
+> **r64** `01b5794` (revision 60), both arms: agy `APPROVE`, codex `REQUEST_CHANGES` (2 P2). codex
+> confirmed `_respell`, the `named-false` cases and their survivor records. P2: **revision 60's variant
+> generator was not layout-valid.** A trailing comment after a value inside a flow collection comments
+> out the commas and braces after it, so a flow-style shipped file would have produced 24 errors. The
+> decoy test also assumed block layout from a variant's LABEL, and errored without a final newline.
+> P2: **the `name` repair was half done.** `is None` conflates ABSENT with a PRESENT `name: null`, `~`
+> or empty `name:`. Those still fell back to the job ID in the comparator and in cell 14's census. Three
+> non-blocking text corrections were also made. **Revision 61** decides the context by key MEMBERSHIP in
+> both places, and the census fails closed on a present null. It adds `named-null` cases per entry, which
+> revision 60's `is None` accepted. Sources now come from three bases (as shipped, flow, no final
+> newline) with layout-valid variants, and the decoy is placed by LAYOUT and EOF-safe: 22 permitted
+> sources, all actionlint-clean. 130 recipes, 220 combinations, 0 failing.
 > **r27** `bcca42d`: codex `REQUEST_CHANGES` (3 ship-affecting + 1 document) + agy
 > `APPROVE_WITH_NOTES`. **Two of the three were introduced by revision 26's own stimulus contracts** —
 > and revision 26 is the one draft since r25 that was **not** run through the pre-commit check.
@@ -320,7 +765,7 @@ here so that observation resolves rather than re-opens.
 Three defects that share one shape: **a static assertion about the tree, or about which bytes are
 running, that is either absent, self-invalidating, or authoritative over the truth it should track.**
 
-| ticket | defect | today |
+| ticket | defect | at planning (the ORIGINAL baseline, not the current state) |
 |---|---|---|
 | COREDEV-2780 | 20 trunk linters configured, wired into **nothing** | bad lints merge freely |
 | COREDEV-2798 | the COREDEV-2619 inventory pins line numbers in files that are *prepended to* | **every release** reds the test |
@@ -329,7 +774,7 @@ running, that is either absent, self-invalidating, or authoritative over the tru
 They are planned together because they are one review's worth of argument. **They do not sequence**
 — revision 1 claimed COREDEV-2798 gated COREDEV-2780; both arms showed that false, since `trunk check`
 never executes `test_transcript_path_inventory.py`, which already runs in the existing `validate` job
-(`plugin-ci.yml:86`, `:588` on Darwin). M1 and M2 are independent.
+(the scripts-suite steps at `plugin-ci.yml:139`, and `:701` on Darwin; earlier locators drifted, codex r54). M1 and M2 are independent.
 
 ## §1 — COREDEV-2780: trunk gates the DIFF, never the tree
 
@@ -443,8 +888,9 @@ own non-required context.
   |---|---|---|
   | `yaml` | a workflow key that must be present with a value, or absent | set / clear / alter the key at its path |
   | `repo_fixture` | a path that must not exist in the checked-out tree (C6) | materialise it — and for `.trunk/setup-ci`, as a **valid composite action that exits green**, not a bare executable |
-  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block, **C6a's shared resolver script**) | edit the bytes while preserving the surrounding shape |
+  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's whole `.trunk/trunk.yaml` with version specifiers normalised out, **C6a's shared resolver script**) | edit the bytes while preserving the surrounding shape |
   | `remote_relation` | local content that must equal live remote state (C2) | diverge the local half, and separately the remote half |
+  | `raw_text` | a property only the source TEXT can show: no explicit YAML tag, and canonical spellings of pinned scalars, read at their YAML PATHS (C0.raw-text-canonical, revision 58; codex r62) | edit the bytes of the workflow source, then check the text and its parse |
 
   **Mutation CASES are first-class, and the generator iterates cases rather than entries**
   (codex, r15). One mutant per *entry* still under-covers, because several obligations need more than
@@ -471,8 +917,10 @@ own non-required context.
     ever survived a round of this gate stays in a corpus that must keep failing. A registry edit that
     silently drops an obligation reddens the corpus even though the rendering lint is happy;
   * **the end-to-end behaviour cells** (1, 2, 3, 5, 12 **and 17**), which observe real runs and do not
-    consult the registry at all — cell 17 most of all, since it observes the ruleset's behaviour rather
-    than any file's contents.
+    take the BEHAVIOUR they assert from the registry — cell 17 most of all, since it observes the
+    ruleset's behaviour rather than any file's contents. They are not wholly registry-free (codex, r56).
+    The parity harness reads the registry's action pin and input digest to run the action as shipped,
+    and cells 1 and 5's judge reads the same, as §6.1 describes.
 
   What remains genuinely unmechanisable is *arbitrary* completeness, and what guards that is the
   registry being small, diffable and reviewed.
@@ -497,7 +945,9 @@ own non-required context.
   authority; cell 11 asserts these clauses by name.
 
 * **THE CONTRACT'S TEETH DEPEND ON `validate` STAYING A REQUIRED CONTEXT.** Every clause below is
-  enforced by the Python suites, which run **only** inside `plugin-ci.yml`'s `validate` job. If that
+  enforced by the Python suites, which run in `plugin-ci.yml`'s `validate` job and again in its
+  `darwin-suite` job. `darwin-suite` is NOT a required context, so it adds no teeth: only `validate`
+  gates a merge (codex, r42 corrected an earlier "only inside `validate`"). If that
   context were ever dropped from ruleset `Control`, a contract-breaking edit to `trunk-check.yml` would
   merge green behind a passing `trunk-check`, and nothing here would notice. **Verified live at
   revision 28**: `Control` requires `validate`, `py39-smoke`, `secret-scan`, `load-check` and
@@ -513,10 +963,13 @@ own non-required context.
   happily (codex, r24). Cell 10 is therefore **hybrid** — the evidence artifact keeps the runtime
   observation, and a static assertion pins the value, with `write-all`, a widened single scope, and
   an absent `permissions` key each mutated.
-  **`concurrency` is prohibited at workflow and job level** (codex, r21): a constant concurrency group
-  makes GitHub **cancel the in-flight run** when a new one starts, and a cancelled required check is
-  not a passing one — a rapid second push would leave the context `cancelled` or pending on the SHA a
-  merge is waiting on. Converting the job mapping to an allowlist in revision 21 left the root open,
+  **`concurrency` is prohibited at workflow and job level** (codex, r21). A constant concurrency group
+  serialises the runs. A new run waits as **`pending`** while one is in progress, and a newer run
+  **cancels any run still pending**. With `cancel-in-progress: true` the in-flight run is cancelled
+  too, but the group alone does not cancel it (GitHub's documented behaviour; codex, r66 corrected
+  revision 21's wording). A cancelled required check is not a passing one, and a pending one is not
+  either: a rapid sequence of pushes would leave the context `cancelled` or pending on a SHA a merge
+  is waiting on. Converting the job mapping to an allowlist in revision 21 left the root open,
   which is the same level-above defect one level further out.
 
   **C1 — one event, and its OPTIONS are an allowlist.** `.github/workflows/trunk-check.yml` is
@@ -629,7 +1082,20 @@ own non-required context.
 
   **C3 — the JOB mapping is an allowlist, and nothing skips or masks on any step.** The job's own
   keys are `runs-on`, `timeout-minutes`, `permissions`, `steps`, and optionally `name` (cell 14's
-  effective check name, which takes precedence over the job id when present) — and nothing else, **with
+  effective check name, which takes precedence over the job id when present) — and nothing else,
+  **with one exception per entry** (codex, r49): the CANARY also carries the permanent job-scoped
+  `continue-on-error: true` that C16 REQUIRES, and the required workflow carries it only at M2 (the
+  advisory exemption). Without the canary exception this allowlist and C16 cannot both hold. The checker
+  implemented the exception; the authority omitted it.
+  **Each workflow declares exactly ONE job** (both arms, r47): every check here reads the first job, so
+  without this a sibling appended under `jobs:` is never inspected at all.
+  **The EFFECTIVE context is pinned per entry** (codex, r46): a PRESENT `name`, whatever its value,
+  decided by MEMBERSHIP (a truthiness test let `name: false` fall back to the job ID, codex r63; an
+  `is None` test then still let `name: null`, `~` or an empty `name:` do so, codex r64), or else the job
+  ID, must
+  equal `trunk-check` for the required workflow and `trunk-check-push` for the canary. `name:` decides
+  which status context a job emits. Checking only the job ID let a canary renamed `validate` emit a
+  REQUIRED context, satisfying it on its SHA without the contract suites ever running. **With
   `permissions:` pinned to exactly `contents: read` here as well as at the root**. GitHub calculates
   the token workflow-level *then* job-level, so a job-level `permissions: write-all` widens the
   effective token while satisfying both allowlists — revision 24 pinned the value at C0 and left the
@@ -646,7 +1112,8 @@ own non-required context.
   `defaults.run`**, which can redirect `shell` or `working-directory` for every step at once. Exactly
   one unconditional Trunk invocation.
 
-  **C4 — the action's `with:` inputs are an allowlist.** Only `arguments` (§6.4's literal),
+  **C4 — the action's `with:` inputs are an allowlist.** Only `arguments` (§6.4's REQUIRED literal;
+  the push canary carries §6.4's CANARY literal),
   `save-annotations` (§6.1), and optionally `cache`/`cache-key`. Everything else absent — notably
   **`trunk-path`** (it names the executed launcher) and **`post-init`** (the action's own docs:
   "caller-controlled escape hatch").
@@ -687,8 +1154,58 @@ own non-required context.
   well-meaning sparse-checkout optimisation can leave changed files **absent from disk** while git
   metadata still yields a non-empty range — so the empty-diff guard passes and Trunk lints files that
   are not there. That is an *accident*, squarely inside §0's threat model. The permitted set is
-  **`fetch-depth` (optional), `lfs: true` (required), and `persist-credentials: false` (required)**;
-  every other input must be absent.
+  **`fetch-depth` (REQUIRED, exactly `2` on the required job and `0` on the canary), `lfs: true`
+  (required), and `persist-credentials: false` (required)**; every other input must be absent.
+  `fetch-depth` was "optional" with its value unconstrained until revision 53 (codex, r56), so depth 1,
+  depth 2 and omission passed on both entries. The required resolver needs `HEAD^1`, which checkout's
+  default depth of 1 lacks. The canary needs the WHOLE history, because a push of N commits has
+  `before` = HEAD~N. At depth 2 that object is absent, and the guard reads an EMPTY diff, so Trunk never
+  runs.
+
+  **The contract is over GITHUB'S parse, YAML 1.2** (codex, r59 and r60). Its core schema has only
+  `true` and `false` as booleans; `yes`/`no`/`on`/`off` are STRINGS; an integer is decimal unless
+  prefixed `0o` or `0x`; and `1_5`, `1:30` and dates are strings. The checker parsed with PyYAML's YAML
+  1.1 default, which reads `yes` as True, so `save-annotations: yes`, `lfs: yes` and
+  `persist-credentials: no` passed. It also reads a leading zero as OCTAL, so `timeout-minutes: 017`
+  passed as 15 where GitHub reads 17. Revision 56 replaced only the boolean resolver, and the integer
+  case survived it. Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema (booleans,
+  integers, floats, null), and the resolver table is an ALLOWLIST of those four (revision 62): it had
+  been PyYAML's 1.1 table with the named resolvers removed, which kept 1.1's merge key `<<` and value
+  `=`. The synonym and octal cases are mutated as RAW TEXT on both entries, because
+  the defect is in the parse and a mutation of an already-parsed dictionary happens after it. The
+  mutation keeps any inline comment, which the contract permits.
+
+  **C0.raw-text-canonical: two properties only the RAW TEXT can show** (codex, r61). First, **no explicit
+  YAML tag**. `!!bool yes` and `!!int 1_5` bypass every implicit resolver, so they re-admitted exactly
+  the 1.1 coercions revision 57 removed, and the checker and actionlint both accepted them. Second,
+  **every pinned scalar is spelled canonically** (`15`, `2`/`0`, `true`, `false`, `true`). A respelling
+  such as `+15` or `TRUE` parses to the pinned value. The raw-text mutation tests had silently assumed
+  canonical spellings, so a correct-but-respelled workflow failed them; the assumption is now a
+  declared contract rule, checked by `raw_workflow_problems` on both entries. **Each pinned value is
+  found at its YAML PATH, never by a line search** (codex, r62). Revision 58 used a line regex, which
+  rejected a quoted key (`"timeout-minutes": 15`). Worse, it ACCEPTED a forbidden `+15` when a decoy
+  `timeout-minutes: 15` line sat inside a permitted block string. The value is now located through the
+  composed node graph, and its spelling read from that node's own source span. A quoted key and a
+  flow-style document are accepted; the decoy is not. **The mutation BUILDERS locate values the same
+  way** (codex, r63). They had kept line regexes, so a permitted inline comment or quoted key in the
+  shipped file would have failed the standing tests. Every raw case now runs on every permitted
+  spelling of each source. There are five BASES: as shipped, the whole file in flow style, no final
+  newline (codex, r64), the trunk inputs as a multi-line flow mapping, and an anchored pinned key
+  aliased by `cache-key` (codex, r65). Each base has quoted-key and flow-style variants, plus an
+  inline-comment variant only where every pinned value ends its line. Inside a flow collection a
+  trailing comment would comment out the commas and braces after it (codex, r64). A key is quoted by
+  its own text, keeping any anchor, and any variant that does not load equal to its base raises by
+  name (codex, r65). The decoy is placed only where the trunk inputs are a BLOCK mapping, decided by
+  that mapping's style, and it must be placed at least once on each entry. All 38 sources (19 per
+  entry) are actionlint-clean and a positive control for both checks. The two trunk-input bases are
+  built by splicing text at node marks, so that builder is defined only inside a declared DOMAIN,
+  `_generator_domain_problems` (COREDEV-2871). The domain requires no anchor or alias, the trunk
+  inputs to be one block mapping of scalars, and no `cache-key` yet. The shipped files must be inside
+  it, and a source outside it is refused BY NAME. A permitted re-layout of a shipped file outside the
+  domain therefore fails the standing tests loudly and by name; that is a declared limit, never a pass.
+  Every base, fed back in as the shipped source, either generates or is refused (codex, r66). The parity
+  harness also reads its inputs with PyYAML. A synonym can no longer reach it on a workflow the contract
+  accepts, so its coercion stays unexercised.
 
   **`persist-credentials: false` is required, and revision 20 forbade it (sweep).** `actions/checkout`
   persists the job's credential by default — **in `.git/config` below v6, and in `$RUNNER_TEMP` from
@@ -785,11 +1302,13 @@ own non-required context.
   `pull_request.sh` and `push.sh`, so §6.4's exclusion necessarily travels through this input.
   Revision 5 governed the input but left two holes codex found: it permitted `arguments:` to be
   **absent**, which after §6.4 was decided is no longer an authorised implementation (absent means
-  `markdown-link-check` *runs* in the required job); and §6.4 never declared the literal bytes cell 9
+  `markdown-link-check` — and, since COREDEV-2850, the five whole-file formatters — *run* in the required
+  job); and §6.4 never declared the literal bytes cell 9
   was told to match, so **the cell could not be executed as written**.
 
-  **The contract:** `arguments:` **must be present and must equal §6.4's declared literal** — whose
-  bytes are stated *only* in §6.4, so this section does not restate them (a derived value written
+  **The contract:** `arguments:` **must be present and must equal §6.4's declared REQUIRED literal**
+  (the push canary: §6.4's CANARY literal) — whose bytes are stated *only* in §6.4, so this section does
+  not restate them (a derived value written
   twice goes stale, and two stale copies agree with each other). Asserted by cell 9 as a whole-string
   match — never a substring or a "contains `--filter`" test, both of which an appended argument would
   still satisfy. **Absence is a failure**, not a permitted variant.
@@ -815,8 +1334,11 @@ it: reading the expectation out of `.trunk/trunk.yaml` makes a **silently reduce
 authoritative over the assertion meant to detect it**, which is the primary hazard this ticket exists
 to close. §1 is the declared authority, so an implementer following this paragraph built exactly the
 blind oracle. Cell 4 instead carries **the 19 expected linter names as frozen literals plus a digest
-over the `lint:` block with version specifiers normalised out**, and fails if a name is missing, an
-unlisted linter appears, the exclusion list grows, or the block changes other than by a version pin.
+over the WHOLE `.trunk/trunk.yaml` with version specifiers normalised out** (the implementation freezes
+the whole configuration, not only its `lint:` block; codex, r64), and fails if a name is missing, an
+unlisted linter appears, either §6.4 literal's excluded set grows, or the configuration changes other
+than by a version pin. The 19 are CONFIGURED membership: since COREDEV-2850, five of them do not run in the
+REQUIRED job (cell 4).
 
 ## §2 — COREDEV-2798: identity is CLASS-SPECIFIC
 
@@ -828,7 +1350,8 @@ rejected it: that fails against a currently-correct tree.
 | `quote-keep` (`CHANGELOG.md:2140`) | the source line itself | **match exactly once** |
 | `rewrite` (`README.md:187` → dest 292) | `destination.payloads` | **match NOTHING** — the legacy source was deliberately deleted |
 
-`test_transcript_path_inventory.py:349` already enforces source-absence for rewrites.
+`test_transcript_path_inventory.py` already enforces source-absence for rewrites (`_legacy_source_survives`,
+`:487` today; `:349` at this plan's baseline).
 
 **The fix, per class:**
 
@@ -841,8 +1364,9 @@ rejected it: that fails against a currently-correct tree.
   its line assertion.
 
 **Two existing line dependencies must change with it** (codex, r2): the observed-site set comparison
-at `test_transcript_path_inventory.py:342` (`quote_keep_sites = {_site_key(site) …}`) and the
-fixed-line hash check at **`:358`** (`_sha256(lines[site["line"] - 1]) != site["sourceSha256"]`).
+at `test_transcript_path_inventory.py` (`quote_keep_sites = {_site_key(site) …}`, `:448` today, `:342`
+at baseline) and the fixed-line hash check (`_sha256(lines[site["line"] - 1]) != site["sourceSha256"]`,
+`:482` today, **`:358`** at baseline; COREDEV-2870).
 **Cited by content, with the line as a hint** — `:355` is the enclosing `class == "quote-keep"` guard,
 not the hash, and this plan carried that wrong pin from revision 2 through the gate. Line pins rot;
 that is COREDEV-2798's entire thesis, one section above.
@@ -852,8 +1376,13 @@ implementations; §5 cells 6–7 now carry the negative controls that kill them.
 
 ## §3 — COREDEV-2801: a diagnostic and a detector, not a remedy
 
-**Cause not identified. Four hypotheses tested and eliminated** (stale scopes; stale fork; a
-release/tag pin; VS Code caching) — on the ticket, so they are not re-tried. Established: `2.7.0`
+**The SELECTION is root-caused; the REBUILD is not** (codex, r51, matching
+`COREDEV-2780_GATING_FOLLOWUP_PLAN.md`). With no `version` in `marketplace.json`, the installed version
+was resolved from the FIRST entry of a raw directory read of the plugin cache, with no sort and no
+semver comparison. That `version` is now declared and enforced as a fifth sync point. What triggers the
+wholesale registry REBUILD that kept reinstating the stale entry is still unproven, and the detector
+below still instruments it. Before that finding, four hypotheses were tested and eliminated (stale
+scopes; stale fork; a release/tag pin; VS Code caching) — on the ticket, so they are not re-tried. Established: `2.7.0`
 exists in exactly one file; `main` has not served it since `13d5c2b` (Aug 7); that file **is**
 rewritten by updates and the stale entries survive the rewrite; four live sessions were bound to it.
 
@@ -875,7 +1404,8 @@ single-caller claim (codex, r7).
 **Why that one, and why it survives the bootstrap problem.** A session bound to 2.7.0 cannot execute
 a detector shipped only in 2.8.4+. The hook is not shipped by the plugin — it lives in the
 **checkout** and runs from it, so it is current regardless of which install a session loaded. It
-compares `~/.claude/plugins/installed_plugins.json` against
+compares `installed_plugins.json` under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/` (Claude Code
+roots its plugin state in `CLAUDE_CONFIG_DIR` when it is set; codex, r64) against
 **`.claude-plugin/plugin.json` as of `origin/main`**, needing no plugin code and no reviewer session.
 
 **The git operation is ANCHORED, and the ROOT IS AN EXPLICIT OPERAND SUPPLIED BY EACH CALLER**
@@ -909,11 +1439,16 @@ ambient variable the other does not have.
 Earlier revisions had pre-commit read the *staged* manifest and `SessionStart` the *worktree*; both
 are wrong for the same reason Table A now states — the working tree and the index are where the
 version-bump rule *raises* the version, so either would warn on the healthy state for a whole
-branch's life. **The detector therefore has NO mode operand at all** (codex, r24). Revision 22 kept
+branch's life. **The detector therefore has NO COMPARISON-SOURCE mode** (codex, r24). It does take a second operand,
+`--session-start`, which `.claude/settings.json` passes and the pre-commit hook does not. That operand
+selects only the hook PROTOCOL (JSON on stdin, deduplication, the `systemMessage` envelope). WHAT is
+compared is identical on both surfaces. Revision 46 said "no mode operand at all", which was false of
+the code (codex, r49). Revision 22 kept
 one and redefined it as selecting "which installs to report on" without ever defining that mapping;
 revision 23 deleted one site of the old semantics and left two more standing. There is nothing for a
 mode to select — both surfaces compare the *same* installed record against the *same* `origin/main`
-manifest, and differ only in **when they fire**. The operand is removed. *(Not to be confused with
+manifest, and differ only in **when they fire**, and in the hook protocol `--session-start` selects
+(above). The comparison-mode operand is removed. *(Not to be confused with
 trunk's `--index` in cell 13, which is a different flag on a different tool and is unaffected.)*
 
 **`origin/main` is a local bookmark — a STATED LIMITATION, not a mechanism.** It is only as current
@@ -971,6 +1506,10 @@ observed shape" while cell 8 required silent rows to produce *no output* — a c
 could satisfy by exiting quietly and recording nothing, passing every cell while violating the table.
 Recording belongs to **Table B**, the one-time §3a experiment, whose observations are written to the
 evidence artifact by a human-run measurement. The per-session detector has no sink and needs none.
+**One notice precedes the table, and it is not a row** (codex, r65): when `python3` is absent the
+detector can evaluate no row at all, so it says once that the drift check did NOT run (a
+`systemMessage` in session mode, stderr otherwise) and exits 0. That guard sits before the
+`origin/main` read, because "I cannot run" must not be reported as "there is nothing to compare".
 
 **Table B — what the §3a experiment establishes.** The experiment runs `claude plugin update` at
 **user scope** and re-reads the record; `u` and `p` are the user and project entries.
@@ -1067,13 +1606,29 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     stat an aged marker, A unlinks and recreates it, B's already-decided unlink removes A's *fresh*
     marker, and B's `O_EXCL` create then succeeds, so both warn in the same new window. Encoding the
     window in the **name** means a live marker is never unlinked at all: the sweep removes only buckets
-    strictly older than the current one, and the decision is a single `O_EXCL` create with no
+    older than current−1 (revision 53, below), and the decision is a single `O_EXCL` create with no
     unlink-then-create sequence to lose.
 
     **`window` is `floor(unix_time / 604800)`** — fixed seven-day buckets from the epoch, declared
     because revision 14 named the field without defining it, and *daily* buckets under a seven-day
     cleanup would have passed every stated test while warning the same session **every day**
-    (codex, r14). Cleanup removes markers whose window is strictly less than the current one.
+    (codex, r14). **Cleanup removes markers whose window is older than current−1; the PREVIOUS bucket
+    is kept** (COREDEV-2868; codex r56, which reproduced three warnings against the detector's own
+    body). Sweeping everything older than the CURRENT bucket let this happen: an invocation captured
+    bucket w and paused before its `O_EXCL`; meanwhile a session in w+1 swept w; the paused invocation
+    re-created w and warned a second time in w. Keeping w makes its `O_EXCL` fail. The accepted
+    boundary behaviour below is therefore exactly two warnings, never three. **That guarantee carries
+    a TIMING ASSUMPTION, stated rather than hidden** (codex, r57 and r58), in two parts. First, each
+    invocation completes within one bucket of its own start: the hook's 5-second timeout bounds an
+    invocation's duration. Second, **the bucket index sampled by every invocation is never smaller than
+    the bucket index sampled by any EARLIER invocation**: the clock is non-decreasing at bucket
+    granularity over the whole history, not merely between two adjacent calls (codex, r59).
+    Revision 55 said "backward by a bucket or more between invocations". codex then produced three
+    warnings from several backward moves, each SHORTER than a bucket, that summed past one. A
+    session that warned in bucket 1000, a sweep from bucket 1002, and then a clock set back to 1000 (a
+    restored VM snapshot, say) warns again in 1000, with every call fast and stable. Any history in
+    which the sampled bucket index decreases is out of scope. Keeping more buckets would only move the counterexample one bucket
+    further; it would not remove it.
     **Accepted boundary behaviour, stated rather than discovered later:** a session live across a
     bucket boundary may warn twice, seconds apart. That is the honest reading of "at most one warning
     per session per retention window", and the alternative — a rolling window anchored on the marker's
@@ -1081,16 +1636,19 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     repeated invocation *within* a bucket (one warning) and *across* a boundary at well under seven
     elapsed days (a second warning, expected). *Hashed*: `session_id` is documented as an opaque identifier
     with **no filename-safety contract**, so using it raw makes marker creation fail on a `/` or an
-    over-long component — and this dedup fails **open**, warning on every invocation. — **not**
+    over-long component. This detector's `OSError` branch then exits SILENTLY, so the failure mode is a
+    LOST warning on every invocation, not a repeated one; revision 54 said "fails open, warning on every
+    invocation", which this code never did (codex, r58). — **not**
     `${CLAUDE_PLUGIN_DATA}`, which revision 10 used and which is scoped to *plugin*-associated hooks
     while this hook deliberately lives in project `.claude/settings.json` (codex, r10). The chosen
     path needs no plugin identity and matches the convention this repo already uses for review
     transcripts. It is created with `O_EXCL` **before** the warning is
     emitted, so two concurrent invocations cannot both warn and a crash between create and emit fails
-    silent rather than warning twice. **Cleanup removes markers from any PRIOR window**, which is not the
-    same statement as "older than 7 days" (codex, r17): just after a bucket boundary a marker seconds
-    old belongs to the previous window and is swept. The window-comparison form is the implementable
-    one; the age phrasing described a mechanism this design deliberately does not use.
+    silent rather than warning twice. **Cleanup is by BUCKET, never by age** (codex, r17): it removes
+    markers older than current−1, so a marker written seconds ago two buckets back is swept, and the
+    previous bucket is kept (COREDEV-2868). Revisions up to 52 said "any PRIOR window", and revision 53
+    left that sentence standing beside its new rule (codex, r57). The window-comparison form is the
+    implementable one; the age phrasing described a mechanism this design deliberately does not use.
   * **Output protocol** — the warning is emitted as **`{"systemMessage": "…"}`**, not bare stdout
     (agy, r8). A `SessionStart` hook's plain stdout is injected into the **agent's context**, so a
     warning printed that way is read by the model and never seen by the developer — a detector whose
@@ -1102,7 +1660,8 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
 
   Cell 8 exercises the matcher set, `${CLAUDE_PROJECT_DIR}` resolution, **the anchored git lookup
   from an unrelated cwd, and the root OPERAND on BOTH surfaces — pre-commit with that variable unset,
-  empty and pointing at a different repository**, the timeout against a sleeping detector, the dedup
+  empty and pointing at a different repository**, the declared `timeout: 5` literal mutated as an
+  operand (a declaration; CI cannot dispatch a real `SessionStart` to time one), the dedup
   marker under
   concurrent invocation **and aged-marker resumption**, **a filename-hostile `session_id` with a
   hash-removal mutation**, **the bucket-boundary cases and the `604800` mutation**, and the
@@ -1228,6 +1787,10 @@ alternative turned out to be complementary rather than competing.
       which meant either the pre-read failed or every successful edit was rolled back — a checklist
       that could not pass (codex, r25).
 
+      **Rolling M4 back means restoring its pre-read snapshot, which lacks `trunk-check`.** That is
+      safe only because **no witness PR exists yet**: cell 17's witnesses are opened only after M4's
+      readback has passed (codex, r52). A rollback with any witness open follows M4a's rule instead:
+      close the witnesses first.
       **Must be UNCHANGED across both reads** — roll back if any differs:
       1. both base tips still carry a byte-equivalent strict job;
       2. the effective check name;
@@ -1246,6 +1809,10 @@ alternative turned out to be complementary rather than competing.
       4. **`trunk-check-push` ABSENT from the required-context list**, before and after (cell 16's
          re-verification — an M4 payload could otherwise require the canary and still satisfy the
          readback, leaving ordinary PRs pending and giving a `main`→`alpha` PR a same-SHA substitute).
+      5. **`enforcement` is `active`** in BOTH reads, read fresh each time. It must be ACTIVE, which is
+         more than "unchanged" (codex, r50). The recorded `active` in the rollout evidence is history,
+         not a precondition, and an inactive ruleset passes items 1-4 and every comparison while
+         enforcing nothing.
 
       **Must CHANGE, in exactly one direction** — roll back if not:
       5. `trunk-check` is **absent** from the required contexts in the pre-read and **present with its
@@ -1281,8 +1848,10 @@ alternative turned out to be complementary rather than competing.
       or a push. Two dispositions follow, both implied by the merge-ref model and neither previously
       stated: **stale same-repo PR branches do NOT need a rebase**, because the `pull_request` merge ref
       picks the workflow up from the base — close/reopen suffices; and a **fork PR with maintainer-edits
-      disabled cannot be refreshed by the maintainer at all**, which under `bypass_actors: []` means the
-      disposition is "close it, or wait for the author". Decide that before M4 blocks on one — it is the
+      disabled cannot be refreshed by a maintainer PUSH**, but close/reopen still re-triggers its
+      workflow, because it edits no fork branch, subject to the repository's fork-run approval (codex,
+      r56 corrected "cannot be refreshed at all"). If that approval is withheld, under
+      `bypass_actors: []` the disposition is "close it, or wait for the author". Decide that before M4 blocks on one — it is the
       exact incident class (unmergeable PRs, no bypass) this plan cites as its motivation.
 
       **Qualify by workflow PROVENANCE, not by timestamp** (codex, r27): a maintainer can "refresh" an
@@ -1299,9 +1868,13 @@ alternative turned out to be complementary rather than competing.
          sacrificial PR is **`blocked`** with the reason naming `trunk-check`, and that a green PR is
          **`clean`**. **No merge endpoint is called, on either half** (codex, r33): the red half's
          failure mode is landing that PR on a protected base, and the green half would advance a base
-         tip this milestone's own readback requires unchanged. Every other observation in this plan is
-         pre-requirement and verifies what the workflow and rule *contain* — this is the only one that
-         verifies the ruleset's *behaviour*.
+         tip this milestone's own readback requires unchanged. **Close the green witness as soon as its
+         `clean` state is recorded** (codex, r53): it is mergeable BY DESIGN, so leaving it open longer
+         than its observation only widens the window in which an authorized human could merge it. For
+         the re-observation after the rehearsal, reopen it (`reopened` re-runs its checks), record
+         `clean`, and close it again. Every other observation in this plan, except cell 2's M4
+         rule-satisfaction half, verifies CONTENT (what the workflow and rule *contain*) — this is the
+         only one that verifies the ruleset's *behaviour* as an enforcement.
       2. **Rehearse the §6.2a rollback — as a SUBSTITUTION, so the repository is never ungated.**
          In one PUT, replace the `trunk-check` entry with a placeholder required context that
          **nothing produces** (`trunk-check-rollback-rehearsal`); observe read-only that the red PR is
@@ -1320,8 +1893,32 @@ alternative turned out to be complementary rather than competing.
          enforce, asserted as though it could. Keeping a placeholder context that nothing satisfies
          makes the interval **fail-closed**: every PR stays blocked throughout, auto-merge included, so
          the guarantee no longer depends on nobody acting for the duration.
-      Both outcomes land in the rollout evidence artifact. **If either fails, roll the ruleset back to
-      its pre-M4 canonical state** and return to M3.
+      Both outcomes land in the rollout evidence artifact. **If either fails, recover in THIS order**
+      (codex, r49). Revision 46 said "roll the ruleset back to its pre-M4 canonical state", which holds
+      neither `trunk-check` nor the placeholder. That is the ungated state, reached with the deliberately
+      red PR still open and its other required checks green, so it reopened the merge race the
+      substitution exists to close, auto-merge included.
+      **What M4a guarantees, scoped to M4a's OWN actions** (codex, r52 and r53 showed broader readings
+      cannot hold): **M4a never merges a witness, and no write of M4a's leaves the red witness
+      mergeable.** It cannot promise that no human merges a witness. The green one is mergeable BY
+      DESIGN while open, and an authorized actor could merge it by hand, which no preflight excludes.
+      That exposure is ACCEPTED, and bounded by opening the green witness only for its observations
+      (step 1). Other open PRs follow the repository's ordinary rules. A window without the
+      `trunk-check` requirement is the pre-M4 status quo, not an exposure M4a creates. "The witnesses"
+      means BOTH cell-17 PRs, red and green.
+      1. **If cell 17 failed, close BOTH witness PRs FIRST.** The red PR observed as mergeable means the
+         gate is NOT enforcing, so restoring that same state is not "fail-closed" (codex, r50). Nothing in
+         the ruleset can be relied on to protect the witness, and an interruption before closure leaves
+         it mergeable. Otherwise, for a rehearsal failure under a ruleset verified `enforcement: active`,
+         **stay fail-closed**: mid-rehearsal keep the placeholder, or else restore the pre-M4a canonical
+         state (`trunk-check` present, no placeholder). Either way, under §6.2a's readback for that
+         write, with `enforcement: active` verified in it. Both are blocking states, and the write
+         between them is one atomic PUT. **If the read before that write finds the repository NOT
+         blocking, the ONE RULE below governs instead: close both witnesses, and stop.**
+      2. **Close both witness PRs** if either is still open, and confirm both are closed, before any
+         write that could ungate.
+      3. **Only then**, and only if the failure shows the gate itself is broken, perform §6.2a's incident
+         rollback to the pre-M4 state (its one-entry readback), and return to M3.
 
       **M4a TOUCHES THE LIVE RULESET AND MUST BE INTERRUPTION-SAFE** (codex, r30 then r33). Step 2
       rewrites the required-context list, so an interruption between its two PUTs leaves `Control` in
@@ -1333,10 +1930,38 @@ alternative turned out to be complementary rather than competing.
       present**. Therefore:
       * **Read the canonical ruleset before entry and before every transition, and classify the state
         by what it contains**: `trunk-check` present and no placeholder = the start (or finished)
-        state; **placeholder present = interrupted mid-rehearsal**, resume at the restore PUT;
+        state; **placeholder present WITHOUT `trunk-check` = interrupted mid-rehearsal**, resume at the
+        restore PUT; **BOTH present = an anomalous state** (a faulty substitution that added the
+        placeholder and kept `trunk-check`). It is blocking, but no planned write reaches a known state
+        whose readback can pass from it, so **STOP exactly as for a not-blocking state: close the
+        witnesses and hand it to the maintainer** (codex, r53). The classifier matches EXACT states, not
+        "contains". **An exact state means the WHOLE canonical document, not only the two context
+        entries** (codex, r54). At every transition read, the remainder (everything except `trunk-check`
+        and the placeholder) must equal the saved pre-M4a canonical remainder, and the target conditions,
+        freshly resolved per C2's `resolve()`, must EQUAL the saved resolved set. Equality, not
+        coverage: an include of `~DEFAULT_BRANCH` can widen the set while the bytes stay unchanged, and
+        C2 requires exact equality (codex, r55; COREDEV-2870). Otherwise an
+        administrator who retargets an ACTIVE `Control` mid-rehearsal produces "placeholder present"
+        with the red witness no longer covered, and resuming the restore would preserve that drift and
+        pass §6.2a's remainder check. **Any discrepancy at a deciding read closes both witnesses and
+        stops.** That is drift visible AT the read, distinct from the unavoidable read-to-write race;
         **neither present = the repository is UNGATED**, which the substitution model should never
-        produce — stop, restore `trunk-check` from the recorded pre-M4a canonical document, and
-        re-enter at step 1 rather than continuing.
+        produce. **Every one of these reads also requires `enforcement: active`** (codex, r50). A
+        placeholder under an inactive ruleset protects nothing.
+        **ONE RULE for every read that finds the repository NOT blocking** — `enforcement` anything
+        but `active`, or neither `trunk-check` nor the placeholder required — **close BOTH witness PRs
+        and confirm both are closed, FIRST. Then STOP M4a: record the state and hand it to the
+        maintainer.** An unplanned state has no planned write. §6.2a's readbacks are defined for the
+        planned transitions only, and a repair from an arbitrary state cannot satisfy them: from "neither
+        present" the placeholder cannot disappear, and from inactive enforcement, restoring changes the
+        remainder (codex, r52). So M4a does not auto-repair. Revision 48 applied close-first to the
+        inactive case only, and revision 49 still restored automatically and closed only the red
+        witness (codex, r51 and r52).
+        **The guarantee this buys, stated with its limit:** interruption-safety is a property of the
+        ACTIVE, blocking states, which the substitution keeps the ruleset in. A fresh read that finds the
+        gate NOT blocking DETECTS the exposure; it cannot protect the witnesses during the window before
+        closure. That is why closure is always the first action, and why the window is bounded by one
+        read.
       * **Preflight, and RE-READ immediately before each PUT.** Enumerate open PRs against both bases
         and confirm none has auto-merge enabled or sits in a merge queue. The entry preflight is a
         snapshot; the read that decides is the one taken immediately before the write, because the
@@ -1353,19 +1978,23 @@ alternative turned out to be complementary rather than competing.
       * **The mandatory final state is: `trunk-check` present with its expected `integration_id`, no
         placeholder context, the canonical ruleset otherwise identical to its pre-M4a bytes, and cell
         17 re-observed.** M4a is not complete until that is read back and recorded.
-      * **The sacrificial PR is closed before M4a exits.**
+      * **Both witness PRs, red and green, are closed before M4a exits.**
       * **Afterwards, verify both protected base tips are where they were.** M4a merges nothing, so any
         movement is another actor's — an incident, not a footnote.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
-      (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
+      (the staged content, not the worktree), **`--no-fix`**, §6.4's HOOK literal (which KEEPS the
+      formatters — COREDEV-2850), a
       a macOS-portable timeout whose **constant is fixed by MEASUREMENT, and measured FIRST**. The
       only datum behind revision 23's `120` was a single 7s one-file run, which says nothing about a
       cold linter-cache bootstrap or a large staged changeset — and this hook **blocks**, so a false
       timeout changes shipped behaviour. **M5a's first step is to measure a representative upper
       envelope** (cold cache, largest realistic staged set); the measured value, **plus explicit
       headroom for slower hardware**, is then **recorded in this plan and becomes the authoritative
-      constant**, which cell 13 asserts and mutates. **The headroom is not optional** (kimi, third
+      constant**, which cell 13 asserts and mutates. **Recorded: `180` seconds**, from a 30.8-second
+      cold-bootstrap envelope with about 5.8x headroom, measured 2026-09-01 and recorded in
+      `evidence/COREDEV-2780-m5a-timeout-measurement.json`. Until revision 55 the value appeared only
+      in the hook and that record, and this paragraph promised it here (codex, r58). **The headroom is not optional** (kimi, third
       lens): the envelope is measured on one developer Mac while the constant is asserted in CI across
       a Linux leg and different Darwin hardware, so a value fitted tightly to the measurement makes
       cell 13's clean slow-path case **fail against a correct implementation** on a slower runner.
@@ -1380,22 +2009,24 @@ alternative turned out to be complementary rather than competing.
       reported — and `.githooks/pre-commit` (§6.3 decided: wire it). Runtime behaviour per **Table
       A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
 
-- [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the four-site bump in
+- [ ] **MV — the version bump, on EVERY landing PR** (sweep). Revision 20 put the version bump in
       §7's file inventory and in no milestone, and this plan lands **eight shipping PRs** —
       **M0a**, M1, M2+M2b+**M2c**, M2a, **M3 on `main` and M3 on `alpha` (two)**, M5a, M6 — one bump
       cannot serve them; M0a ships the registry and survivor corpus, and M2c ships the harness workflow
       and its fixture refs.
       M3 edits the workflow on **both** bases and the plan specifies no single-PR mechanism for that,
       so it is two landings, not one (codex, r23). **Each PR that changes a
-      shipped asset carries its own bump**: `plugin.json`, the README H1, the README's newest
-      `### vX.Y.Z`, the README asset counts, and a `CHANGELOG.md` section. **M3 belongs on that list**
+      shipped asset carries its own bump**: `plugin.json`, **`.claude-plugin/marketplace.json`'s
+      `version`** (the fifth sync point, enforced in strict CI; omitting it fails `validate`, codex
+      r51), the README H1, the README's newest `### vX.Y.Z`, the README asset counts, and a
+      `CHANGELOG.md` section. **M3 belongs on that list**
       — it edits the workflow on both bases to remove `continue-on-error`, a shipped-asset change that
       revision 21 omitted while demanding a bump on every such PR (codex, r21). **M0, M4, M4a and M5 are the
       only exceptions** — a branch sync, a ruleset edit, a ruleset rehearsal and running the §3a
       experiment ship no plugin asset. **This list is closed, so every milestone added later must be
       placed on one side of it explicitly**; M2c and M4a were both added without it being revisited; revision 21 listed M0
       as shipping and then exempted it two lines later. `validate-version-sync.sh`
-      only checks the four sites **agree**, not that they **moved**, so agreement at a stale version
+      only checks the five sites **agree**, not that they **moved**, so agreement at a stale version
       passes: the bump is a milestone obligation, not something the validator will catch.
 
 M3 and M4 are gated on evidence, not schedule.
@@ -1452,8 +2083,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    plan — codex, r10.)*
 2. **The gate bites — asserted at the level each milestone can actually deliver** (codex, r11). A
    deliberately bad changed file must produce a failure. But at **M2** the job ships
-   `continue-on-error: true`, so the *job* still concludes green: an unqualified "fails the job" is a
-   cell that **cannot pass at M2**, and revision 11 exempted only cell 11 from that window. So:
+   `continue-on-error: true`. Revision 11 reasoned that the *job* therefore concludes green, so that an
+   unqualified "fails the job" could not pass at M2. **That premise was wrong** (codex, r39). Job-scope
+   `continue-on-error` stops the job's failure from failing the *workflow run*; it does not rewrite the
+   job's conclusion. Cell 16 already records this correction (codex, r30). The two branches below stand
+   on their own: each binds a conclusion it names to the expected diagnostic. Revision 11 exempted only
+   cell 11 from that window. So:
    * **at M2** — assert the Trunk step's **API-reported `conclusion`** is `failure` in the
      workflow-jobs record **and that the failure carries the expected lint diagnostic for the
      deliberately bad file**. Conclusion alone is not causation (codex, r24): a checkout, launcher or
@@ -1472,21 +2107,46 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      land, then **retarget it to the other base** and assert the context that satisfies the rule is a
      **new run against the new base's range** — not the earlier same-SHA result. Without `edited` in
      the set the old run persists and this case fails, which is the discrimination the clause needs.
-3. **The gate does not over-reach** — *asserted from M3, when the job can actually fail*. At M2 the
-   job ships `continue-on-error: true`, so its "passes" halves cannot fail and its "still failing"
-   half cannot pass; like cell 2, this cell is milestone-qualified rather than unqualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
+     **The case splits across two milestones** (codex, r44), as the rollout record already does: the
+     range re-resolution is observable at M3, and "the context that SATISFIES THE RULE" only from M4,
+     when `trunk-check` becomes a required context. Until then no rule is satisfied by it.
+3. **The gate does not over-reach** — *asserted from M3*, the milestone at which the job ships without
+   `continue-on-error`. Revision 11's reason for the qualification — that M2's `continue-on-error: true`
+   made the job conclude green — rests on the premise cell 2 now corrects (codex, r39). Asserting from
+   M3 is conservative, never vacuous, so like cell 2 this cell stays milestone-qualified (sweep). (a) A PR touching one clean file passes with the 9027-issue
    backlog present. (b) A PR touching a **historically dirty** file passes for its pre-existing
    findings while still failing for newly introduced ones.
+
+   **(b) is SUPERSEDED IN PART by COREDEV-2850 (revision 38) — narrowed, not fixed.** Trunk evaluates its
+   five `formatter: true` linters WHOLE-FILE, so before COREDEV-2850 a clean edit to an already
+   unformatted file failed (b)'s FIRST conjunct for debt the PR did not introduce — about 73% of tracked
+   files. The required job now filters those five (§6.4). That makes the first conjunct TRUE for
+   formatters, and makes the SECOND conjunct — "still failing for newly introduced ones" — FALSE for the
+   formatter family BY DESIGN: a newly introduced formatting defect no longer fails the required gate.
+   The pre-commit hook and the push canary still report it. For LINT findings both conjuncts hold
+   unchanged **for every lint command the REQUIRED literal retains — which is not all of them** (codex,
+   r39). `-taplo` removes taplo's non-formatter `taplo lint` command along with its formatter (§6.4), so
+   a newly introduced TOML lint finding no longer fails the required gate either. This is the rollout record's written-narrowing closure route, accepted in COREDEV-2850's
+   plan §5, which the maintainer approved for implementation; this cell must not be read as "fixed".
 4. **The configured linter set MEMBERSHIP is frozen in the test, not derived from the configuration
    under test**
    (codex, r5). Revision 5 said "the configured set minus the declared exclusions", which reads the
    expectation out of `.trunk/trunk.yaml` — **making a silently reduced configuration authoritative
    over the assertion meant to detect it**, the exact shape this plan's Overview names. The cell
    instead carries **the 19 expected linter names as literals** (20 enabled, minus
-   `markdown-link-check`) **and a frozen digest over the `lint:` block with VERSION SPECIFIERS
-   NORMALISED OUT**. Fails if any of the 19 is missing, if an unlisted linter appears, if the
-   exclusion list grows, or if the block changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
+   `markdown-link-check`) **and a frozen digest over the WHOLE `.trunk/trunk.yaml` with VERSION
+   SPECIFIERS NORMALISED OUT** (`_normalised_trunk_config`; revisions before 61 said "the `lint:`
+   block", codex r64). Fails if any of the 19 is missing, if an unlisted linter appears, if either
+   §6.4 literal's excluded set grows, or if the configuration changes in any way other than a version pin — **and it fails when `.trunk/trunk.yaml` is reduced**, which the revision-5 wording
    could not.
+
+   **Since COREDEV-2850 (revision 38) the 19 are CONFIGURED membership, not the REQUIRED job's run set**
+   (gemini, r39). The five formatters stay enabled in `.trunk/trunk.yaml` but are filtered from the
+   REQUIRED job, which therefore runs fourteen; the hook and the canary run all nineteen. "Either §6.4
+   literal's excluded set grows" means past its §6.4 declaration: six entries for REQUIRED, one for
+   HOOK/CANARY. The frozen six-entry set, the exactly-five difference between the two literals, and
+   disjointness from the security linters belong to cell 4 of COREDEV-2850's plan. They are asserted in
+   the same test class as this cell, and this cell does not restate them.
 
    **Names alone were not enough (both arms, r9).** A PR can keep all 19 names and still disable
    every linter by overriding `lint.definitions[].commands[].run` to `exit 0`, widening
@@ -1521,8 +2181,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
    **The fixture must be deliberately fixable (codex, r10).** Running the job over already-canonical
    files proves nothing — autofix would produce no byte change there either, so the cell *reaches* the
-   wrong implementation without killing it. The case therefore stages a file a formatter would
-   certainly rewrite (mis-indented, unsorted imports) and asserts it is **byte-identical afterwards**.
+   wrong implementation without killing it. The case therefore stages a file carrying a finding
+   that **a linter the REQUIRED literal retains** would certainly autofix, and asserts it is
+   **byte-identical afterwards**. **Since revision 38 that cannot be a formatter finding** (codex, r39).
+   The REQUIRED job filters all five formatters, so a mis-indented or unsorted-imports fixture is no
+   stimulus there: autofix would leave it unchanged too, and the positive control below could never
+   turn the cell red. The shipped `trunk-parity-harness.yml` fixture is a ShellCheck SC2250 finding,
+   which trunk autofixes and the REQUIRED literal keeps.
 
    **This is a hybrid under §7's rule, and its runtime half needs a SENSOR, not a sink** (codex, r14
    then r18). The claim is about what the real run did, which a Python test cannot observe — but the
@@ -1566,10 +2231,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
    **The control was CONFOUNDED (codex, r3).** Restoring the legacy README source reintroduces both
    fixed transcript literals, so the *independent* observed-literal check at
-   `test_transcript_path_inventory.py:326` fails **first** — codex reproduced both diagnostics
+   `test_transcript_path_inventory.py` (`:458` today, `:326` at baseline) fails **first** — codex reproduced both diagnostics
    (`README.md:591: output literal survives outside the quote-keep set` **and** `README.md:187:
    legacy source payload survives`). A test that reds for a different reason than the one under test
-   proves reachability, not discrimination: deleting the source-absence assertion at `:362` would
+   proves reachability, not discrimination: deleting the source-absence assertion (`_legacy_source_survives`, `:486` today, `:362` at baseline) would
    still leave the case red, and the control would still "pass".
 
    **The control as it must be written:** assert the **specific diagnostic** `legacy source payload
@@ -1588,7 +2253,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      or locally-newer install cannot train people to ignore the warning.
    * **`SessionStart`** cannot be proved by the planned suite (codex, r10, refined r11): the
      repository *does* install Claude Code later in `plugin-ci.yml`, but **the Python suites run
-     before that step**, and §7 leaves the workflow unchanged — so any "real entry point" assertion there would be a parser or
+     before that step**, and this plan does not reorder `plugin-ci.yml` (it changes only this ticket's own
+     CI needs, listed in §7) — so any "real entry point" assertion there would be a parser or
      emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly.**
 
      **CI asserts the DECLARATION**, against the documented stdin contract — rewritten as a list
@@ -1612,27 +2278,40 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
        length limit — with a mutation that removes the hashing. The contract requires
        `sha256(session_id)` precisely because the identifier is opaque, and revision 16 tested that
        nowhere: an implementation using the raw id passes the matcher, concurrency and aged-marker
-       cases and then **fails open** (codex, r17);
+       cases and then **loses its warning** — this detector's `OSError` branch exits SILENTLY, so the
+       failure is a lost warning on every invocation, not a repeated one (codex, r17; r59 corrected
+       "fails open");
      * the `O_EXCL` marker under **concurrent invocation** and under **aged-marker resumption** — a
        session whose marker was swept past the retention window warns again, which is exactly why the
        promise is per-window rather than per-session (codex, r11);
      * **the retention constant, discriminated in the terms the design actually uses**: repeated
        invocation **within one bucket** warns once, invocation **across a bucket boundary** warns
-       again *even minutes apart*, and the **bucket-width constant `604800` is mutated**. An
+       again *even minutes apart*, and the **bucket-width constant `604800` is mutated**. **The
+       combined concurrent-boundary control** (codex, r56): a previous-bucket marker survives a sweep
+       made from the next bucket, so a delayed same-bucket invocation's `O_EXCL` still fails. Testing
+       concurrency and the boundary separately had certified a detector that warned three times. **What
+       that test does and does not do** (codex, r57): it kills the old sweep predicate by observing the
+       previous-bucket marker survive. It does NOT execute paused concurrent invocations across a
+       controlled boundary; that executed interleaving is outstanding (COREDEV-2869). An
        aged-marker test alone is satisfied by a detector sweeping at six days — covering the line
        without covering its operand (codex, r12) — while the age-threshold phrasing that replaced it
        ("just under seven days must NOT sweep") described a mechanism §3b **abandoned at revision 13**
-       for epoch buckets, and would fail against a correct implementation: under buckets a marker
-       created shortly before a boundary is swept while hours old.
+       for epoch buckets, and would fail against a correct implementation: under buckets a marker is
+       swept by its BUCKET, never by its age, even one created hours earlier.
 
      **The real session-start invocation** is recorded once as a **committed evidence artifact**, the
      same standing cells 10 and 12 have. Claiming a CI proof this repo's pipeline cannot produce would
-     be a cell that cannot pass.
+     be a cell that cannot pass. **The artifact is `evidence/COREDEV-2801-sessionstart-observation.json`,
+     not the rollout record**, and it is weaker than this cell first claimed (codex, r43). It pipes a real
+     `SessionStart` payload into the command `.claude/settings.json` wires: the envelope on the first
+     call, silence on the second. Its evidence for the WIRING is inferred from dispatcher-written dedup
+     markers. **The dispatcher invoking the detector has not been witnessed**, and that runtime proof
+     remains outstanding.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
    **absent** (not "absent-or-false": C4 is an allowlist, and `post-annotations: false` is an unlisted
    key *present* in `with:`, which cell 11's arbitrary-unlisted-key mutant reds — the two cells
    disagreed while the blacklist wording stood), no custom `--upstream`, no `--fix`, `actions/checkout` SHA-pinned — and
-   **`arguments:` PRESENT and equal to §6.4's declared literal as a whole string** (§1) — absence is
+   **`arguments:` PRESENT and equal to §6.4's declared REQUIRED literal as a whole string** (§1) — absence is
    a failure, not a permitted variant (codex, r5), and an appended argument cannot pass a substring
    test — **and `trunk-io/trunk-action` is pinned to the exact SHA of §1's C9**, with tag-reference
    and different-SHA mutants. Revision 9 asserted only that `actions/checkout` was pinned, so a
@@ -1673,7 +2352,27 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     Concretely, one mutant per declared **case** (codex, r9: a single mutant cannot exercise the
     independent parser paths inside a multi-part clause; codex, r15: one per *entry* under-covers any
     obligation needing several). **Each mutant must be constructible, must change the intended
-    property, and must fail with its OWN diagnostic.** It need not satisfy every other clause — the
+    property, and must fail with its OWN diagnostic.** **Constructible means GitHub would accept the
+    workflow:** `actionlint -shellcheck= -pyflakes=` reports nothing for it, except the style-only
+    `if-cond` on the six `if: false` cases (`job-if` and the five `step-if-*`), whose constant `false`
+    IS the hazard. **The flags are part of the rule**
+    (codex, r43). Validity of the WORKFLOW is the criterion, not lint of the scripts embedded in it.
+    With ShellCheck enabled, the three `shell: sh` mutants (`C3.no-defaults-run/workflow` and `/job`,
+    `C8.run-bodies-frozen/changed-shell`) report SC3040/SC3001, because they run the frozen Bash
+    bodies under `sh`. That mismatch IS the hazard those cases exist to catch, and GitHub accepts
+    those workflows. Revision 41 wrote "actionlint reports nothing" while its own sweep ran with
+    these flags, so the rule as written was stricter than what had been measured. Round 42 found five cases breaking this rule (codex, r42, three in
+    the registry; a sweep found two more in the suite): a root-level `schedule`, `branches-ignore`
+    beside `branches`, an empty `on:` after removing the only trigger, an empty `on.schedule`, and
+    `needs:` naming a job that did not exist. Revision 41 corrects all five. Verified by a one-off
+    sweep, actionlint 1.7.12 over all 69 suite mutants. **The suite EXECUTES this rule**
+    (COREDEV-2869, revision 65). `validate` installs actionlint before the scripts suite, and
+    `test_every_mutant_is_a_workflow_github_would_accept` runs it over every (case, entry) pair. A
+    case may report only the kinds its own `actionlint_allow` declares: `[if-cond]` on the six
+    `if: false` cases. An allowance that no longer fires fails as stale, so the allowlist cannot
+    widen silently. The test refuses to skip in `validate`; it may skip only where actionlint is
+    not installed (`darwin-suite`). It need not
+    satisfy every other clause — the
     clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
     (codex, r14). The generator must at minimum produce:
@@ -1769,8 +2468,8 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       `strategy.matrix`; job-level `continue-on-error`; step-level `continue-on-error`; **zero** Trunk
       invocations; **two** Trunk invocations.
     * **C4** — each of `trunk-path` and `post-init`; one arbitrary unlisted key; **`arguments:`
-      absent** (its failure mode is omission, not addition — absent means `markdown-link-check` runs
-      in the required job); **and `save-annotations` absent, and set `false`** — §6.1 chose option
+      absent** (its failure mode is omission, not addition — absent means `markdown-link-check` and,
+      since COREDEV-2850, the five whole-file formatters run in the required job); **and `save-annotations` absent, and set `false`** — §6.1 chose option
       (b), so its value is *required-present*, and absent means the action falls back to
       `--github-annotate` and 403s under `contents: read`.
     * **REQUIRED-PRESENT obligations need OMISSION cases, which revision 20 had none of (sweep).**
@@ -1802,7 +2501,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       arbitrary key outside the allowlist**; on **each of the five steps** an `if: false` and a
       `continue-on-error: true`; on the **three `run:` steps only** — the C6a digest guard, the
       empty-diff guard and the C6 launcher guard — a changed `shell`, a changed `working-directory`,
-      an exact-form mutation of each body, and an **omission** of each; and a `defaults.run` at workflow and at job level.
+      an exact-form mutation of each body, and an **omission** of each — as a no-op body (`run: ":"`),
+      since removing or emptying `run:` is a schema error and would break the validity rule below; and
+      a `defaults.run` at workflow and at job level.
 
       **`shell` is valid only on `run:` steps** (codex, r17): `actions/checkout` and the Trunk action
       are `uses:` steps, where `actionlint` rejects `shell` as an unexpected key — so revision 16's
@@ -1871,8 +2572,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       must complete without tripping it, and the mechanism must be **macOS-portable**, exercised against a sleeping
       fake `trunk` on the PATH;
     * the hook's **exit code aggregates**, asserted by making an *earlier* hook command fail while
-      the trunk check succeeds — appending a passing command after `.githooks/pre-commit:7` would
-      otherwise mask its nonzero result.
+      the trunk check succeeds — appending a passing command after an earlier failing one would
+      otherwise mask its nonzero result. (A `.githooks/pre-commit:7` locator stood here, and that line
+      is now a comment; codex, r59.)
 
     Fails if the hook is advisory, scopes to the whole tree, checks the worktree instead of the
     index, mutates either, is unbounded, or swallows a prior failure.
@@ -1926,7 +2628,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     equal to the ruleset's **resolved** target set (C2's `resolve()`, `include` minus `exclude`); the C4/C8/C9 action and checkout pins; C5's `env:` prohibition;
     C6's repository-launcher guard; the empty-diff and zero-`before` guards, both invoking C6a's shared
     resolver; `permissions: contents: read`; `continue-on-error: true` **at job scope**; and that
-    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list. **The three-item
+    `trunk-check-push` is absent from ruleset `Control`'s required-status-check list. **Each is a
+    registry obligation whose `entries:` names the canary, executed ON the canary** by the cross-entry
+    test (revision 50), accounted per (case, entry) pair with the C6 and C6a fixtures run against the
+    canary's own guard bodies (revision 51). Before that, C1's event cases and C8's sequence and body-freeze obligations named
+    the required entry only, so a registry-driven generator could not have tested the canary's own
+    events or guard bodies (codex, r52). The canary's `push` events now have their own C1 obligations. **The three-item
     form this instruction previously carried — existence, `continue-on-error`, ruleset absence — is
     exactly what r24 proved insufficient**, and it survived directly beneath the paragraph saying so — revision 20 required the
     file to exist while no milestone created it and no inventory listed it. This is the cell that
@@ -1982,9 +2689,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     deliberately: an unproved 405 is cheaper than a red PR merged into `main`.
 
     **This is the only cell that tests the ruleset's BEHAVIOUR rather than its bytes, and the plan
-    reached revision 27 without it** (kimi, third lens). Every other observation here is
-    *pre-requirement*: M3's green and red runs, cell 12's provenance-bound check runs, M4's canonical
-    readback — all of them verify what the workflow and the rule *contain*, and none of them verifies
+    reached revision 27 without it** (kimi, third lens). Every other observation here, except cell 2's
+    M4 rule-satisfaction half, verifies CONTENT: M3's green and red runs, cell 12's provenance-bound
+    check runs, and M4's canonical readbacks (one of them taken after the edit, so "pre-requirement" was
+    the wrong word, codex r52). All of them verify what the workflow and the rule *contain*, and none verifies
     the property the entire plan exists to produce. It is also the cheapest cell in the document. An
     absence like this cannot surface in a diff, which is why twenty-nine rounds of incremental review
     did not find it.
@@ -2052,8 +2760,14 @@ permission alone, the deciding factor.
 annotating, and the job's token scope stays minimal. **The accepted cost, restated so it is not
 rediscovered as a defect later:** findings are reachable only from the job log or the
 `trunk-annotations` artifact, never inline on the diff. If that proves to make the gate unusable in
-practice, the remedy is a scope change to option (a) — a one-line permissions edit plus cell 10 —
-not a redesign.
+practice, the remedy is a scope change to option (a), not a redesign. **It is a planned change with its own
+plan revision and gate, not a local edit.** Revision 42 wrote a recipe for it, and the recipe was still
+incomplete (codex, r44), so this plan no longer gives one. Known touch points, for scoping and NOT a
+complete list: the job's `permissions` (C0 and C3 pin `contents: read` independently, and C3 rejects
+`{contents: read, checks: write}`); `save-annotations`, which keeps selecting artifact output whatever
+the token scope, and its `C4.save-annotations-required` obligation; the registry's
+`action_inputs_digest`, which the parity harness checks and which `used['save-annotations']` indexes
+directly; and cell 10.
 
 ### 6.2 — Adding a required context to ruleset `Control`
 
@@ -2116,10 +2830,31 @@ head while `main` is unmergeable. This repository has already shipped that incid
   is that the red PR's blocking reason **stops naming `trunk-check`**, read-only. An untested rollback
   is a plan, not a remedy. *(A real incident rollback is the plain removal below — there the ungated
   state is the intended outcome, because the gate is what is broken.)*
-* **Both ruleset writes here carry M4's readback discipline** — the rehearsal in M4a and any real
-  incident rollback. Capture the canonical ruleset before and after, admit **exactly one semantic
-  difference** (the `trunk-check` entry appearing or disappearing), and confirm every other rule,
-  enforcement setting, bypass list and target condition is byte-identical. An emergency edit made
+* **Every ruleset write here carries M4's readback discipline, each with its OWN named difference**
+  (codex, r40). Capture the canonical ruleset before and after each write, then make TWO assertions,
+  both required:
+  1. **Direction.** Each named entry is absent and present on exactly the sides stated below.
+  2. **Remainder.** Subtract the named entries from both documents and require the remainders to be
+     equal: every other rule, enforcement setting, bypass list and target condition byte-identical.
+
+  The remainder check alone is NOT enough. Executed against sample payloads, it passes a PUT that adds
+  the placeholder and keeps `trunk-check`, and a PUT that removes `trunk-check` and adds nothing —
+  the UNGATED state. Direction catches both. Remainder catches a payload that also drops another
+  required context. The named entries differ by write:
+  * **a real incident rollback** — **exactly one**: the `trunk-check` entry disappears;
+  * **M4a's substitution PUT** — **exactly two, in the same required-status-check rule**: `trunk-check`
+    disappears AND `trunk-check-rollback-rehearsal` appears;
+  * **M4a's restore PUT** — the reverse pair: the placeholder disappears AND `trunk-check` reappears
+    with its expected `integration_id`.
+
+  **These readbacks cover the PLANNED writes only.** A state M4a did not plan for — not blocking — gets
+  no automated write at all. M4a closes its witnesses and stops, and the maintainer decides the repair
+  (codex, r52).
+
+  Revision 32 made the rehearsal a substitution and left this bullet demanding one difference for both
+  writes. A correct rehearsal therefore failed its own comparison: subtracting `trunk-check` alone
+  leaves the placeholder in one snapshot. M4a's mandatory final state separately requires the NET
+  result to equal the pre-M4a bytes. An emergency edit made
   under pressure is *more* likely to carry an accidental change, not less, and this plan already
   requires that discipline of the M4 write that is made calmly.
 * **Then re-enter at M3** — the gate returns only through the same evidence path that admitted it.
@@ -2147,37 +2882,74 @@ consequences follow, and both are now settled rather than open:
 datum, not the envelope** — M5a measures the cold-cache and large-changeset upper bound before the
 timeout constant is fixed, and the accepted per-commit cost is restated there from the measurement.
 
-### 6.4 — `markdown-link-check` — RESOLVED as a declared exclusion
+### 6.4 — `markdown-link-check` and the whole-file formatters — RESOLVED as declared exclusions
 
 Revision 2's recommendation contradicted §1. Under §1's corrected rule (no *undeclared* filter), the
 resolution is a **declared, enumerated, cell-enforced exclusion**: `markdown-link-check` is excluded
 from the required job and runs in the scheduled advisory job (COREDEV-2778).
 
-**THE DECLARED LITERAL — stated here once, and referenced everywhere else** (codex + agy, r5: §1 and
+**THE DECLARED LITERALS — each stated here once, and referenced everywhere else** (codex + agy, r5: §1 and
 cell 9 both demanded a whole-string match against a value no section ever defined, so the cell was
 unexecutable):
+
+**Revision 38 (COREDEV-2850): there are now TWO literals, and they differ BY DESIGN.**
+
+The **REQUIRED** literal — the `trunk-check` job's `arguments:`:
+
+```
+--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo
+```
+
+The **HOOK** and **CANARY** literal — `.githooks/pre-commit` and `trunk-check-push.yml`:
 
 ```
 --filter=-markdown-link-check
 ```
 
-That exact scalar is the whole permitted value of the job's `arguments:` input. §1 and cell 9 point
-at this declaration rather than restating it — a derived value stated twice goes stale, and two stale
-copies agree with each other.
+Each scalar is the whole permitted filter value on its own surface — the `arguments:` input in each
+workflow, the `trunk check` argument in the hook. §1, C4, M5a and cells 9, 11
+and 13 point at this declaration, naming WHICH literal, rather than restating either — a derived value
+stated twice goes stale, and two stale copies agree with each other.
+
+**Why the required literal also excludes the formatters (COREDEV-2850).** Trunk evaluates its five
+`formatter: true` linters — black, isort, prettier, shfmt, taplo — WHOLE-FILE and reports pre-existing
+formatting debt as NEW on any touched file, so the required gate failed a clean edit to any of the ~73%
+of tracked files that were already unformatted. That is cell 3's over-reach. The **hook** keeps them:
+it runs over the author's own staged diff, where formatting the files you touched is exactly what is
+wanted. The **canary** keeps them so their findings are still OBSERVED rather than lost. Cell 4 of
+COREDEV-2850's plan — not this plan's cell 4, which owns CONFIGURED membership — is what makes the two
+literals becoming identical again fail.
 
 **The local pre-commit check (§6.3) excludes it too**, for the same reason and one more: a network
 round-trip per commit, failing on someone else's outage, is exactly the "gate red by default" trap
 §1 rejects. Link-checking stays in the scheduled job on both surfaces.
 
-**And it is ENFORCED on both surfaces, not only the CI one.** Cell 9 asserts the workflow's
-`arguments:` equals this literal as a whole string; **cell 13 asserts the same literal in the
+**And it is ENFORCED on every surface, not only the CI one.** Cell 9 asserts the workflow's
+`arguments:` equals the REQUIRED literal as a whole string; **cell 13 asserts the HOOK literal in the
 pre-commit invocation**, with the same whole-string match and the same mutants (appended flag, absent
-argument). A literal that is required in two places and checked in one is a declaration, not a
-control.
+argument); and cell 4 of COREDEV-2850's plan asserts the canary's literal and that the two differ by EXACTLY
+the five formatters, in both directions. A literal that is required in two places and checked in one is
+a declaration, not a control — and two literals that must differ, checked only for equality to
+themselves, can quietly become one.
 
 **Losing cost, previously unstated (codex, r2): no merge-time detection of newly broken links.** A
 PR may introduce a dead link and merge; the scheduled job reports it afterwards. Accepted, because a
 required gate that fails on someone else's outage is worse — but it is a real loss, not a free win.
+
+**A second losing cost, from revision 38 (COREDEV-2850): no required-gate detection of NEWLY INTRODUCED
+formatting defects.** Accepted — cell 3(b) records the narrowing — because a required gate that fails
+for debt the author did not introduce blocks most PRs in this repository. The pre-commit hook still
+formats-checks the author's staged files, and the push canary still reports formatter findings.
+
+**And `-taplo` costs TOML LINTING, not only TOML formatting** (codex, r39). `--filter` denies by linter
+NAME, and taplo's pinned v1.11.0 definition carries two commands: `format` (`formatter: true`) and
+`lint` (`taplo lint ${target}`, no formatter flag). The REQUIRED job therefore runs neither. Of the five
+excluded names, only taplo has a second, non-formatter command. COREDEV-2850's plan §A4 accepts and
+names this loss. It is narrower than it sounds: both tracked `.toml` files are frozen byte-for-byte by
+COREDEV-2860 — `.gitleaks.toml` as a declared member, `.trunk/configs/ruff.toml` inside the frozen
+`.trunk/configs` tree — so neither can change without a reviewed oracle update. What is actually lost
+is required-gate TOML linting of a NEW `.toml` file, and of a reviewed edit to either frozen one. The
+hook and the canary still run `taplo lint`.
 
 ## §7 — Files Changed
 
@@ -2194,7 +2966,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
   because revision 26 required "one shared shipped script" and inventoried none (codex, r27).
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
   per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
-  `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
+  `content_digest`, `remote_relation`, and since revision 58 `raw_text`) and **one or more mutation cases** — operator and side, target,
   payload or fixture, validity check, and expected diagnostic. §1's C0–C9 and C6a prose is rendered from it,
   cell 11's mutants are generated by iterating its **cases**, and cell 15 asserts prose and registry
   agree. It exists because "derived from the clause text" is not a mechanism when the clause text is
@@ -2211,7 +2983,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
   repository-supplied-launcher guard, the merge-queue stop, the frozen step sequence and run-body
   digests, and the action's exact SHA pin — **eleven clauses, C0 through C9 plus C6a** — the shared resolver's own
   `content_digest` obligation; the gloss said nine before C0 existed and ten before C6a did, and a
-  count that trails the contract is how a clause ends up unenforced (codex, r28). Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's `arguments:`
+  count that trails the contract is how a clause ends up unenforced (codex, r28). Plus §6.1's `save-annotations: true` with `contents: read`, §6.4's REQUIRED `arguments:`
   literal, and the **five-step sequence** (checkout, the C6a resolver-digest guard, the empty-diff
   guard, the C6 launcher-path guard, the action). **Values are stated in §1 and §6, never here** — this
   is a file inventory, and revision 9's copy of the contract into this entry is exactly the
@@ -2221,20 +2993,25 @@ required gate that fails on someone else's outage is worse — but it is a real 
   here, because three independent enumerations of this file's obligations have already drifted apart
   once. Created by M2b, asserted by cell 16. Revision 20 required
   this file to exist and listed it nowhere (sweep).
-* `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
-  which is exactly why `trunk-check` may not live in it
+* `.github/workflows/plugin-ci.yml` — changed by this ticket for its own CI needs, and nothing that
+  hosts the gate (codex, r43 corrected "unchanged", and r49 corrected "only PyYAML"). Those needs are:
+  PyYAML installs for the contract cells, in `validate` and `darwin-suite`; the pinned mypy install,
+  with a `pinned-mypy-bin` PATH shim, so the 3.9-floor cell cannot skip; and ShellCheck coverage
+  extended to `scripts/ci/*.sh`. It keeps its `workflow_dispatch`, which is exactly why `trunk-check` may not
+  live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
   `:358` updated
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
   anchor lines demoted to hints for prepend-only sites
 * `CLAUDE.md` — gate-list update
-* **`.claude-plugin/plugin.json`, `README.md` (H1 + newest `### vX.Y.Z` + bold asset counts), and
-  `CHANGELOG.md` — THE VERSION BUMP, which revision 19 omitted entirely** (codex, r20). This repo's
-  rule is that **every change that ships bumps the version**, because `marketplace.json` carries no
-  version field and `plugin.json` is the only signal an installed plugin has that anything changed —
-  an unbumped fix is a fix nobody receives. The `.githooks/pre-commit` and detector changes here are
+* **`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`'s `version`, `README.md` (H1 +
+  newest `### vX.Y.Z` + bold asset counts), and `CHANGELOG.md` — THE VERSION BUMP, which revision 19
+  omitted entirely** (codex, r20). This repo's rule is that **every change that ships bumps the
+  version**, because the version is the only signal an installed plugin has that anything changed. An
+  unbumped fix is a fix nobody receives. Revision 48 still said `marketplace.json` "carries no version
+  field". It has carried one since COREDEV-2801's follow-up, as the fifth sync point (codex, r51). The `.githooks/pre-commit` and detector changes here are
   exactly that kind of change, and as planned they could have landed without the signal consumers use
-  to pull them. `validate-version-sync.sh` asserts all four sites (`warn` in pre-commit, `strict` in
+  to pull them. `validate-version-sync.sh` asserts all five sites (`warn` in pre-commit, `strict` in
   CI, so a partial bump commits cleanly and fails CI).
 * `.githooks/pre-commit` — the `--index`-scoped, `--no-fix`, bounded, exit-code-aggregating trunk
   check (§6.3 decided: wire it), **and** the §3b detector call
@@ -2244,7 +3021,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
   that fires while a stale install is actually running (§3b)
 * **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11, 14 **and 15** (workflow parsing, the
   frozen membership set (cell 4 holds the names and the count — this list does not restate them),
-  the `arguments:` literal, the producer census, **cell 10's static `permissions` assertion**,
+  the REQUIRED and CANARY `arguments:` literals, the producer census, **cell 10's static `permissions` assertion**,
   **cell 16's canary-shape assertions**, cell 15's runner/timeout and its registry-vs-rendered
   comparison, and the **generated** mutant set)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
@@ -2258,7 +3035,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
   (the workflow-jobs API exposes `conclusion`, never `outcome` — codex, r20), **cell 16's ruleset read
   and its canary runtime control**, **cell 17's post-M4 enforcement smoke test and the §6.2a rollback
   rehearsal (M4a)**, cell 3's observed PR outcomes, C2's live-ruleset
-  half**, and cell 8's real `SessionStart` invocation. Provenance-bound observations of things a real
+  half**. Provenance-bound observations of things a real
   run **reports** — never runner-local state that vanishes with the job, which is why cell 5's
   post-invocation hash moved to the harness (codex, r18)
 * **`.github/workflows/trunk-parity-harness.yml` (NEW, non-required) + `scripts/tests/test_trunk_upstream_parity.py`.**
@@ -2278,8 +3055,8 @@ required gate that fails on someone else's outage is worse — but it is a real 
   `${CLAUDE_PROJECT_DIR}` resolution **and the anchored lookup from an unrelated cwd**, the
   `O_EXCL` dedup marker under concurrent invocation **and aged-marker resumption**, **the
   filename-hostile `session_id` and hash-removal mutation**, **the bucket-boundary cases and the
-  `604800` mutation**, the `systemMessage` output shape, and the timeout against a sleeping detector
-  (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower).
+  `604800` mutation**, the `systemMessage` output shape, and the declared `timeout: 5` literal
+  mutated as an operand (cell 8, SessionStart half — cell 8's own text is authoritative; this list had drifted narrower).
   **The root-operand cases on the pre-commit surface — unset, empty, and naming a different
   repository — belong to `test_precommit_trunk_gate.py`**, which owns that entry point (codex, r33)
 
@@ -2315,7 +3092,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 17 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: it asserts the live ruleset's *behaviour* (the red PR observed `blocked` with `trunk-check` named, the green one `clean`), which nothing static can observe. **Both observations are reads; this cell never calls the merge endpoint** (codex, r33) |
 | 16 | **hybrid**: `test_trunk_check_workflow.py` asserts the canary workflow's *static* shape — job-scoped permanent `continue-on-error`, SHA pins, both guards and their shared resolver, C5's `env:` prohibition, C6's launcher guard, `permissions` by value, and that `branches:` is well-formed and non-empty. **`branches:` EQUALLING the ruleset's live RESOLVED target set (C2's `resolve()`) is a local-vs-remote comparison** and therefore hybrid under §7's own rule, exactly as C2 is for the required workflow — the evidence artifact carries that half; `evidence/COREDEV-2780-rollout.json` carries both *runtime* halves — the ruleset read showing `trunk-check-push` absent from the required contexts, **and** the control proving the Trunk step stays observably failed while the job stays non-blocking. Revision 25 assigned that runtime control to the Python owner, against the rule three paragraphs above |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
-| 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
+| 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2801-sessionstart-observation.json` (the runtime half, which no test file can carry; codex, r11). It records the wired command run with a real payload, and dispatcher markers as INFERRED wiring; the dispatcher's invocation itself is outstanding (codex, r43) |
 | 10 | **hybrid**: `test_trunk_check_workflow.py` pins `permissions` by value at both scopes (a wider token yields identical runtime evidence, so only a static check discriminates it — codex, r25); `evidence/COREDEV-2780-rollout.json` carries the annotation-artifact observation |
 | 12 | `docs/planning/evidence/COREDEV-2780-rollout.json` — **evidence, not a unit test**: the annotation artifact and the dual-base provenance-bound check runs are observations of real runs, recorded as a committed artifact the way COREDEV-2711 §3a's measurement was. Saying so is what makes them ownable |
 | 13 | `test_precommit_trunk_gate.py` |

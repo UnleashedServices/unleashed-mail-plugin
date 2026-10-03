@@ -52,8 +52,8 @@ jobs:
 
       # DECLARED, NOT INHERITED. The step below parses YAML, and PyYAML is not in the stdlib. It
       # happens to be present on the current ubuntu image, which is why this has never failed — but
-      # this harness has never actually run (no `parity-*.json` exists yet), so "it works" is
-      # untested rather than established, and a runner image change would take M2c's evidence with
+      # when this was written the harness had never run (the `parity-*.json` records now exist), so
+      # "it works" was untested rather than established, and a runner image change would take M2c's evidence with
       # it. Two lines, copied verbatim from plugin-ci.yml, remove the question.
       #
       # NOT `actions/setup-python`: that prepends a CLEAN toolcache interpreter with no PyYAML and
@@ -113,7 +113,8 @@ jobs:
           # run and the autofix positive control — and validating only the first meant a pin bump
           # that updated the shipped workflow and the primary step but missed the control would
           # record the new pin while the control's sensitivity was established with an older action.
-          # The control's whole premise is that ONLY `--fix` differs (codex, PR #84).
+          # The control's premise is that only `--fix` changes what can REWRITE the fixture (codex, PR #84);
+          # `save-annotations` also differs, and cannot (codex, plan r62).
           hused = {
               str(s["uses"])
               for s in hjob["steps"]
@@ -132,13 +133,20 @@ jobs:
 
       - name: stage-the-deliberately-fixable-fixture
         # Running the action over already-canonical files proves NOTHING: autofix would produce no byte
-        # change there either, so the case would REACH the wrong implementation without killing it. The
-        # fixture is mis-indented on purpose, and `git add` makes it tracked so cell 5's claim — no
-        # TRACKED file's bytes change — actually bites.
+        # change there either, so the case would REACH the wrong implementation without killing it.
+        # `git add` makes the fixture tracked so cell 5's claim — no TRACKED file's bytes change — bites.
+        # COREDEV-2850: the fixture's finding must SURVIVE the required job's six-name filter, which now
+        # excludes the formatters — so the old mis-indented file (shfmt's whole-file `fmt`, its ONLY
+        # finding) went silent. It must also be AUTOFIXABLE by the same inputs plus `--fix`, or the
+        # autofix positive control cannot move it. Measured, not assumed: an unbraced variable reference
+        # is reported as `shellcheck/SC2250` at 3:7 under the six-name filter, and `--fix` rewrites it
+        # to `${name}`, leaving the file clean. codespell was tried first and is reported but NOT autofixed.
         run: |
           set -euo pipefail
           mkdir -p harness-fixtures
-          printf '#!/usr/bin/env bash\nif true; then\n      echo "deliberately   mis-indented"\n   fi\n' \
+          # The literal, unexpanded `$name` IS the fixture: its unbraced reference is the finding.
+          # shellcheck disable=SC2016
+          printf '#!/usr/bin/env bash\nname="deliberately fixable"\necho "$name"\n' \
             > harness-fixtures/fixable.sh
           git add --force harness-fixtures/fixable.sh
           echo "fixture staged:"; sed -n '1,10p' harness-fixtures/fixable.sh
@@ -215,8 +223,10 @@ jobs:
       # They are equal when autofix is off, and equally equal when the fixture was never in the
       # linted range at all, which is the failure mode that would make cell 5 certify a blind sensor.
       #
-      # Same pinned action, same recorder, same resolved range — only `--fix` differs, so a change in
-      # the fixture's bytes is attributable to autofix and nothing else. It records into its OWN argv
+      # Same pinned action, same recorder, same resolved range. `--fix` differs, and so does
+      # `save-annotations` (false here, true in the shipped job; codex, plan r61, corrected "only
+      # `--fix` differs"). Annotation output cannot rewrite the fixture, so a change in the fixture's
+      # bytes is still attributable to autofix and nothing else. It records into its OWN argv
       # file: cell 1 compares the invocation the shipped configuration produced, and a second set of
       # argv in that stream would be evidence of a run the shipped workflow never makes.
       #
@@ -265,11 +275,12 @@ jobs:
               succeeded. Only lint evaluation names THIS FILE together with the LINTER that
               judged it, so that pair is what is recorded.
 
-              The position is deliberately optional. The fixture is mis-indented, which shfmt
-              reports as a whole-file `fmt` finding printed as `-:-` — it has no line or column.
-              Requiring integers here would make the field unsatisfiable for the very fixture the
-              harness stages, which is how the first attempt at this returned null on a run that
-              had in fact linted the file. Trunk renders as:
+              The position is deliberately optional. A whole-file finding — e.g. a formatter's
+              `fmt`, printed as `-:-` — has no line or column, and the original fixture produced
+              exactly that; requiring integers made the field unsatisfiable, which is how the first
+              attempt at this returned null on a run that had in fact linted the file. The CURRENT
+              fixture (COREDEV-2850) is positional — `shellcheck/SC2250` at 3:7 — but optionality is
+              kept, because trunk legitimately emits both shapes. Trunk renders as:
 
                   harness-fixtures/fixable.sh
                    -:-  fmt  Incorrect formatting, autoformat by running 'trunk fmt'  shfmt
