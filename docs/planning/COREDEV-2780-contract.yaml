@@ -276,6 +276,13 @@ obligations:
         payload: "{branches: [main]}"
         validity: the canary would also run on pull requests
         diagnostic: "event set: unlisted event `pull_request`"
+      - id: C1.canary-single-event/arbitrary-event
+        op: add
+        side: local
+        target: $.on.schedule
+        payload: "- cron: '0 0 * * *'"
+        validity: a valid unlisted event, so a blacklist of known-bad events passes it (codex, r53)
+        diagnostic: "event set: unlisted event `schedule`"
 
   - id: C1.canary-push-option-allowlist
     clause: C1
@@ -444,7 +451,7 @@ obligations:
   - id: C3.nothing-skips-or-masks
     clause: C3
     kind: yaml
-    entries: [required]
+    entries: [required, canary]
     statement: >-
       No `if:` and no `continue-on-error:` on the job OR on ANY of the five steps. A job skipped by a
       conditional REPORTS SUCCESS to a required context; an `if: false` on a GUARD step preserves both
@@ -466,13 +473,6 @@ obligations:
         payload: github.event_name != 'workflow_dispatch'
         validity: valid syntax, and strictly worse than the hazard it was written to fix
         diagnostic: "job: `if:` is prohibited (a skipped job reports Success)"
-      - id: C3.nothing-skips-or-masks/job-continue-on-error
-        op: add
-        side: local
-        target: $.jobs.<job>.continue-on-error
-        payload: "true"
-        validity: enabled only from M3, per the exemption above
-        diagnostic: "job: `continue-on-error:` is prohibited"
       - id: C3.nothing-skips-or-masks/step-continue-on-error
         op: add
         side: local
@@ -543,6 +543,24 @@ obligations:
         payload: false
         validity: a skipped step reports Success; cell 11 requires it on EACH of the five steps (codex, r44)
         diagnostic: "step `trunk`: `if:` is prohibited"
+
+  - id: C3.no-job-continue-on-error
+    clause: C3
+    kind: yaml
+    entries: [required]
+    statement: >-
+      The REQUIRED workflow's job carries no `continue-on-error` from M3 on. Split from
+      C3.nothing-skips-or-masks because the canary REQUIRES that key at job scope (C16), so the shared
+      skip/mask cases could not be declared for the canary while this one sat beside them (codex, r53).
+    target: $.jobs.<job>.continue-on-error
+    cases:
+      - id: C3.no-job-continue-on-error/present
+        op: add
+        side: local
+        target: $.jobs.<job>.continue-on-error
+        payload: "true"
+        validity: enabled only from M3, per the exemption above
+        diagnostic: "job: `continue-on-error:` is prohibited"
 
   - id: C3.effective-context-pinned-required
     clause: C3
@@ -776,6 +794,12 @@ obligations:
           The canary's own branch of the whole-string check. `contract_problems` selects the canary's
           literal on `is_canary`; without a canary case, that branch has no mutant at all.
         diagnostic: "action inputs: `arguments` does not equal the declared literal"
+      - id: C4.arguments-canary-literal/absent
+        op: remove
+        side: local
+        target: steps[trunk].with.arguments
+        validity: OMISSION, since an absent `arguments` runs every linter and a presence-only check misses it (codex, r53)
+        diagnostic: "action inputs: `arguments` is absent"
 
   - id: C4.save-annotations-required
     clause: C4

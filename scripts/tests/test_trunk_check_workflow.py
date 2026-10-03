@@ -3286,7 +3286,7 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             # formulation is vacuous, because the unmutated workflow is clean and a checker that had
             # stopped looking would pass it just as happily.
             (
-                "C3.nothing-skips-or-masks/job-continue-on-error",
+                "C3.no-job-continue-on-error/present",
                 lambda w: w["jobs"][EXPECTED_CONTEXT].update(
                     {"continue-on-error": True}
                 ),
@@ -3491,6 +3491,16 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 "event set: unlisted event `pull_request`",
             ),
             (
+                "C1.canary-single-event/arbitrary-event",
+                lambda w: _on(w).update({"schedule": [{"cron": "0 0 * * *"}]}),
+                "event set: unlisted event `schedule`",
+            ),
+            (
+                "C4.arguments-canary-literal/absent",
+                lambda w: _step(w, "trunk")["with"].pop("arguments"),
+                "action inputs: `arguments` is absent",
+            ),
+            (
                 "C1.canary-push-option-allowlist/paths",
                 lambda w: _on(w)["push"].update({"paths": ["**.py"]}),
                 "push options: unlisted option `paths`",
@@ -3608,7 +3618,21 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             for case in obligation.get("cases", []):
                 recipe = recipes.get(case["id"])
                 if recipe is None:
-                    continue  # deferred cases: the coverage test below accounts for them
+                    # Not a YAML/body recipe. Account for it per (case, ENTRY), not per case id: a
+                    # fixture case declared for two entries but run against one hid eight canary
+                    # executions behind a covered id (codex, r53).
+                    if case["id"] in FIXTURE_EXECUTED_CASES:
+                        fixture_entries = {
+                            C6AndC6aGuardsExecuteAgainstFixtureTrees.ENTRY,
+                            C6AndC6aGuardsExecuteAgainstTheCanarysOwnBodies.ENTRY,
+                        }
+                        for entry in obligation.get("entries", []):
+                            with self.subTest(case=case["id"], entry=entry):
+                                self.assertIn(entry, fixture_entries)
+                    elif case["id"] in CELL16_INJECTED_CASES:
+                        with self.subTest(case=case["id"]):
+                            self.assertEqual(1, len(obligation.get("entries", [])))
+                    continue  # anything else is deferred; the coverage test below accounts for it
                 for entry in obligation.get("entries", []):
                     with self.subTest(case=case["id"], entry=entry):
                         mutant = copy.deepcopy(bases[entry])
@@ -3887,9 +3911,18 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
     of it. A test that re-implements the guard proves the test correct, not the guard.
     """
 
+    ENTRY = "required"
+
+    @classmethod
+    def _workflow(cls) -> dict:
+        if cls.ENTRY == "canary":
+            canary: dict = yaml.safe_load(CANARY_PATH.read_text(encoding="utf-8"))
+            return canary
+        return _load_workflow()
+
     @classmethod
     def setUpClass(cls):
-        workflow = _load_workflow()
+        workflow = cls._workflow()
         cls.c6_guard = _step(workflow, "guard-launcher-path")["run"]
         cls.c6a_guard = _step(workflow, "guard-resolver-digest")["run"]
 
@@ -4034,10 +4067,20 @@ class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
         """ "Verify, then execute" is the property C6a exists for. Under §0's threat model an edited
         resolver still fails closed at the C6 guard, but that is the wrong step reporting it.
         """
-        names = [step.get("name") for step in _steps(_load_workflow())]
+        names = [step.get("name") for step in _steps(self._workflow())]
         self.assertLess(
             names.index("guard-resolver-digest"), names.index("guard-empty-diff")
         )
+
+
+class C6AndC6aGuardsExecuteAgainstTheCanarysOwnBodies(
+    C6AndC6aGuardsExecuteAgainstFixtureTrees
+):
+    """The same shipped-guard execution, against the CANARY's guard bodies. C6 and C6a declare both
+    entries, but only the required workflow's bodies were ever executed: eight declared (case, entry)
+    pairs never ran (codex, r53)."""
+
+    ENTRY = "canary"
 
 
 class TheRemoteReadsSurviveAMachineWithoutGh(unittest.TestCase):
