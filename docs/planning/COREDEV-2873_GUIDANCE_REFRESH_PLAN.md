@@ -1,7 +1,7 @@
 # COREDEV-2873 — Guidance refresh: Claude 5.5 request shapes, Apple toolchain, Foundation Models, stale examples
 
 **Ticket:** COREDEV-2873 · **Epic:** COREDEV-2485 · **Branch:** `feat/COREDEV-2873-guidance-refresh` · **Base:** `main` (`dd84d82`)
-**Status:** Planning, revision 2
+**Status:** Planning, revision 3
 **Origin:** item (c) of the 2026-10-03 external audit. The maintainer agreed the order: COREDEV-2872 (item b),
 then this, then COREDEV-2869 part 1 and M4.
 
@@ -22,6 +22,19 @@ then this, then COREDEV-2869 part 1 and M4.
 > - Adds the validator-comment update and a probe for each of the three events.
 > - Adds explicit acceptance checks.
 > - Removes the unsourced F7.
+>
+> **r2** `3ba9ebf` (revision 2): agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking).
+> - §4 claimed that no panel reviewer owns AI-request correctness. That was false, and I had not checked it.
+>   `concurrency-reviewer` is the declared **correctness owner** (`agents/concurrency-reviewer.md:16`;
+>   `AGENT_CONTRACTS.md` §11), with an "API semantics" checklist item and `logic`/`error-handling` categories
+>   (`:259-267`).
+> - Three recommendations: the acceptance checks missed the substantive additions; the scan regex missed
+>   `Xcode (16.3+)` and `**Swift**: 6.1`; and the CLI comment's "2.1.220 is the `latest` dist-tag" is a stale
+>   claim inside text the plan said to keep.
+>
+> **Revision 3** puts the 5.5 request-shape check with its real owner (§3.2) and drops the false gap from
+> §4. It adds explicit manual assertions for each substantive addition, fixes both scan blind spots, and
+> separates the CLI comment's rationale (kept) from its stale version claim (updated).
 
 ## 0. Scope rule
 
@@ -65,18 +78,24 @@ audit's wording is what a reader of this plan will have seen first.
   that relied on forcing one must validate the model's choice. It adds F4's Sonnet-only `between_tools` note
   and names the source.
 
-### 3.2 (dropped in revision 2)
-`agents/prompt-review.md` is out of scope for these checks. That reviewer excludes correctness by its own
-contract (`:21`, `:89-93`), and a request that is guaranteed to get a 400 is a correctness defect. The rules
-belong in `ai-engineer`, where the code is written (§3.1). A review-time owner is listed in §4.
+### 3.2 `agents/concurrency-reviewer.md`: the review-time check, with its declared owner (priority 1)
+* **Owner.** A request that is guaranteed to get a 400 is a correctness defect. Correctness belongs to
+  `concurrency-reviewer`, the declared correctness owner (`:16`; `AGENT_CONTRACTS.md` §11), not to
+  `prompt-review`, which excludes correctness by contract (`:21`, `:89-93`). Revision 1's placement in
+  `prompt-review` was wrong for that reason.
+* **The change.** One checklist item beside "API semantics" (`:259-261`): a request to a Claude 5.5 model that
+  sets any of F3's five settings. It points to `ai-engineer`'s "Claude 5.5 request rules" (§3.1) for the
+  replacements. It uses the existing `category: "logic"` with severity `blocker`, because the request fails on
+  every call. There is no new category and no schema change.
 
 ### 3.3 `agents/ai-engineer.md`: Foundation Models (priority 1)
 * **Verified pattern (F5), stated as the app's current practice:**
   - `@available(macOS 26.0, *)` on the provider;
   - the `#if canImport(FoundationModels)` guard;
-  - a mapping of `SystemLanguageModel.default.availability` to the app's own reasons, before any use.
+  - a mapping of `SystemLanguageModel.default.availability` to the app's own reasons.
 
-  New Foundation Models code must follow this pattern.
+  New Foundation Models code must follow this pattern, and must check availability before calling the model.
+  That ordering is prescribed guidance; F5 shows the mapping, not every call site's order.
 * **Recommendation, labelled as such:** when the model is unavailable, route to another provider rather than
   failing. F5 does not show where that routing happens, so the guidance does not claim the app already does it.
 
@@ -86,7 +105,8 @@ The scan covered `agents/`, `skills/`, `README.md`, `CLAUDE.md` and `AGENT_CONTR
 
 * **Change to F6** (CI on `macos-26` runners, the newest installed Xcode selected the way the app selects it,
   deployment target macOS 15.0, Swift 6 language mode):
-  - `agents/ci-engineer.md:17`, the platform line ("Build: Xcode 16.3+");
+  - `agents/ci-engineer.md:17`, the platform line ("Build: Xcode 16.3+" and "**Swift**: 6.1 toolchain"; the
+    toolchain is whatever the selected Xcode carries, and the language mode stays 6.0);
   - `agents/ci-engineer.md:53, 85, 106, 174, 193, 250`, six `runs-on: macos-15`;
   - `agents/ci-engineer.md:57`, `xcode-select -s /Applications/Xcode_16.3.app`, replaced by the app's own
     newest-installed selection (F6);
@@ -125,16 +145,14 @@ The scan covered `agents/`, `skills/`, `README.md`, `CLAUDE.md` and `AGENT_CONTR
 * `.github/workflows/plugin-ci.yml`: the Claude Code CLI pin (`CLAUDE_CODE_VERSION: 2.1.220`, at `:260` and
   `:530`, in the `validate` and `load-check` jobs) moves to the current `latest` dist-tag. That was 2.1.289 on
   2026-10-03, and it is re-read at implementation time. The pin's own comment, which says why it tracks
-  `latest` rather than `stable`, is kept. The two changed job digests in `test_python39_floor.py` are
+  `latest` rather than `stable`, is kept as rationale. Its stale numeric claim, "2.1.220 is the `latest`
+  dist-tag" (`:258`), is updated to the new version. The two changed job digests in `test_python39_floor.py` are
   re-pinned. If the newer CLI's `claude plugin validate --strict` rejects anything, that is reported, and then
   either fixed or the pin is held — never silenced. No tarball checksum is pinned today; that is an existing
   follow-up and stays out of scope.
 
 ## 4. Out of scope (separate decisions)
 
-* A **review-time** check for 5.5 request shapes. No reviewer in the panel owns AI-request correctness:
-  `prompt-review` excludes correctness, and the other four reviewers are domain-specific. Assigning one is a
-  roster decision, not a guidance correction. Ticket it if wanted.
 * Changes to how the review gate itself behaves:
   - the reviewer models (Gemini 3.8 Flash as primary, a pinned Codex model) and agy's `--effort`;
   - the bundled MCP server's protocol version (2025-11-25 → 2026-07-28).
@@ -143,13 +161,23 @@ The scan covered `agents/`, `skills/`, `README.md`, `CLAUDE.md` and `AGENT_CONTR
 
 * **Sources:** each changed claim is re-read against its §1 source at implementation time.
 * **Acceptance checks**, recorded with their output in the PR:
-  1. **Stale-toolchain scan.** The §3.4 pattern over the same paths returns ONLY the sites §3.4 keeps:
+  1. **Stale-toolchain scan.** The §3.4 pattern, plus the literals `Xcode (16.3+)` and `**Swift**: 6.1`
+     (which that pattern misses), over the same paths returns ONLY the sites §3.4 keeps:
      - the three dated records (`concurrency-reviewer.md:140`, `release-manager.md:73`, `AGENT_CONTRACTS.md:35`);
      - any deployment-target or language-mode line the pattern happens to match.
 
      Every listed change site must be gone.
-  2. `ai-engineer.md` names `claude-sonnet-5-5` in the example, and mentions `claude-sonnet-5` only as legacy
-     (or not at all). The 5.5 subsection names all five F3 settings.
+  2. **`ai-engineer.md`, read section by section against F1 to F5:**
+     - the example names `claude-sonnet-5-5` and sets `output_config.effort`;
+     - `claude-sonnet-5` appears only as legacy, or not at all;
+     - the 5.5 subsection names all five F3 settings, each with the guide's own replacement, and does not
+       promise forced tool calls;
+     - it states F4's Sonnet-only `between_tools` limits;
+     - the Foundation Models subsection states the three F5 guards (`@available`, `canImport`, the
+       availability mapping) and labels fallback routing as a recommendation.
+
+     `concurrency-reviewer.md` gains exactly one checklist item, which names all five settings and uses
+     `logic`/`blocker`.
   3. `brainstorm/SKILL.md` contains neither "macOS 25" nor "≤25".
   4. `microsoft-graph-integration/SKILL.md` contains no fixed past `expirationDateTime`, and states both F10
      limits.
