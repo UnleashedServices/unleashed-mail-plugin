@@ -131,6 +131,19 @@ same job, and never the step being placed.
 One mutant is EQUIVALENT and is not counted as a survivor. The `else` branches of `_mutate_key` and
 `_mutate_steps` are unreachable behind `_check_operator_fields`' unknown-op guard.
 
+**PR #108 review (codex, P2), fixed.** A rooted `edit_bytes` case in an obligation of any kind other
+than `yaml` or `raw_text` would be classified `raw` and counted as executed. Both raw classes filter by
+their own KIND, though, so nothing diagnosed it. Reproduced: with the obligation's `kind: yaml` changed
+to `yml_typo`, or to `content_digest`, the suite stayed green. Three changes close it:
+* obligation kinds are a CLOSED set (`OBLIGATION_KINDS`);
+* raw cases count as executed only if their obligation's kind is one a raw class runs
+  (`_RAW_CLASS_KINDS`);
+* `_raw_problems` fails closed on any other kind.
+
+Both reproductions now go red. With the accounting fix deleted, the `content_digest` reproduction goes
+green again, so that fix is the one doing the catching. Both reproductions are now in the battery,
+which stands at 53 controls, all 53 red.
+
 **Registry migration:** 157 fields across 95 cases, self-verified. The script reloads the result,
 requires every case to equal its specified form, and requires every other key to be unchanged.
 

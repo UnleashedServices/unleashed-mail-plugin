@@ -265,6 +265,12 @@ def _recorded_remote_halves():
         ) from error
 
 
+# The obligation kinds the registry may declare (2780 plan, §1's kind table). A CLOSED set: a misspelt
+# kind would otherwise fall out of every kind-keyed branch without failing anything (PR #108, codex).
+OBLIGATION_KINDS = frozenset(
+    {"yaml", "repo_fixture", "content_digest", "remote_relation", "raw_text"}
+)
+
 # The two target-set diagnostics, as the registry's `target_set_resolution` family declares them. The
 # checker emits `D: detail`; cell 11 matches `D` (COREDEV-2869).
 TARGET_SET_MISMATCH = (
@@ -3848,10 +3854,17 @@ def _raw_mutation(case: dict, entry: str, source: str, registry: dict) -> str:
 
 
 def _raw_problems(case: dict, obligation: dict, mutated: str, entry: str) -> list[str]:
+    """The checker a raw case's obligation KIND names. Any other kind FAILS: a kind this does not name
+    would otherwise fall through to a checker nobody chose (PR #108 review, codex)."""
     if obligation["kind"] == "raw_text":
         return raw_workflow_problems(mutated, entry=entry)
-    return contract_problems(
-        _load_actions_yaml(mutated), milestone=SHIPPED_MILESTONE, entry=entry
+    if obligation["kind"] == "yaml":
+        return contract_problems(
+            _load_actions_yaml(mutated), milestone=SHIPPED_MILESTONE, entry=entry
+        )
+    raise _case_failure(
+        case,
+        f"raw case in a `{obligation['kind']}` obligation, which no raw checker handles",
     )
 
 
@@ -3964,6 +3977,14 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 AssertionError, "x/"
             ):
                 _classify(case)
+
+    def test_every_obligation_declares_a_known_kind(self):
+        """The kind decides which checker a raw case meets and whether the comparator runs, so it is a
+        closed set too: `kind: yml` must fail here, not silently skip a diagnostic (PR #108, codex).
+        """
+        for obligation in self.registry["obligations"]:
+            with self.subTest(obligation=obligation["id"]):
+                self.assertIn(obligation["kind"], OBLIGATION_KINDS)
 
     def test_every_case_uses_only_the_declared_fields(self):
         """V2. A misspelt or invented key must not silently become "no anchor"."""
@@ -4687,8 +4708,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             for case in obligation.get("cases", []):
                 declared.add(case["id"])
                 executor = _classify(case)
+                # A raw case runs only in the raw class whose KIND is its obligation's kind; any other
+                # kind is a raw case NOTHING diagnoses (PR #108, codex).
+                raw_run = executor == "raw" and obligation["kind"] in _RAW_CLASS_KINDS
                 if (
-                    executor in ("structural", "raw")
+                    executor == "structural"
+                    or raw_run
                     or (executor == "fixture" and case["id"] in FIXTURE_EXECUTED_CASES)
                     or (executor == "injected" and case["id"] in CELL16_INJECTED_CASES)
                 ):
@@ -5197,6 +5222,16 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
                     )
             # A skip that took every source would leave this test unable to fail.
             self.assertGreater(placed, 0, f"{entry}: the decoy was placed in no source")
+
+
+# The obligation kinds the two raw classes actually run. Cell 11's accounting reads THIS, so a raw case
+# of any other kind counts as executed nowhere.
+_RAW_CLASS_KINDS = frozenset(
+    {
+        RawYamlSynonymsAreNotThePinnedBooleans.KIND,
+        RawWorkflowTextIsUntaggedAndCanonical.KIND,
+    }
+)
 
 
 class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):
