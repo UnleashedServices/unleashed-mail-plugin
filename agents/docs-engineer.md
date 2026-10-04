@@ -36,7 +36,7 @@ code — that's for other agents.
 
 Maintain a comprehensive README.md. Use this template; **verify product claims with the user before publishing** — historical drafts of this template have included incorrect claims (e.g., "end-to-end encryption" when the project does local at-rest encryption only).
 
-```markdown
+````markdown
 # UnleashedMail
 
 A native macOS email client built with SwiftUI and Swift concurrency.
@@ -47,24 +47,27 @@ A native macOS email client built with SwiftUI and Swift concurrency.
 - **AI-Powered Assistance**: Smart replies and email summaries
 - **Offline Support**: Cache emails for airplane mode
 - **Local at-rest encryption**: Email database is SQLCipher-encrypted (AES-256) on the user's
-  device. *(NOT end-to-end encryption — emails travel between Google/Microsoft and this client
-  over standard TLS. Don't claim E2E.)*
+  device. _(NOT end-to-end encryption — emails travel between Google/Microsoft and this client
+  over standard TLS. Don't claim E2E.)_
 - **Accessibility**: Full VoiceOver and keyboard navigation support
 
 ## Installation
 
 ### Requirements
-- macOS 15.0+
-- Xcode 16.3+
-- Swift 6.0+
+
+- macOS 15.0+ (deployment target)
+- Xcode: the version the app's CI selects (the newest installed on `macos-26`)
+- Swift 6.0+ (language mode)
 
 ### Setup
+
 1. Clone the repository
 2. Open `Unleashed Mail.xcodeproj` (note the space in the name)
 3. Xcode will resolve package dependencies automatically
 4. Build and run (⌘R)
 
 ### Development Setup
+
 ```bash
 # This is an Xcode project, NOT a SwiftPM package.
 # Package dependencies are managed inside Xcode — there is no `swift package resolve`.
@@ -76,15 +79,18 @@ xcodebuild test -scheme "Unleashed Mail" -destination 'platform=macOS'
 xcodebuild docbuild -scheme "Unleashed Mail" -destination 'platform=macOS' \
     -derivedDataPath /tmp/dd
 ```
+````
 
 ## Usage
 
 ### Adding Accounts
+
 1. Launch UnleashedMail
 2. Go to Settings > Accounts
 3. Click "Add Account" and follow OAuth flow
 
 ### Composing Emails
+
 - Press ⌘N to compose
 - Use the rich text editor for formatting
 - Send with ⌘↵
@@ -104,9 +110,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 ## License
 
-*(Confirm with user — don't assume MIT. The plugin's repo is MIT, but the application repo
-license is set by the project owner. Check `LICENSE` file in the repo root before claiming a license.)*
-```
+_(Confirm with user — don't assume MIT. The plugin's repo is MIT, but the application repo
+license is set by the project owner. Check `LICENSE` file in the repo root before claiming a license.)_
+
+````
 
 ## API Documentation with Swift-DocC
 
@@ -124,7 +131,7 @@ xcodebuild docbuild \
 #   /tmp/dd/Build/Products/Debug/Unleashed_Mail.doccarchive
 # Preview by opening it in Xcode:
 open /tmp/dd/Build/Products/Debug/Unleashed_Mail.doccarchive
-```
+````
 
 ### Documentation Comments
 
@@ -149,6 +156,7 @@ public protocol AuthServiceProtocol {
 ```
 
 **Rules:**
+
 - Use `- Parameter`: for each parameter
 - Use `- Returns`: for return values
 - Use `- Throws`: for error conditions
@@ -195,11 +203,13 @@ UnleashedMail supports Gmail and Outlook accounts.
 ## Troubleshooting
 
 ### "Authentication Failed"
+
 - Check your internet connection
 - Ensure your account has 2FA enabled (required for some providers)
 - Try signing out and back in
 
 ### Permission Errors
+
 - Gmail: Ensure "Less secure app access" is disabled (use OAuth)
 - Outlook: Admin approval may be required for organization accounts
 ```
@@ -217,24 +227,29 @@ Update `docs/planning/FEATURE_NAME_PLAN.md` as features progress:
 **Jira Ticket:** COREDEV-1234
 
 ## Overview
+
 Allow users to snooze emails for later review.
 
 ## Implementation
+
 - Added `snooze(until:)` method to `EmailServiceProtocol`
 - Implemented in both Gmail and Graph providers
 - Added UI in message actions menu
 
 ## Files Changed
+
 - `Unleashed Mail/Sources/Services/EmailServiceProtocol.swift`
 - `Unleashed Mail/Sources/Services/GmailService+EmailService.swift`
 - `Unleashed Mail/Sources/Services/MicrosoftGraphService.swift`
 
 ## Testing
+
 - Unit tests for snooze logic
 - Integration tests for provider implementations
 - UI tests for snooze action
 
 ## Notes
+
 - Graph API doesn't support native snooze — emulated with categories
 - Snoozed emails reappear in inbox at specified time
 ```
@@ -248,15 +263,15 @@ Allow users to snooze emails for later review.
 
 Maintain `CONTRIBUTING.md` (template — confirm repo URL with user):
 
-```markdown
+````markdown
 # Contributing to UnleashedMail
 
 ## Development Setup
 
 1. **Prerequisites**
-   - macOS 15.0+
-   - Xcode 16.3+
-   - Swift 6.0+
+   - macOS 15.0+ (deployment target)
+   - Xcode: the version the app's CI selects (the newest installed on `macos-26`)
+   - Swift 6.0+ (language mode)
 
 2. **Clone and Setup**
    ```bash
@@ -264,6 +279,7 @@ Maintain `CONTRIBUTING.md` (template — confirm repo URL with user):
    cd "Unleashed Mail"
    open "Unleashed Mail.xcodeproj"   # Xcode resolves package dependencies automatically
    ```
+````
 
 3. **Run Tests** (project is xcodeproj, NOT SwiftPM)
    ```bash
@@ -299,7 +315,8 @@ UnleashedMail uses specialized AI agents for different concerns:
 - `swift-reviewer`: Code review orchestration
 
 Invoke agents for your task area.
-```
+
+````
 
 ## Changelog Maintenance
 
@@ -334,7 +351,7 @@ release stage and build date — see [`docs/VERSIONING.md`](../../Unleashed%20Ma
 
 ### Security
 - SQLCipher encryption for local database
-```
+````
 
 ## Architecture Documentation
 
@@ -355,21 +372,25 @@ docs/architecture/
 # UnleashedMail System Architecture
 
 ## Overview
+
 UnleashedMail is a native macOS email client supporting Gmail and Microsoft Graph APIs.
 
 ## Core Components
 
 ### Frontend Layer
+
 - **SwiftUI Views**: User interface built with SwiftUI + AppKit bridging
 - **WKWebView**: Email composition and rendering
 - **ViewModels**: State management with @Observable macro
 
 ### Service Layer
+
 - **Email Providers**: Gmail REST API and Microsoft Graph API clients
 - **Authentication**: OAuth 2.0 with MSAL and Google OAuth
 - **Database**: GRDB.swift with SQLCipher encryption
 
 ### Data Layer
+
 - **Local Storage**: Encrypted SQLite database
 - **Keychain**: Secure credential storage
 - **Cache**: Offline email caching
@@ -377,7 +398,7 @@ UnleashedMail is a native macOS email client supporting Gmail and Microsoft Grap
 ## Architecture Principles
 
 1. **Provider Parity**: All features implemented for both Gmail and Graph
-2. **Security First**: Local at-rest encryption (SQLCipher AES-256), Keychain credential storage. *(Not E2E — emails transit standard TLS to Google/Microsoft.)*
+2. **Security First**: Local at-rest encryption (SQLCipher AES-256), Keychain credential storage. _(Not E2E — emails transit standard TLS to Google/Microsoft.)_
 3. **Performance**: Cache-first architecture, async operations
 4. **Accessibility**: Full VoiceOver and keyboard navigation support
 ```
@@ -415,25 +436,30 @@ docs/roadmap/
 # UnleashedMail Product Roadmap
 
 ## Vision
+
 Unified, AI-powered email experience across Gmail and Outlook.
 
 ## Current Release (v1.x)
+
 - ✅ Unified inbox
 - ✅ AI email summaries
 - ✅ Offline caching
 - ✅ Basic accessibility
 
 ## Next Release (v2.0) - Q2 2026
+
 - 🤔 Advanced AI features (smart replies, categorization)
 - 🤔 Enhanced security (zero-knowledge encryption)
 - 🤔 Collaboration features (shared inboxes)
 
 ## Future Releases (v3.0+) - 2027
+
 - 🤔 Cross-platform support (iOS companion)
 - 🤔 Advanced integrations (calendar, contacts)
 - 🤔 Enterprise features (audit logs, compliance)
 
 ## Technical Priorities
+
 1. Performance optimization
 2. Security hardening
 3. AI/ML integration
@@ -448,28 +474,34 @@ Track features by version:
 # Release Roadmap
 
 ## v1.2.0 (Current Sprint)
+
 **Target:** April 2026
 **Status:** In Development
 
 ### Features
+
 - [ ] AI-powered email categorization
 - [ ] Enhanced offline sync
 - [ ] Improved accessibility (rotor support)
 
 ### Technical Debt
+
 - [ ] Database migration optimization
 - [ ] Memory usage reduction
 - [ ] Test coverage improvement
 
 ## v1.3.0 (Next Sprint)
+
 **Target:** May 2026
 
 ### Features
+
 - [ ] Smart reply suggestions
 - [ ] Email templates
 - [ ] Advanced search filters
 
 ### Infrastructure
+
 - [ ] CI/CD pipeline improvements
 - [ ] Automated testing expansion
 - [ ] Performance monitoring
@@ -478,6 +510,7 @@ Track features by version:
 ## Handoff
 
 When your documentation work is done, you produce:
+
 1. Updated README.md and guides
 2. Generated API documentation
 3. Current planning documents

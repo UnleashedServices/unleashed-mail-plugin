@@ -1,7 +1,9 @@
 # COREDEV-2873 — Guidance refresh: Claude 5.5 request shapes, Apple toolchain, Foundation Models, stale examples
 
 **Ticket:** COREDEV-2873 · **Epic:** COREDEV-2485 · **Branch:** `feat/COREDEV-2873-guidance-refresh` · **Base:** `main` (`dd84d82`)
-**Status:** Planning, revision 3
+**Status:** Implemented (2.8.29). The plan gate PASSED on revision 3: combined verdict APPROVE_WITH_NOTES,
+bound to digest `6c6093f2…`, with the double approval reproduced in rounds 3–5. Edits after revision 3 are
+ungated; see the implementation note below.
 **Origin:** item (c) of the 2026-10-03 external audit. The maintainer agreed the order: COREDEV-2872 (item b),
 then this, then COREDEV-2869 part 1 and M4.
 
@@ -35,6 +37,21 @@ then this, then COREDEV-2869 part 1 and M4.
 > **Revision 3** puts the 5.5 request-shape check with its real owner (§3.2) and drops the false gap from
 > §4. It adds explicit manual assertions for each substantive addition, fixes both scan blind spots, and
 > separates the CLI comment's rationale (kept) from its stale version claim (updated).
+
+## Implementation note (post-gate, ungated)
+
+* **§3.6's "fix or hold" rule fired.** On 2.1.289, `claude plugin validate --strict .` validates the PLUGIN
+  root and fails on the contributor `CLAUDE.md` warning. 2.1.220 had validated `.` as the marketplace
+  manifest. The step now names `.claude-plugin/marketplace.json`: the same object at the same strictness,
+  verified on both versions, and a corrupted manifest still fails. This edit is outside the reviewed plan
+  text.
+* **§3.5's brainstorm change is DEFERRED to COREDEV-2874**, a post-gate deviation from the reviewed plan.
+  Touching `skills/brainstorm/SKILL.md` forces a prettier pass, because the file carries existing debt.
+  That pass inserts blank lines and re-indents a pinned line, which broke 20 tests across three line-pinned
+  suites. The wording fix is low impact and gets its own coordinated pass, so the file is byte-identical to
+  `main` here.
+* **Codex's r3–r5 notes are applied** as positive acceptance checks. Their output, 29/29, is recorded in
+  the PR.
 
 ## 0. Scope rule
 

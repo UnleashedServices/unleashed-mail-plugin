@@ -53,14 +53,14 @@ grep -n "linker command failed" /tmp/build.log | head -5
 
 ### Step 3: Classify the Error
 
-| Error Pattern | Category | Common Fix |
-|---|---|---|
-| `cannot find type 'X'` | Missing import or typo | Add import or fix spelling |
-| `has no member 'X'` | API change in dependency | Check dependency version, update call site |
-| `swift-tools-version` mismatch | Xcode/Swift version conflict | Verify CI uses correct Xcode (16.3+); confirm with user before bumping local Xcode |
-| `code signing` errors | Entitlements/identity | Fix signing settings or disable for CI |
-| `duplicate symbol` | Link-time conflict | Check for duplicate SPM targets |
-| `module 'X' not found` | Xcode package resolution failure | In Xcode: File → Packages → Reset Package Caches, then Resolve Package Versions; clean DerivedData (`rm -rf ~/Library/Developer/Xcode/DerivedData/*`) |
+| Error Pattern                  | Category                         | Common Fix                                                                                                                                                                            |
+| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cannot find type 'X'`         | Missing import or typo           | Add import or fix spelling                                                                                                                                                            |
+| `has no member 'X'`            | API change in dependency         | Check dependency version, update call site                                                                                                                                            |
+| `swift-tools-version` mismatch | Xcode/Swift version conflict     | Verify CI selected the Xcode you expect (the app's CI takes the newest installed on `macos-26`; check `xcodebuild -version` in the log); confirm with user before bumping local Xcode |
+| `code signing` errors          | Entitlements/identity            | Fix signing settings or disable for CI                                                                                                                                                |
+| `duplicate symbol`             | Link-time conflict               | Check for duplicate SPM targets                                                                                                                                                       |
+| `module 'X' not found`         | Xcode package resolution failure | In Xcode: File → Packages → Reset Package Caches, then Resolve Package Versions; clean DerivedData (`rm -rf ~/Library/Developer/Xcode/DerivedData/*`)                                 |
 
 ### Step 4: Investigate Context
 
@@ -104,8 +104,8 @@ Confirm "BUILD SUCCEEDED". If not, return to Step 2.
 
 ## CI-Specific Issues (GitHub Actions)
 
-- Xcode version: Ensure the workflow uses `xcode-select` with Xcode 16.3+ for Swift 6.1 toolchain
-- macOS runner: Use `macos-15` for ARM64 support and Xcode 16.3+ compatibility
+- Xcode version: The workflow selects the NEWEST installed Xcode (`ls -d /Applications/Xcode*.app | sort -V | tail -1`, then `xcode-select`), so the Swift toolchain is that Xcode's; the project's language mode is Swift 6.0
+- macOS runner: Use `macos-26`, the runner the app's CI uses (Apple silicon)
 - SPM cache: `actions/cache` with key based on `Package.resolved` hash
 - Code signing: Set `CODE_SIGN_IDENTITY=""` and `CODE_SIGNING_REQUIRED=NO` in CI builds
 

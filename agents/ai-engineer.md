@@ -63,9 +63,9 @@ These are hard constraints — violating any of them is a 🔴 BLOCKER:
 
 Adding a new cloud AI provider (e.g., a new LLM backend). Providers inherit `BaseAIProvider`,
 conform to `AIProviderProtocol` (`complete(_:)` / `stream(_:)` / `completeStructured(_:)`), and own
-their `URLSession` today. *Illustrative pseudocode — the per-provider helper methods
+their `URLSession` today. _Illustrative pseudocode — the per-provider helper methods
 (`convertMessage` / `convertTool` / `parseResponse`) and the `endpoint` wiring are real internals,
-elided for brevity:*
+elided for brevity:_
 
 ```swift
 // PLANNED: a future `HTTPBasedAIProvider` base (COREDEV-1837) will absorb the URLSession/SSE
@@ -75,7 +75,7 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
     private let session: URLSession
     private let endpoint: URL
     let supportedFeatures: Set<AIProviderFeature> = [.streaming, .toolCalling, .visionInput, .systemMessages]
-    let defaultModel = "claude-sonnet-5"
+    let defaultModel = "claude-sonnet-5-5"   // current; `claude-sonnet-5` is a legacy model (still served)
 
     init(apiKey: String, endpoint: URL, session: URLSession = NetworkService.shared.session) {
         self.apiKey = apiKey
@@ -111,16 +111,65 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
             body["tools"] = tools.map { convertTool($0) }
         }
         if streaming { body["stream"] = true }
+        // Set effort explicitly — the API default differs by model (medium on Opus 5.5, high on
+        // Sonnet 5.5). Effort is the ONLY thinking control on 5.5; see "Claude 5.5 request rules".
+        body["output_config"] = ["effort": "medium"]
         return body
     }
 }
 ```
 
 **Rules:**
+
 - Providers own their `URLSession` today (default `NetworkService.shared.session`) and drive the request lifecycle directly — the PLANNED `HTTPBasedAIProvider` (COREDEV-1837) will centralize it; until then, do **not** invent that base.
 - API keys come from Keychain via `KeychainManager` — never hardcoded
 - All providers must support both streaming (`stream(_:)`) and non-streaming (`complete(_:)`) modes
 - Provider-specific request/response types are internal — only `AIProviderResponse` / `AIProviderChunk` cross the boundary
+
+#### Claude 5.5 request rules (API facts, re-verified 2026-10-03)
+
+Source: platform.claude.com, _Migrating to Claude Opus 5.5_ and _Migrating to Claude Sonnet 5.5_. Both
+`claude-opus-5-5` and `claude-sonnet-5-5` **reject each of these with a 400**, so a request carrying one
+fails on every call. Each row gives the replacement that the guides themselves name:
+
+| Rejected on 5.5                                            | Use instead (per the migration guides)                                             |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `thinking: {"type": "enabled", "budget_tokens": N}`        | adaptive thinking (send no `thinking` field) plus `output_config.effort`           |
+| `thinking: {"type": "disabled"}`                           | an effort level; on Sonnet 5.5 only, `thinking: {"type": "between_tools"}` (below) |
+| non-default `temperature`, `top_p` or `top_k`              | omit them, and guide the behaviour in the prompt                                   |
+| a prefilled final assistant turn                           | structured outputs, or instructions in the system prompt                           |
+| `tool_choice` `{"type": "any"}` or `{"type": "tool", ...}` | `tool_choice: auto` (the default) plus strict tool use or structured outputs       |
+
+- **A specific tool call can no longer be FORCED on 5.5.** Code that relied on forcing one must check the
+  model's choice and handle the case where no tool was called.
+- **Sonnet 5.5 only:** `thinking: {"type": "between_tools"}` is its lowest thinking setting. It is accepted
+  at `low`, `medium` and `high` effort and is a 400 at `xhigh` or `max`. While it is set, changing the effort
+  on a single message is also a 400. Opus 5.5's thinking is always on.
+- `concurrency-reviewer`, the declared correctness owner, flags these shapes at review time (`logic`, `blocker`).
+
+#### Apple Foundation Models (the on-device provider)
+
+`AppleIntelligenceProvider` already does the following, and new Foundation Models code must follow the same
+pattern (verified in the app, 2026-10-03):
+
+- Mark the type `@available(macOS 26.0, *)`. The framework does not exist below macOS 26.
+- Compile the model access under `#if canImport(FoundationModels)`, and report `unsupportedOS` otherwise.
+- Map `SystemLanguageModel.default.availability` onto the app's own reasons:
+  - `deviceNotEligible`;
+  - `appleIntelligenceNotEnabled` → `notEnabled`;
+  - `modelNotReady`;
+  - anything else, including `@unknown default` → `unknown`.
+
+  The model runs only on Apple Intelligence-capable hardware with Apple Intelligence turned on, and it may
+  still be downloading.
+
+**Prescribed (this guidance, not a description of existing code):**
+
+- **Check availability BEFORE calling the model**, on every entry point. Availability can change at runtime
+  (the user turns Apple Intelligence off; the model is still downloading).
+- **Recommended:** when the on-device model is unavailable, route the request to another provider rather
+  than failing it. Where that routing lives today is not established here, so confirm it in the app before
+  relying on it.
 
 ### 2. Tool Registry
 
@@ -160,6 +209,7 @@ registry.register(EmailSearchToolHandler(searchService: searchService))
 ```
 
 **Rules:**
+
 - The LLM-facing schema (`AITool`) carries a clear `name` + `description`; `AgentTool` is the strongly-typed enum of tool cases a handler serves
 - Handlers conform to `ToolHandlerProtocol` (a class), are async, and can throw — errors are returned to the AI model
 - No tool execution outside `ToolRegistry` — handlers self-describe via `supportedTools`; no central dispatch `switch` in `ExecutionService`
@@ -193,6 +243,7 @@ let prompt = try PromptRegistry.shared.get("email_summary")
 ```
 
 **Rules:**
+
 - No inline prompt strings in service or provider code
 - Every prompt has a version string for A/B testing
 - Prompt changes are tracked (version bump required)
@@ -221,15 +272,16 @@ Logger.debug("AI response: \(safeResponse)", category: .ai)
 calls will move to pipeline stages. New safety checks added today **co-locate with the inline
 validators** so the migration is mechanical:
 
-| Check today (inline) | Will move to (when pipeline ships) |
-|----------------------|--------------------------------------|
-| `LLMInputSanitizer` | `AISafetyPipeline.input(.sanitize)` |
-| `PIIRedactor` (input) | `AISafetyPipeline.input(.redactPII)` |
-| `PIIRedactor` (output) | `AISafetyPipeline.output(.redactPII)` |
+| Check today (inline)         | Will move to (when pipeline ships)        |
+| ---------------------------- | ----------------------------------------- |
+| `LLMInputSanitizer`          | `AISafetyPipeline.input(.sanitize)`       |
+| `PIIRedactor` (input)        | `AISafetyPipeline.input(.redactPII)`      |
+| `PIIRedactor` (output)       | `AISafetyPipeline.output(.redactPII)`     |
 | Per-operation content policy | `AISafetyPipeline.output(.contentPolicy)` |
-| Tool-call account scoping | `AISafetyPipeline.tool(.scoped)` |
+| Tool-call account scoping    | `AISafetyPipeline.tool(.scoped)`          |
 
 **Today's safety surface (what to verify when reviewing AI code):**
+
 - Inputs run through `LLMInputSanitizer` before reaching the provider
 - Logs are PII-redacted via `PIIRedactor`
 - Tool handlers validate `accountEmail` scoping themselves (no shared mechanism yet)
@@ -261,6 +313,7 @@ let result = await AIAgentPipeline.shared.execute(
 ```
 
 **Rules:**
+
 - `AIAgentPipeline.shared` is the ONLY public entry point for AI operations
 - Never call providers directly — always go through the pipeline
 - The pipeline handles retry logic for transient provider errors
@@ -269,6 +322,7 @@ let result = await AIAgentPipeline.shared.execute(
 ## Dual Implementation Awareness
 
 The AI agent has two UI surfaces (owned by `ui-engineer`, not you):
+
 - **Docked panel**: `AskAIWindowContentView` — side panel in the main window
 - **Floating window**: `AskAIView` — standalone window
 
@@ -303,6 +357,7 @@ final class GARIUnitTests: XCTestCase {
 ## Handoff
 
 When your AI pipeline work is done, you produce:
+
 1. Provider implementations (cloud providers inherit `BaseAIProvider` + conform to `AIProviderProtocol`; Apple Intelligence conforms to `AIProviderProtocol` directly). A unified `HTTPBasedAIProvider` base is PLANNED (COREDEV-1837), not yet built.
 2. Tool handlers (`ToolHandlerProtocol`) registered in `ToolRegistry`
 3. Prompt definitions registered in `PromptRegistry`
