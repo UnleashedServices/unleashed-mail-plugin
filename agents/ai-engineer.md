@@ -112,7 +112,9 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
         }
         if streaming { body["stream"] = true }
         // Set effort explicitly — the API default differs by model (medium on Opus 5.5, high on
-        // Sonnet 5.5). Effort is the ONLY thinking control on 5.5; see "Claude 5.5 request rules".
+        // Sonnet 5.5). Effort sets thinking DEPTH on both. It is Opus 5.5's only thinking control;
+        // Sonnet 5.5 also takes `thinking: {"type": "between_tools"}` to skip up-front thinking,
+        // which is legal only at low/medium/high. See "Claude 5.5 request rules".
         body["output_config"] = ["effort": "medium"]
         return body
     }

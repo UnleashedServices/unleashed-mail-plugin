@@ -50,8 +50,9 @@ then this, then COREDEV-2869 part 1 and M4.
   That pass inserts blank lines and re-indents a pinned line, which broke 20 tests across three line-pinned
   suites. The wording fix is low impact and gets its own coordinated pass, so the file is byte-identical to
   `main` here.
-* **Codex's r3–r5 notes are applied** as positive acceptance checks. Their output, 29/29, is recorded in
-  the PR.
+* **Codex's r3–r5 notes are applied** as positive acceptance checks. Their output, 28/28, is recorded in
+  the PR. The 29th check, for the brainstorm wording, went with §3.5's deferral. (This line said 29/29
+  until PR #107's codex review, P3.)
 
 ## 0. Scope rule
 

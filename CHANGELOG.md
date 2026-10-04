@@ -51,6 +51,13 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     coordinated pass. It is unchanged here.
   - `AGENT_CONTRACTS.md` §13's `concurrency-findings` anchor moved from `:269` to `:286`, following the
     `## Output Format` heading that the new checklist item shifted. This is position only.
+  - **PR #107 review (codex), all four fixed.**
+    - `docs-engineer`'s README and CONTRIBUTING templates no longer close early. Each template's nested
+      fence closed the outer one: on `main` too, made explicit here by prettier. The rest of each template
+      had rendered as agent instructions, and the following section as a code block.
+    - `ai-engineer`'s example comment called effort the ONLY 5.5 thinking control. That is true of
+      Opus 5.5 only: Sonnet 5.5 also takes `between_tools`.
+    - This plan's acceptance count is corrected to 28/28.
 
 ## [2.8.28] — 2026-10-03
 

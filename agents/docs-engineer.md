@@ -79,7 +79,6 @@ xcodebuild test -scheme "Unleashed Mail" -destination 'platform=macOS'
 xcodebuild docbuild -scheme "Unleashed Mail" -destination 'platform=macOS' \
     -derivedDataPath /tmp/dd
 ```
-````
 
 ## Usage
 
@@ -112,7 +111,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 _(Confirm with user — don't assume MIT. The plugin's repo is MIT, but the application repo
 license is set by the project owner. Check `LICENSE` file in the repo root before claiming a license.)_
-
 ````
 
 ## API Documentation with Swift-DocC
@@ -131,7 +129,7 @@ xcodebuild docbuild \
 #   /tmp/dd/Build/Products/Debug/Unleashed_Mail.doccarchive
 # Preview by opening it in Xcode:
 open /tmp/dd/Build/Products/Debug/Unleashed_Mail.doccarchive
-````
+```
 
 ### Documentation Comments
 
@@ -274,12 +272,12 @@ Maintain `CONTRIBUTING.md` (template — confirm repo URL with user):
    - Swift 6.0+ (language mode)
 
 2. **Clone and Setup**
+
    ```bash
    git clone <APP_REPO_URL>  # confirm with user — NOT the plugin repo
    cd "Unleashed Mail"
    open "Unleashed Mail.xcodeproj"   # Xcode resolves package dependencies automatically
    ```
-````
 
 3. **Run Tests** (project is xcodeproj, NOT SwiftPM)
    ```bash
@@ -315,7 +313,6 @@ UnleashedMail uses specialized AI agents for different concerns:
 - `swift-reviewer`: Code review orchestration
 
 Invoke agents for your task area.
-
 ````
 
 ## Changelog Maintenance
@@ -335,23 +332,27 @@ release stage and build date — see [`docs/VERSIONING.md`](../../Unleashed%20Ma
 ## [Unreleased]
 
 ### Added
+
 - AI-powered email summaries
 - Support for Outlook accounts
 
 ### Fixed
+
 - Memory leak in message list scrolling
 
 ## [1.0.0] - 2024-01-01
 
 ### Added
+
 - Initial release
 - Gmail integration
 - Basic email composition
 - Offline caching
 
 ### Security
+
 - SQLCipher encryption for local database
-````
+```
 
 ## Architecture Documentation
 
