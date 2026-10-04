@@ -63,10 +63,10 @@ Docs: https://developers.openai.com/codex/cli/reference
 
 - **Tool:** `codex` CLI.
 - **Working directory:** always run from the project root (top-level workspace directory containing `Unleashed Mail.xcodeproj/`). Codex resolves relative paths against `$PWD`.
-- **Model:** `~/.codex/config.toml` sets `model = "gpt-6-astra"` (GPT-6 "Astra"; `codex-cli` 0.153.4, verified 2026-09-05 by reading the live config and the CLI banner). The model is inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded). Supersedes `gpt-5.6-sol`, which this file pinned until the Astra release.
+- **Model:** `~/.codex/config.toml` sets `model = "gpt-6.1-sol"` (`codex-cli` 0.160.0). Verified 2026-10-03 from the SESSION RECORD of a real review, not from the banner, which only echoes what was requested: `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl` carries `model` and `collaboration_mode.settings.reasoning_effort`, and the round-66 review of 2026-10-02 shows `gpt-6.1-sol` at `ultra`. The model is inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded). This supersedes `gpt-6-astra`, which this file named, and pinned inline as `review_model`, after the config had already moved on (COREDEV-2872). **Probe `codex` before a gate round when the release lineage moves** (`gpt-5.6-sol` → `gpt-6-astra` → `gpt-6.1-sol` so far).
 - **⚠️ Effort: ALWAYS pass `-c model_reasoning_effort=ultra` on a review call — do not rely on the config default.** The ladder, read from the shipped binary's own enum (it serialises in ascending order), is **`minimal` < `low` < `medium` < `high` < `xhigh` < `max` < `ultra`**. `ultra` is the ceiling; this file previously mandated `xhigh`, which is **fifth of seven** — correct when it was written, and a silent under-powering of the gate once Astra shipped the two tiers above it.
-- **⚠️ The CLI does NOT validate this value.** Measured on `codex-cli` 0.153.4: `-c model_reasoning_effort=definitely-not-valid` is echoed back in the run banner and the review proceeds at the backend default — no error, no warning, no exit code. A stale or mistyped tier is therefore an invisible downgrade, which is the same class as the config reset the 5.6 upgrade caused (it silently became `low`). Passing the tier explicitly is what makes the gate resilient to a config reset; the wrappers additionally assert the token against the seven known tiers and exit 2 rather than let a typo run. There is no dedicated `--reasoning-effort` flag; the generic `-c key=value` is the mechanism.
-- **Pinning a config value one-off (rarely needed):** `codex exec -c model=gpt-6-astra -c model_reasoning_effort=ultra -s read-only "PROMPT"` — the `-c model=…` shows an explicit model pin. Normally let the config supply the model and only force effort; never `--model` (zero-byte failure on this install).
+- **⚠️ The CLI does NOT validate this value.** Measured on `codex-cli` 0.153.4 (the ladder was re-read from the 0.160.0 native binary on 2026-10-03 and is unchanged, so `ultra` is still the ceiling): `-c model_reasoning_effort=definitely-not-valid` is echoed back in the run banner and the review proceeds at the backend default — no error, no warning, no exit code. A stale or mistyped tier is therefore an invisible downgrade, which is the same class as the config reset the 5.6 upgrade caused (it silently became `low`). Passing the tier explicitly is what makes the gate resilient to a config reset; the wrappers additionally assert the token against the seven known tiers and exit 2 rather than let a typo run. There is no dedicated `--reasoning-effort` flag; the generic `-c key=value` is the mechanism.
+- **Pinning a config value one-off (rarely needed):** `codex exec -c model=gpt-6.1-sol -c model_reasoning_effort=ultra -s read-only "PROMPT"` — the `-c model=…` shows an explicit model pin. Normally let the config supply the model and only force effort; never `--model` (zero-byte failure on this install).
 
 ## ⚠️ Always capture output via the PTY wrapper (eliminates 0-byte / STDN failures)
 
@@ -139,9 +139,9 @@ codex exec -c model_reasoning_effort=ultra -s read-only "PROMPT_HERE"
 codex exec -c model_reasoning_effort=ultra -s read-only "/security-reviewer [FILES]"
 
 # Full diff review — built-in `codex review` (outputs to STDOUT; no -o — capture via the PTY wrapper)
-codex -c review_model=gpt-6-astra -c model_reasoning_effort=ultra review --uncommitted
-codex -c review_model=gpt-6-astra -c model_reasoning_effort=ultra review --base main
-codex -c review_model=gpt-6-astra -c model_reasoning_effort=ultra review --commit <SHA>
+codex -c review_model=gpt-6.1-sol -c model_reasoning_effort=ultra review --uncommitted
+codex -c review_model=gpt-6.1-sol -c model_reasoning_effort=ultra review --base main
+codex -c review_model=gpt-6.1-sol -c model_reasoning_effort=ultra review --commit <SHA>
 
 # Save agent output to file
 codex exec -c model_reasoning_effort=ultra -s read-only -o /tmp/output.md "PROMPT_HERE"
@@ -152,11 +152,11 @@ codex exec -c model_reasoning_effort=ultra -s read-only -o /tmp/output.md "PROMP
 > sets `review_model` (a recognized key, verified on 0.153.4), `codex review` uses THAT, not the session
 > `model`. So a machine left with a stale `review_model` can run the diff audit on an old model despite the
 > guidance here — and the release that set it is not recoverable from the value. For the built-in path, either verify `review_model`
-> is unset/`gpt-6-astra` or pin it inline with a `-c review_model=gpt-6-astra` override alongside the effort
+> is unset/`gpt-6.1-sol` or pin it inline with a `-c review_model=gpt-6.1-sol` override alongside the effort
 > override. The `codex exec "/skill …"` audits are unaffected — they inherit the session `model`.
 >
 > ```bash
-> codex -c review_model=gpt-6-astra -c model_reasoning_effort=ultra review --uncommitted
+> codex -c review_model=gpt-6.1-sol -c model_reasoning_effort=ultra review --uncommitted
 > ```
 
 ## `codex exec` flags (non-interactive)
@@ -246,7 +246,7 @@ codex exec -c model_reasoning_effort=ultra -s read-only -- "PLAN_OR_DEBUG_CONTEN
 
 1. **Plan review:** `codex exec -c model_reasoning_effort=ultra -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer "<name>=<STATUS>:<allocated-path>"` argument to produce the auditable **Combined verdict** block before implementation.
 2. **Post-implementation audit:** run the five Codex audit skills in parallel (`/security-reviewer`, `/concurrency-reviewer`, `/ux-perf-reviewer`, `/accessibility-auditor`, `/prompt-review`) with `-s read-only`
-3. **Full diff review:** optionally also run `codex -c review_model=gpt-6-astra -c model_reasoning_effort=ultra review --uncommitted`
+3. **Full diff review:** optionally also run `codex -c review_model=gpt-6.1-sol -c model_reasoning_effort=ultra review --uncommitted`
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
 5. Incorporate feedback from both Gemini and Codex before considering work complete
 
@@ -265,6 +265,6 @@ later expansion of `CODEX_TRANSCRIPT` so the allocated path remains one opaque a
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-approvals-and-sandbox` is reserved for externally sandboxed CI environments only
 - `codex exec -c model_reasoning_effort=ultra -s read-only` with skill prompts is the preferred pattern for targeted reviews
-- `codex -c review_model=gpt-6-astra -c model_reasoning_effort=ultra review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`). The `review_model` pin is needed because the built-in review path resolves its model from `review_model`, not the session `model` (see the callout above)
+- `codex -c review_model=gpt-6.1-sol -c model_reasoning_effort=ultra review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`). The `review_model` pin is needed because the built-in review path resolves its model from `review_model`, not the session `model` (see the callout above)
 
 Both Gemini and Codex must review plans before implementation begins. Neither review is optional.

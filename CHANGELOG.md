@@ -13,6 +13,37 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.28] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2872: the review gate's CLI docs had drifted from what actually runs.** Each fact below was
+  re-verified on 2026-10-03.
+  - **Gemini fallback.** `skills/gemini-review/SKILL.md` named `gemini-2.5-pro` as the one-run fallback,
+    and `agy models` (agy 1.2.16) no longer lists it. A dead name fails exactly when a fallback is
+    needed, so the skill now gives the rule instead of a literal: pick a currently listed
+    `gemini-*-flash-high` other than the primary, and never `gemini-3.1-pro-high`, which failed to emit
+    a parseable verdict in 5 of 6 rounds.
+  - **Codex model.** `skills/codex-review/SKILL.md` said the config sets `gpt-6-astra` and pinned it
+    inline (`-c review_model=gpt-6-astra`) on the built-in `codex review` commands. The configured
+    model is `gpt-6.1-sol`, and the round-66 session record shows `gpt-6.1-sol` at `ultra`. Following
+    the skill forced the old model, so the pins and the setup text now say `gpt-6.1-sol`. They also show
+    how to read a run's real model and effort from `~/.codex/sessions/…/rollout-*.jsonl`. The effort
+    ladder, re-read from the 0.160.0 binary, is unchanged.
+  - **Effort default.** `AGENT_CONTRACTS.md` §11 now records the documented default: Opus 5.5 and
+    Sonnet 5.5 run at `medium` when nothing sets a level. Since the plugin's assets inherit the session's
+    level, review and gate sessions should set one explicitly.
+  - **A broken example in the Gemini skill.** Step 1 of "Slim-argv + workspace prompt file" had lost
+    its opening fence, so the example's `#` comment lines rendered as markdown headings. The fence now
+    opens before step 1, as intended. A formatter pass would otherwise have rewritten those "headings".
+    In `AGENT_CONTRACTS.md`, the plan-gate step list (`00.`, `0.`, `1.`…) carries a `prettier-ignore`
+    marker, because prettier renumbers it and other documents cite those step numbers. The Gemini skill's
+    numbered workflow list carries one too: prettier would dedent a continuation line inside a
+    multi-line code span, which the COREDEV-2619 transcript-path inventory pins byte for byte. That
+    inventory's three `destination.line` values for the Gemini skill moved with the edits above
+    (210→212, 272→277, 275→280), derived from where each frozen payload now occurs exactly once.
+    No payload or hash changed.
+
 ## [2.8.27] — 2026-10-02
 
 ### Fixed

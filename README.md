@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.27
+# UnleashedMail — Claude Code Plugin v2.8.28
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,18 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.28
+
+**The review gate's CLI documentation matches what actually runs (COREDEV-2872).**
+
+- **Gemini:** the documented one-run fallback model, `gemini-2.5-pro`, is no longer offered by `agy`.
+  The skill now tells you how to pick a fallback from `agy models`, and warns off `gemini-3.1-pro-high`.
+- **Codex:** the skill pinned `gpt-6-astra` inline on `codex review` after the configured model had
+  moved to `gpt-6.1-sol`. That is now corrected. The skill also shows how to read the model and effort
+  a run actually used from its session record.
+- **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus 5.5 and Sonnet 5.5 default to `medium`
+  effort, so set a level explicitly for any review or gate session.
 
 ### v2.8.27
 
