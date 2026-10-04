@@ -1,6 +1,6 @@
 # COREDEV-2869 part 1 — Generate cell 11's mutants from the registry
 
-**Status:** Planning, revision 1. Not yet reviewed.
+**Status:** Planning, revision 2. Gate round 1: agy `APPROVE`, codex `REQUEST_CHANGES` (3 blocking).
 **Ticket:** COREDEV-2869 (parent Epic COREDEV-2485). Parts 2 and 3 shipped in v2.8.27 (PR #104):
 actionlint now runs over every mutant in `validate`, and cell 15's sentinel test exists.
 **Branch / worktree:** `feat/COREDEV-2869-registry-generated-mutants`, `.claude/worktrees/2869-generated-mutants`,
@@ -9,7 +9,32 @@ cut from `origin/main` at `dd84d82`.
 
 ## Review log
 
-*(empty)*
+> **r1** `1b075f7` (revision 1): agy `APPROVE`, codex `REQUEST_CHANGES` (3 blocking). codex reproduced
+> F1, F3, F4, F6, F7 and F8 independently, and F2's 220 constructions and 220 diagnostics.
+> 1. §2.3's postconditions were impossible for two existing cases. An `insert` targets the `steps` list,
+>    so reading the target back cannot equal its one-step payload. A step `move` keeps its name, so its
+>    source can never become absent. My draft never implemented the postconditions, so it could not
+>    catch this.
+> 2. `append` and `duplicate` had no postcondition. An executor keeping the old `body + "\n" + line`, or
+>    duplicating `checkout` BEFORE the guards, still produces the case's diagnostic. codex confirmed
+>    the second against the checker. So the declared placement was a property nothing checked.
+> 3. V7 could not prove that the raw cases depend on the registry's payload. `save-annotations: yes`
+>    and `: on` produce the same diagnostic, so an executor that ignored a payload edit stays green.
+>
+> Notes, all applied:
+> * F5 named four target spellings, and there is a fifth (`before trunk`).
+> * §2.1's "cannot go unexecuted" claimed more than set equality shows.
+> * `step-name` had no grammar production.
+> * Nothing verified that the companion job FAILS.
+> * The family patch must raise DURING `_resolve_once`, not while its return value is prepared.
+> * V3 was incomplete.
+> * V9 needs declaration-aware inspection, because a substring check matches its own literals.
+>
+> **Revision 2** replaces §2.3's single postcondition sentence with a per-operator table. Each row is a
+> VALUE check plus a FRAME check: nothing outside the declared edit changed. The table includes step
+> placement. Revision 2 also adds a span postcondition and a payload-substitution control for the raw
+> cases (§2.7), and EXECUTES the companion job's body (§2.5). It specifies the family patch as a
+> callable `side_effect` (§2.8), and completes V3, V4, V7 and V9.
 
 ## 0. The defect, in one paragraph
 
@@ -68,8 +93,9 @@ output). §7's cells make each of these counts an executed assertion, not a rest
   * `C3.exactly-one-trunk-invocation/two` carries none.
 
   Two `defaults.run` targets name a key below an absent parent.
-* **F5 — targets come in four spellings.** `$.`-rooted paths, bare `steps[<name>]…`, `.with.<key>`
-  relative to the Trunk step, and bare names (`guard-launcher-path`, `continue-on-error`). Of the
+* **F5 — targets come in five spellings.** `$.`-rooted paths, bare `steps[<name>]…`, `.with.<key>`
+  relative to the Trunk step, bare names (`guard-launcher-path`, `continue-on-error`), and the
+  `insert` case's prose `before trunk`. Of the
   `structural` and `raw` cases, 80 targets are not `$`-rooted. §3 rewrites 83 targets: those 80, the
   two `defaults` parents (F4), and the literal canary job id, which becomes `<job>`.
 * **F6 — the resolver family already executes correctly; only its wording differs.** The draft ran all 24
@@ -85,6 +111,19 @@ output). §7's cells make each of these counts an executed assertion, not a rest
   comment and its `actionlint_allow: [if-cond]` describe a constant, while its payload is the expression
   `github.event_name != 'workflow_dispatch'`. Its `defaults` payloads are `shell: bash -e {0}` and
   `working-directory: /tmp`. The hand-written recipes follow the plan on both points.
+* **F9 — revision 2's postconditions are executed, not just specified.** The draft implements §2.3's
+  table. All 220 executions satisfy it, and each of these seven wrong-effect controls is caught:
+  * a duplicate placed before the guards;
+  * an append with an extra newline;
+  * an insert after the anchor;
+  * a write to the parent key;
+  * a write of `None`;
+  * a step moved to the wrong index;
+  * a stray second edit.
+
+  §2.7's span check holds for all four raw payload shapes, `yes`, `017`, `TRUE` and `!!int 1_5`. The
+  `yes` → `on` substitution changes the text while the diagnostic stays the same, which is codex's
+  r1 point, measured.
 * **F8 — the `local-divergence` cases never execute their declared op.**
   `C2.branches-equal-resolved-target-set/local-divergence` and its C16 sibling declare `set` of
   `branches` to `[main]` on the LOCAL side. They are counted as executed because they appear in
@@ -111,8 +150,10 @@ The two `local-divergence` cases move from `injected` to `structural` (F8): thei
 
 Two of these classes stay owned by hand-maintained sets, `FIXTURE_EXECUTED_CASES` and
 `CELL16_INJECTED_CASES`. For each, the test asserts in both directions that the set EQUALS what the
-classifier derives, so a fixture case added to the registry cannot go unexecuted, and the set cannot
-name a case the registry does not classify there. `RAW_YAML_CASES` is deleted, and the raw class is
+classifier derives. So a fixture case added to the registry fails the suite until it is listed in the
+set that the per-entry accounting checks, and the set cannot name a case the registry does not
+classify there. That is ownership bookkeeping, not a witness that the fixture ran. Execution remains
+the fixture tests' own business, as it is today (§6). `RAW_YAML_CASES` is deleted, and the raw class is
 derived.
 
 **Why a table and not a per-case `executor:` field.** A declared field would be more explicit. It
@@ -126,6 +167,7 @@ undeclared one would, with nothing to keep in step.
 target   := "$" segment+
 segment  := "." name | ".<job>" | ".steps[" step-name "]"
 name     := [A-Za-z0-9_-]+
+step-name := [A-Za-z0-9_-]+
 ```
 
 * `<job>` is the entry's job id, read from the registry's own `entries.<entry>.job`. It is never
@@ -159,11 +201,28 @@ silently become "no anchor".
 `before` is a step target (`$.jobs.<job>.steps[trunk]`), and `at` takes exactly one value, `end`.
 `payload` is FORBIDDEN on `remove`, `move` and `duplicate`. `to` is legal only on a key `move`.
 
-**A postcondition on every write.** After an `add`, `set` or `insert`, the generator reads the target
-back and requires it to equal `parse(payload)`. After a `remove`, the target must be absent. After a
-`move`, the source must be absent and the destination must hold the moved value. A generator that
-ignored the payload or wrote it elsewhere would still produce a mutant that fails some diagnostic, so
-the diagnostic assertion alone cannot detect it. The read-back can.
+`payload` is REQUIRED on `add`, `set`, `append` and `insert`.
+
+**A postcondition on every write: the declared VALUE, and nothing else changed.** The diagnostic
+assertion cannot see what the mutant is. A generator that wrote the payload to the wrong key, kept a
+superseded separator, or placed a duplicate before the guards would still produce some case's
+diagnostic. codex confirmed the duplicate placement against the checker (r1). So after each write,
+`_mutate` reads the mutant and compares it with the base it started from, independently of how the
+write was made. A failure names the case.
+
+| op | value check | frame check: nothing outside the edit changed |
+|---|---|---|
+| `add`, `set` | the target equals `parse(payload)`, type-strict | deleting the target key from base and mutant leaves equal documents |
+| `remove` (key) | the key is absent | deleting the key from the base yields the mutant |
+| `append` | the target equals `old + payload`, exactly | as for `set` |
+| `move` (key) | the source is absent, and `to` equals the source's old value | deleting the source from the base and `to` from the mutant leaves equal documents |
+| `remove` (step) | the sequence is one shorter, and no step has that name | deleting that one element from the base sequence yields the mutant sequence |
+| `move` (step) | the step stands IMMEDIATELY before the anchor (or last, for `at: end`), and is equal to its old value | deleting it from both sequences leaves equal sequences, with the order preserved |
+| `duplicate` | the sequence is one longer; the new element equals the original and stands IMMEDIATELY before the anchor (or last); the name now matches two steps | deleting the new element yields the base sequence |
+| `insert` | the sequence is one longer, and the element IMMEDIATELY before the anchor (or last) equals `parse(payload)` | deleting that element yields the base sequence |
+
+For step operators, the document outside the job's `steps` must equal the base's. The §2.5 companion
+is applied first, and the frame for the primary edit is taken from the base WITH the companion.
 
 ### 2.4 Payloads
 
@@ -183,6 +242,10 @@ it. It adds `$.jobs.<declares_support_job.id>`, holding the mapping minus `id` a
 primary edit, and that key must be absent. The plan already names this field ("C3's `needs:` case
 declares the failing support job"), so the generator reads the declaration that exists rather than
 adding a new one. No other case declares more than one edit (F2: 220 mutants built, 0 errors).
+
+Its validity, "the support job must fail", is EXECUTED. The test runs the companion's run body with
+`bash` and requires a non-zero exit. The mutant's `$.jobs.<id>` must also equal the declared mapping,
+minus `id` and `why` (§2.3's frame).
 
 ### 2.6 Execution
 
@@ -214,7 +277,18 @@ two recipe methods. Their assertions do not change, except where §4 says so.
 
 ### 2.7 Raw-text cases
 
-The 8 `raw` cases are built from the registry. The generator derives the pinned path from the canonical
+The 8 `raw` cases are built from the registry. A diagnostic does not show which bytes a raw case wrote:
+`save-annotations: yes` and `: on` fail identically. So each raw mutation has its own postcondition.
+Let `[start, end)` be the pinned value's span in the SOURCE text. The mutated text must hold `payload`
+byte for byte at `[start, start + len(payload))`. The text before `start` must equal the source's,
+and the text after the payload must equal the source's text after `end`. The check uses the source
+offsets, not a re-parse of the mutant, because a tagged payload such as `!!int 1_5` re-composes to a
+node whose span excludes the tag. A payload-substitution control then changes one raw
+case's payload in a COPY of the registry, to a different hazardous spelling (`yes` → `on`). It
+requires the regenerated text to carry the new token in that span, and to differ from the text the
+original payload produced.
+
+The generator derives the pinned path from the canonical
 target: `(step, key)` for `$.jobs.<job>.steps[<step>].with.<key>`, and `(key,)` for
 `$.jobs.<job>.<key>`. That path must be one of `PINNED_PATHS`' values, or the case fails by name.
 Today each tuple carries only the target's last segment, and the registry's target is never read, so
@@ -233,8 +307,9 @@ each `form`:
 1. injected := the recorded raw target set (`c2AndCell16RemoteHalves.rawTargetSet` in the rollout
    evidence), with `injected[side]` replaced by `[form.payload]`. The default branch is `main`, a
    fixture value: the evidence does not record one, and each form's outcome is checked below;
-2. `_resolve_target_set` (the LIVE read, and only that) is patched to return
-   `_resolve_ref_name(injected, "main")`. `_resolve_once`, `_target_set_results` and
+2. `_resolve_target_set` (the LIVE read, and only that) is patched with a CALLABLE `side_effect` that
+   evaluates `_resolve_ref_name(injected, "main")` when it is called. A refusal therefore raises
+   inside `_resolve_once`, not while the patch is prepared. `_resolve_once`, `_target_set_results` and
    `_target_set_problems` run unmodified;
 3. an `equality` form must yield exactly one problem for its entry, matching
    `diagnostics.equality`. A `refusal` form must raise `ValueError`, whose message matches
@@ -398,13 +473,13 @@ produces it.
 |---|---|---|---|
 | V1 | every case is classified into exactly one executor; fixture and injected sets EQUAL the derived classes | a test over all 149 cases | a case gets `op: rename`; a case is added to `FIXTURE_EXECUTED_CASES` only; the remote case is deleted from `CELL16_INJECTED_CASES` |
 | V2 | the closed schema | a test over every case | a case gains `anchor:`; a `structural` case loses `diagnostic` |
-| V3 | the generator fails closed on each requirement in §2.3 | one synthetic case per requirement, each `assertRaises` with the case id in the message | each guard in §2.2–§2.4 is deleted, one at a time: unparseable target, step 0 matches, step 2 matches, add-present, set-absent, set-equal, remove-absent, append on a non-string, move source absent, move-to-present, non-string payload, both `before`+`at`, neither, payload on `remove`, unknown op. Separately, the set-equal TYPE comparison is dropped: `timeout-float` must then fail to build |
-| V4 | the postcondition binds the payload | per `add`/`set`/`insert` execution | `_mutate` writes `parse(payload)` to the PARENT key; `_mutate` writes `None` |
+| V3 | the generator fails closed on each requirement in §2.2–§2.4 | one synthetic case per requirement, each `assertRaises` with the case id in the message | each guard is deleted, one at a time. The guards: unparseable target; step 0 matches; step 2 matches; `add` on a present key; `set` on an absent key; `set` to an equal value; `remove` of an absent key or step; `append` to a non-string; `move` from an absent source; `move` to a present `to`; a non-string payload; a MISSING payload on each of `add`, `set`, `append` and `insert`; a payload on `remove`, `move` and `duplicate`; `to` on anything but a key `move`; both `before` and `at`; neither; an `at` other than `end`; an unknown op. Separately, the set-equal TYPE comparison is dropped, and `timeout-float` must then fail to build |
+| V4 | every §2.3 postcondition, value and frame | after every structural write, plus one synthetic wrong-effect control per row | `_mutate` writes `parse(payload)` to the PARENT key (frame); writes `None` (value); appends `"\n" + payload` (append value); places a duplicate at index 1, before the guards (placement); inserts AFTER the anchor (placement); moves a step to the wrong index (placement); drops the companion's `exit 1` (§2.5's executed failure) |
 | V5 | every structural (case, entry) builds, differs from its base, and yields its registry diagnostic at M3: 222 executions (220 + the two `local-divergence`) | the per-entry test, with its count asserted | one §3 diagnostic edit is reverted; `<job>` resolves to the other entry's job id; the M3 constant becomes M2 (the `no-job-continue-on-error` case must red) |
 | V6 | actionlint accepts every generated mutant, apart from declared allowances, and no allowance is stale | the existing test, now over the generator's output | `job-if`'s payload reverts to the expression (a stale `if-cond` allowance); a `needs` case is built without its companion (`job-needs`) |
-| V7 | the raw cases are derived, and the pinned path agrees with the target | the two raw classes | a raw target names the wrong step; a raw payload is edited (the executed mutant must change with it) |
+| V7 | the raw cases are derived; the pinned path agrees with the target; the span holds the payload verbatim, and nothing else changed | the two raw classes, the span postcondition, and the substitution control (§2.7) | a raw target names the wrong step; the executor keeps the OLD token when the registry's payload changes (`yes` → `on`: the substitution control must red, although the diagnostic alone stays green); the executor writes outside the span |
 | V8 | the family: 24 executions; verdict class and diagnostic per form; distinguishable | the family test, with its count asserted | the resolver treats `~ALL` as a literal; the comparator ignores `resolved`; both family diagnostics are made equal |
-| V9 | no recipe survives | a source assertion that `_yaml_mutants`, `_canary_mutants`, `RAW_YAML_CASES`, any `CASES = (` tuple and `test_patterns_and_all_fail_closed_on_both_sides` are absent from the module | any of them is reintroduced |
+| V9 | no recipe survives | a DECLARATION-aware check: parse the module with `ast` and require that no function, method or assignment target is named `_yaml_mutants`, `_canary_mutants`, `RAW_YAML_CASES` or `test_patterns_and_all_fail_closed_on_both_sides`, and that no class assigns a literal tuple to `CASES`. It inspects declarations, not text, so the check's own name list cannot trip it | any of them is declared again |
 | V10 | the positive controls still pass: both shipped workflows at M3, every permitted spelling | the existing tests, unchanged | (unchanged controls) |
 | V11 | the local gate, as CI runs it | CLAUDE.md's full list, including `trunk check` on the touched files, and the plan-citation linter's self-test | — |
 
