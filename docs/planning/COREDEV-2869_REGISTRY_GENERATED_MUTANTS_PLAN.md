@@ -1,6 +1,6 @@
 # COREDEV-2869 part 1 — Generate cell 11's mutants from the registry
 
-**Status:** Planning, revision 2. Gate round 1: agy `APPROVE`, codex `REQUEST_CHANGES` (3 blocking).
+**Status:** Planning, revision 3. Gate round 2: agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking).
 **Ticket:** COREDEV-2869 (parent Epic COREDEV-2485). Parts 2 and 3 shipped in v2.8.27 (PR #104):
 actionlint now runs over every mutant in `validate`, and cell 15's sentinel test exists.
 **Branch / worktree:** `feat/COREDEV-2869-registry-generated-mutants`, `.claude/worktrees/2869-generated-mutants`,
@@ -35,6 +35,22 @@ cut from `origin/main` at `dd84d82`.
 > placement. Revision 2 also adds a span postcondition and a payload-substitution control for the raw
 > cases (§2.7), and EXECUTES the companion job's body (§2.5). It specifies the family patch as a
 > callable `side_effect` (§2.8), and completes V3, V4, V7 and V9.
+>
+> **r2** `3c41aee` (revision 2): agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking). codex judged
+> every Round 1 blocker resolved and re-derived F1 through F8.
+> 1. §2.10 kept the registry's `BASH_ENV: /tmp/x` for `C5.no-env-any-scope/step` and called the 2780
+>    plan silent. It is not. Cell 11's minimum list requires "`env: {TRUNK_PATH: /bin/true}` at
+>    **workflow** level, at job level, and at step level", and the recipe follows it. Both payloads
+>    produce the same diagnostic, so V5 and V6 could never have shown the loss of the prescribed
+>    launcher-bypass probe.
+>
+> The cause was method, not one oversight. I tested "the plan is silent" by searching the plan for
+> each payload string. The minimum list states payloads per CLAUSE, and the search could not find
+> those. **Revision 3** reads that list in full, as the normative enumeration it is (§2.10). C5 is the
+> only additional conflict: every other payload it names matches the registry. It applies the
+> plan-first rule to C5. Two non-blocking clarifications are applied as well: §2.7 validates the whole
+> raw target before reducing it to `PINNED_PATHS`, and V3 gains the non-mapping `insert` payload and
+> the non-sequence insertion target.
 
 ## 0. The defect, in one paragraph
 
@@ -49,7 +65,7 @@ drifted, and nothing can see it:
 
 * 11 recipes assert a different diagnostic from the registry's, over 21 (case, entry) executions. The
   2780 plan already reports this as "diagnostic debt", and it is re-derived in §1;
-* 26 recipes build a different mutant from the one the registry declares (§1, F3);
+* 28 recipes build a different mutant from the one the registry declares (§2.10);
 * 19 registry cases declare an operator the recipe could not have used as written (§1, F4).
 
 The 2780 plan's status block lists this as outstanding (`COREDEV-2780_REPO_GATING_HYGIENE_PLAN.md`,
@@ -79,9 +95,10 @@ output). §7's cells make each of these counts an executed assertion, not a rest
   control, **220/220 produce the registry's diagnostic**. That needs the diagnostic reconciliation in
   §2.9. Under `actionlint -shellcheck= -pyflakes=`, the generated set reports **12 findings, all
   declared** (`if-cond` on the six `if: false` cases × 2 entries), and **0 stale allowances**.
-* **F3 — what generation changes.** 169 of the 220 generated mutants are byte-identical, after
-  `yaml.safe_dump(sort_keys=True)`, to the recipe they replace. The other 51 executions (26 cases)
-  differ. Each difference is listed in §2.10 and resolved by the rule stated there.
+* **F3 — what generation changes.** With the registry corrected as §3 specifies, 171 of the 220
+  generated mutants are byte-identical, after `yaml.safe_dump(sort_keys=True)`, to the recipe they
+  replace. The other 49 executions (25 cases) differ. Each difference is listed in §2.10 and resolved
+  by the rule stated there.
 * **F4 — operators that cannot be executed as written.** 16 cases say `set` on a key the shipped
   workflow does not have: the five `step-if-*` cases, the four `step-continue-on-error-<step>`
   cases, the six `changed-shell`/`changed-working-directory` cases, and `sibling-key`. Three cases say
@@ -104,13 +121,15 @@ output). §7's cells make each of these counts an executed assertion, not a rest
   forms produced exactly one problem for their entry, and 16 refusal forms raised. Neither message
   matches the registry's `diagnostics`. The comparator says "…is not the ruleset's resolved target
   set…", and the resolver says "target set unresolvable: refusing to enumerate …".
-* **F7 — the plan, not the registry, is normative on two payloads.** The 2780 plan's cell-11 rule
+* **F7 — the plan, not the registry, is normative on three payloads.** The 2780 plan's cell-11 rule
   names "the six `if: false` cases (`job-if` and the five `step-if-*`), whose constant `false` IS the
   hazard". It also names "the three `shell: sh` mutants (`C3.no-defaults-run/workflow` and `/job`,
   `C8.run-bodies-frozen/changed-shell`)". The registry's own `job-if` case contradicts itself: its
   comment and its `actionlint_allow: [if-cond]` describe a constant, while its payload is the expression
   `github.event_name != 'workflow_dispatch'`. Its `defaults` payloads are `shell: bash -e {0}` and
-  `working-directory: /tmp`. The hand-written recipes follow the plan on both points.
+  `working-directory: /tmp`. Cell 11's minimum list requires "`env: {TRUNK_PATH: /bin/true}` at
+  **workflow** level, at job level, and at step level". The registry's step case says
+  `BASH_ENV: /tmp/x`. The hand-written recipes follow the plan on all three points.
 * **F9 — revision 2's postconditions are executed, not just specified.** The draft implements §2.3's
   table. All 220 executions satisfy it, and each of these seven wrong-effect controls is caught:
   * a duplicate placed before the guards;
@@ -288,7 +307,11 @@ case's payload in a COPY of the registry, to a different hazardous spelling (`ye
 requires the regenerated text to carry the new token in that span, and to differ from the text the
 original payload produced.
 
-The generator derives the pinned path from the canonical
+Before any reduction, the WHOLE raw target is validated against the entry it runs on. It must parse
+in the §2.2 grammar, `<job>` must resolve to that entry's job id, and a step selector must match
+exactly one step there. This matters because `_pinned_pairs`, which `_respell` uses, searches every
+job and every matching step, so a target naming the wrong job or step would otherwise reduce to the
+same tuple. The generator then derives the pinned path from the canonical
 target: `(step, key)` for `$.jobs.<job>.steps[<step>].with.<key>`, and `(key,)` for
 `$.jobs.<job>.<key>`. That path must be one of `PINNED_PATHS`' values, or the case fails by name.
 Today each tuple carries only the target's last segment, and the registry's target is never read, so
@@ -359,8 +382,24 @@ branches`, names a second message that no comparator emits, and there is one com
 
 **Rule.** Where the 2780 plan's normative text specifies a mutant, the registry is corrected to it.
 Where the plan is silent, the registry's payload stands, and the generated mutant is what the case
-declared. Three cases fall under the first half (F7): `job-if` and the two `defaults` cases. The
-other 25 fall under the second.
+declared. Four cases fall under the first half (F7): `job-if`, the two `defaults` cases and
+`C5.no-env-any-scope/step`. The other 24 fall under the second.
+
+**Where the normative text is, and how "silent" was established.** Cell 11's minimum list in the 2780
+plan's §7 (the bullets after "The generator must at minimum produce") enumerates, clause by clause,
+the mutants the generator owes. Revision 3 reads that list in full. A search for each payload string
+could not find payloads stated per clause, and that is how revision 2 missed C5 (codex, r2).
+
+Every value the list names, with what the registry says:
+* **Matches the registry:** `if: false` and `continue-on-error: true` on each of the five steps;
+  `run: ":"`; `TRUNK_PATH` at workflow and job scope; `TRUNK_PATH=/bin/true` and `BASH_ENV=…` written
+  to `$GITHUB_ENV`; the `schedule` event; the `container`, `id` and `timeout-minutes` keys; and
+  `lfs: false` and `persist-credentials: true`.
+* **Contradicts the registry:** the four F7 cases.
+* **No value named:** every other bullet names a key or an event and no value.
+
+Elsewhere in the plan, three lines name a case id next to a code span. Two of them are F7's `shell: sh`
+sentence. The third is `C16.canary-not-required/present`, which stays `injected`.
 
 | case(s) | executions | recipe built | generated (resolution) |
 |---|---|---|---|
@@ -368,16 +407,15 @@ other 25 fall under the second.
 | `C3.no-defaults-run/workflow`, `/job` | 4 | `defaults: {run: {shell: sh}}` | the same. **Plan wins** (F7). The registry payloads `shell: bash -e {0}` / `working-directory: /tmp` are corrected, and the targets move to `$.defaults` / `$.jobs.<job>.defaults` (F4) |
 | the five `step-if-*` | 10 | the string `'false'` | the boolean `false`, the registry's payload and the plan's `if: false` |
 | `C0.no-concurrency/workflow`, `/job` | 4 | `group: x` | `group: trunk-check` |
-| `C5.no-env-any-scope/step` | 2 | `TRUNK_PATH: /bin/true` | `BASH_ENV: /tmp/x` |
+| `C5.no-env-any-scope/step` | 2 | `env: {TRUNK_PATH: /bin/true}` | the same. **Plan wins** (F7). The registry's `BASH_ENV: /tmp/x` and its `validity` are corrected |
 | `C8.step-sequence-allowlist/extra-step` | 2 | `{name: extra, run: echo hi}` | `{run: echo hi}` |
 | `C1.single-event/add-push` | 1 | `branches: [main]` | `branches: [main, alpha]` |
 | the 15 run-body appends (`creates-c6-path`, `github-env-*`, `github-path`, `body-digest-*`, per step) | 30 | body + `"\n"` + line | body + line. The body already ends in a newline, so the recipe's extra `"\n"` was a blank line. `github-path` on `guard-empty-diff` also takes the registry's `/tmp/fake` |
 
-That is 55 executions in total. The four `defaults` executions come out identical to their recipe
-once the registry is corrected, which leaves F3's 51 executions (26 cases). `job-if` still differs
+That is 55 executions in total. The four `defaults` executions and the two C5 executions come out
+identical to their recipe once the registry is corrected, which leaves F3's 49 executions (25 cases). `job-if` still differs
 from its recipe, by type: the boolean `false` replaces the string `'false'`, as it does on the five
-steps. The plan text that names a payload is cited in F7. For the other 25 cases, a reviewer can check
-the claim "the plan is silent" by searching the plan for each payload.
+steps.
 
 ### 2.11 What is deleted
 
@@ -400,12 +438,14 @@ directory). Comments and layout are preserved, and each edit is a line edit insi
 3. **Positions and destinations:** 3 `to:`, 6 `before:` and 2 `at: end`. The prose payloads they
    replace are removed.
 4. **Payloads:** the non-string ones are quoted (`False` → `"false"`, `True` → `"true"`, `1` → `"1"`);
-   `':'` → `"':'"`; `body-digest-*` gain `":"`; and `job-if` / `defaults` follow §2.10. 29 in total,
-   counting the 9 prose payloads item 3 removes.
+   `':'` → `"':'"`; `body-digest-*` gain `":"`; and `job-if`, `defaults` and C5's step case follow
+   §2.10. 30 in total, counting the 9 prose payloads item 3 removes.
 5. **Diagnostics:** the 11 cases of §2.9, plus C16 `local-divergence`. The family's `diagnostics` are
    unchanged, because the checker moves to them (§2.8).
-6. **`job-if`'s `validity`** stops saying "strictly worse than the hazard it was written to fix". That
-   described the expression payload this plan removes.
+6. **`validity` text that described a removed payload.** `job-if`'s stops saying "strictly worse than
+   the hazard it was written to fix", which described the expression. C5's step case stops saying
+   "alters every Bash process the action spawns", which described `BASH_ENV`. It names the
+   launcher redirect instead: the action reads `TRUNK_PATH`, so `/bin/true` runs in its place.
 7. **The header** gains §2.2–§2.4's grammar, compressed. It stops claiming generation that does not
    happen: the claim becomes true, and the header says where the generator lives.
 
@@ -473,7 +513,7 @@ produces it.
 |---|---|---|---|
 | V1 | every case is classified into exactly one executor; fixture and injected sets EQUAL the derived classes | a test over all 149 cases | a case gets `op: rename`; a case is added to `FIXTURE_EXECUTED_CASES` only; the remote case is deleted from `CELL16_INJECTED_CASES` |
 | V2 | the closed schema | a test over every case | a case gains `anchor:`; a `structural` case loses `diagnostic` |
-| V3 | the generator fails closed on each requirement in §2.2–§2.4 | one synthetic case per requirement, each `assertRaises` with the case id in the message | each guard is deleted, one at a time. The guards: unparseable target; step 0 matches; step 2 matches; `add` on a present key; `set` on an absent key; `set` to an equal value; `remove` of an absent key or step; `append` to a non-string; `move` from an absent source; `move` to a present `to`; a non-string payload; a MISSING payload on each of `add`, `set`, `append` and `insert`; a payload on `remove`, `move` and `duplicate`; `to` on anything but a key `move`; both `before` and `at`; neither; an `at` other than `end`; an unknown op. Separately, the set-equal TYPE comparison is dropped, and `timeout-float` must then fail to build |
+| V3 | the generator fails closed on each requirement in §2.2–§2.4 | one synthetic case per requirement, each `assertRaises` with the case id in the message | each guard is deleted, one at a time. The guards: unparseable target; step 0 matches; step 2 matches; `add` on a present key; `set` on an absent key; `set` to an equal value; `remove` of an absent key or step; `append` to a non-string; `move` from an absent source; `move` to a present `to`; a non-string payload; a MISSING payload on each of `add`, `set`, `append` and `insert`; a payload on `remove`, `move` and `duplicate`; an `insert` payload that does not parse to a mapping; an `insert` target that is not a sequence; `to` on anything but a key `move`; both `before` and `at`; neither; an `at` other than `end`; an unknown op. Separately, the set-equal TYPE comparison is dropped, and `timeout-float` must then fail to build |
 | V4 | every §2.3 postcondition, value and frame | after every structural write, plus one synthetic wrong-effect control per row | `_mutate` writes `parse(payload)` to the PARENT key (frame); writes `None` (value); appends `"\n" + payload` (append value); places a duplicate at index 1, before the guards (placement); inserts AFTER the anchor (placement); moves a step to the wrong index (placement); drops the companion's `exit 1` (§2.5's executed failure) |
 | V5 | every structural (case, entry) builds, differs from its base, and yields its registry diagnostic at M3: 222 executions (220 + the two `local-divergence`) | the per-entry test, with its count asserted | one §3 diagnostic edit is reverted; `<job>` resolves to the other entry's job id; the M3 constant becomes M2 (the `no-job-continue-on-error` case must red) |
 | V6 | actionlint accepts every generated mutant, apart from declared allowances, and no allowance is stale | the existing test, now over the generator's output | `job-if`'s payload reverts to the expression (a stale `if-cond` allowance); a `needs` case is built without its companion (`job-needs`) |
