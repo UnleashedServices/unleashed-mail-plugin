@@ -102,8 +102,9 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
     // Per-provider request assembly — signature DIFFERS by provider:
     // OpenAI/Anthropic use (from:streaming:); Gemini uses (from:apiVersion:).
     private func buildRequestBody(from request: AIProviderRequest, streaming: Bool) -> [String: Any] {
+        let model = request.model ?? defaultModel
         var body: [String: Any] = [
-            "model": request.model ?? defaultModel,
+            "model": model,
             "messages": request.messages.map { convertMessage($0) },
             "max_tokens": request.maxTokens
         ]
@@ -111,11 +112,16 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
             body["tools"] = tools.map { convertTool($0) }
         }
         if streaming { body["stream"] = true }
-        // Set effort explicitly — the API default differs by model (medium on Opus 5.5, high on
-        // Sonnet 5.5). Effort sets thinking DEPTH on both. It is Opus 5.5's only thinking control;
-        // Sonnet 5.5 also takes `thinking: {"type": "between_tools"}` to skip up-front thinking,
-        // which is legal only at low/medium/high. See "Claude 5.5 request rules".
-        body["output_config"] = ["effort": "medium"]
+        // Effort is per MODEL. Haiku 4.5 does not support it, so an unconditional field fails every
+        // request whose `model` override names it. `supportsEffort` reads the Models API's
+        // `capabilities.effort.supported` (`GET /v1/models/{id}`, cached per model id).
+        // Where supported, set it explicitly: the API default differs by model (medium on Opus 5.5,
+        // high on Sonnet 5.5). Effort sets thinking DEPTH on both. It is Opus 5.5's only thinking
+        // control; Sonnet 5.5 also takes `thinking: {"type": "between_tools"}` to skip up-front
+        // thinking, which is legal only at low/medium/high. See "Claude 5.5 request rules".
+        if supportsEffort(model) {
+            body["output_config"] = ["effort": "medium"]
+        }
         return body
     }
 }
@@ -142,6 +148,9 @@ fails on every call. Each row gives the replacement that the guides themselves n
 | a prefilled final assistant turn                           | structured outputs, or instructions in the system prompt                           |
 | `tool_choice` `{"type": "any"}` or `{"type": "tool", ...}` | `tool_choice: auto` (the default) plus strict tool use or structured outputs       |
 
+- **Effort is per model.** Send `output_config.effort` only to a model that supports it: the Models
+  API reports `capabilities.effort.supported`, and each level, per model. Claude Haiku 4.5 does not
+  support effort, so an unconditional field breaks every request that overrides `model` with it.
 - **A specific tool call can no longer be FORCED on 5.5.** Code that relied on forcing one must check the
   model's choice and handle the case where no tool was called.
 - **Sonnet 5.5 only:** `thinking: {"type": "between_tools"}` is its lowest thinking setting. It is accepted

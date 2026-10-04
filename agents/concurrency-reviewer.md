@@ -270,12 +270,12 @@ caught here.
 - [ ] **API semantics**: a call that compiles but uses the wrong overload/parameter
       order, a discarded async result, pagination (`nextPageToken` / `deltaLink`) not
       advanced, a Boolean flag passed inverted
-- [ ] **Claude 5.5 request shapes**: a request to `claude-opus-5-5` or `claude-sonnet-5-5`
-      that sets any of the five settings 5.5 rejects with a 400 — a thinking budget
-      (`budget_tokens`), `thinking: {"type": "disabled"}`, non-default `temperature`/`top_p`/`top_k`,
-      a prefilled final assistant turn, or a forced `tool_choice` (`any`/`tool`). It fails on EVERY
-      call: `category: "logic"`, severity `blocker`. Replacements: `ai-engineer`'s "Claude 5.5 request
-      rules"
+- [ ] **Claude 5.5 request shapes**: a request to `claude-opus-5-5` or `claude-sonnet-5-5` that sets
+      any of the five settings 5.5 rejects with a 400 — a thinking budget (`budget_tokens`),
+      `thinking: {"type": "disabled"}`, non-default `temperature`/`top_p`/`top_k`, a prefilled final
+      assistant turn, or a forced `tool_choice` (`any`/`tool`) — or `output_config.effort` sent to a
+      model without effort support (Haiku 4.5). Each fails on EVERY call: `category: "logic"`,
+      severity `blocker`. Replacements: `ai-engineer`'s "Claude 5.5 request rules"
 - [ ] **State**: a field mutated but never read, an early `return` that skips required
       cleanup, a cache written but never invalidated
 

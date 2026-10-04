@@ -58,6 +58,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     - `ai-engineer`'s example comment called effort the ONLY 5.5 thinking control. That is true of
       Opus 5.5 only: Sonnet 5.5 also takes `between_tools`.
     - This plan's acceptance count is corrected to 28/28.
+  - **PR #107 second review (codex, P2).** The example sent `output_config.effort` unconditionally.
+    Claude Haiku 4.5 does not support effort, so a request whose `model` override names it would
+    fail every call. The example now sends effort only where the Models API reports
+    `capabilities.effort.supported`. The 5.5 rules and `concurrency-reviewer`'s request-shape item
+    say so too.
 
 ## [2.8.28] — 2026-10-03
 
