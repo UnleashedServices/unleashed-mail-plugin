@@ -1,6 +1,8 @@
 # COREDEV-2869 part 1 — Generate cell 11's mutants from the registry
 
-**Status:** Planning, revision 4. Round 3 approved on both arms; round 4, its byte-identical reproduction, did NOT hold (codex `REQUEST_CHANGES`, 1 blocking).
+**Status:** Implemented. The plan gate PASSED on revision 4: combined verdict APPROVE_WITH_NOTES,
+reproduced on byte-identical bytes (`76185a4e8398`) in rounds 5 and 6. Every edit to this file after
+round 6 is ungated by construction; the implementation note lists them.
 **Ticket:** COREDEV-2869 (parent Epic COREDEV-2485). Parts 2 and 3 shipped in v2.8.27 (PR #104):
 actionlint now runs over every mutant in `validate`, and cell 15's sentinel test exists.
 **Branch / worktree:** `feat/COREDEV-2869-registry-generated-mutants`, `.claude/worktrees/2869-generated-mutants`,
@@ -84,6 +86,53 @@ cut from `origin/main` at `dd84d82`.
 > * restricts the companion to its declared shape (§2.5);
 > * makes the frame equality recursive and type-strict, executed in the draft: 220/220 pass, and a
 >   type-only stray `15` → `15.0` edit that `==` misses is caught.
+
+## Implementation note (post-gate, ungated)
+
+**Notes applied from rounds 5 and 6** (codex, `APPROVE_WITH_NOTES` both times):
+* §2.8(2) now describes the substituted function accurately: the live read, the default-branch lookup
+  and the resolution. It also says "three arithmetic tests" where it said "other three".
+* V9's label is narrowed to what its check covers.
+* V6 asserts the 222 structural lint files explicitly.
+* V3 names invalid `before` anchors: malformed, not a step, another job, absent, ambiguous, and the
+  placed step itself.
+* V1's `rename` example uses a local case.
+
+**Found by executing the red controls, and implemented more strictly than §7 states.** The first
+battery ran 51 controls and 9 SURVIVED:
+* **6 were V3 guards masked by later guards.** A control that accepted any failure naming the case
+  passed with its guard deleted, because a downstream guard raised instead. This is the
+  defence-in-depth masking the 2780 campaign keeps meeting. Each V3 control now asserts its own
+  REASON.
+* **The two step-placement postconditions covered for each other.** Every wrong-placement control broke
+  both, so either could be deleted unnoticed. V4 gains two discriminating controls:
+  * a correct duplicate whose copy is MODIFIED, which only the placement value check sees;
+  * a correct duplicate plus a stray edit to another step, which only the step frame sees.
+
+  V4 also requires the failure to be a postcondition, not a precondition.
+* **V6's raw count measured intent, not effect.** A counter beside the write kept counting when the
+  write was dropped. The count is now the files in the lint tree.
+
+**Other implementation detail:** `before` must be `$.jobs.<job>.steps[name]`, naming a step in the
+same job, and never the step being placed.
+
+**Final battery: 51 controls, 51 red,** run against the formatted code that ships. By cell:
+* V1: 3
+* V2: 1
+* V3: 21 guards
+* V4: 9 weakenings
+* V5: 4
+* V6: 4
+* V7: 2
+* V8: 3
+* V9: 2
+* §2.5: 2
+
+One mutant is EQUIVALENT and is not counted as a survivor. The `else` branches of `_mutate_key` and
+`_mutate_steps` are unreachable behind `_check_operator_fields`' unknown-op guard.
+
+**Registry migration:** 157 fields across 95 cases, self-verified. The script reloads the result,
+requires every case to equal its specified form, and requires every other key to be unchanged.
 
 ## 0. The defect, in one paragraph
 
@@ -391,7 +440,7 @@ each `form`:
 1. injected := the recorded raw target set (`c2AndCell16RemoteHalves.rawTargetSet` in the rollout
    evidence), with `injected[side]` replaced by `[form.payload]`. The default branch is `main`, a
    fixture value: the evidence does not record one, and each form's outcome is checked below;
-2. `_resolve_target_set` (the LIVE read, and only that) is patched with a CALLABLE `side_effect` that
+2. `_resolve_target_set` (the live read, the default-branch lookup AND the resolution) is patched with a CALLABLE `side_effect` that
    evaluates `_resolve_ref_name(injected, "main")` when it is called. A refusal therefore raises
    inside `_resolve_once`, not while the patch is prepared. `_resolve_once`, `_target_set_results` and
    `_target_set_problems` run unmodified;
@@ -413,7 +462,7 @@ the message names `<entry>`. The property it guards, that the entry's diagnostic
 sentinel, is unchanged. The generated 16 refusal executions make
 `Cell15_TargetSetResolution.test_patterns_and_all_fail_closed_on_both_sides` redundant. That test is a
 hand-written list of the same four payloads (`~ALL`, `a*`, `mai?`, `mai[a-z]`) × both sides, and it
-is deleted. The class's other three tests stay (alias and prefix expansion, exclude veto, and
+is deleted. The class's three arithmetic tests stay (alias and prefix expansion, exclude veto, and
 same-cardinality retarget), because they pin specific resolver arithmetic that no family form states.
 
 ### 2.9 Diagnostic reconciliation
@@ -580,7 +629,7 @@ produces it.
 | V6 | actionlint accepts every generated mutant, structural AND raw, apart from declared allowances, and no allowance is stale | the existing test, now over the generator's output: structural mutants dumped, raw mutants written as their source TEXT (§2.7). The count of raw texts is asserted as cases × entries × permitted spellings | `job-if`'s payload reverts to the expression (a stale `if-cond` allowance); a `needs` case is built without its companion (`job-needs`); a raw case's payload becomes `"[]"` (`syntax-check`, although its span, frame and diagnostic all still pass); raw mutants are dropped from the lint tree (the asserted count reds) |
 | V7 | the raw cases are derived; the pinned path agrees with the target; the span holds the payload verbatim, and nothing else changed | the two raw classes, the span postcondition, and the substitution control (§2.7) | a raw target names the wrong step; the executor keeps the OLD token when the registry's payload changes (`yes` → `on`: the substitution control must red, although the diagnostic alone stays green); the executor writes outside the span |
 | V8 | the family: 24 executions; verdict class and diagnostic per form; distinguishable | the family test, with its count asserted | the resolver treats `~ALL` as a literal; the comparator ignores `resolved`; both family diagnostics are made equal |
-| V9 | no recipe survives | a DECLARATION-aware check: parse the module with `ast` and require that no function, method or assignment target is named `_yaml_mutants`, `_canary_mutants`, `RAW_YAML_CASES` or `test_patterns_and_all_fail_closed_on_both_sides`, and that no class assigns a literal tuple to `CASES`. It inspects declarations, not text, so the check's own name list cannot trip it | any of them is declared again |
+| V9 | none of the retired recipe declarations is declared again | a DECLARATION-aware check: parse the module with `ast` and require that no function, method or assignment target is named `_yaml_mutants`, `_canary_mutants`, `RAW_YAML_CASES` or `test_patterns_and_all_fail_closed_on_both_sides`, and that no class assigns a literal tuple to `CASES`. It inspects declarations, not text, so the check's own name list cannot trip it | any of them is declared again |
 | V10 | the positive controls still pass: both shipped workflows at M3, every permitted spelling | the existing tests, unchanged | (unchanged controls) |
 | V11 | the local gate, as CI runs it | CLAUDE.md's full list, including `trunk check` on the touched files, and the plan-citation linter's self-test | — |
 

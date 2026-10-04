@@ -13,6 +13,29 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.30] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2780 cell 11: mutants are GENERATED from the registry (COREDEV-2869 part 1).** The
+  registry's header said cell 11 generated one mutant per case. In fact 130 hand-written recipes and
+  8 hand-written raw tuples built them, and none of them read the registry's `op`, `target` or
+  `payload`. Eleven asserted diagnostics (21 executions), 28 mutants and 19 operators had drifted
+  from their cases.
+  - `_classify` gives every one of the 149 cases exactly one executor.
+  - `_mutate` builds the 222 structural (case, entry) mutants. Its per-operator postconditions are
+    type-strict, and check both the declared VALUE and that nothing outside the edit changed,
+    including where a step is placed.
+  - `_raw_mutation` writes the raw cases verbatim and lints them as text: 304 texts, 0 findings.
+  - The target-set family runs as its 24 executions through the real resolve-once boundary.
+  - The C2 and C16 `local-divergence` cases now execute their declared local op. They had been
+    counted as injected, and only the comparator catches them.
+  - The registry's case fields now follow one grammar, documented in its header: 157 fields across
+    95 cases.
+  - Four payloads that contradicted cell 11's minimum list are corrected to it: `job-if`, the two
+    `defaults`, and C5's step-scope `env`.
+  - 51 red controls, each run against the shipped code: all 51 go red.
+
 ## [2.8.27] — 2026-10-02
 
 ### Fixed

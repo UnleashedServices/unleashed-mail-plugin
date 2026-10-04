@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.27
+# UnleashedMail — Claude Code Plugin v2.8.30
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,17 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.30
+
+**Cell 11's contract mutants are now generated from the registry, so the two cannot drift.** The
+registry said cell 11 generated one mutant per case, but 138 hand-written recipes built them instead.
+11 asserted diagnostics, 28 mutants and 19 operators no longer matched the case they claimed to run.
+A grammar-strict generator now builds all 222 structural mutants from each case's `op`, `target`
+and `payload`, and proves each one: the declared value is there, and nothing else changed, placement
+included. The 8 raw-text mutants are written verbatim over their pinned spans. actionlint accepts
+every mutant, raw text included. The resolver family runs as its 24 executions through the real
+boundary. Two `local-divergence` cases that had never run their declared op now run it.
 
 ### v2.8.27
 
