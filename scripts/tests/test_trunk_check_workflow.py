@@ -3345,6 +3345,24 @@ _SEGMENT = re.compile(
 )
 _ABSENT = object()
 _COMPANION_FIELDS = frozenset({"id", "why", "runs-on", "steps"})
+_INJECTED_OBSERVATION = "injected ruleset observation"
+
+
+def _injected_context(case: dict) -> str:
+    """The required-status-check context an `injected` case adds to the ruleset observation: its
+    payload must parse to exactly `{context: <string>}`, which is all cell 16 knows how to inject.
+    """
+    observation = _parsed_payload(case)
+    if (
+        not isinstance(observation, dict)
+        or set(observation) != {"context"}
+        or not isinstance(observation["context"], str)
+    ):
+        raise _case_failure(
+            case,
+            f"an injected payload must be `{{context: <string>}}`, found {observation!r}",
+        )
+    return observation["context"]
 
 
 def _case_failure(case: dict, why: str) -> AssertionError:
@@ -3366,7 +3384,12 @@ def _classify(case: dict) -> str:
             side == "local"
             and (op == "materialise" or (op == "edit_bytes" and not rooted)),
         ),
-        ("injected", side == "remote"),
+        # ONLY the shape cell 16 implements: an `add` to the injected ruleset observation. A remote case
+        # with any other op or target matches no row and fails here (PR #108 second review, codex).
+        (
+            "injected",
+            side == "remote" and op == "add" and target == _INJECTED_OBSERVATION,
+        ),
     )
     matched = [name for name, hit in rows if hit]
     if len(matched) != 1:
@@ -3985,6 +4008,25 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         for obligation in self.registry["obligations"]:
             with self.subTest(obligation=obligation["id"]):
                 self.assertIn(obligation["kind"], OBLIGATION_KINDS)
+
+    def test_every_obligation_declares_at_least_one_known_entry(self):
+        """Every count and loop in this file iterates `entries`. An empty list runs a case on NOTHING
+        while each aggregate stays satisfied, so it fails here (PR #108 second review, codex).
+        """
+        known = set(self.registry["entries"])
+        for obligation in self.registry["obligations"]:
+            with self.subTest(obligation=obligation["id"]):
+                entries = obligation.get("entries")
+                self.assertTrue(entries, "declares no entry")
+                self.assertEqual(set(), set(entries) - known, "names an unknown entry")
+
+    def test_the_injected_case_adds_the_canarys_own_context(self):
+        """`C16.canary-not-required` is about the CANARY's context. This check never skips; the cell-16
+        execution beside it needs an authenticated ruleset read and can."""
+        injected = _registry_cases(self.registry, "injected")
+        self.assertEqual(1, len(injected))
+        ((_, case),) = injected
+        self.assertEqual(CANARY_CONTEXT, _injected_context(case))
 
     def test_every_case_uses_only_the_declared_fields(self):
         """V2. A misspelt or invented key must not silently become "no anchor"."""
@@ -4897,15 +4939,19 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         live = _live_ruleset()
         if live is None:
             self.skipTest(_REMOTE_HALF_SKIP)
+        # The context comes from the registry CASE, so the case is what this executes (PR #108).
+        registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+        ((_, case),) = _registry_cases(registry, "injected")
+        context = _injected_context(case)
         injected = copy.deepcopy(live)
         for rule in injected["rules"]:
             if rule["type"] == "required_status_checks":
                 rule["parameters"]["required_status_checks"].append(
-                    {"context": CANARY_CONTEXT, "integration_id": 15368}
+                    {"context": context, "integration_id": 15368}
                 )
         contexts = _required_contexts(injected)
         self.assertIn(
-            CANARY_CONTEXT, contexts, "the injected observation must be constructible"
+            context, contexts, "the injected observation must be constructible"
         )
         # And the live one is still clean — the mutation touched the copy only.
         ruleset = _live_ruleset()
@@ -5062,9 +5108,17 @@ def _assert_raw_cases_rejected(test: unittest.TestCase, kind: str) -> None:
     """
     registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
     ran = 0
+    owed: set[tuple[str, str]] = set()
+    executed: set[tuple[str, str]] = set()
     for obligation, case in _registry_cases(registry, "raw"):
         if obligation["kind"] != kind:
             continue
+        # Per CASE, not in aggregate: a raw obligation with no entries ran none of its cases while
+        # the other obligations kept `ran > 0` true (PR #108 second review, codex).
+        test.assertTrue(
+            obligation.get("entries"), f"{case['id']}: its obligation declares no entry"
+        )
+        owed.update((case["id"], entry) for entry in obligation["entries"])
         for entry in obligation.get("entries", []):
             path = WORKFLOW_PATH if entry == "required" else CANARY_PATH
             for spelling, source in _all_permitted_sources(
@@ -5077,7 +5131,9 @@ def _assert_raw_cases_rejected(test: unittest.TestCase, kind: str) -> None:
                         _raw_problems(case, obligation, mutated, entry),
                     )
                     ran += 1
+                    executed.add((case["id"], entry))
     test.assertGreater(ran, 0, f"no raw case of kind {kind!r} ran")
+    test.assertEqual(set(), owed - executed, "raw (case, entry) pairs that never ran")
 
 
 class RawMutationsAreTheRegistrysPayloadVerbatim(unittest.TestCase):

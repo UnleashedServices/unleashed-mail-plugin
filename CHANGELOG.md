@@ -34,10 +34,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     95 cases.
   - Four payloads that contradicted cell 11's minimum list are corrected to it: `job-if`, the two
     `defaults`, and C5's step-scope `env`.
-  - 53 red controls, each run against the shipped code: all 53 go red.
+  - 56 red controls, each run against the shipped code: all 56 go red.
   - **PR #108 review (codex):** a raw case whose obligation kind no raw class runs was counted as
     executed and diagnosed by nothing. Obligation kinds are now a closed set, raw accounting is keyed
     on the kinds the raw classes actually run, and `_raw_problems` fails closed.
+  - **PR #108 second review (codex).**
+    - A remote case is `injected` only in the shape cell 16 implements, an `add` of `{context: …}` to
+      the observation. Cell 16 reads its context from the case.
+    - Every obligation must declare at least one known entry.
+    - Raw execution is tracked per (case, entry), so a raw-only obligation with no entries can no
+      longer pass untested.
 
 ## [2.8.27] — 2026-10-02
 

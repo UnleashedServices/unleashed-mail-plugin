@@ -141,8 +141,23 @@ to `yml_typo`, or to `content_digest`, the suite stayed green. Three changes clo
 * `_raw_problems` fails closed on any other kind.
 
 Both reproductions now go red. With the accounting fix deleted, the `content_digest` reproduction goes
-green again, so that fix is the one doing the catching. Both reproductions are now in the battery,
-which stands at 53 controls, all 53 red.
+green again, so that fix is the one doing the catching. Both reproductions are now in the battery.
+
+**PR #108 second review (codex, two P2s), fixed.**
+* **A remote case was `injected` whatever its `op` said.** The cell-16 test hard-codes its injection,
+  so `op: typo` on `C16.canary-not-required/present` stayed green. Reproduced. Two changes close it.
+  First, the `injected` row now selects only the shape cell 16 implements: an `add` to the injected
+  ruleset observation. Second, `_injected_context` requires the payload to be `{context: <string>}`.
+  Cell 16 reads its context from the case, and a check that never skips requires that context to be
+  the canary's. Cell 16's own execution can still skip without an authenticated ruleset read.
+* **A raw case could count as executed with no entry to run on.** Codex's example,
+  `C3.runner-and-timeout-pinned` with `entries: []`, was caught, but only INCIDENTALLY: the obligation
+  also has structural cases, and the 222 count dropped. A raw-only `yaml` obligation with no entries
+  escaped: probed, all 130 tests stayed green. Two changes close it. Every obligation now declares at
+  least one known entry. The raw helper also tracks execution per (case, entry), so an empty or partial
+  list is reported per case, not hidden in an aggregate.
+
+All three reproductions are in the battery, which stands at 56 controls, all 56 red.
 
 **Registry migration:** 157 fields across 95 cases, self-verified. The script reloads the result,
 requires every case to equal its specified form, and requires every other key to be unchanged.
