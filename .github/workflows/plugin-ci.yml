@@ -255,16 +255,20 @@ jobs:
           # cover this. Bump it alongside the actionlint/gitleaks version pins below.
           # Opus 5 requires >= 2.1.219 (COREDEV-2583 §4.8). This pin drives
           # `claude plugin validate`, so the schema authority must not sit below the
-          # floor the plugin targets. 2.1.220 is the `latest` dist-tag; pinning ahead of
+          # floor the plugin targets. 2.1.289 is the `latest` dist-tag (2026-10-03); pinning ahead of
           # `stable` is deliberate because stable is below the Opus 5 floor.
-          CLAUDE_CODE_VERSION: 2.1.220
+          CLAUDE_CODE_VERSION: 2.1.289
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude --version
           # Marketplace manifest schema (top-level entry point). --strict promotes warnings to
           # failures; verified green on the pinned CLI above before enabling (COREDEV-2494).
-          claude plugin validate --strict .
+          # NAMED EXPLICITLY (COREDEV-2873): 2.1.220 validated a bare `.` as the marketplace manifest,
+          # but from 2.1.289 a bare `.` is validated as the PLUGIN root, whose contributor CLAUDE.md
+          # warning --strict promotes to a failure. Naming the manifest keeps --strict on the object this
+          # step exists for, on both versions; a corrupted manifest still fails (verified on 2.1.289).
+          claude plugin validate --strict .claude-plugin/marketplace.json
           # Deep plugin validation — agents/skills/hooks schemas. Exits 0 on the expected
           # "root CLAUDE.md is a contributor doc, not shipped context" warning, non-zero on a
           # real schema error. House conventions (missing name/description, agent-key hygiene,
@@ -527,7 +531,7 @@ jobs:
           # validates proves less than it appears to. That job scopes CLAUDE_CODE_VERSION to a single
           # STEP, so `${{ env.CLAUDE_CODE_VERSION }}` is EMPTY here; the value is repeated instead and
           # `scripts/tests/test_shell_primitive_drift.py` asserts the two pins agree.
-          CLAUDE_CODE_VERSION: 2.1.220
+          CLAUDE_CODE_VERSION: 2.1.289
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"

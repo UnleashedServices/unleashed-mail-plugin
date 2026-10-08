@@ -18,6 +18,33 @@ and `payload`, and proves each one: the declared value is there, and nothing els
 included. The 8 raw-text mutants are written verbatim over their pinned spans. actionlint accepts
 every mutant, raw text included. The resolver family runs as its 24 executions through the real
 boundary. Two `local-divergence` cases that had never run their declared op now run it.
+### v2.8.29
+
+**The agents' guidance is corrected against primary sources (COREDEV-2873).**
+
+- **Claude 5.5:** `ai-engineer` now recommends `claude-sonnet-5-5`, sets effort explicitly, and lists the five
+  request settings that Claude Opus 5.5 and Sonnet 5.5 reject with a 400, each with the replacement the
+  migration guides give. `concurrency-reviewer` flags those shapes at review time.
+- **Foundation Models:** `ai-engineer` documents the app's existing gating pattern (`@available(macOS 26.0, *)`,
+  `canImport`, the availability mapping) and requires an availability check before every call.
+- **Toolchain:** the build and CI agents now match the app's real CI: `macos-26` runners and the newest
+  installed Xcode, with a macOS 15.0 deployment target and Swift 6 language mode.
+- **Smaller fixes:**
+  - the Graph subscription example no longer hard-codes a past date;
+  - the hooks validator knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch`;
+  - CI validates with Claude Code 2.1.289.
+
+### v2.8.28
+
+**The review gate's CLI documentation matches what actually runs (COREDEV-2872).**
+
+- **Gemini:** the documented one-run fallback model, `gemini-2.5-pro`, is no longer offered by `agy`.
+  The skill now tells you how to pick a fallback from `agy models`, and warns off `gemini-3.1-pro-high`.
+- **Codex:** the skill pinned `gpt-6-astra` inline on `codex review` after the configured model had
+  moved to `gpt-6.1-sol`. That is now corrected. The skill also shows how to read the model and effort
+  a run actually used from its session record.
+- **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus, Sonnet and Haiku 5.5 default to `medium`
+  effort (Opus 4.7 to `xhigh`), so set a level explicitly for any review or gate session.
 
 ### v2.8.27
 

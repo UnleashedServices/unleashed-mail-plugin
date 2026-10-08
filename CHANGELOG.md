@@ -51,6 +51,91 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     forbidden pattern after a valid entry, so a resolver that validates only the first item of a side
     fails. Duplicates are closed as a class: censuses count distinct (case, entry) pairs, an obligation
     may not repeat an entry, obligation ids are unique, and the registry may not repeat a mapping key.
+## [2.8.29] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2873: agent and skill guidance corrected against primary sources.** This is item (c) of the
+  2026-10-03 external audit. The plan was reviewed by both arms and the double approval reproduced across
+  rounds 3–5 on byte-identical plan bytes. The audit was corrected where it was wrong: Apple's April 2026
+  Xcode 26 upload rule does not cover macOS, and `claude-sonnet-5` is legacy, not invalid.
+  - `ai-engineer`: recommends `claude-sonnet-5-5` and sets `output_config.effort` explicitly. A new "Claude
+    5.5 request rules" table lists the five request settings that Opus 5.5 and Sonnet 5.5 reject with a 400
+    (thinking budget, `thinking: disabled`, non-default sampling, assistant prefill, forced `tool_choice`).
+    Each is paired with the migration guides' own replacement, alongside Sonnet 5.5's `between_tools`
+    limits.
+  - `ai-engineer`: documents the app's existing Foundation Models gating (`@available(macOS 26.0, *)`,
+    `#if canImport(FoundationModels)`, the `SystemLanguageModel.default.availability` mapping) and requires
+    an availability check before every call. Fallback routing is labelled as a recommendation.
+  - `concurrency-reviewer`, the declared correctness owner, flags the five 5.5 shapes as `logic`/`blocker`.
+    `prompt-review` was considered and rejected, because it excludes correctness by contract.
+  - Toolchain text now matches the app's CI: `macos-26` runners, the newest installed Xcode, a macOS 15.0
+    deployment target and Swift 6 language mode. This replaces "Xcode 16.3+ / Swift 6.1 / macos-15"
+    everywhere a complete scan found it (`ci-engineer`, `xcode-build-fixer`, `docs-engineer`,
+    `release-manager`, `tester`, `spm-management`). Dated measurements are kept.
+  - The Graph subscription
+    example replaces its past date with a placeholder, and it now states the 1,440-minute limit for
+    subscriptions with resource data and the 45-minute floor.
+  - `validate-hooks.py` knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch` (33 events). Each was
+    rejected before the change and accepted after it (`--root`, `--require-manifest`).
+  - CI's Claude Code pin moves 2.1.220 → 2.1.289. From 2.1.289 a bare `claude plugin validate --strict .`
+    validates the PLUGIN root and fails on the contributor `CLAUDE.md` warning, so the strict step now
+    names `.claude-plugin/marketplace.json`. That is the same object at the same strictness, and a corrupted
+    manifest still fails. This command change follows the plan's "fix or hold the pin" rule and was made
+    after the gate, so it is ungated.
+  - **Deferred: the brainstorm skill's "macOS 25" wording (COREDEV-2874).** The file carries existing
+    prettier debt, and three suites pin its lines (the transcript-path inventory, the callers-scan frozen
+    regions and the COREDEV-2605 anchors). Formatting it broke 20 tests, so the fix needs its own
+    coordinated pass. It is unchanged here.
+  - `AGENT_CONTRACTS.md` §13's `concurrency-findings` anchor moved from `:269` to `:286`, following the
+    `## Output Format` heading that the new checklist item shifted. This is position only.
+  - **PR #107 review (codex), all four fixed.**
+    - `docs-engineer`'s README and CONTRIBUTING templates no longer close early. Each template's nested
+      fence closed the outer one: on `main` too, made explicit here by prettier. The rest of each template
+      had rendered as agent instructions, and the following section as a code block.
+    - `ai-engineer`'s example comment called effort the ONLY 5.5 thinking control. That is true of
+      Opus 5.5 only: Sonnet 5.5 also takes `between_tools`.
+    - This plan's acceptance count is corrected to 28/28.
+  - **PR #107 second review (codex, P2).** The example sent `output_config.effort` unconditionally.
+    Claude Haiku 4.5 does not support effort, so a request whose `model` override names it would
+    fail every call. The example now sends effort only where the Models API reports
+    `capabilities.effort.supported`. The 5.5 rules and `concurrency-reviewer`'s request-shape item
+    say so too.
+  - **PR #107 third review (gemini).** `validate-hooks.py` drops two ranges, `0x2060–0x2064` and
+    `0x2065–0x2069`, that `0x2060–0x206F` already covered. The predicate is identical on all 1,114,112
+    code points. The `MIN-20` comment moves above a loop that black had wrapped across five lines.
+
+## [2.8.28] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2872: the review gate's CLI docs had drifted from what actually runs.** Each fact below was
+  re-verified on 2026-10-03.
+  - **Gemini fallback.** `skills/gemini-review/SKILL.md` named `gemini-2.5-pro` as the one-run fallback,
+    and `agy models` (agy 1.2.16) no longer lists it. A dead name fails exactly when a fallback is
+    needed, so the skill now gives the rule instead of a literal: pick a currently listed
+    `gemini-*-flash-high` other than the primary, and never `gemini-3.1-pro-high`, which failed to emit
+    a parseable verdict in 5 of 6 rounds. `agy models` is now granted exactly (`Bash(agy models)`), so
+    the fallback works without a permission prompt; it runs no prompt (PR #106 review).
+  - **Codex model.** `skills/codex-review/SKILL.md` said the config sets `gpt-6-astra` and pinned it
+    inline (`-c review_model=gpt-6-astra`) on the built-in `codex review` commands. The configured
+    model is `gpt-6.1-sol`, and the round-66 session record shows `gpt-6.1-sol` at `ultra`. Following
+    the skill forced the old model, so the pins and the setup text now say `gpt-6.1-sol`. They also show
+    how to read a run's real model and effort from `~/.codex/sessions/…/rollout-*.jsonl`. The effort
+    ladder, re-read from the 0.160.0 binary, is unchanged.
+  - **Effort default.** `AGENT_CONTRACTS.md` §11 now records the documented defaults: Opus, Sonnet and
+    Haiku 5.5 run at `medium` and Opus 4.7 at `xhigh` when nothing sets a level (PR #106 review). Since
+    the plugin's assets inherit the session's level, review and gate sessions should set one explicitly.
+  - **A broken example in the Gemini skill.** Step 1 of "Slim-argv + workspace prompt file" had lost
+    its opening fence, so the example's `#` comment lines rendered as markdown headings. The fence now
+    opens before step 1, as intended. A formatter pass would otherwise have rewritten those "headings".
+    In `AGENT_CONTRACTS.md`, the plan-gate step list (`00.`, `0.`, `1.`…) carries a `prettier-ignore`
+    marker, because prettier renumbers it and other documents cite those step numbers. The Gemini skill's
+    numbered workflow list carries one too: prettier would dedent a continuation line inside a
+    multi-line code span, which the COREDEV-2619 transcript-path inventory pins byte for byte. That
+    inventory's three `destination.line` values for the Gemini skill moved with the edits above
+    (210→212, 272→277, 275→280), derived from where each frozen payload now occurs exactly once.
+    No payload or hash changed.
 
 ## [2.8.27] — 2026-10-02
 

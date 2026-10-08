@@ -127,13 +127,13 @@ actor MSALTokenManager {
 
 ### Key Difference from Gmail OAuth
 
-| Aspect | Gmail | Microsoft Graph |
-|---|---|---|
-| Library | Manual OAuth 2.0 | MSAL SDK (handles cache + refresh) |
-| Token storage | Keychain (manual) | MSAL keychain (automatic) |
-| Redirect URI | `http://localhost:<port>` | `msauth.<bundle-id>://auth` |
-| Refresh logic | Custom `TokenManager` actor | MSAL silent acquisition |
-| Multi-tenant | N/A | `common` authority for personal + work |
+| Aspect        | Gmail                       | Microsoft Graph                        |
+| ------------- | --------------------------- | -------------------------------------- |
+| Library       | Manual OAuth 2.0            | MSAL SDK (handles cache + refresh)     |
+| Token storage | Keychain (manual)           | MSAL keychain (automatic)              |
+| Redirect URI  | `http://localhost:<port>`   | `msauth.<bundle-id>://auth`            |
+| Refresh logic | Custom `TokenManager` actor | MSAL silent acquisition                |
+| Multi-tenant  | N/A                         | `common` authority for personal + work |
 
 ## Mail API Endpoints
 
@@ -219,14 +219,15 @@ POST /subscriptions
     "changeType": "created,updated,deleted",
     "notificationUrl": "https://your-backend.com/api/graph-webhook",
     "resource": "/me/messages",
-    "expirationDateTime": "2025-04-01T00:00:00Z",
+    "expirationDateTime": "<ISO 8601 UTC, at most 10,080 minutes from now — 1,440 with includeResourceData>",
     "clientState": "your-secret-validation-token"
 }
 ```
 
 ### Subscription Lifecycle
 
-- **Max expiration**: 10080 minutes (~7 days) for mail resources.
+- **Max expiration** (Microsoft Graph _subscription resource type_, re-read 2026-10-03): 10,080 minutes (under seven days) for Outlook `message`/`event`/`contact`, but **1,440 minutes (under one day)** for subscriptions with resource data (`includeResourceData: true`). Compute `expirationDateTime` from now at creation and renewal; never hard-code a date.
+- **Minimum**: Graph raises any `expirationDateTime` less than 45 minutes after the request to 45 minutes after it.
 - **Renewal**: Must call `PATCH /subscriptions/{id}` before expiry. Set a timer at 80% of the TTL.
 - **Validation**: Graph sends a validation token on creation — your endpoint must echo it back.
 
@@ -283,13 +284,13 @@ func incrementalSync(state: inout DeltaSyncState) async throws -> [GraphMessage]
 
 ### Gmail vs. Graph Push Comparison
 
-| Aspect | Gmail | Microsoft Graph |
-|---|---|---|
-| Mechanism | Pub/Sub (GCP) | Webhooks (HTTPS endpoint) |
-| Payload | historyId only | resource ID + changeType |
-| Max TTL | 7 days | ~7 days (mail) |
-| Offline fallback | history.list | delta queries |
-| Backend needed? | GCP project | HTTPS endpoint (or use delta polling) |
+| Aspect           | Gmail          | Microsoft Graph                       |
+| ---------------- | -------------- | ------------------------------------- |
+| Mechanism        | Pub/Sub (GCP)  | Webhooks (HTTPS endpoint)             |
+| Payload          | historyId only | resource ID + changeType              |
+| Max TTL          | 7 days         | ~7 days (mail)                        |
+| Offline fallback | history.list   | delta queries                         |
+| Backend needed?  | GCP project    | HTTPS endpoint (or use delta polling) |
 
 ## Pagination
 
