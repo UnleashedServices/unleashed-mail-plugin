@@ -1,16 +1,12 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 65 (ungated; see the revision 63 to 65 log entries). The re-gate opened
+**Status:** Planning, revision 66 (ungated; see the revision 63 to 66 log entries). The re-gate opened
 at revision 38 (COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT
 passed.** See the **r66** log entry. Every edit after revision 62 is ungated by construction.
 **Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
 respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
-* cell 11 — YAML mutants are hand-written, not generated from the registry, and eleven of their
-  asserted diagnostics differ from the registry's (ten that now run on both entries, one canary-only: 10 x 2 + 1 = 21 executions;
-  revision 52 said 19, COREDEV-2870); the `(side, form)` resolver family runs as hard-coded helper tests, not as the
-  24 registry-expanded executions;
 * cell 8 — the pre-commit half is not proved through Git's entry point: no test makes a real
   `git commit` that a stale install warns on and still permits, or runs the silent rows that way; the
   r33 root-operand controls are source assertions and direct detector calls; the bucket boundary is
@@ -36,6 +32,19 @@ respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemen
   (codex, r56);
 * **older than revision 33:** cell 15's rendered-prose-versus-registry comparison. No test reads this
   plan.
+
+**Implemented in revision 66 (COREDEV-2869 part 1), no longer outstanding:** cell 11's mutants are
+GENERATED from the registry. `_classify` gives each of the 149 cases exactly one executor. `_mutate`
+builds the 222 structural (case, entry) mutants from `op` / `target` / `payload`, and its per-operator
+value-and-frame postconditions prove each one is what the case declares. `_raw_mutation` writes the 8
+raw cases verbatim over their pinned spans. actionlint accepts every structural dump and every raw text
+(304), apart from the six declared `if-cond` allowances. The `(side, form)` resolver family runs as its
+24 executions through the real `_resolve_once` boundary. The eleven diagnostic mismatches (21
+executions) are reconciled. Each registry diagnostic is now the checker's message for that case's own
+obligation. The hand-written recipes and tuples are gone. The two `local-divergence` cases now execute
+their declared LOCAL op through the comparator: they had been counted as injected, and
+`contract_problems` reports nothing for either mutant. Design, measurements and the 51 red controls are
+in `COREDEV-2869_REGISTRY_GENERATED_MUTANTS_PLAN.md`.
 
 **Implemented in revision 65 (COREDEV-2869), no longer outstanding:** cell 11's case-validity rule
 is EXECUTED. `validate` installs actionlint before the scripts suite, and
@@ -81,8 +90,9 @@ is still not EXECUTED (above). A standing test now runs every case on every entr
 (revision 50). Revision 51 accounts for it per (case, entry) PAIR. That brought in the fixture-typed C6
 and C6a cases, which now also run against the CANARY's own guard bodies. The canary's C6a guard is
 different bytes from the required workflow's, and those eight pairs had never run (codex, r53). **Scope
-of that claim** (codex, r54): every YAML/body pair and every fixture pair executes. The three
-remote-relation pairs are injected per single entry, and `C16.canary-not-required/present` can skip on
+of that claim** (codex, r54): every YAML/body pair and every fixture pair executes. One remote-relation
+pair (`C16.canary-not-required/present`) is injected; the two `local-divergence` pairs execute their
+declared local op through the comparator (revision 66), and `C16.canary-not-required/present` can skip on
 a machine without authenticated `gh`. Its remote half then rests on the recorded rollout read, not on
 this run. Its `TRUNK_PATH` cases now write that
 assignment; until revision 44 all three appended `echo X`.
@@ -493,6 +503,13 @@ assignment; until revision 44 all three appended `echo X`.
 > flow style), all actionlint-clean and all a positive control for both checks. A present `name`
 > decides the context whatever its value, with a `named-false` case per entry; the old expression
 > accepted both. 128 recipes, 218 combinations, 0 failing.
+> **Revision 66** (2026-10-03; ungated here, and gated in its own plan): COREDEV-2869 part 1. Cell 11's
+> mutants are generated from the registry. The registry's case fields were rewritten to one grammar,
+> and its four payloads that contradicted cell 11's minimum list were corrected to it: `job-if`, the two
+> `defaults` and C5's step. The status block above records the result. The design passed a dual-review
+> gate in `COREDEV-2869_REGISTRY_GENERATED_MUTANTS_PLAN.md`, reproduced on byte-identical bytes, rounds
+> 5 and 6.
+>
 > **Revision 65** (2026-10-03; ungated): COREDEV-2869 part 2. Cell 11's validity rule ran only as a
 > one-off sweep, because `validate` installed actionlint AFTER the scripts suite. The install now
 > runs before the suite (in RUNNER_TEMP), and the rule is a standing test. Each case's allowed kinds
