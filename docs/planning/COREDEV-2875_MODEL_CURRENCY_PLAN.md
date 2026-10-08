@@ -1,6 +1,6 @@
 # COREDEV-2875 — Model currency: every caller in the plugin uses the newest model
 
-**Status:** Planning, revision 3. Gate round 2: agy `REQUEST_CHANGES` (1 blocking), codex `REQUEST_CHANGES` (3 blocking).
+**Status:** Planning, revision 4. Gate round 3: agy `APPROVE`, codex `REQUEST_CHANGES` (3 blocking, 1 factual).
 **Ticket:** COREDEV-2875 (parent Epic COREDEV-2485). **Branch / worktree:**
 `feat/COREDEV-2875-model-currency`, `.claude/worktrees/model-currency`. It is cut from PR #107's head
 (`692576a`), which already carries PR #106, because both PRs edit the same files. The PR for this
@@ -61,6 +61,29 @@ branch opens against `main` once those two merge.
 > as a recipe or not (§2.1). Agy's ANSI note was measured before it was taken. On a TTY agy fuses an
 > escape to the FIRST entry, which is the newest model, so stripping would be an approximate fix. The
 > resolver instead uses pipes only and fails closed on any control byte (F11).
+>
+> **r3** `b2a73e7` (revision 3): agy `APPROVE`, codex `REQUEST_CHANGES`.
+> 1. **(P1) A new-session caller was exempted.** `agy -i "…"` (`SKILL.md:236`) runs an INITIAL prompt
+>    in a new session. Revision 3 had filed it under "interactive keeps the session's choice", but the
+>    flag table says a session without `--model` starts on `settings.json`.
+> 2. **(P2) §3 missed broken fixtures:**
+>    * `test_preflight_agy_isolation`'s pong-only stubs;
+>    * `test_end_to_end_gate`'s verdict-only stubs, plus its first-line `VERDICT: APPROVE` assertion
+>      (`:156`);
+>    * `test_validate_plugin_assembly`'s every-key fixture, which sets `model: v`.
+> 3. **(P2) M2's byte-guard control cannot go red.** The fused `\x1b[Kgemini-3.8-flash-high` still ends
+>    in `-flash-high`, so the candidate grammar rejects it whether or not the byte guard exists.
+> 4. **F2 was false.** `_TIER_ROW` parses tier names as `` `[a-z]+` ``, so a coordinated concrete-id
+>    edit leaves the agent unparsed and the build red. agy's r3 review "verified" F2 as written.
+>
+> **Revision 4** takes all four.
+> * **Item 1** is widened rather than patched. agy's own help says `--model` is the "Model for the current
+>   CLI session", and `-c`/`--conversation` resume a conversation in a new CLI session. So EVERY launch
+>   mode resolves (`-p`, `-i`, `-c`, `--conversation`). Slash commands inside a running session are the
+>   only interactive surface left with the session's choice.
+> * **Item 2** is answered by MEASUREMENT rather than by adding codex's three names. A throwaway draft of
+>   the whole design was applied and the full suite run. It fails 56 tests in 9 modules, and §3 now
+>   accounts for every one (F4).
 
 ## 0. The direction, and the two decisions behind it
 
@@ -79,16 +102,21 @@ inside that direction were put to the maintainer and decided:
   `opus` ×3, `sonnet` ×7 and `inherit` ×11. **No shipped agent pins a generation.** On the Anthropic API
   an alias resolves to the newest model of its family. `inherit` follows the session's model, which the
   operator controls (`AGENT_CONTRACTS.md:463`). No skill sets `model:`.
-* **F2 — nothing keeps it that way.** `validate-plugin-assembly.py` accepts any concrete model id that
-  matches `[a-z]+-[a-z0-9-]*\d[a-z0-9-]*` (`MODEL_ALIASES` plus that regex).
+* **F2 — only an accident keeps it that way, and only for agents.** `validate-plugin-assembly.py:806`
+  accepts any concrete model id that matches `[a-z]+-[a-z0-9-]*\d[a-z0-9-]*`.
   `test_validate_plugin_assembly.test_valid_model_ids_pass` and `test_supported_aliases_and_ids_accepted`
-  (line 227) both assert that concrete ids pass. The tier check (`validate-plugin-assembly.py:1143`)
-  rejects an agent model that disagrees with §11's table. So a lone pin fails, but a COORDINATED pin and
-  table edit ships green.
+  (line 227) both assert that concrete ids pass.
+  * **Agents** with a concrete id still fail today, but only through §11's tier check. Its row parser
+    (`_TIER_ROW`, `:1064`) reads a tier name as `` `[a-z]+` ``, so a concrete id cannot be filed. A lone
+    pin disagrees with its row, and a coordinated pin-and-table edit leaves the agent "missing from the
+    tiering table" (`:1143–1149`). Neither message says why the id is wrong. (Revision 3 said the
+    coordinated edit ships green; codex r3 showed it does not.)
+  * **Skills** have no tier table, so nothing stops a concrete id there.
 * **F3 — the Gemini arm is two versions behind.** `scripts/review/isolated-agy-review.sh:71` reads
   `MODEL="${MODEL:-gemini-3.6-flash-high}"`, and `agy models` (agy 1.2.16, run today) lists
-  `gemini-3.8-flash-high` and `gemini-3.7-flash-high` above it. The literal appears in four more
+  `gemini-3.8-flash-high` and `gemini-3.7-flash-high` above it. The literal appears in five more
   places:
+  * the wrapper's rationale comment (`:59`);
   * the gemini-review skill: its description (line 3), setup text (line 63) and checklist (line 273);
   * `CLAUDE.md:95`.
 
@@ -127,6 +155,26 @@ inside that direction were put to the maintainer and decided:
   * `test_isolated_harness_preconditions` 2.
 
   **2** are the F3 doc gates, and **2** are the callers-scan manifest.
+
+  **A second draft covers the whole design** (`draft-full.patch` and `draft-agy-newest-model.sh` beside
+  the first). It contains the resolver, the wrapper's resolution, id grammar and banner, operand six's
+  grammar check, the preflight resolution, and the validator's alias-only check for agents and skills.
+  Against the real `agy` the resolver printed `gemini-3.8-flash-high`. The full scripts suite then FAILED
+  56 of 1519 (`draft-full-suite.txt`):
+
+  | Module | Failures | Cause |
+  |---|---|---|
+  | `test_gemini_reviews_the_bound_plan` | 20 | stub never answers `agy models`, `MODEL` unset |
+  | `test_m5_path_contract` | 10 | the same |
+  | `test_transcript_path_threading` | 5 | the same |
+  | `test_isolated_harness_preconditions` | 2 | the same |
+  | `test_end_to_end_gate` | 9 | verdict-only stub, `MODEL` unset: the wrapper fails closed and the gemini transcript is empty |
+  | `test_preflight_agy_isolation` | 2 | pong-only stubs: resolution fails, so no ping runs |
+  | `test_validate_plugin_assembly` | 4 | two concrete-id acceptance cases, `test_valid_model_ids_pass`, and the every-key fixture's `model: v` |
+  | `test_doc_gates` | 2 | the F3 literal bindings |
+  | `test_callers_scan` | 2 | the new script is absent from the manifest |
+
+  The draft was then reverted, and the tree verified clean at `b2a73e7`.
 * **F5 — the Codex arm already follows its config.** `capture-codex-review.sh` and `audit-codex.sh` pass
   no model, so Codex uses `~/.codex/config.toml`. An unpinned local `codex review --base origin/main`
   today recorded `model: gpt-6.1-sol` and `reasoning effort: ultra` in its transcript header.
@@ -233,9 +281,10 @@ over `skills`, `agents`, `scripts`, `hooks`, `CLAUDE.md` and `AGENT_CONTRACTS.md
 git grep -nIE '(^|[`"( ]|-- )agy( +-[-a-z]|  *models)'
 ```
 
-On `8716979` it returns 44 lines. A narrower scan, for an `agy` command with a quoted `-p` prompt,
-returns exactly the eight launch sites in the table below plus the four historical demonstrations
-(`SKILL.md:163–165`, `:168`).
+On `8716979` it returns 44 lines. A narrower scan, for an agy LAUNCH in any mode, returns exactly the
+ten launch sites in the table below plus the four historical demonstrations (`SKILL.md:163–165`,
+`:168`). A launch is `agy` with `-p`/`--print`/`--prompt` or `-i`/`--prompt-interactive` and a quoted
+prompt, or with `-c`/`--continue`/`--conversation`.
 
 | Site | Today | After |
 |---|---|---|
@@ -243,6 +292,8 @@ returns exactly the eight launch sites in the table below plus the four historic
 | `preflight-agy.sh:71` | a bare ping | resolve, then `--model "$MODEL"`; a resolution failure is a preflight failure |
 | `skills/gemini-review/SKILL.md:62` (review recipe) | bare | the checked form below |
 | `SKILL.md:229` (terminal example) | bare | the checked form below |
+| `SKILL.md:236` (`agy -i "…"`, a NEW session with an initial prompt) | bare | the checked form below |
+| `SKILL.md:276` ("continue with `agy -c` or `agy -i`") | bare | refers to the example's checked form, without spelling a bare launch |
 | `SKILL.md:272` (smoke test), `:314` (troubleshooting) | a bare ping | `bash …/preflight-agy.sh` |
 | `skills/implement/SKILL.md:107` | a PTY-wrapped bare ping | `bash …/preflight-agy.sh` |
 | `scripts/pty-capture.py:30–32` (docstring) | bare | the checked form below |
@@ -251,15 +302,19 @@ returns exactly the eight launch sites in the table below plus the four historic
 command substitution does not stop the command it is embedded in: codex reproduced `agy --model "$(…)"`
 launching with an empty model. So resolution is its own command, and `&&` gates the launch.
 
-**The other 36 lines start no non-interactive review:**
-* **Interactive sessions keep the session's choice, and the examples say so:** `agy -i` and `agy -c`
-  (`SKILL.md:236`, `:239–248`, `:276`, and the interactive-only notes at `:344`, `:403` and `:459`).
+**Every launch mode uses it.** agy's help says `--model` is the "Model for the current CLI session".
+`-i` runs an initial prompt in a new session, and `-c`/`--conversation` resume a conversation in a new
+CLI session. Without `--model`, each of them starts on agy's global setting.
+
+**The other 34 lines launch nothing:**
+* **Inside a running session.** Slash commands keep that session's choice: the section at
+  `SKILL.md:239–248`, and the interactive-only notes at `:344`, `:403` and `:459`.
 * **Historical demonstrations** of failed invocations: `SKILL.md:86–88`, `:163–168`, and
   `isolated-agy-review.sh:16–18`.
 * **Prose about agy's behaviour or flags, or calls that start no model:**
   * `AGENT_CONTRACTS.md:125`, `:128`;
   * `SKILL.md:16` (the grant), `:59`, `:61` (which already routes to preflight), `:63`, `:65`, `:69`,
-    `:226` (the comment heading `:229`'s example), `:250` (the flags heading), `:311`, `:313`
+    `:226` (the comment that heads the terminal example), `:250` (the flags heading), `:311`, `:313`
     (`agy --version`) and `:319–323`;
   * the timeout comments at `capture-gemini-review.sh:37` and `isolated-agy-review.sh:57`, and the
     `agy models` note at `isolated-agy-review.sh:62`.
@@ -391,7 +446,10 @@ note links to the model-config page for any other model.
   * `-preview`, `pro-high` and second-column text are excluded;
   * an empty list fails closed, with the message;
   * `agy models` exiting non-zero fails closed;
-  * a listing with `\r\x1b[K` fused to the NEWEST entry fails, rather than selecting the second newest;
+  * a listing with `\r\x1b[K` fused to the NEWEST entry fails WITH the forbidden-byte message. It is a
+    regression case, and the candidate grammar would also reject it;
+  * a forbidden byte in a SECOND-column label, beside valid candidates, fails with the forbidden-byte
+    message. Only the byte guard can catch this case;
   * `Fetching available models...` on stderr is ignored;
   * a set `MODEL` wins, and the stub records that `models` was never called;
   * an unrecognized candidate (`gemini-3.10.1-flash-high`) fails;
@@ -407,9 +465,20 @@ note links to the model-config page for any other model.
   * `preflight-agy.sh`'s ping receives `--model <newest listed>`;
   * a resolver failure in the checked form launches nothing. The test EXECUTES the skill's and the
     docstring's recipe text with a failing resolver stub and a recording agy stub.
-* **The 37 stubbed-reviewer tests** set `MODEL` explicitly in the environment they build. They test
-  binding, isolation and status propagation, not selection, and selection is covered above. The
-  production path, `MODEL` unset, is the end-to-end case.
+* **Every one of the draft's 56 failures (F4) is answered:**
+  * **The 37 stubbed-reviewer tests** set `MODEL` explicitly in the environment they build. They test
+    binding, isolation and status propagation, not selection, and selection is covered above.
+  * **`test_end_to_end_gate` (9)** keeps exercising the production path. Its stub agy gains a
+    side-effect-free `models` answer listing one flash-high model, and `MODEL` stays unset. The
+    whole-chain assertion at `:156` stops requiring `VERDICT: APPROVE` as the gemini transcript's FIRST
+    line. It checks line 1 is the banner naming the stub's model, and then the anchored verdict
+    separately. The codex transcript's assertion is unchanged.
+  * **`test_preflight_agy_isolation` (2):** its stubs gain the same `models` answer and keep their ping
+    behaviour. A new case asserts that a failed resolution reports unavailable and runs no ping.
+  * **`test_validate_plugin_assembly` (4):**
+    * the two concrete-id cases and `test_valid_model_ids_pass` become rejections (§2.3);
+    * the every-key fixture (`:309`) keeps EVERY key, with a legal value for `model` (`inherit`).
+  * **`test_doc_gates` (2) and `test_callers_scan` (2):** below.
 * **The two doc gates** bind the skill's description of the RULE to the resolver's pattern. They also
   assert that no versioned flash-high literal (`gemini-<major>[.<minor>]-flash-high`) appears anywhere
   in the wrapper, the resolver, the gemini-review skill or `CLAUDE.md`. Other names stay legal, such as
@@ -420,8 +489,8 @@ note links to the model-config page for any other model.
 * **A codex-review doc gate** asserts that nothing in the skill assigns a value to `model` or
   `review_model`, in commands or in setup text (line 69's `-c model=` included). Prose that names the
   keys without a value passes.
-* **A recipe gate** scans shipped markdown and script docstrings for an `agy` command with a quoted
-  `-p` prompt. Each one must use the checked form, or appear in a closed exemption list of historical
+* **A recipe gate** scans shipped markdown and script docstrings for an agy LAUNCH in any mode (§2.1's
+  definition). Each one must use the checked form, or appear in a closed exemption list of historical
   demonstrations. That list holds `SKILL.md:163–165` and `:168`, keyed by exact line text with a
   reason, and its count is pinned.
 * The callers-scan manifest is regenerated. Any transcript-path inventory site whose bytes move is
@@ -432,12 +501,12 @@ note links to the model-config page for any other model.
 | # | property | must go red when |
 |---|---|---|
 | M1 | the resolver selects the newest flash-high | string comparison: `3.10` vs `3.9` is tested ALONE (no `4` in the list); the `$1` filter is dropped: a NEWER second-column decoy wins; `-preview` is admitted: a NEWER `-flash-high-preview` wins |
-| M2 | it fails closed | the non-zero listing stub PRINTS A VALID candidate and exits 1 (so only the status check can catch it); an unrecognized newer form is skipped instead of failing; the control-byte check is removed (the `\x1b[K`-fused newest entry then yields the second newest); the timeout is removed (a 5 s stub with a 1 s bound then succeeds) |
+| M2 | it fails closed | the non-zero listing stub PRINTS A VALID candidate and exits 1 (so only the status check can catch it); an unrecognized newer form is skipped instead of failing; the control-byte check is removed (the second-column-label case then SUCCEEDS, and the fused-entry case fails with the grammar message instead of the byte message); the timeout is removed (a 5 s stub with a 1 s bound then succeeds) |
 | M3 | the override wins without a listing | the selected model is not the override, OR the stub's call log shows `models` was called. This is checked for the environment `MODEL` and for capture operand six |
 | M4 | production runs the resolved model | `MODEL` is unset by the test (not merely operand six omitted), and the real capture entrypoint stops passing `--model <newest>`, stops writing the banner as the transcript's first line, or passes `agy` as agy's first argument |
-| M5 | no concrete id ships in frontmatter | direct field tests: a concrete id or `default` is rejected WITH the model-specific message, for an agent and for a skill; an integration fixture keeps a consistent tier table, so the failure is this guard's |
+| M5 | no concrete id ships in frontmatter | direct field tests: a concrete id or `default` is rejected WITH the model-specific message, for an agent and for a skill. Any integration test asserts that model-specific message, never merely a non-zero exit, because §11's tier parser already rejects a concrete agent id incidentally (F2) |
 | M6 | the review skills name no pinned model | a `-c review_model=…` command or the `-c model=…` setup example returns to codex-review; a versioned flash-high literal returns to the wrapper, the resolver, any line of the gemini-review skill, or `CLAUDE.md`; the `settings.json` assertion still holds |
-| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; a NEW bare `agy -p "…"` recipe is added to a skill; the checked form's `&&` becomes `;` (the executed recipe then launches agy after a failed resolution) |
+| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; a NEW bare launch is added to a skill, once each as `agy -p "…"`, `agy -i "…"` and `agy -c`; the checked form's `&&` becomes `;` (the executed recipe then launches agy after a failed resolution) |
 | M8 | no model id can add a line to the transcript | the id grammar check is removed: a newline override then writes an anchored `VERDICT:` line. The cell asserts the REASON — the round fails with the grammar message and the transcript holds no anchored `VERDICT:` line — not merely a failure |
 
 ## 5. Rollout
