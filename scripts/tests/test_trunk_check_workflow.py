@@ -4041,6 +4041,37 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 entries = obligation.get("entries")
                 self.assertTrue(entries, "declares no entry")
                 self.assertEqual(set(), set(entries) - known, "names an unknown entry")
+                # A repeated entry runs one entry twice and the other never, under an unchanged count
+                # (local review of PR #108, codex).
+                self.assertEqual(len(entries), len(set(entries)), "repeats an entry")
+
+    def test_obligation_ids_are_unique(self):
+        ids = [obligation["id"] for obligation in self.registry["obligations"]]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate obligation ids")
+
+    def test_the_registry_has_no_duplicate_mapping_key(self):
+        """PyYAML keeps the LAST of two equal keys, silently: a pasted second `payload:` or `entries:`
+        would replace the first with no error. Checked on the composed nodes, before construction.
+        """
+        root = yaml.compose(REGISTRY_PATH.read_text(encoding="utf-8"))
+        duplicates: list[str] = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, yaml.MappingNode):
+                keys = [
+                    key.value
+                    for key, _ in node.value
+                    if isinstance(key, yaml.ScalarNode)
+                ]
+                duplicates.extend(
+                    f"line {node.start_mark.line + 1}: `{key}`"
+                    for key in sorted({k for k in keys if keys.count(k) > 1})
+                )
+                stack.extend(value for _, value in node.value)
+            elif isinstance(node, yaml.SequenceNode):
+                stack.extend(node.value)
+        self.assertEqual([], duplicates)
 
     def test_the_raw_census_is_pinned(self):
         """RAW_EXECUTIONS, asserted where nothing can skip. The actionlint test asserts it too, but that
@@ -4091,9 +4122,9 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         A `remote_relation` obligation's problems include the comparator's, against ONE resolution.
         """
         resolved = _resolve_once(self, _shipped_branches())
-        executed = 0
+        executed: set[tuple[str, str]] = set()
         for obligation, case, entry, mutant in self._structural():
-            executed += 1
+            executed.add((case["id"], entry))
             with self.subTest(case=case["id"], entry=entry):
                 self.assertFalse(
                     _strict_equal(self.bases[entry], mutant),
@@ -4108,7 +4139,9 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                     f"{case['id']} on {entry}: expected {case['diagnostic']!r}, "
                     f"found {problems + relation}",
                 )
-        self.assertEqual(self.STRUCTURAL_EXECUTIONS, executed)
+        # DISTINCT (case, entry) pairs: `entries: [canary, canary]` kept a 222 iteration count while
+        # dropping the required workflow's mutant (local review of PR #108, codex).
+        self.assertEqual(self.STRUCTURAL_EXECUTIONS, len(executed))
 
     def test_the_companion_job_fails_and_keeps_its_closed_shape(self):
         """Plan §2.5: "the support job must fail" is EXECUTED, and nothing can be added that masks it."""
@@ -4613,6 +4646,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 allowed[case["id"]] = set(case.get("actionlint_allow", []))
                 write(case["id"], entry, yaml.safe_dump(mutant, sort_keys=False))
             structural = len(names)
+            self.assertEqual(
+                structural,
+                len(set(names.values())),
+                "duplicate structural (case, entry) pairs",
+            )
             for obligation, case in _registry_cases(self.registry, "raw"):
                 allowed[case["id"]] = set(case.get("actionlint_allow", []))
                 for entry in obligation.get("entries", []):

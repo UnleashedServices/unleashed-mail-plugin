@@ -187,7 +187,19 @@ hand-written refusal test was replaced:
   and is post-gate, so ungated. Deletion check: with this change reverted, the first-item resolver
   passes; with it applied, all 16 refusal executions go red.
 
-Both are in the battery, which stands at 60 controls, all 60 red.
+Both are in the battery.
+
+**Second local review pass, one P2, fixed as a CLASS.** `entries: [canary, canary]` kept the 222 census
+while dropping the required workflow's mutant. It is the same duplicate class as the family dimensions
+above, and fixing only that instance was the recurring "close half, call it closed" defect. So the whole
+class was swept:
+* every census now counts DISTINCT (case, entry) pairs;
+* an obligation may not repeat an entry;
+* obligation ids must be unique;
+* no mapping in the registry may repeat a key, because PyYAML silently keeps the last of two equal keys.
+  This is checked on the composed nodes.
+
+All three are in the battery, which stands at 63 controls, all 63 red.
 
 **Registry migration:** 157 fields across 95 cases, self-verified. The script reloads the result,
 requires every case to equal its specified form, and requires every other key to be unchanged.
