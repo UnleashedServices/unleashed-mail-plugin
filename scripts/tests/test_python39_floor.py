@@ -369,9 +369,10 @@ _WORKFLOW_DIR = REPO / ".github/workflows"
 # invisible, and the ">= 4 files" control still passed (PR #85 round 5).
 _JOB_DIGESTS = {
     # COREDEV-2869: actionlint is installed BEFORE the scripts suite (in RUNNER_TEMP), so cell 11's
-    # validity rule runs inside the suite instead of being a one-off sweep.
+    # validity rule runs inside the suite instead of being a one-off sweep. COREDEV-2873: the Claude
+    # Code CLI pin moved to 2.1.289 and the strict validate names the marketplace manifest explicitly.
     ("plugin-ci.yml", "validate"): (
-        "f22bb9d30f57f5c33bea39747fffc26dfa2350441117e0eea3ab4a6dae43d37a"
+        "aa7bcb19a7a1addddb448c63a608f4e716d680bf0d9c3e59db57757ae0544c8e"
     ),
     ("plugin-ci.yml", "py39-smoke"): (
         "e87d60109f929643f84ee362d581e4306ab54bf98cf8c3e269e814163b3f7de7"
@@ -380,7 +381,7 @@ _JOB_DIGESTS = {
         "9364cf91c8d53c02b357618450f37ecf61aa320657983615bd9361e96bb3e904"
     ),
     ("plugin-ci.yml", "load-check"): (
-        "3ebd88459a7a56467cdb862f06f1b8f9a8b406f2ec78fadcb33714b50ee6abf9"
+        "6f346f790c2fbebbb25821dd1c8563f1983bc90dcdac6efa7a1809ff886d9a25"
     ),
     ("plugin-ci.yml", "redactor-equivalence"): (
         "4fea961a111c1c7670a2a51f5c573076a907013e2491893576852134b3a67e72"

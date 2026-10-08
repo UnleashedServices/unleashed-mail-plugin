@@ -13,6 +13,60 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.29] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2873: agent and skill guidance corrected against primary sources.** This is item (c) of the
+  2026-10-03 external audit. The plan was reviewed by both arms and the double approval reproduced across
+  rounds 3–5 on byte-identical plan bytes. The audit was corrected where it was wrong: Apple's April 2026
+  Xcode 26 upload rule does not cover macOS, and `claude-sonnet-5` is legacy, not invalid.
+  - `ai-engineer`: recommends `claude-sonnet-5-5` and sets `output_config.effort` explicitly. A new "Claude
+    5.5 request rules" table lists the five request settings that Opus 5.5 and Sonnet 5.5 reject with a 400
+    (thinking budget, `thinking: disabled`, non-default sampling, assistant prefill, forced `tool_choice`).
+    Each is paired with the migration guides' own replacement, alongside Sonnet 5.5's `between_tools`
+    limits.
+  - `ai-engineer`: documents the app's existing Foundation Models gating (`@available(macOS 26.0, *)`,
+    `#if canImport(FoundationModels)`, the `SystemLanguageModel.default.availability` mapping) and requires
+    an availability check before every call. Fallback routing is labelled as a recommendation.
+  - `concurrency-reviewer`, the declared correctness owner, flags the five 5.5 shapes as `logic`/`blocker`.
+    `prompt-review` was considered and rejected, because it excludes correctness by contract.
+  - Toolchain text now matches the app's CI: `macos-26` runners, the newest installed Xcode, a macOS 15.0
+    deployment target and Swift 6 language mode. This replaces "Xcode 16.3+ / Swift 6.1 / macos-15"
+    everywhere a complete scan found it (`ci-engineer`, `xcode-build-fixer`, `docs-engineer`,
+    `release-manager`, `tester`, `spm-management`). Dated measurements are kept.
+  - The Graph subscription
+    example replaces its past date with a placeholder, and it now states the 1,440-minute limit for
+    subscriptions with resource data and the 45-minute floor.
+  - `validate-hooks.py` knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch` (33 events). Each was
+    rejected before the change and accepted after it (`--root`, `--require-manifest`).
+  - CI's Claude Code pin moves 2.1.220 → 2.1.289. From 2.1.289 a bare `claude plugin validate --strict .`
+    validates the PLUGIN root and fails on the contributor `CLAUDE.md` warning, so the strict step now
+    names `.claude-plugin/marketplace.json`. That is the same object at the same strictness, and a corrupted
+    manifest still fails. This command change follows the plan's "fix or hold the pin" rule and was made
+    after the gate, so it is ungated.
+  - **Deferred: the brainstorm skill's "macOS 25" wording (COREDEV-2874).** The file carries existing
+    prettier debt, and three suites pin its lines (the transcript-path inventory, the callers-scan frozen
+    regions and the COREDEV-2605 anchors). Formatting it broke 20 tests, so the fix needs its own
+    coordinated pass. It is unchanged here.
+  - `AGENT_CONTRACTS.md` §13's `concurrency-findings` anchor moved from `:269` to `:286`, following the
+    `## Output Format` heading that the new checklist item shifted. This is position only.
+  - **PR #107 review (codex), all four fixed.**
+    - `docs-engineer`'s README and CONTRIBUTING templates no longer close early. Each template's nested
+      fence closed the outer one: on `main` too, made explicit here by prettier. The rest of each template
+      had rendered as agent instructions, and the following section as a code block.
+    - `ai-engineer`'s example comment called effort the ONLY 5.5 thinking control. That is true of
+      Opus 5.5 only: Sonnet 5.5 also takes `between_tools`.
+    - This plan's acceptance count is corrected to 28/28.
+  - **PR #107 second review (codex, P2).** The example sent `output_config.effort` unconditionally.
+    Claude Haiku 4.5 does not support effort, so a request whose `model` override names it would
+    fail every call. The example now sends effort only where the Models API reports
+    `capabilities.effort.supported`. The 5.5 rules and `concurrency-reviewer`'s request-shape item
+    say so too.
+  - **PR #107 third review (gemini).** `validate-hooks.py` drops two ranges, `0x2060–0x2064` and
+    `0x2065–0x2069`, that `0x2060–0x206F` already covered. The predicate is identical on all 1,114,112
+    code points. The `MIN-20` comment moves above a loop that black had wrapped across five lines.
+
 ## [2.8.28] — 2026-10-03
 
 ### Fixed

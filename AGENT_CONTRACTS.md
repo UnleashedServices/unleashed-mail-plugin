@@ -578,7 +578,7 @@ unchanged and still mandatory.
 | `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:237`       |
 | `pr-review-report`       | `pr-review`             | `in`    | `skills/pr-review/SKILL.md:68`        |
 | `security-findings`      | `security-reviewer`     | `out`   | `agents/security-reviewer.md:208`     |
-| `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:269`  |
+| `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:286`  |
 | `ux-perf-findings`       | `ux-perf-reviewer`      | `out`   | `agents/ux-perf-reviewer.md:205`      |
 | `accessibility-findings` | `accessibility-auditor` | `out`   | `agents/accessibility-auditor.md:211` |
 | `prompt-safety-findings` | `prompt-review`         | `out`   | `agents/prompt-review.md:95`          |

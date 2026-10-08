@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.28
+# UnleashedMail — Claude Code Plugin v2.8.29
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,22 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.29
+
+**The agents' guidance is corrected against primary sources (COREDEV-2873).**
+
+- **Claude 5.5:** `ai-engineer` now recommends `claude-sonnet-5-5`, sets effort explicitly, and lists the five
+  request settings that Claude Opus 5.5 and Sonnet 5.5 reject with a 400, each with the replacement the
+  migration guides give. `concurrency-reviewer` flags those shapes at review time.
+- **Foundation Models:** `ai-engineer` documents the app's existing gating pattern (`@available(macOS 26.0, *)`,
+  `canImport`, the availability mapping) and requires an availability check before every call.
+- **Toolchain:** the build and CI agents now match the app's real CI: `macos-26` runners and the newest
+  installed Xcode, with a macOS 15.0 deployment target and Swift 6 language mode.
+- **Smaller fixes:**
+  - the Graph subscription example no longer hard-codes a past date;
+  - the hooks validator knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch`;
+  - CI validates with Claude Code 2.1.289.
 
 ### v2.8.28
 
