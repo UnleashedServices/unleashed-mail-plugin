@@ -171,7 +171,23 @@ All three reproductions are in the battery.
   `payload`; `expect` is `equality` or `refusal`; and sides are a subset of include and exclude. V8's
   dispatch fails on anything else.
 
-Both reproductions are in the battery, which stands at 58 controls, all 58 red.
+Both reproductions are in the battery.
+
+**Local diff review (codex, `codex review --base origin/main`, 2026-10-08), two P2s, fixed.** The local
+review was skipped before this PR was opened. That is why the bots kept finding these one round at a
+time. Both findings were reproduced by the reviewer, and both are regressions introduced when the
+hand-written refusal test was replaced:
+* **A duplicate family dimension passed the census.** With `sides: [include, include]` the census still
+  counted 24 executions, but only 12 were distinct and no exclude side ran. Duplicates are now rejected
+  in `sides`, `applies_to` and the form ids, and V8 asserts the count of distinct execution tuples.
+* **Mixed-list refusal coverage was lost.** The removed test put a forbidden pattern after a valid entry
+  (`include: [refs/heads/main, '~ALL']`). A singleton replacement does not, so a resolver that validated
+  only each side's FIRST item passed. Refusal forms now append the payload after a valid entry, and
+  equality forms keep the singleton they need. This departs from §2.8's "replaced by `[form.payload]`"
+  and is post-gate, so ungated. Deletion check: with this change reverted, the first-item resolver
+  passes; with it applied, all 16 refusal executions go red.
+
+Both are in the battery, which stands at 60 controls, all 60 red.
 
 **Registry migration:** 157 fields across 95 cases, self-verified. The script reloads the result,
 requires every case to equal its specified form, and requires every other key to be unchanged.

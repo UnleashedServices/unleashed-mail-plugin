@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     95 cases.
   - Four payloads that contradicted cell 11's minimum list are corrected to it: `job-if`, the two
     `defaults`, and C5's step-scope `env`.
-  - 58 red controls, each run against the shipped code: all 58 go red.
+  - 60 red controls, each run against the shipped code: all 60 go red.
   - **PR #108 review (codex):** a raw case whose obligation kind no raw class runs was counted as
     executed and diagnosed by nothing. Obligation kinds are now a closed set, raw accounting is keyed
     on the kinds the raw classes actually run, and `_raw_problems` fails closed.
@@ -47,6 +47,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - **PR #108 third review (codex).** The raw census is pinned independently (`RAW_EXECUTIONS = 16`), so
     deleting a raw case can no longer shrink every check with it. The target-set family's schema is
     closed, so a misspelt `expect` fails rather than falling through to the refusal branch.
+  - **Local diff review (codex).** Duplicate family dimensions are rejected. Refusal forms now place the
+    forbidden pattern after a valid entry, so a resolver that validates only the first item of a side
+    fails.
 
 ## [2.8.27] — 2026-10-02
 

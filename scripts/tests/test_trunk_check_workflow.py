@@ -3899,6 +3899,15 @@ def _family_executions(registry: dict) -> list[dict]:
     # passed (PR #108 third review, codex).
     if not set(family["sides"]) <= {"include", "exclude"}:
         raise AssertionError(f"target-set family: unknown side in {family['sides']}")
+    # No duplicate dimension: `sides: [include, include]` kept the 24-execution census while running
+    # half the distinct executions and no exclude side at all (local review of PR #108, codex).
+    for name, values in (
+        ("sides", family["sides"]),
+        ("applies_to", family["applies_to"]),
+        ("form ids", [form.get("id") for form in family["forms"]]),
+    ):
+        if len(values) != len(set(values)):
+            raise AssertionError(f"target-set family: duplicate {name}: {values}")
     for form in family["forms"]:
         if set(form) != {"id", "expect", "payload"} or form["expect"] not in (
             "equality",
@@ -4689,7 +4698,14 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         for execution in executions:
             form, entry = execution["form"], execution["entry"]
             injected = copy.deepcopy(recorded)
-            injected[execution["side"]] = [form["payload"]]
+            if form["expect"] == "refusal":
+                # AFTER a valid entry: a resolver that validates only the first item of a side must
+                # still fail. The removed hand-written test covered that mixed list; a singleton
+                # replacement did not (local review of PR #108, codex).
+                valid = injected[execution["side"]] or ["refs/heads/alpha"]
+                injected[execution["side"]] = [*valid, form["payload"]]
+            else:
+                injected[execution["side"]] = [form["payload"]]
             boundary = unittest.mock.patch.object(
                 sys.modules[__name__],
                 "_resolve_target_set",
@@ -4718,6 +4734,11 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 else:
                     self.fail(f"form {form['id']!r}: unknown expect {form['expect']!r}")
         self.assertEqual(self.FAMILY_EXECUTIONS, len(executions))
+        distinct = {
+            (execution["obligation"], execution["side"], execution["form"]["id"])
+            for execution in executions
+        }
+        self.assertEqual(self.FAMILY_EXECUTIONS, len(distinct), "duplicate executions")
 
     # ---- V9: no hand-written recipe is declared again --------------------------------------------
     def test_no_hand_written_recipe_is_declared_again(self):
