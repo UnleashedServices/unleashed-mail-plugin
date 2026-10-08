@@ -1284,8 +1284,10 @@ def _config_tree_digest(
 # every other edit — a changed `commands[].run`, a widened `success_codes`, a dropped linter, a new
 # `ignore` — moves it, and moving it is a reviewed change: update this literal in the same commit,
 # with the reason, exactly as the ignore-list literal above is maintained.
+# COREDEV-2875 moved it: one prettier-only ignore for `skills/implement/SKILL.md`, whose recipe bytes the
+# callers-scan contract freezes (see the ignore-list literal and `.trunk/trunk.yaml`'s own comment).
 EXPECTED_NORMALISED_CONFIG_DIGEST = (
-    "afccfda8341a29d71cac8ab0ac38b4aa6ce243d9249ca3ac4a04ea86cbbb6e0b"
+    "0e559710dc41f001cbb9799afb42a7368ce1163bf612631421ae52b0d6c818af"
 )
 
 
@@ -3147,6 +3149,9 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
             # COREDEV-2780: a plan whose bytes are bound to a review verdict cannot be reflowed —
             # a formatter would invalidate a genuine approval.
             (("markdownlint", "prettier"), ("docs/planning/*_PLAN.md",)),
+            # COREDEV-2875: the same principle for a second gate — `skills/implement/SKILL.md`'s recipe
+            # destinations are frozen by `test_callers_scan` (M5.13-M5.15), and prettier re-indents them.
+            (("prettier",), ("skills/implement/SKILL.md",)),
         }
         self.assertEqual(expected, actual)
 

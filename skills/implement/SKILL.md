@@ -104,7 +104,7 @@ a reviewer that never ran (that misread is the wedge COREDEV-2493 exists to remo
 and stands on its own. `verify` reports that case as `TWO SEPARATE problems: …` — address the requested
 changes *and* recover the missing reviewer. Neither alone passes the gate.
 
-First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` that answers a **`pong`** means the CLI is healthy
+First **rule out a bad invocation**: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"` reporting **`healthy`** (a `pong` from the model the gate resolves) means the CLI is healthy
 and the review call was wrong (`agy` needs `--print-timeout 28m`; a tiny transcript is a failure, not a
 verdict). A healthy ping plus a failed review is a **you** problem, not an availability problem — fix the
 flag and re-run.

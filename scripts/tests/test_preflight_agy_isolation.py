@@ -31,7 +31,19 @@ REPO = Path(__file__).resolve().parents[2]
 PREFLIGHT = REPO / "scripts" / "review" / "preflight-agy.sh"
 
 HEALTHY = '#!/usr/bin/env bash\nprintf "Pong! How can I help?\\n"\n'
-WRITES_IN_CWD = '#!/usr/bin/env bash\n: > "$PWD/AGY_WROTE_HERE.txt"\nprintf "Pong!\\n"\n'
+WRITES_IN_CWD = (
+    '#!/usr/bin/env bash\n: > "$PWD/AGY_WROTE_HERE.txt"\nprintf "Pong!\\n"\n'
+)
+
+# The preflight resolves its model with `agy models` first (COREDEV-2875). EVERY stub answers that
+# listing before anything else and without side effects -- the mutating stubs included -- so each
+# isolation test still exercises the PING rather than failing, or mutating, during the listing.
+STUB_MODEL = "gemini-3.8-flash-high"
+MODELS_BRANCH = (
+    'if [ "${1-}" = models ]; then\n'
+    f'    printf "{STUB_MODEL}\\tGemini 3.8 Flash (High)\\n"; exit 0\n'
+    "fi\n"
+)
 
 
 class PreflightAgyIsolation(unittest.TestCase):
@@ -39,29 +51,54 @@ class PreflightAgyIsolation(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="agy-preflight-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         (self.root / "tracked.txt").write_text("x\n", encoding="utf-8")
-        for command in (["git", "init", "-q", "."],
-                        ["git", "config", "user.email", "probe@test"],
-                        ["git", "config", "user.name", "probe"],
-                        ["git", "add", "-A"],
-                        ["git", "commit", "-qm", "init"]):
+        for command in (
+            ["git", "init", "-q", "."],
+            ["git", "config", "user.email", "probe@test"],
+            ["git", "config", "user.name", "probe"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-qm", "init"],
+        ):
             subprocess.run(command, cwd=self.root, check=True)
 
         self.stubs = self.root / ".stubs"
         self.stubs.mkdir()
         self.env = dict(os.environ)
         self.env["PATH"] = f"{self.stubs}{os.pathsep}{self.env['PATH']}"
+        self.env.pop(
+            "MODEL", None
+        )  # the preflight takes no caller input; nothing inherited may steer it
+        self.argv_log = self.root.parent / f"{self.root.name}-agy-argv.log"
+        self.addCleanup(lambda: self.argv_log.unlink(missing_ok=True))
         # The stub directory is untracked, so it is in the BEFORE fingerprint too — which is exactly
         # why the script compares before/after rather than asserting a clean tree.
 
-    def install(self, body: str) -> None:
+    def install(self, body: str, models_branch: str = MODELS_BRANCH) -> None:
+        """Install `body` as agy, behind the side-effect-free `models` branch, logging every argv.
+
+        The log lives OUTSIDE the checkout, so recording a call is not itself a tree mutation.
+        """
+        shebang, _, rest = body.partition("\n")
+        log = f'printf "%s\\n" "$*" >> "{self.argv_log}"\n'
         stub = self.stubs / "agy"
-        stub.write_text(body, encoding="utf-8")
+        stub.write_text(f"{shebang}\n{log}{models_branch}{rest}", encoding="utf-8")
         stub.chmod(0o755)
+
+    def calls(self) -> list[str]:
+        return (
+            self.argv_log.read_text(encoding="utf-8").splitlines()
+            if self.argv_log.exists()
+            else []
+        )
 
     def run_preflight(self):
         return subprocess.run(
-            ["bash", str(PREFLIGHT)], cwd=self.root, env=self.env,
-            capture_output=True, text=True, check=False, input="",
+            ["bash", str(PREFLIGHT)],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
         )
 
     def test_a_healthy_agy_reports_healthy(self):
@@ -70,6 +107,26 @@ class PreflightAgyIsolation(unittest.TestCase):
         result = self.run_preflight()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("healthy", result.stdout)
+
+    def test_the_ping_runs_on_the_model_the_gate_resolves(self):
+        """A bare `agy -p "ping"` used agy's global setting, a model the gate never runs (COREDEV-2875)."""
+        self.install(HEALTHY)
+        result = self.run_preflight()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(["models", f"--model {STUB_MODEL} -p ping"], self.calls())
+
+    def test_a_failed_resolution_is_unavailable_and_runs_no_ping(self):
+        """No model resolved means no health check at all -- never a ping on agy's global setting."""
+        self.install(
+            HEALTHY, models_branch='if [ "${1-}" = models ]; then exit 1; fi\n'
+        )
+        result = self.run_preflight()
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertNotIn("healthy", result.stdout)
+        self.assertIn("no model resolved", result.stderr)
+        self.assertEqual(
+            ["models"], self.calls(), "a ping ran although resolution failed"
+        )
 
     def test_the_ping_does_not_run_in_the_checkout(self):
         """The stub writes to `$PWD`. If that is the checkout, the file lands in the tree."""
@@ -105,7 +162,9 @@ class PreflightAgyIsolation(unittest.TestCase):
         self.install(f'#!/usr/bin/env bash\n: > "{target}"\nprintf "Pong!\\n"\n')
 
         result = self.run_preflight()
-        reported = [line for line in result.stderr.splitlines() if line.startswith("??")]
+        reported = [
+            line for line in result.stderr.splitlines() if line.startswith("??")
+        ]
         self.assertEqual(["?? SNEAKED_IN.txt"], reported, result.stderr)
 
     def test_a_content_edit_to_an_already_dirty_tracked_file_is_caught(self):
@@ -117,15 +176,21 @@ class PreflightAgyIsolation(unittest.TestCase):
         content change; the report says a content edit occurred, since there is no new status line.
         """
         tracked = self.root / "tracked.txt"
-        tracked.write_text("dirty edit\n", encoding="utf-8")  # already ` M` before the ping
-        self.install(f'#!/usr/bin/env bash\nprintf "more dirt\\n" > "{tracked}"\nprintf "Pong!\\n"\n')
+        tracked.write_text(
+            "dirty edit\n", encoding="utf-8"
+        )  # already ` M` before the ping
+        self.install(
+            f'#!/usr/bin/env bash\nprintf "more dirt\\n" > "{tracked}"\nprintf "Pong!\\n"\n'
+        )
 
         result = self.run_preflight()
         self.assertNotEqual(0, result.returncode, result.stdout)
         self.assertIn("MUTATED", result.stderr)
         self.assertIn("content", result.stderr.lower())
         # No forged new status line — the whole point is that the status was unchanged.
-        self.assertEqual([], [line for line in result.stderr.splitlines() if line.startswith("??")])
+        self.assertEqual(
+            [], [line for line in result.stderr.splitlines() if line.startswith("??")]
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

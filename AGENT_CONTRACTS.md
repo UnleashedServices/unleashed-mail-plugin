@@ -499,9 +499,9 @@ is run at an appropriate effort. If a maintainer needs a guaranteed minimum, it 
 session (or via `CLAUDE_CODE_EFFORT_LEVEL`), not requested from the plugin.
 
 **What an unset session runs at (Claude Code docs, model-config, re-read 2026-10-08; COREDEV-2872).**
-With nothing set, **Opus 5.5, Sonnet 5.5 and Haiku 5.5 default to `medium`**, and Opus 4.7 to `xhigh`.
-Every other effort-capable model defaults to `high`. An organization's default level replaces that
-default for the organization's default model. The plugin's agents and skills omit `effort:`, so a 5.5
+With nothing set, **Opus 5.5, Sonnet 5.5 and Haiku 5.5 default to `medium`**; for any other model, see
+the model-config page (code.claude.com/docs/en/model-config). An organization's default level replaces
+that default for the organization's default model. The plugin's agents and skills omit `effort:`, so a 5.5
 session that sets no level runs them at `medium`, review agents and gate included. Resolution order:
 
 1. an explicit choice: `CLAUDE_CODE_EFFORT_LEVEL`, launching with `--effort`, or `/effort`;
@@ -511,8 +511,9 @@ session that sets no level runs them at `medium`, review agents and gate include
 **Set a level explicitly for any review or gate session.**
 
 Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current Opus generation and
-updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this
-replaces ("prefer `inherit`/`sonnet` over hard-pinning `opus`") conflated the two.
+updates with the CLI; `claude-opus-5` would be a hard version pin, which the validator rejects in shipped
+frontmatter (COREDEV-2875). Prefer the alias — the guidance this replaces ("prefer `inherit`/`sonnet`
+over hard-pinning `opus`") conflated the two.
 
 ---
 
@@ -578,7 +579,7 @@ unchanged and still mandatory.
 | `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:237`       |
 | `pr-review-report`       | `pr-review`             | `in`    | `skills/pr-review/SKILL.md:68`        |
 | `security-findings`      | `security-reviewer`     | `out`   | `agents/security-reviewer.md:208`     |
-| `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:286`  |
+| `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:287`  |
 | `ux-perf-findings`       | `ux-perf-reviewer`      | `out`   | `agents/ux-perf-reviewer.md:205`      |
 | `accessibility-findings` | `accessibility-auditor` | `out`   | `agents/accessibility-auditor.md:211` |
 | `prompt-safety-findings` | `prompt-review`         | `out`   | `agents/prompt-review.md:95`          |

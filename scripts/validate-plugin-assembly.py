@@ -23,6 +23,7 @@ Usage:
     default     warn  — print problems, exit 0  (pre-commit)
     --strict          — print problems, exit 1  (CI)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,40 +42,98 @@ TOP_KEY = re.compile(r"^([A-Za-z0-9_-]+):(.*)$")  # column-0 key: value
 # using it in an agent silently nullifies every tool restriction (the agent inherits ALL tools).
 # This whole check exists to stop that recurring (audit pm-diagnostic.1 / orchestration.1).
 KNOWN_AGENT_KEYS = {
-    "name", "description", "tools", "disallowedTools", "model", "permissionMode",
-    "maxTurns", "skills", "mcpServers", "hooks", "memory", "background",
-    "effort", "isolation", "color", "initialPrompt",
+    "name",
+    "description",
+    "tools",
+    "disallowedTools",
+    "model",
+    "permissionMode",
+    "maxTurns",
+    "skills",
+    "mcpServers",
+    "hooks",
+    "memory",
+    "background",
+    "effort",
+    "isolation",
+    "color",
+    "initialPrompt",
 }
-# §4.4 (COREDEV-2583): transcribed VERBATIM from Claude Code 2.1.220's alias table (`h1e`),
-# plus `inherit` — a sub-agent-only value the runtime handles separately and which is NOT in
-# that table. Re-check this set on every CLI pin bump (.github/workflows/plugin-ci.yml).
+# §4.4 (COREDEV-2583): transcribed VERBATIM from Claude Code 2.1.220's alias table (`h1e`).
+# Re-verified against the 2.1.294 binary, 2026-10-08 (COREDEV-2875): unchanged, `fable[1m]` included.
+# Re-check this set on every CLI pin bump (.github/workflows/plugin-ci.yml).
 #   h1e = ["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]","opusplan"]
 # Note there is NO `default`, and only sonnet/opus/fable take the `[1m]` long-context suffix.
 # The bracketed forms are LITERAL set members, never synthesised by stripping a suffix — a
 # "strip then re-validate the base" rule would over-accept haiku[1m]/best[1m]/opusplan[1m]/
-# inherit[1m], none of which the runtime recognises. The model-id regex below is unchanged, so
-# COREDEV-2503 F10 anchoring is untouched: a supported bracketed alias short-circuits on exact
-# membership, and an unsupported one falls through and is rejected because the regex character
-# class contains no `[`/`]`.
-MODEL_ALIASES = {
-    "sonnet", "opus", "haiku", "fable", "best", "opusplan",
-    "sonnet[1m]", "opus[1m]", "fable[1m]",
-    "inherit",
-}
+# inherit[1m], none of which the runtime recognises.
+RUNTIME_MODEL_ALIASES = frozenset(
+    {
+        "sonnet",
+        "opus",
+        "haiku",
+        "fable",
+        "best",
+        "opusplan",
+        "sonnet[1m]",
+        "opus[1m]",
+        "fable[1m]",
+    }
+)
+# WHAT `model:` MAY HOLD — ONLY an alias or `inherit` (COREDEV-2875). A concrete model id goes stale
+# silently, while an alias resolves to the newest model of its family. Exact set membership is the
+# whole check, so COREDEV-2503 F10's injection and end-anchor negatives hold by construction: nothing
+# that is not literally a member can pass. `default` is not a member: it is "not itself a model
+# alias" and reverts to the account default, not the newest model.
+# Two sets, derived from one table, so a divergence between the sub-agents and skills references is
+# a one-line change here rather than a second copy to drift:
+#   * agents: the aliases plus `inherit` (sub-agents reference);
+#   * skills: "the same values as /model, or inherit" (skills reference, re-read 2026-10-08).
+AGENT_MODEL_VALUES = RUNTIME_MODEL_ALIASES | {"inherit"}
+SKILL_MODEL_VALUES = RUNTIME_MODEL_ALIASES | {"inherit"}
+MODEL_ALIASES = (
+    AGENT_MODEL_VALUES  # the name older call sites and tests use for the agent set
+)
 # Built-in tool names an agent may list. The MCP namespace is install-defined and NOT
 # enumerable, so `mcp__*` entries are always accepted; an unknown non-mcp entry is accepted
 # too (it may be a newer tool), but a CLOSE typo of a known tool is flagged — a misspelled
 # tool name silently disables that tool (mirrors validate-hooks.py's difflib guard).
 KNOWN_TOOLS = {
-    "Read", "Write", "Edit", "NotebookEdit", "Bash", "BashOutput",
-    "Glob", "Grep", "Agent", "WebFetch", "WebSearch", "TodoWrite",
-    "Skill", "SlashCommand", "EnterPlanMode", "ExitPlanMode", "KillShell", "AskUserQuestion",
+    "Read",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "Bash",
+    "BashOutput",
+    "Glob",
+    "Grep",
+    "Agent",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "Skill",
+    "SlashCommand",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "KillShell",
+    "AskUserQuestion",
     # §4.5 (COREDEV-2583): current built-ins that were previously accepted only as "unknown",
     # two of which the difflib guard actively FALSE-REJECTED (`TaskOutput` as a typo of
     # `BashOutput`, `EnterPlanMode` of `ExitPlanMode`).
-    "TaskOutput", "TaskStop", "ToolSearch", "Monitor", "SendMessage", "Artifact",
-    "EnterWorktree", "ExitWorktree", "PowerShell", "Workflow", "ScheduleWakeup",
-    "CronCreate", "CronList", "CronDelete",
+    "TaskOutput",
+    "TaskStop",
+    "ToolSearch",
+    "Monitor",
+    "SendMessage",
+    "Artifact",
+    "EnterWorktree",
+    "ExitWorktree",
+    "PowerShell",
+    "Workflow",
+    "ScheduleWakeup",
+    "CronCreate",
+    "CronList",
+    "CronDelete",
 }
 
 # B4 (COREDEV-2503): stale/invalid tool names to HARD-reject. Merely dropping `Task` from KNOWN_TOOLS is a
@@ -91,32 +150,79 @@ _STALE_TOOL_REASONS = {
     "task": "the sub-agent dispatcher is `Agent`, not `Task` (AGENT_CONTRACTS §9)",
     "multiedit": "`MultiEdit` was removed from Claude Code; use `Edit` (COREDEV-2583 §4.5)",
 }
-_STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}   # case-insensitive membership (gemini review #53)
+_STALE_TOOLS_LOWER = {
+    t.lower() for t in STALE_TOOLS
+}  # case-insensitive membership (gemini review #53)
 
 
 # §4.6 (COREDEV-2583): DERIVED from Claude Code 2.1.220's skill/command frontmatter schema,
 # not hand-written. The schema runs from `name` to `improved_by`; the agent schema begins after
 # it (its own `name` is described "Agent identifier"). Re-derive on every CLI pin bump.
+# Re-derived against the 2.1.294 binary, 2026-10-08 (COREDEV-2875): its 22 keys are unchanged; the two
+# extras below are this validator's own.
 #
 # `disallowedTools` IS legal here — the runtime declares it verbatim as "Canonical (normalized)
 # alias of `disallowed-tools`". An earlier draft of this ticket asserted the opposite and would
 # have REJECTED A LEGAL FIELD. `allowedTools` is the genuinely inert camelCase form: a
 # delimiter-anchored search of the same schema finds no such key at all.
 KNOWN_SKILL_KEYS = {
-    "name", "description", "model",
-    "allowed-tools", "disallowed-tools", "disallowedTools",
-    "argument-hint", "arguments",
-    "disable-model-invocation", "user-invocable",
-    "effort", "shell", "version", "when_to_use", "paths",
-    "agent", "context", "background", "hooks", "fallback",
-    "created_by", "improved_by",
+    "name",
+    "description",
+    "model",
+    "allowed-tools",
+    "disallowed-tools",
+    "disallowedTools",
+    "argument-hint",
+    "arguments",
+    "disable-model-invocation",
+    "user-invocable",
+    "effort",
+    "shell",
+    "version",
+    "when_to_use",
+    "paths",
+    "agent",
+    "context",
+    "background",
+    "hooks",
+    "fallback",
+    "created_by",
+    "improved_by",
     # accepted in the wild and harmless; not worth false-rejecting over
-    "license", "metadata",
+    "license",
+    "metadata",
 }
 
 
-def check_skill_fields(rel: Path, fm: dict[str, str], problems: list[str],
-                       warnings: list[str]) -> None:
+def check_model_value(
+    rel: Path, model: str, allowed: frozenset[str], kind: str
+) -> str | None:
+    """Return the problem for a `model:` value outside `allowed`, or None (COREDEV-2875).
+
+    The message is specific to this field so a test can tell THIS check failed: §11's tier parser
+    already rejects a concrete AGENT id incidentally, with a misleading "missing from the table".
+    """
+    if not model or model in allowed:
+        return None
+    family = re.match(r"claude-(opus|sonnet|haiku|fable)-", model)
+    if model == "default":
+        why = "`default` is not a model alias — it reverts to the account default, not the newest model"
+    elif family:
+        why = (
+            f"a concrete model id goes stale silently — use `{family.group(1)}`, the alias that "
+            f"tracks the newest model of that family"
+        )
+    else:
+        why = "only a runtime alias or `inherit` may be named"
+    return (
+        f"{rel}: {kind} `model: {model!r}` is not allowed — {kind} `model:` takes only a runtime "
+        f"alias or `inherit` {sorted(allowed)}; {why}"
+    )
+
+
+def check_skill_fields(
+    rel: Path, fm: dict[str, str], problems: list[str], warnings: list[str]
+) -> None:
     """Skill/command frontmatter validation (§4.6).
 
     Deliberately NOT symmetric with `check_agent_fields`: an unknown key here is a WARNING,
@@ -125,6 +231,11 @@ def check_skill_fields(rel: Path, fm: dict[str, str], problems: list[str],
     `KNOWN_TOOLS`. Only the one key proven inert gets a hard error.
     """
     check_model_reachable_grants(rel, fm, problems, warnings)
+    model_problem = check_model_value(
+        rel, fm.get("model", ""), SKILL_MODEL_VALUES, "skill"
+    )
+    if model_problem:
+        problems.append(model_problem)
 
     for key in fm:
         if key in KNOWN_SKILL_KEYS:
@@ -133,10 +244,13 @@ def check_skill_fields(rel: Path, fm: dict[str, str], problems: list[str],
             problems.append(
                 f"{rel}: `allowedTools` is not a skill key and is silently IGNORED — the "
                 f"kebab form `allowed-tools` is the real one. (Note `disallowedTools` IS a "
-                f"legal alias of `disallowed-tools`; only the 'allowed' side is inert.)")
+                f"legal alias of `disallowed-tools`; only the 'allowed' side is inert.)"
+            )
             continue
-        warnings.append(f"{rel}: unknown skill frontmatter key `{key}` (advisory — the skill "
-                        f"schema moves between CLI releases; verify against the pinned version)")
+        warnings.append(
+            f"{rel}: unknown skill frontmatter key `{key}` (advisory — the skill "
+            f"schema moves between CLI releases; verify against the pinned version)"
+        )
 
 
 # Grants that must never appear on a MODEL-REACHABLE skill. Every tool a skill lists is pre-approved
@@ -192,7 +306,11 @@ def _normalized_command_words(specifier: str) -> list[str]:
     while index < len(words):
         word = words[index]
         # `VAR=value` assignments precede the command they run.
-        if "=" in word and not word.startswith("-") and word.split("=", 1)[0].isidentifier():
+        if (
+            "=" in word
+            and not word.startswith("-")
+            and word.split("=", 1)[0].isidentifier()
+        ):
             index += 1
             continue
         base = word.rsplit("/", 1)[-1]
@@ -205,7 +323,7 @@ def _normalized_command_words(specifier: str) -> list[str]:
                 return None
             index += 1
             continue
-        return [base] + words[index + 1:]
+        return [base] + words[index + 1 :]
     return []
 
 
@@ -235,7 +353,11 @@ def _bash_specifiers(value: str) -> list[str]:
             j += 1
         # depth 0 -> j is one past the matching ')'; unbalanced -> take the rest (still analysed, since
         # a grant that opens `Bash(` and never closes it is malformed and must not pass silently).
-        inner = value[start + len(token): j - 1] if depth == 0 else value[start + len(token):]
+        inner = (
+            value[start + len(token) : j - 1]
+            if depth == 0
+            else value[start + len(token) :]
+        )
         specifiers.append(inner)
         i = j
     return specifiers
@@ -280,8 +402,10 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
     """
     head = _normalized_command_words(specifier)
     if head is None:
-        return ("a flagged command wrapper cannot be analysed safely, so it is refused. "
-                "Name the command directly.")
+        return (
+            "a flagged command wrapper cannot be analysed safely, so it is refused. "
+            "Name the command directly."
+        )
     if not head:
         return "the grant has no command at all, so it pre-approves anything"
 
@@ -293,8 +417,10 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
         # Code/module/stdin modes are the arbitrary-execution shapes. They are NOT script paths, and
         # the previous rule's "is there a `*` in the path" question never applied to them.
         if target in _INTERPRETER_CODE_MODES or target == "-" or target.startswith("-"):
-            return (f"`{command} {target}` is an interpreter code/module/stdin mode — that is "
-                    "arbitrary code execution, not a call to a reviewed script")
+            return (
+                f"`{command} {target}` is an interpreter code/module/stdin mode — that is "
+                "arbitrary code execution, not a call to a reviewed script"
+            )
         # AN OPERATOR CAN BE GLUED TO THE ENTRYPOINT WITH NO SPACE, so it never becomes a separate word
         # for the head[2:] scan below: `${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /` splits to one token whose
         # `;rm` rides inside `target` (PR #63 recheck, P2 — `;`, `&&`, `|` all measured passing). The
@@ -304,24 +430,32 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
         # spelling rather than only in-root ones.
         prefix = "${CLAUDE_PLUGIN_ROOT}/"
         if target.startswith(prefix):
-            suffix = target[len(prefix):]
+            suffix = target[len(prefix) :]
             if not re.fullmatch(r"[A-Za-z0-9._/*-]+", suffix):
-                return (f"`{target}` has a shell operator, substitution or redirection glued to the "
-                        "entrypoint path — the grant is a compound program, not one reviewed command")
+                return (
+                    f"`{target}` has a shell operator, substitution or redirection glued to the "
+                    "entrypoint path — the grant is a compound program, not one reviewed command"
+                )
         if "*" in target:
-            return ("the wildcard is in the SCRIPT PATH, so it pre-approves every script in that "
-                    "directory (including destructive ones). Name the exact entrypoint.")
+            return (
+                "the wildcard is in the SCRIPT PATH, so it pre-approves every script in that "
+                "directory (including destructive ones). Name the exact entrypoint."
+            )
         # BENEATH, not merely CONTAINING. Substring matching accepted three escapes, all measured:
         # `${CLAUDE_PLUGIN_ROOT}/../evil.sh`, a `..` chain deeper in the path, and
         # `/tmp/x/${CLAUDE_PLUGIN_ROOT}/evil.sh` — where the variable is not even the prefix. The
         # allowlist's whole justification is that these scripts ship in this repo and are reviewed
         # with it; a path that leaves the plugin root has neither property (PR #63 recheck).
         if not target.startswith("${CLAUDE_PLUGIN_ROOT}/"):
-            return (f"only an exact script beneath `${{CLAUDE_PLUGIN_ROOT}}` may carry a trailing "
-                    f"wildcard; `{target}` does not start there and is not reviewed with the plugin")
+            return (
+                f"only an exact script beneath `${{CLAUDE_PLUGIN_ROOT}}` may carry a trailing "
+                f"wildcard; `{target}` does not start there and is not reviewed with the plugin"
+            )
         if any(segment == ".." for segment in target.split("/")):
-            return (f"`{target}` walks out of the plugin root with `..`; a wrapper that can leave the "
-                    "reviewed tree is not an exact plugin-root entrypoint")
+            return (
+                f"`{target}` walks out of the plugin root with `..`; a wrapper that can leave the "
+                "reviewed tree is not an exact plugin-root entrypoint"
+            )
         # THE REST OF THE SPECIFIER MUST BE OPERANDS, NOT A PROGRAM. Reaching an allowlisted target was
         # treated as the whole answer, so everything after it went unexamined: `&& rm *`, `; rm -rf *`,
         # `$(rm *)` and `> /etc/x` after an in-root script ALL passed, and CI called the tree clean while
@@ -342,9 +476,11 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
     if command in TRAMPOLINE_BASH_PREFIXES:
         return f"that {TRAMPOLINE_BASH_PREFIXES[command]}"
     # DEFAULT DENY. Everything not named above lands here — which is the whole correction.
-    return (f"wildcard `Bash({command} …)` is not an exact plugin-root wrapper. Model-reachable "
-            "grants are default-deny: call a reviewed script under `${CLAUDE_PLUGIN_ROOT}`, or write "
-            "the exact command with no wildcard.")
+    return (
+        f"wildcard `Bash({command} …)` is not an exact plugin-root wrapper. Model-reachable "
+        "grants are default-deny: call a reviewed script under `${CLAUDE_PLUGIN_ROOT}`, or write "
+        "the exact command with no wildcard."
+    )
 
 
 def _tool_tokens(value: str) -> "set[str]":
@@ -388,7 +524,7 @@ def _agent_specifier_members(token: str) -> "list[str]":
     """`Agent(a, unleashed-mail:b)` -> ['a', 'unleashed-mail:b']. Bare `Agent` -> []."""
     if not token.startswith("Agent(") or not token.endswith(")"):
         return []
-    return [m.strip() for m in token[len("Agent("):-1].split(",") if m.strip()]
+    return [m.strip() for m in token[len("Agent(") : -1].split(",") if m.strip()]
 
 
 def _live_tools(frontmatter: dict) -> "set[str]":
@@ -440,10 +576,14 @@ def _unquoted_shell_operators(line: str) -> "list[str]":
     quote = None
     index = 0
     while index < len(line):
-        pair = line[index:index + 2]
+        pair = line[index : index + 2]
         character = line[index]
-        if quote is None and character == "#" and (index == 0 or line[index - 1] in " \t"):
-            break                                  # the rest of the line is a comment
+        if (
+            quote is None
+            and character == "#"
+            and (index == 0 or line[index - 1] in " \t")
+        ):
+            break  # the rest of the line is a comment
         if quote == "'":
             if character == "'":
                 quote = None
@@ -451,10 +591,10 @@ def _unquoted_shell_operators(line: str) -> "list[str]":
             continue
         if quote == '"':
             if character == "\\":
-                index += 2                     # a backslash escape inside double quotes
+                index += 2  # a backslash escape inside double quotes
                 continue
             if pair == "$(":
-                operators.append("$(")         # substitution IS active inside double quotes
+                operators.append("$(")  # substitution IS active inside double quotes
                 index += 2
                 continue
             if character == "`":
@@ -470,10 +610,10 @@ def _unquoted_shell_operators(line: str) -> "list[str]":
             quote = character
         elif pair in ("||", "&&"):
             operators.append(pair)
-            index += 2                         # both characters consumed, or `||` also counts as `|`
+            index += 2  # both characters consumed, or `||` also counts as `|`
             continue
         elif pair in ("$(", "<(", ">("):
-            operators.append(pair)                 # substitution, or process substitution
+            operators.append(pair)  # substitution, or process substitution
             index += 2
             continue
         elif character == "|":
@@ -555,11 +695,15 @@ def _spawn_remedy(frontmatter: dict) -> str:
     to prevent. Both diagnostics in this function route through here so the pair cannot drift.
     """
     if "tools" not in frontmatter:
-        return ("To stop this agent spawning, deny bare `Agent`. Do NOT add a `tools:` list to "
-                "narrow it — this agent inherits install-prefixed MCP tools by omitting `tools:`, "
-                "and setting it is a strict allowlist that would silently drop them.")
-    return ("To stop this agent spawning, deny bare `Agent`. To narrow WHICH types it declares, "
-            "use a scoped `Agent(...)` grant in `tools:` instead.")
+        return (
+            "To stop this agent spawning, deny bare `Agent`. Do NOT add a `tools:` list to "
+            "narrow it — this agent inherits install-prefixed MCP tools by omitting `tools:`, "
+            "and setting it is a strict allowlist that would silently drop them."
+        )
+    return (
+        "To stop this agent spawning, deny bare `Agent`. To narrow WHICH types it declares, "
+        "use a scoped `Agent(...)` grant in `tools:` instead."
+    )
 
 
 def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
@@ -624,9 +768,12 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         # `tools: Read, Agent(rogue-writer)` beside a writing `rogue-writer` reported NO problem,
         # because `_live_tools` holds `Agent(...)` rather than bare `Agent` and the spawner was
         # skipped entirely. The same hole opens when an allowlisted specialist LATER gains `Bash`.
-        scoped_spawners.extend((path, member)
-                               for token in live if token.startswith("Agent(")
-                               for member in _agent_specifier_members(token))
+        scoped_spawners.extend(
+            (path, member)
+            for token in live
+            if token.startswith("Agent(")
+            for member in _agent_specifier_members(token)
+        )
 
         # AN `Agent(x)` ENTRY IN `disallowedTools` IS REJECTED UNCONDITIONALLY (codex, PR #76).
         # That specifier form inside a DENY list strips the `Agent` tool entirely — it is what
@@ -641,8 +788,11 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         # walks straight through the prefix test.
         # `.strip()` AFTER the quotes: a YAML scalar with incidental inner whitespace
         # (`" Agent(x)"`) otherwise walks through the prefix test (gemini, PR #76).
-        bad_denials = sorted(tok for tok in _tool_tokens(frontmatter.get("disallowedTools", ""))
-                             if tok.strip('"\'').strip().startswith("Agent("))
+        bad_denials = sorted(
+            tok
+            for tok in _tool_tokens(frontmatter.get("disallowedTools", ""))
+            if tok.strip("\"'").strip().startswith("Agent(")
+        )
         if bad_denials:
             rel = path.relative_to(root).as_posix()
             # THE REMEDY IS CONDITIONAL (codex, PR #76). Telling an INHERIT-ALL agent to add a
@@ -675,8 +825,11 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         # BOTH SPELLINGS. A consumer install resolves `unleashed-mail:<name>` as well as the bare name,
         # so denying only one leaves the other reachable — the same both-spellings rule the skills'
         # `Agent(...)` grants already follow. Measured: a bare-only denial passed this check.
-        missing = [w for w in writers
-                   if f"Agent({w})" not in denied or f"Agent(unleashed-mail:{w})" not in denied]
+        missing = [
+            w
+            for w in writers
+            if f"Agent({w})" not in denied or f"Agent(unleashed-mail:{w})" not in denied
+        ]
         if missing:
             rel = path.relative_to(root).as_posix()
             problems.append(
@@ -689,8 +842,12 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
             )
 
 
-def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[str],
-                                 warnings: list[str] | None = None) -> None:
+def check_model_reachable_grants(
+    rel: Path,
+    fm: dict[str, str],
+    problems: list[str],
+    warnings: list[str] | None = None,
+) -> None:
     """Reject broad write/VCS/agent grants on a skill the MODEL can invoke (deep review, P1).
 
     `disable-model-invocation: true` opts a skill out — a user-invoked-only skill still pre-approves
@@ -703,7 +860,9 @@ def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[s
     if not granted:
         return
 
-    entries = [entry.strip() for entry in re.split(r",(?![^(]*\))", granted) if entry.strip()]
+    entries = [
+        entry.strip() for entry in re.split(r",(?![^(]*\))", granted) if entry.strip()
+    ]
     for entry in entries:
         if entry in BROAD_MODEL_REACHABLE_GRANTS:
             problems.append(
@@ -715,7 +874,13 @@ def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[s
         # match above catches `Write`; it does NOT catch `Write(**)`, `Write(/**)`, `Edit(**)` or
         # `Agent(*)`, each of which pre-approves the entire surface the bare grant does. Measured passing.
         scope_match = re.fullmatch(r"(Write|Edit|NotebookEdit|Agent)\((.*)\)", entry)
-        if scope_match and scope_match.group(2).strip() in ("*", "**", "/**", "/*", "**/*"):
+        if scope_match and scope_match.group(2).strip() in (
+            "*",
+            "**",
+            "/**",
+            "/*",
+            "**/*",
+        ):
             name = scope_match.group(1)
             problems.append(
                 f"{rel}: model-invocable skill grants `{entry}` — a `{scope_match.group(2).strip()}` "
@@ -753,7 +918,8 @@ def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[s
 
 def skill_preload_list(fm: dict[str, str]) -> list[str]:
     """Normalize a `skills:` frontmatter value (inline `[a, b]`, comma, or accumulated block-list) into
-    skill names, tolerating an optional `unleashed-mail:`/`<plugin>:` namespace prefix (MIN-22)."""
+    skill names, tolerating an optional `unleashed-mail:`/`<plugin>:` namespace prefix (MIN-22).
+    """
     raw = fm.get("skills", "")
     if raw in ("", ">", "|", ">-", "|-"):
         return []
@@ -761,12 +927,15 @@ def skill_preload_list(fm: dict[str, str]) -> list[str]:
     for entry in (t.strip().strip("[]").lstrip("-").strip() for t in raw.split(",")):
         if not entry:
             continue
-        out.append(entry.split(":", 1)[1] if ":" in entry else entry)  # drop a plugin prefix
+        out.append(
+            entry.split(":", 1)[1] if ":" in entry else entry
+        )  # drop a plugin prefix
     return out
 
 
-def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
-                       warnings: list[str]) -> None:
+def check_agent_fields(
+    rel: Path, fm: dict[str, str], problems: list[str], warnings: list[str]
+) -> None:
     """Agent-only frontmatter validation: unknown keys, model alias, tool-name typos.
 
     Skills/commands are intentionally exempt — `allowed-tools` is a real key for them.
@@ -781,9 +950,11 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
             continue
         hint = ""
         if key == "allowed-tools":
-            hint = (" — `allowed-tools` is a skills/commands key; sub-agents use "
-                    "`tools`/`disallowedTools`. As written the restriction is silently "
-                    "ignored and the agent inherits ALL tools.")
+            hint = (
+                " — `allowed-tools` is a skills/commands key; sub-agents use "
+                "`tools`/`disallowedTools`. As written the restriction is silently "
+                "ignored and the agent inherits ALL tools."
+            )
         problems.append(f"{rel}: unknown agent frontmatter key `{key}`{hint}")
 
     # §4.7: these ARE legal sub-agent keys, but Claude Code IGNORES all three for PLUGIN
@@ -796,16 +967,14 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
                 f"{rel}: `{key}` is IGNORED for plugin sub-agents (Claude Code security "
                 f"exemption) — it will silently have no effect. For permissions use a "
                 f"PermissionRequest hook in hooks/hooks.json; for MCP scope use "
-                f"`disallowedTools`.")
+                f"`disallowedTools`."
+            )
 
-    model = fm.get("model", "")
-    # A concrete model id (e.g. `claude-opus-4-8`) is allowed; a bare unknown alias is not. F10
-    # (COREDEV-2503): `re.fullmatch` anchors BOTH ends — the prior `re.match` (start-only, no end anchor)
-    # accepted a valid prefix + trailing garbage/newline (`claude-opus-4-8 rm -rf`). `\Z`-style fullmatch,
-    # not `$` (which allows a terminal newline). The trailing `[a-z0-9-]*` allows ids ending in a letter.
-    if model and model not in MODEL_ALIASES and not re.fullmatch(r"[a-z]+-[a-z0-9-]*\d[a-z0-9-]*", model):
-        problems.append(
-            f"{rel}: `model: {model}` is not a known alias {sorted(MODEL_ALIASES)} or a model id")
+    model_problem = check_model_value(
+        rel, fm.get("model", ""), AGENT_MODEL_VALUES, "agent"
+    )
+    if model_problem:
+        problems.append(model_problem)
 
     for field in ("tools", "disallowedTools"):
         val = fm.get(field, "")
@@ -814,13 +983,21 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
         # normalize YAML flow-list (`[Task]`, `[Task, Read]`) and block-list (`- Task`) syntax before the
         # stale/typo checks — the plain `val.split(",")` scalar form otherwise missed `[Task]`/`- Task`,
         # letting a stale `Task` tool through in list form (audit of #53).
-        for entry in (t.strip().strip("[]").lstrip("-").strip() for t in val.split(",")):
+        for entry in (
+            t.strip().strip("[]").lstrip("-").strip() for t in val.split(",")
+        ):
             if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
                 continue
-            if entry.lower() in _STALE_TOOLS_LOWER:  # B4: hard-reject a known-stale name (difflib wouldn't
+            if (
+                entry.lower() in _STALE_TOOLS_LOWER
+            ):  # B4: hard-reject a known-stale name (difflib wouldn't
                 # flag it). Case-INSENSITIVE so `task`/`TASK` can't slip past the exact-`Task` check (gemini #53).
-                reason = _STALE_TOOL_REASONS.get(entry.lower(), "it is not a valid tool name")
-                problems.append(f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — {reason}")
+                reason = _STALE_TOOL_REASONS.get(
+                    entry.lower(), "it is not a valid tool name"
+                )
+                problems.append(
+                    f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — {reason}"
+                )
                 continue
             # §4.5: ADVISORY, not a hard failure. `KNOWN_TOOLS` is inherently incomplete — the
             # built-in surface moves — so a near-miss is as likely to be a NEW tool as a typo. The
@@ -830,8 +1007,10 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
             # for the explicit `STALE_TOOLS` set above.
             near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.7)
             if near:
-                warnings.append(f"{rel}: `{field}` entry `{entry}` looks like a typo of "
-                                f"`{near[0]}` (advisory — if `{entry}` is a real tool, ignore)")
+                warnings.append(
+                    f"{rel}: `{field}` entry `{entry}` looks like a typo of "
+                    f"`{near[0]}` (advisory — if `{entry}` is a real tool, ignore)"
+                )
 
 
 def _unquote(value: str) -> str:
@@ -852,7 +1031,9 @@ def _unquote(value: str) -> str:
 def _flow_items(value: str) -> str:
     """`[a, "b", 'c']` -> `a, b, c`. Assumes the brackets are present and balanced."""
     inner = value[1:-1].strip()
-    return ", ".join(_unquote(item.strip()) for item in inner.split(",") if item.strip())
+    return ", ".join(
+        _unquote(item.strip()) for item in inner.split(",") if item.strip()
+    )
 
 
 def _strip_yaml_comment(value: str) -> str:
@@ -914,7 +1095,7 @@ def _join_flow_lists(lines: list[str]) -> list[str]:
                 pending = opener
                 continue
         joined.append(line)
-    if pending is not None:                  # unterminated flow list: leave it as written, malformed
+    if pending is not None:  # unterminated flow list: leave it as written, malformed
         joined.append(pending)
     return joined
 
@@ -972,12 +1153,19 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
                 val = _flow_items(val)
             fm[key] = val  # may be "", ">", "|", or an inline value
             if val in (">", "|", ">-", "|-"):
-                block_scalar_keys.add(key)           # `key: |`/`>` body is PROSE — space-join, never comma
+                block_scalar_keys.add(
+                    key
+                )  # `key: |`/`>` body is PROSE — space-join, never comma
             current = key
-        elif current is not None and line.strip() and (
+        elif (
+            current is not None
+            and line.strip()
+            and (
                 line[:1].isspace()
                 or (line.lstrip().startswith("- ") and current not in block_scalar_keys)
-                or (line.rstrip() == "-" and current not in block_scalar_keys)):
+                or (line.rstrip() == "-" and current not in block_scalar_keys)
+            )
+        ):
             # continuation / block-scalar body / block-LIST item -> the key has content.
             # MIN-21: a COLUMN-0 block-list item (`tools:\n- Read\n- Task`) is legal YAML that PyYAML and
             # Claude Code read as `['Read','Task']`, but the old `line[:1].isspace()`-only gate dropped the
@@ -985,8 +1173,10 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
             # check_agent_fields. Treat a column-0 `- item` under a non-block-scalar key as a list item too.
             body = line.strip()
             is_list_item = body.startswith("-") and current not in block_scalar_keys
-            if is_list_item:                         # block-list item: drop a trailing YAML inline comment
-                hp = body.find(" #")                 # (`- Task # legacy`) so it doesn't hide a stale tool
+            if is_list_item:  # block-list item: drop a trailing YAML inline comment
+                hp = body.find(
+                    " #"
+                )  # (`- Task # legacy`) so it doesn't hide a stale tool
                 if hp != -1:
                     body = body[:hp].rstrip()
                 # STRIP THE `- ` MARKER (PR #63 recheck, P1). It used to be stored, so a block list
@@ -1023,7 +1213,9 @@ def has(fm: dict[str, str], key: str) -> bool:
 REGISTRY_ROW = re.compile(r"^\|\s*`([a-z][a-z0-9-]*)`\s*\|")
 
 
-def check_agent_registry(root: Path, agent_names: set[str], problems: list[str]) -> None:
+def check_agent_registry(
+    root: Path, agent_names: set[str], problems: list[str]
+) -> None:
     reg = root / "skills" / "agent-orchestration" / "SKILL.md"
     rel = "skills/agent-orchestration/SKILL.md"
     if not reg.is_file():
@@ -1050,11 +1242,17 @@ def check_agent_registry(root: Path, agent_names: set[str], problems: list[str])
                 rows.append(m.group(1))
     registered = set(rows)
     for name in sorted({n for n in rows if rows.count(n) > 1}):
-        problems.append(f"{rel}: agent `{name}` is listed more than once in the Agent Registry tables")
+        problems.append(
+            f"{rel}: agent `{name}` is listed more than once in the Agent Registry tables"
+        )
     for name in sorted(agent_names - registered):
-        problems.append(f"{rel}: agent `{name}` is missing from the Agent Registry tables")
+        problems.append(
+            f"{rel}: agent `{name}` is missing from the Agent Registry tables"
+        )
     for name in sorted(registered - agent_names):
-        problems.append(f"{rel}: Agent Registry lists `{name}` but agents/{name}.md does not exist")
+        problems.append(
+            f"{rel}: Agent Registry lists `{name}` but agents/{name}.md does not exist"
+        )
 
 
 # §11 (Model Tiering Policy) in AGENT_CONTRACTS.md files every agent under exactly one `model:` tier.
@@ -1065,7 +1263,9 @@ _TIER_ROW = re.compile(r"^\|[^|]*\|\s*`([a-z]+)`[^|]*\|\s*([^|]+?)\s*\|\s*$")
 _AGENT_TOKEN = re.compile(r"[a-z][a-z0-9-]*")
 
 
-def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: list[str]) -> None:
+def check_effort_policy(
+    root: Path, asset_efforts: dict[str, str], problems: list[str]
+) -> None:
     """§4.3 (COREDEV-2583) — assert the effort FLOOR on BOTH axes and in the policy text.
 
     The floor is a floor, not a pin. Assets INHERIT the session effort by omitting `effort:`,
@@ -1091,11 +1291,12 @@ def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: lis
                 f"{rel}: `effort: {effort}` is BELOW the floor — omit `effort:` to inherit the "
                 f"session level, or pin `xhigh`/`max`. A downward pin silently under-powers the "
                 f"asset and is invisible at runtime "
-                f"(AGENT_CONTRACTS §11 effort policy; COREDEV-2583 §4.1)")
+                f"(AGENT_CONTRACTS §11 effort policy; COREDEV-2583 §4.1)"
+            )
 
     contracts = root / "AGENT_CONTRACTS.md"
     if not contracts.is_file():
-        return                      # check_model_tiering already reports the missing file
+        return  # check_model_tiering already reports the missing file
     try:
         content = contracts.read_text(encoding="utf-8-sig")
     except OSError:
@@ -1105,10 +1306,13 @@ def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: lis
     if "no agent or skill pins an effort below `xhigh`" not in content:
         problems.append(
             "AGENT_CONTRACTS.md §11: the effort policy line is missing or does not state "
-            "the floor — expected the sentence \"no agent or skill pins an effort below `xhigh`\"")
+            'the floor — expected the sentence "no agent or skill pins an effort below `xhigh`"'
+        )
 
 
-def check_model_tiering(root: Path, agent_models: dict[str, str], problems: list[str]) -> None:
+def check_model_tiering(
+    root: Path, agent_models: dict[str, str], problems: list[str]
+) -> None:
     contracts = root / "AGENT_CONTRACTS.md"
     rel = "AGENT_CONTRACTS.md"
     if not contracts.is_file():
@@ -1135,27 +1339,40 @@ def check_model_tiering(root: Path, agent_models: dict[str, str], problems: list
         rows += 1
         for name in _AGENT_TOKEN.findall(agents_cell):
             if name in tier_of and tier_of[name] != model:
-                problems.append(f"{rel} §11: `{name}` appears under two tiers (`{tier_of[name]}`/`{model}`)")
+                problems.append(
+                    f"{rel} §11: `{name}` appears under two tiers (`{tier_of[name]}`/`{model}`)"
+                )
             tier_of[name] = model
     if rows < 2:
-        problems.append(f"{rel} §11: could not parse the Model Tiering table (found {rows} tier row(s))")
+        problems.append(
+            f"{rel} §11: could not parse the Model Tiering table (found {rows} tier row(s))"
+        )
         return
     for stem, model in sorted(agent_models.items()):
         tier = tier_of.get(stem)
         if tier is None:
-            problems.append(f"{rel} §11: agent `{stem}` (model: {model}) is missing from the tiering table")
+            problems.append(
+                f"{rel} §11: agent `{stem}` (model: {model}) is missing from the tiering table"
+            )
         elif tier != model:
-            problems.append(f"{rel} §11: agent `{stem}` is filed under `{tier}` but its frontmatter pins "
-                            f"`model: {model}` — align §11 or the agent")
+            problems.append(
+                f"{rel} §11: agent `{stem}` is filed under `{tier}` but its frontmatter pins "
+                f"`model: {model}` — align §11 or the agent"
+            )
     for name in sorted(set(tier_of) - set(agent_models)):
-        problems.append(f"{rel} §11: tiering table lists `{name}` but agents/{name}.md does not exist")
+        problems.append(
+            f"{rel} §11: tiering table lists `{name}` but agents/{name}.md does not exist"
+        )
 
 
-def check_reviewer_roster(root: Path, agent_names: set[str], problems: list[str]) -> None:
+def check_reviewer_roster(
+    root: Path, agent_names: set[str], problems: list[str]
+) -> None:
     """MIN-16: the five-reviewer roster is hardcoded in six places with no cross-check. A reviewer rename
     edits one (e.g. the SKILL.md registry) and leaves the others stale — the unanchored hooks matchers stop
     matching, capture.py rejects the new name, and swift-reviewer Step-5 exits UNATTRIBUTED for a reviewer
-    that ran (fail-closed but undiagnosable). Assert all six agree and each name exists as an agent."""
+    that ran (fail-closed but undiagnosable). Assert all six agree and each name exists as an agent.
+    """
     sources: dict[str, "set[str] | None"] = {}
 
     def read(rel: str) -> "str | None":
@@ -1172,7 +1389,9 @@ def check_reviewer_roster(root: Path, agent_names: set[str], problems: list[str]
     t = read("mcp/review-synthesizer/capture.py")
     if t is not None:
         m = re.search(r"VALID_AGENTS\s*=\s*\((.*?)\)", t, re.DOTALL)
-        sources["capture.py:VALID_AGENTS"] = set(re.findall(r'"([a-z][a-z0-9-]*)"', m.group(1))) if m else None
+        sources["capture.py:VALID_AGENTS"] = (
+            set(re.findall(r'"([a-z][a-z0-9-]*)"', m.group(1))) if m else None
+        )
 
     t = read("hooks/hooks.json")
     if t is not None:
@@ -1191,15 +1410,24 @@ def check_reviewer_roster(root: Path, agent_names: set[str], problems: list[str]
                     got = set(mm.group(1).split("|"))
             sources[f"hooks.json:{ev}"] = got
 
-    for fn in ("scripts/capture-reviewer-round-start.sh", "scripts/capture-reviewer-verdict.sh"):
+    for fn in (
+        "scripts/capture-reviewer-round-start.sh",
+        "scripts/capture-reviewer-verdict.sh",
+    ):
         t = read(fn)
         if t is not None:
-            m = re.search(r"^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)+)\)\s*;;", t, re.MULTILINE)
-            sources[fn.rsplit("/", 1)[-1] + ":case"] = set(m.group(1).split("|")) if m else None
+            m = re.search(
+                r"^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)+)\)\s*;;", t, re.MULTILINE
+            )
+            sources[fn.rsplit("/", 1)[-1] + ":case"] = (
+                set(m.group(1).split("|")) if m else None
+            )
 
     for k, v in sources.items():
         if v is None:
-            problems.append(f"reviewer-roster: could not extract the reviewer set from `{k}`")
+            problems.append(
+                f"reviewer-roster: could not extract the reviewer set from `{k}`"
+            )
     parsed = {k: v for k, v in sources.items() if v is not None}
     if len(parsed) < 2:
         return
@@ -1207,15 +1435,20 @@ def check_reviewer_roster(root: Path, agent_names: set[str], problems: list[str]
     ref = parsed[ref_key]
     for k, v in parsed.items():
         if v != ref:
-            problems.append(f"reviewer-roster: `{k}` roster {sorted(v)} != `{ref_key}` {sorted(ref)}")
+            problems.append(
+                f"reviewer-roster: `{k}` roster {sorted(v)} != `{ref_key}` {sorted(ref)}"
+            )
     for name in sorted(ref - agent_names):
-        problems.append(f"reviewer-roster: `{name}` is rostered but agents/{name}.md does not exist")
+        problems.append(
+            f"reviewer-roster: `{name}` is rostered but agents/{name}.md does not exist"
+        )
 
 
 def check_mcp_server_paths(root: Path, problems: list[str]) -> None:
     """MIN-23: .mcp.json is only JSON-parsed; nothing checks that each server's command/args target
     (`${CLAUDE_PLUGIN_ROOT}/mcp/.../mcp_server.py`) resolves to an existing, non-empty file. A path typo
-    keeps every validator and the pinned-path MCP test suite green while the shipped server never starts."""
+    keeps every validator and the pinned-path MCP test suite green while the shipped server never starts.
+    """
     mcp = root / ".mcp.json"
     if not mcp.is_file():
         return
@@ -1229,42 +1462,70 @@ def check_mcp_server_paths(root: Path, problems: list[str]) -> None:
         if not isinstance(cfg, dict):
             continue
         toks = [cfg["command"]] if isinstance(cfg.get("command"), str) else []
-        toks += [a for a in cfg.get("args", []) if isinstance(a, str)] if isinstance(cfg.get("args"), list) else []
+        toks += (
+            [a for a in cfg.get("args", []) if isinstance(a, str)]
+            if isinstance(cfg.get("args"), list)
+            else []
+        )
         for tok in toks:
             if "${CLAUDE_PLUGIN_ROOT}" not in tok:
                 continue
             relpath = tok.replace("${CLAUDE_PLUGIN_ROOT}", "").lstrip("/")
             target = root / relpath
             if not (str(target.resolve()) + os.sep).startswith(root_str + os.sep):
-                problems.append(f".mcp.json: server `{name}` target {tok!r} escapes the plugin root")
+                problems.append(
+                    f".mcp.json: server `{name}` target {tok!r} escapes the plugin root"
+                )
             elif not target.is_file():
-                problems.append(f".mcp.json: server `{name}` references missing file {relpath} ({tok!r})")
+                problems.append(
+                    f".mcp.json: server `{name}` references missing file {relpath} ({tok!r})"
+                )
             elif target.stat().st_size == 0:
-                problems.append(f".mcp.json: server `{name}` references empty file {relpath}")
+                problems.append(
+                    f".mcp.json: server `{name}` references empty file {relpath}"
+                )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate unleashed-mail plugin assets.")
-    ap.add_argument("--root", default=None, help="plugin repo root (default: parent of scripts/)")
-    ap.add_argument("--strict", action="store_true", help="exit non-zero on any problem (CI)")
+    ap.add_argument(
+        "--root", default=None, help="plugin repo root (default: parent of scripts/)"
+    )
+    ap.add_argument(
+        "--strict", action="store_true", help="exit non-zero on any problem (CI)"
+    )
     args = ap.parse_args()
 
-    root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
+    root = (
+        Path(args.root).resolve()
+        if args.root
+        else Path(__file__).resolve().parent.parent
+    )
     problems: list[str] = []
-    warnings: list[str] = []            # never affect the exit code (COREDEV-2583 §4.7)
-    agent_models: dict[str, str] = {}   # stem -> effective model (default "inherit"); fed to §11 tier check
-    asset_efforts: dict[str, str] = {}  # rel path -> declared effort (""=absent); fed to the §4.3 check
+    warnings: list[str] = []  # never affect the exit code (COREDEV-2583 §4.7)
+    agent_models: dict[str, str] = (
+        {}
+    )  # stem -> effective model (default "inherit"); fed to §11 tier check
+    asset_efforts: dict[str, str] = (
+        {}
+    )  # rel path -> declared effort (""=absent); fed to the §4.3 check
 
-    def check_frontmatter(path: Path, require_name: bool, is_agent: bool = False) -> None:
+    def check_frontmatter(
+        path: Path, require_name: bool, is_agent: bool = False
+    ) -> None:
         rel = path.relative_to(root)
         try:
-            text = path.read_text(encoding="utf-8-sig")  # utf-8-sig strips a BOM (PR #11)
+            text = path.read_text(
+                encoding="utf-8-sig"
+            )  # utf-8-sig strips a BOM (PR #11)
         except OSError as e:
             problems.append(f"{rel}: cannot read ({e})")
             return
         fm = parse_frontmatter(text)
         if fm is None:
-            problems.append(f"{rel}: missing or unterminated YAML frontmatter (`---` block)")
+            problems.append(
+                f"{rel}: missing or unterminated YAML frontmatter (`---` block)"
+            )
             return
         if not has(fm, "description"):
             problems.append(f"{rel}: frontmatter missing non-empty `description`")
@@ -1273,16 +1534,18 @@ def main() -> int:
                 problems.append(f"{rel}: frontmatter missing non-empty `name`")
             elif not KEBAB.match(fm["name"]):
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
-        asset_efforts[str(rel)] = fm.get("effort", "").strip()   # §4.3
+        asset_efforts[str(rel)] = fm.get("effort", "").strip()  # §4.3
         if not is_agent:
-            check_skill_fields(rel, fm, problems, warnings)   # §4.6
+            check_skill_fields(rel, fm, problems, warnings)  # §4.6
         if is_agent:
             check_agent_fields(rel, fm, problems, warnings)
             # The frontmatter `name` is the identifier Claude Code registers; if it diverges from the
             # filename stem, the registry set-equality check (keyed on stems) would enforce the wrong
             # identifier. Require them equal.
             if has(fm, "name") and fm["name"] != path.stem:
-                problems.append(f"{rel}: agent `name: {fm['name']}` != filename stem `{path.stem}`")
+                problems.append(
+                    f"{rel}: agent `name: {fm['name']}` != filename stem `{path.stem}`"
+                )
             # Record the effective model (omitted `model:` defaults to `inherit`) for the §11 tier check.
             agent_models[path.stem] = fm.get("model", "").strip() or "inherit"
         # MIN-22: a `skills:` preload must resolve to skills/<name>/SKILL.md on disk, else the preload
@@ -1290,7 +1553,9 @@ def main() -> int:
         # class this validator exists to catch). Applies to agents (and any skill that preloads siblings).
         for skill_name in skill_preload_list(fm):
             if not (root / "skills" / skill_name / "SKILL.md").is_file():
-                problems.append(f"{rel}: `skills:` preload `{skill_name}` has no skills/{skill_name}/SKILL.md")
+                problems.append(
+                    f"{rel}: `skills:` preload `{skill_name}` has no skills/{skill_name}/SKILL.md"
+                )
 
     # agents/*.md and skills/*/SKILL.md require name+description.
     agents = sorted((root / "agents").glob("*.md"))
@@ -1316,7 +1581,9 @@ def main() -> int:
     for p in commands:
         check_frontmatter(p, require_name=False)
         if not KEBAB.match(p.stem):
-            problems.append(f"{p.relative_to(root)}: command filename stem `{p.stem}` is not kebab-case")
+            problems.append(
+                f"{p.relative_to(root)}: command filename stem `{p.stem}` is not kebab-case"
+            )
 
     # §4.3 MUST run after EVERY asset has been walked — agents, skills and commands all feed
     # `asset_efforts`. Called any earlier it silently checks only the agents walked so far, which
@@ -1356,7 +1623,9 @@ def main() -> int:
                 for field in ("name", "version", "description"):
                     fv = data.get(field)
                     if not (isinstance(fv, str) and fv.strip()):
-                        problems.append(f"{m.relative_to(root)}: missing/empty required field `{field}`")
+                        problems.append(
+                            f"{m.relative_to(root)}: missing/empty required field `{field}`"
+                        )
     for m in optional_manifests:
         if not m.is_file():
             continue
@@ -1367,8 +1636,10 @@ def main() -> int:
         except (OSError, ValueError) as e:
             problems.append(f"{m.relative_to(root)}: invalid JSON ({e})")
 
-    summary = (f"{len(agents)} agents, {len(skills)} skills, {len(commands)} commands, "
-               f"{parsed}/{total_manifests} manifests")
+    summary = (
+        f"{len(agents)} agents, {len(skills)} skills, {len(commands)} commands, "
+        f"{parsed}/{total_manifests} manifests"
+    )
     for warning in warnings:
         print(f"  ⚠️  {warning}")
 

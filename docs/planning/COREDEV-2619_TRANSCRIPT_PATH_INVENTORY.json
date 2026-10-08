@@ -192,11 +192,11 @@
       "reason": "The Gemini usage example must demonstrate capture to a reserved allocated leaf.",
       "contracts": ["S-CAPTURE"],
       "destination": {
-        "line": 31,
+        "line": 32,
         "payloads": [
-          "    python3 pty-capture.py --allocated \"$GEMINI_TRANSCRIPT\" -- \\"
+          "    MODEL=\"$(bash review/agy-newest-model.sh)\" && python3 pty-capture.py --allocated \"$GEMINI_TRANSCRIPT\" -- agy --model \"$MODEL\" --add-dir \"$(pwd)\" -p \"Read and follow .agy-prompt-$TICKET-r$ROUND.md\""
         ],
-        "payloadSha256": "59b6861e17c81eb47109f192e80dc0be2b6b646fcf634ea32f32b0bc6effaf69"
+        "payloadSha256": "60fd65aa98be88c9c19dce2c51373b21d01a67bd21b97f4e1e9dbfccc9668c0d"
       },
       "sourceSha256": "5a3eb5808cdf4ae356f45bb138dc2dfee451b644714aed7dcbe9cacd9228699e",
       "precedingAnchorLine": 30,
@@ -212,7 +212,7 @@
       "reason": "Live security commentary must describe reserved leaves after fixed paths are retired.",
       "contracts": ["S-CAPTURE"],
       "destination": {
-        "line": 566,
+        "line": 592,
         "payloads": [
           "            # local hazard: another user could replace the reserved `<out-path>` with a symlink to redirect the"
         ],
@@ -381,7 +381,7 @@
       "reason": "The live recipe commentary must point readers to the allocated capture target.",
       "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 108,
+        "line": 109,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -486,7 +486,7 @@
       "reason": "The live capture instruction must identify the allocated target, not a shared path.",
       "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 277,
+        "line": 278,
         "payloads": [
           "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -507,7 +507,7 @@
       "reason": "Synthesis must receive both reviewers' allocated paths as opaque arguments.",
       "contracts": ["S-THREAD"],
       "destination": {
-        "line": 280,
+        "line": 281,
         "payloads": [
           "8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

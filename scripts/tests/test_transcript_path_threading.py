@@ -16,7 +16,6 @@ import unittest
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
 REPO = Path(__file__).resolve().parents[2]
 ALLOCATE = REPO / "scripts" / "review" / "allocate-transcript.sh"
 ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
@@ -35,6 +34,7 @@ CAPTURE_GEMINI = REPO / "scripts" / "review" / "capture-gemini-review.sh"
 PLAN_RELATIVE = "docs/planning/FEATURE_PLAN.md"
 BIND_PROMPT = REPO / "scripts" / "review" / "bind-prompt.py"
 CONTAINMENT = REPO / "scripts" / "review" / "containment.py"
+
 
 def verdict_module():
     """The SHIPPED `review-verdict.py`, loaded as a module.
@@ -72,7 +72,7 @@ SYNTHESIS_BEGIN = "# COREDEV2619_SYNTHESIS_PERSIST_BEGIN"
 SYNTHESIS_END = "# COREDEV2619_SYNTHESIS_PERSIST_END"
 
 
-WRITER_SHIM = r'''#!/usr/bin/env python3
+WRITER_SHIM = r"""#!/usr/bin/env python3
 import json
 import os
 import pathlib
@@ -104,10 +104,10 @@ with open(out_path, "wb") as stream:
     stream.write(payload)
 with open(out_path + ".captureid", "w", encoding="utf-8") as stream:
     stream.write("capture-" + reviewer + "\n")
-'''
+"""
 
 
-BASH_SHIM = r'''#!/usr/bin/env python3
+BASH_SHIM = r"""#!/usr/bin/env python3
 import json
 import os
 import pathlib
@@ -125,10 +125,10 @@ if args and pathlib.Path(args[0]).name in ("isolated-agy-review.sh", "isolated-c
     clean_env.pop("CLAUDE_PLUGIN_ROOT", None)
     os.execve(os.environ["THREAD_REAL_BASH"], [os.environ["THREAD_REAL_BASH"]] + args, clean_env)
 os.execv(os.environ["THREAD_REAL_BASH"], [os.environ["THREAD_REAL_BASH"]] + args)
-'''
+"""
 
 
-PYTHON_SHIM = r'''#!/bin/sh
+PYTHON_SHIM = r"""#!/bin/sh
 if [ "${1-}" = "${THREAD_REVIEW_VERDICT-}" ] && [ "${2-}" = "write" ]; then
     : > "${THREAD_VERDICT_ARGV_LOG:?}"
     for argument in "$@"; do
@@ -136,7 +136,7 @@ if [ "${1-}" = "${THREAD_REVIEW_VERDICT-}" ] && [ "${2-}" = "write" ]; then
     done
 fi
 exec "${THREAD_REAL_PYTHON:?}" "$@"
-'''
+"""
 
 
 def extract_recipe(path: Path, begin: str, end: str) -> str:
@@ -148,7 +148,9 @@ def extract_recipe(path: Path, begin: str, end: str) -> str:
     return source[start:finish].strip() + "\n"
 
 
-def run_checked(argv: List[str], cwd: Path, env: Dict[str, str]) -> subprocess.CompletedProcess:
+def run_checked(
+    argv: List[str], cwd: Path, env: Dict[str, str]
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         argv,
         cwd=str(cwd),
@@ -157,7 +159,6 @@ def run_checked(argv: List[str], cwd: Path, env: Dict[str, str]) -> subprocess.C
         text=True,
         check=False,
     )
-
 
 
 def write_prompt_binding(transcript) -> None:
@@ -178,7 +179,9 @@ def write_prompt_binding(transcript) -> None:
 
 class TranscriptThreadingFixture(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix=".thread-proof-", dir=str(REPO))
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix=".thread-proof-", dir=str(REPO)
+        )
         self.root = Path(self.temporary.name)
         self.home = self.root / "home"
         self.home.mkdir(mode=0o700)
@@ -216,9 +219,8 @@ class TranscriptThreadingFixture(unittest.TestCase):
         # different `*_PLAN.md`, or none at all — a prompt saying `REVIEW TARGET: PLAN_B` bound cleanly
         # to `--plan PLAN_A` and produced an APPROVE artifact for the wrong plan (PR #63 recheck, P1).
         # A path-threading fixture still has to be a legitimate review request.
-        prompt = (
-            "# Review fixture\n\nREVIEW TARGET: FEATURE_PLAN.md\n\n"
-            + ("read-only fixture material\n" * 80)
+        prompt = "# Review fixture\n\nREVIEW TARGET: FEATURE_PLAN.md\n\n" + (
+            "read-only fixture material\n" * 80
         )
         (self.reviewed / ".agy-prompt.md").write_text(prompt, encoding="utf-8")
         # The codex arm's prompt file was never created here. The old inline recipe passed
@@ -235,7 +237,9 @@ class TranscriptThreadingFixture(unittest.TestCase):
         # walking past the skill's apparent `Write(docs/planning/**)` boundary with no user gesture.
         # A fixture that keeps its plan at the repo root is modelling a layout the gate no longer allows.
         (self.reviewed / "docs" / "planning").mkdir(parents=True, exist_ok=True)
-        (self.reviewed / PLAN_RELATIVE).write_text("# Plan\nThread paths.\n", encoding="utf-8")
+        (self.reviewed / PLAN_RELATIVE).write_text(
+            "# Plan\nThread paths.\n", encoding="utf-8"
+        )
         env = dict(os.environ)
         commands = (
             ["git", "init", "-q"],
@@ -263,7 +267,9 @@ class TranscriptThreadingFixture(unittest.TestCase):
         for source in sorted(REVIEW_DIR.iterdir()):
             if source.is_file():
                 shutil.copy2(source, review_dir / source.name)
-        shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
+        shutil.copy2(
+            REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh"
+        )
         self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
 
     def install_capture_helper(self, source: str, reviewer: str = "codex") -> None:
@@ -307,6 +313,9 @@ class TranscriptThreadingFixture(unittest.TestCase):
                 "THREAD_REAL_BASH": str(self.real_bash),
                 "THREAD_REAL_PYTHON": str(self.real_python),
                 "THREAD_REVIEWER": reviewer,
+                # An explicit gemini-arm model (COREDEV-2875): this fixture tests path threading, not
+                # selection, and its stub does not answer `agy models`.
+                "MODEL": "gemini-fixture-flash-high",
                 "PATH": str(self.bin_dir) + os.pathsep + env.get("PATH", ""),
             }
         )
@@ -337,15 +346,23 @@ class TranscriptThreadingFixture(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
 
         marker_prefix = "UNLEASHED_TRANSCRIPT="
-        markers = [line for line in result.stdout.splitlines() if line.startswith(marker_prefix)]
+        markers = [
+            line
+            for line in result.stdout.splitlines()
+            if line.startswith(marker_prefix)
+        ]
         self.assertEqual(1, len(markers), result.stdout)
-        allocated = markers[0][len(marker_prefix):]
-        records = [json.loads(line) for line in self.capture_log.read_text(encoding="utf-8").splitlines()]
+        allocated = markers[0][len(marker_prefix) :]
+        records = [
+            json.loads(line)
+            for line in self.capture_log.read_text(encoding="utf-8").splitlines()
+        ]
         self.assertEqual(1, len(records), records)
         helper_records = []
         if self.helper_log.exists():
             helper_records = [
-                json.loads(line) for line in self.helper_log.read_text(encoding="utf-8").splitlines()
+                json.loads(line)
+                for line in self.helper_log.read_text(encoding="utf-8").splitlines()
             ]
         return allocated, records[0], helper_records
 
@@ -359,7 +376,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         prefix = "UNLEASHED_TRANSCRIPT="
         self.assertTrue(result.stdout.startswith(prefix), result.stdout)
-        return result.stdout[len(prefix):].rstrip("\n")
+        return result.stdout[len(prefix) :].rstrip("\n")
 
     def bind_transcript_to_plan(self, *transcripts: str) -> None:
         """Write the `.plan` sidecar the capture helper would have written.
@@ -434,8 +451,13 @@ class TranscriptThreadingFixture(unittest.TestCase):
         result = run_checked([str(self.real_bash), "-c", recipe], self.reviewed, env)
         self.assertEqual(0, result.returncode, result.stderr)
 
-        artifact = (self.reviewed / "docs" / "planning" / ".verdicts"
-                    / "FEATURE_PLAN.md.verdict.json")
+        artifact = (
+            self.reviewed
+            / "docs"
+            / "planning"
+            / ".verdicts"
+            / "FEATURE_PLAN.md.verdict.json"
+        )
         self.assertTrue(artifact.is_file(), result.stdout + result.stderr)
         payload = json.loads(artifact.read_text(encoding="utf-8"))
         argv = self.verdict_argv_log.read_text(encoding="utf-8").splitlines()
@@ -490,23 +512,35 @@ class TranscriptThreadingFixture(unittest.TestCase):
             },
         )
 
-    def assert_artifact_paths(self, artifact: dict, gemini_path: str, codex_path: str) -> None:
+    def assert_artifact_paths(
+        self, artifact: dict, gemini_path: str, codex_path: str
+    ) -> None:
         by_name = {reviewer["name"]: reviewer for reviewer in artifact["reviewers"]}
         self.assertEqual(gemini_path, by_name["gemini"]["transcriptPath"])
         self.assertEqual(codex_path, by_name["codex"]["transcriptPath"])
 
     @staticmethod
     def reviewer_values(argv: List[str]) -> List[str]:
-        return [argv[index + 1] for index, value in enumerate(argv) if value == "--reviewer"]
+        return [
+            argv[index + 1] for index, value in enumerate(argv) if value == "--reviewer"
+        ]
 
 
 class TranscriptPathPropagationTests(TranscriptThreadingFixture):
-    def test_M5_1_M5_6_both_arms_and_consumers_preserve_one_opaque_argument(self) -> None:
+    def test_M5_1_M5_6_both_arms_and_consumers_preserve_one_opaque_argument(
+        self,
+    ) -> None:
         """Rejects unquoted/re-derived handoffs in capture, synthesis, brainstorm, or artifact."""
-        hostile_base = self.root / "state space\tglob[*]?\\single' double\" colon: equals="
+        hostile_base = (
+            self.root / "state space\tglob[*]?\\single' double\" colon: equals="
+        )
 
-        gemini_path, gemini_capture, gemini_helpers = self.run_capture_recipe("gemini", hostile_base)
-        codex_path, codex_capture, codex_helpers = self.run_capture_recipe("codex", hostile_base)
+        gemini_path, gemini_capture, gemini_helpers = self.run_capture_recipe(
+            "gemini", hostile_base
+        )
+        codex_path, codex_capture, codex_helpers = self.run_capture_recipe(
+            "codex", hostile_base
+        )
 
         expected_prefix = str(hostile_base.resolve()) + os.sep
         self.assertTrue(gemini_path.startswith(expected_prefix), gemini_path)
@@ -525,7 +559,11 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
             codex_helpers[0][:3],
         )
         self.assertEqual(5, len(codex_helpers[0]), codex_helpers[0])
-        self.assertEqual(PLAN_RELATIVE, codex_helpers[0][4], "the bound plan is not handed to the codex harness")
+        self.assertEqual(
+            PLAN_RELATIVE,
+            codex_helpers[0][4],
+            "the bound plan is not handed to the codex harness",
+        )
         # The first three operands are a fixed contract. The timeout is NOT asserted as a literal --
         # see _assert_recipe_timeout_exceeds_print_timeout below for why.
         #
@@ -551,8 +589,15 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         # (PR #63 recheck, P1). Asserting the count keeps the operand from being quietly dropped.
         self.assertEqual(5, len(gemini_helpers[0]), gemini_helpers[0])
         self._assert_recipe_timeout_exceeds_print_timeout(gemini_helpers[0][3])
-        self.assertEqual(PLAN_RELATIVE, gemini_helpers[0][4], "the bound plan is not handed to the harness")
-        for expected, record in ((gemini_path, gemini_capture), (codex_path, codex_capture)):
+        self.assertEqual(
+            PLAN_RELATIVE,
+            gemini_helpers[0][4],
+            "the bound plan is not handed to the harness",
+        )
+        for expected, record in (
+            (gemini_path, gemini_capture),
+            (codex_path, codex_capture),
+        ):
             with self.subTest(expected=expected):
                 argv = record["argv"]
                 allocated_index = argv.index("--allocated")
@@ -591,13 +636,19 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         for suffix in ("terminal-space ", "terminal-tab\t"):
             with self.subTest(suffix=suffix):
                 base = self.root / suffix
-                gemini_path, gemini_capture, _helpers = self.run_capture_recipe("gemini", base)
-                codex_path, codex_capture, _helpers = self.run_capture_recipe("codex", base)
+                gemini_path, gemini_capture, _helpers = self.run_capture_recipe(
+                    "gemini", base
+                )
+                codex_path, codex_capture, _helpers = self.run_capture_recipe(
+                    "codex", base
+                )
                 for allocated, record in (
                     (gemini_path, gemini_capture),
                     (codex_path, codex_capture),
                 ):
-                    self.assertTrue(allocated.startswith(str(base.resolve()) + os.sep), allocated)
+                    self.assertTrue(
+                        allocated.startswith(str(base.resolve()) + os.sep), allocated
+                    )
                     index = record["argv"].index("--allocated")
                     self.assertEqual(allocated, record["argv"][index + 1])
 
@@ -642,8 +693,12 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
                 canonical_prefix = str(canonical_base) + os.sep
                 self.assertTrue(gemini_path.startswith(canonical_prefix), gemini_path)
                 self.assertTrue(codex_path.startswith(canonical_prefix), codex_path)
-                self.assertNotIn(str(xdg_link if use_xdg else fallback_link), gemini_path)
-                self.assertNotIn(str(xdg_link if use_xdg else fallback_link), codex_path)
+                self.assertNotIn(
+                    str(xdg_link if use_xdg else fallback_link), gemini_path
+                )
+                self.assertNotIn(
+                    str(xdg_link if use_xdg else fallback_link), codex_path
+                )
 
                 self.bind_transcript_to_plan(gemini_path, codex_path)
                 artifact, _argv = self.run_synthesis(
@@ -658,8 +713,12 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         base = self.root / "delimiter:=base=more:still"
         gemini_path = self.allocate_empty("gemini", base)
         codex_path = self.allocate_empty("codex", base)
-        Path(gemini_path).write_text("gemini review\nVERDICT: APPROVE\n", encoding="utf-8")
-        Path(codex_path).write_text("codex review\nVERDICT: APPROVE\n", encoding="utf-8")
+        Path(gemini_path).write_text(
+            "gemini review\nVERDICT: APPROVE\n", encoding="utf-8"
+        )
+        Path(codex_path).write_text(
+            "codex review\nVERDICT: APPROVE\n", encoding="utf-8"
+        )
 
         self.bind_transcript_to_plan(gemini_path, codex_path)
         gemini_spec = f"gemini=APPROVE:{gemini_path}"
@@ -675,7 +734,9 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         gemini_path = self.allocate_empty("gemini", base)
         codex_path = self.allocate_empty("codex", base)
         self.assertEqual(0, Path(gemini_path).stat().st_size)
-        Path(codex_path).write_text("codex review\nVERDICT: APPROVE\n", encoding="utf-8")
+        Path(codex_path).write_text(
+            "codex review\nVERDICT: APPROVE\n", encoding="utf-8"
+        )
 
         artifact, argv = self.run_synthesis(
             f"gemini=APPROVE:{gemini_path}",
@@ -701,7 +762,9 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         exceed the print-timeout it is wrapping -- so either value may be retuned without editing a
         test, and no retuning can reintroduce the inversion.
         """
-        wrapper = (self.plugin / "scripts" / "review" / "isolated-agy-review.sh").read_text()
+        wrapper = (
+            self.plugin / "scripts" / "review" / "isolated-agy-review.sh"
+        ).read_text()
         match = re.search(r"--print-timeout\s+(\d+)m", wrapper)
         self.assertIsNotNone(match, "wrapper must pass an explicit --print-timeout")
         print_timeout_seconds = int(match.group(1)) * 60
@@ -712,8 +775,6 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
             f"({print_timeout_seconds}s), or a live review is SIGTERMed before agy can "
             "report its own diagnosable timeout",
         )
-
-
 
 
 class NestedScratchWorktreeStillStages(unittest.TestCase):
@@ -743,14 +804,35 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         snapshot.write_text(body, encoding="utf-8")
         record = root / "prompt.sha256"
         record.write_text(
-            hashlib.sha256(snapshot.read_bytes()).hexdigest() + "  prompt.md\n", encoding="utf-8")
+            hashlib.sha256(snapshot.read_bytes()).hexdigest() + "  prompt.md\n",
+            encoding="utf-8",
+        )
         tree_root = Path(tree)
         tree_root.mkdir(parents=True, exist_ok=True)
-        return subprocess.run(
-            [sys.executable, str(STAGE_PROMPT), "--snapshot", str(snapshot), "--record", str(record),
-             "--tree", str(tree_root), "--rel", "prompt.md", "--repo", repo, "--min-bytes", "1"],
-            capture_output=True, text=True, check=False,
-        ), tree_root
+        return (
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(STAGE_PROMPT),
+                    "--snapshot",
+                    str(snapshot),
+                    "--record",
+                    str(record),
+                    "--tree",
+                    str(tree_root),
+                    "--rel",
+                    "prompt.md",
+                    "--repo",
+                    repo,
+                    "--min-bytes",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            ),
+            tree_root,
+        )
 
     def test_a_SIBLING_sharing_the_repository_prefix_is_left_alone(self):
         """`Unleashed Mail` vs `Unleashed MailTests` — live in this project's own layout.
@@ -764,8 +846,8 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         """
         repo = tempfile.mkdtemp(prefix="prefix-repo-")
         self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
-        sibling = repo + "Tests"           # shares the whole root as a prefix
-        dotted = repo + ".worktrees"       # ditto, continued by `.`
+        sibling = repo + "Tests"  # shares the whole root as a prefix
+        dotted = repo + ".worktrees"  # ditto, continued by `.`
         # A SPACE IS A LEGAL PATH CHARACTER, and this project's checkout name contains one. My first
         # boundary treated "any byte outside [A-Za-z0-9._-]" as a component end, so `<repo> Helper/…`
         # was rewritten to `<tree> Helper/…` — the same defect this cell exists for, one character
@@ -777,48 +859,72 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         tree = os.path.join(tempfile.mkdtemp(prefix="prefix-tree-"), "tree")
         self.addCleanup(shutil.rmtree, os.path.dirname(tree), ignore_errors=True)
 
-        body = ("Review carefully.\n" * 20
-                + f"REVIEW TARGET: {repo}/docs/planning/X_PLAN.md\n"
-                + f"Also read {sibling}/AuthTests.swift\n"
-                + f"and the worktree {dotted}/feature/\n"
-                + f"and the helper {spaced}/notes.md\n"
-                # A SENTENCE-ENDING PERIOD closes the component; `.worktrees` above does not. Left
-                # unrewritten, the prompt would still name the LIVE checkout and the residue check —
-                # asking the same question — would not notice.
-                + f"The checkout is {repo}. Then stop.\n"
-                # The rest of the decidable class — punctuation followed by whitespace or end. The
-                # review reported the PERIOD; measuring showed the others behaved identically, so they
-                # are swept together rather than arriving one report at a time.
-                + f"Compare {repo}, then {repo}; and finally ({repo}) or \"{repo}\" here.\n"
-                # STACKED closing punctuation — ordinary Markdown produces it, and requiring the first
-                # closing byte to be followed immediately by whitespace missed it.
-                + f"See `{repo}`. And \"{repo}\".\n"
-                # The root as a SUFFIX of a longer path. Without a LEFT boundary this became
-                # `/Volumes/backup<tree>/…` — the same silent corruption, on the other side.
-                + f"Backup at /Volumes/backup{repo}/docs/plan.md\n")
+        body = (
+            "Review carefully.\n" * 20
+            + f"REVIEW TARGET: {repo}/docs/planning/X_PLAN.md\n"
+            + f"Also read {sibling}/AuthTests.swift\n"
+            + f"and the worktree {dotted}/feature/\n"
+            + f"and the helper {spaced}/notes.md\n"
+            # A SENTENCE-ENDING PERIOD closes the component; `.worktrees` above does not. Left
+            # unrewritten, the prompt would still name the LIVE checkout and the residue check —
+            # asking the same question — would not notice.
+            + f"The checkout is {repo}. Then stop.\n"
+            # The rest of the decidable class — punctuation followed by whitespace or end. The
+            # review reported the PERIOD; measuring showed the others behaved identically, so they
+            # are swept together rather than arriving one report at a time.
+            + f'Compare {repo}, then {repo}; and finally ({repo}) or "{repo}" here.\n'
+            # STACKED closing punctuation — ordinary Markdown produces it, and requiring the first
+            # closing byte to be followed immediately by whitespace missed it.
+            + f'See `{repo}`. And "{repo}".\n'
+            # The root as a SUFFIX of a longer path. Without a LEFT boundary this became
+            # `/Volumes/backup<tree>/…` — the same silent corruption, on the other side.
+            + f"Backup at /Volumes/backup{repo}/docs/plan.md\n"
+        )
         result, tree_root = self.stage(repo, tree, body)
 
         self.assertEqual(0, result.returncode, result.stderr)
         staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged, "the plan reference was not rewritten")
-        self.assertIn(f"{sibling}/AuthTests.swift", staged,
-                      "a sibling sharing the repository prefix was rewritten into a path that does "
-                      "not exist — the reviewer would silently read nothing")
+        self.assertIn(
+            f"{tree}/docs/planning/X_PLAN.md",
+            staged,
+            "the plan reference was not rewritten",
+        )
+        self.assertIn(
+            f"{sibling}/AuthTests.swift",
+            staged,
+            "a sibling sharing the repository prefix was rewritten into a path that does "
+            "not exist — the reviewer would silently read nothing",
+        )
         self.assertIn(f"{dotted}/feature/", staged)
-        self.assertIn(f"{spaced}/notes.md", staged,
-                      "a sibling whose name continues with a SPACE was rewritten — a space is a legal "
-                      "path character, and this project's own checkout name contains one")
+        self.assertIn(
+            f"{spaced}/notes.md",
+            staged,
+            "a sibling whose name continues with a SPACE was rewritten — a space is a legal "
+            "path character, and this project's own checkout name contains one",
+        )
         self.assertNotIn(f"{tree}Tests", staged)
         self.assertNotIn(f"{tree} Helper", staged)
-        self.assertIn(f"The checkout is {tree}. Then stop.", staged,
-                      "a sentence-ending period left the root naming the LIVE checkout")
-        self.assertIn(f"Compare {tree}, then {tree}; and finally ({tree}) or \"{tree}\" here.", staged,
-                      "punctuation followed by whitespace is prose and must be rewritten")
-        self.assertIn(f"See `{tree}`. And \"{tree}\".", staged,
-                      "stacked closing punctuation left the root naming the LIVE checkout")
-        self.assertIn(f"/Volumes/backup{repo}/docs/plan.md", staged,
-                      "the root as a SUFFIX of a longer path was rewritten — a left boundary is "
-                      "required, not only a right one")
+        self.assertIn(
+            f"The checkout is {tree}. Then stop.",
+            staged,
+            "a sentence-ending period left the root naming the LIVE checkout",
+        )
+        self.assertIn(
+            f'Compare {tree}, then {tree}; and finally ({tree}) or "{tree}" here.',
+            staged,
+            "punctuation followed by whitespace is prose and must be rewritten",
+        )
+        self.assertIn(
+            f'See `{tree}`. And "{tree}".',
+            staged,
+            "stacked closing punctuation left the root naming the LIVE checkout",
+        )
+        self.assertIn(
+            f"/Volumes/backup{repo}/docs/plan.md",
+            staged,
+            "the root as a SUFFIX of a longer path was rewritten — a left boundary is "
+            "required, not only a right one",
+        )
         self.assertNotIn(f"/Volumes/backup{tree}", staged)
         self.assertNotIn(repo + ",", staged)
         self.assertNotIn("(" + repo, staged)
@@ -836,20 +942,29 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
         scratch = tempfile.mkdtemp(prefix="backslash-tmp-")
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
-        tree = os.path.join(scratch, "a\\1b", "tree")     # a literal backslash-one in the path
+        tree = os.path.join(
+            scratch, "a\\1b", "tree"
+        )  # a literal backslash-one in the path
 
-        result, tree_root = self.stage(repo, tree, f"Review {repo}/docs/planning/X_PLAN.md.\n" * 20)
+        result, tree_root = self.stage(
+            repo, tree, f"Review {repo}/docs/planning/X_PLAN.md.\n" * 20
+        )
 
         self.assertEqual(0, result.returncode, result.stderr)
         staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
-        self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged,
-                      "the backslash was expanded as a template escape instead of copied literally")
+        self.assertIn(
+            f"{tree}/docs/planning/X_PLAN.md",
+            staged,
+            "the backslash was expanded as a template escape instead of copied literally",
+        )
 
     def test_a_scratch_tree_BENEATH_the_repository_still_stages(self):
         repo = tempfile.mkdtemp(prefix="nested-repo-")
         self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
-        tree = os.path.join(repo, "tmp.scratch", "tree")      # TMPDIR inside the checkout
-        result, tree_root = self.stage(repo, tree, f"Review {repo}/docs/planning/X_PLAN.md.\n" * 20)
+        tree = os.path.join(repo, "tmp.scratch", "tree")  # TMPDIR inside the checkout
+        result, tree_root = self.stage(
+            repo, tree, f"Review {repo}/docs/planning/X_PLAN.md.\n" * 20
+        )
         self.assertEqual(0, result.returncode, result.stderr)
         staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
         self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged)

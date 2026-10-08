@@ -7,6 +7,8 @@ import re
 import subprocess
 import unittest
 
+import test_agy_recipe_gate as recipe  # the shared agy-unit declaration (COREDEV-2875)
+
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
@@ -913,26 +915,39 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
                 self.assertIn(flag, self.skill)
 
     def test_every_raw_agy_invocation_is_warned_or_superseded(self):
-        """A raw `agy --add-dir "$(pwd)"` may appear only where the surrounding text flags the risk."""
+        """A raw launch pointed at the working tree may appear only where the surrounding text flags the risk.
+
+        It reads the recipe gate's UNITS (COREDEV-2875 §3), never an exact substring: the checked form puts
+        `--model` first, so `agy --add-dir "$(pwd)"` would match nothing and this test would pass without
+        reading the example (codex r4). Any unit whose `--add-dir` names anything but the isolated
+        `"$TREE"` needs a warning marker in the twelve lines above it, and at least one such unit must be
+        read, so the test can never pass vacuously.
+        """
         lines = self.skill.split("\n")
-        for i, line in enumerate(lines):
-            if 'agy --add-dir "$(pwd)"' not in line:
-                continue
-            window = "\n".join(lines[max(0, i - 12) : i])
-            with self.subTest(line=i + 1):
-                self.assertTrue(
-                    any(
-                        k in window
-                        for k in (
-                            "SUPERSEDED",
-                            "can write",
-                            "NOT READ-ONLY",
-                            "isolated wrapper",
-                            "COREDEV-2607",
-                        )
-                    ),
-                    f"unwarned raw agy invocation at line {i + 1} — it points at the working tree",
-                )
+        found = 0
+        for number, unit in recipe.units("skills/gemini-review/SKILL.md", self.skill):
+            for value in re.findall(r'--add-dir[ =]("[^"]*"|\S+)', unit):
+                if value == '"$TREE"':
+                    continue
+                found += 1
+                window = "\n".join(lines[max(0, number - 13) : number - 1])
+                with self.subTest(line=number):
+                    self.assertTrue(
+                        any(
+                            k in window
+                            for k in (
+                                "SUPERSEDED",
+                                "can write",
+                                "NOT READ-ONLY",
+                                "isolated wrapper",
+                                "COREDEV-2607",
+                            )
+                        ),
+                        f"unwarned raw agy invocation at line {number} — its --add-dir is {value}",
+                    )
+        self.assertGreater(
+            found, 0, "no raw launch was read at all — the gate would pass vacuously"
+        )
 
     def test_the_wrapper_asserts_the_tree_is_unchanged(self):
         with open(self.WRAPPER, encoding="utf-8") as fh:
@@ -1039,24 +1054,36 @@ class DeepReviewP2Fixes(unittest.TestCase):
                 os.remove(produced)
 
     def test_agy_arm_default_is_the_model_its_own_comment_names(self):
-        """The comment described a switch the code never made, for every round this branch ran.
+        """The comment and the model the arm runs cannot disagree — now as a FAMILY (COREDEV-2875).
 
-        Binding the two to each other is the point: either can be edited, but they cannot disagree.
+        The comment once described a switch the code never made; then a pinned version went stale while
+        `agy models` listed two newer ones. So no version is pinned: the comment names the flash-high
+        family, and the resolver selects from exactly that family. Either can be edited; they cannot
+        drift apart.
         """
         source = _read("scripts/review/isolated-agy-review.sh")
-        match = re.search(r'^MODEL="\$\{MODEL:-([^}]+)\}"$', source, re.M)
-        self.assertIsNotNone(match, "isolated-agy-review.sh has no MODEL default line")
-        default = match.group(1)
+        resolver = _read("scripts/review/agy-newest-model.sh")
+        self.assertIsNone(
+            re.search(r'^MODEL="\$\{MODEL:-', source, re.MULTILINE),
+            "a pinned MODEL default is back",
+        )
         self.assertIn(
-            "Switched from gemini-3.1-pro to " + default,
+            'MODEL="$(bash "${SCRIPT_DIR}/agy-newest-model.sh")"',
             source,
-            f"the default is {default!r} but the rationale above it names a different model",
+            "the wrapper no longer resolves its model",
         )
-        self.assertNotEqual(
-            "gemini-3.1-pro-high",
-            default,
-            "this is the model the comment says failed to emit a parseable verdict in 5 of 6 rounds",
+        self.assertIn("# Reviewer model: the flash-high family.", source)
+        pattern = re.search(
+            r'^FLASH_HIGH = re\.compile\(r"([^"]+)"\)', resolver, re.MULTILINE
         )
+        assert pattern is not None, "the resolver's candidate pattern moved"
+        self.assertTrue(pattern.group(1).endswith("-flash-high"), pattern.group(1))
+        self.assertNotIn(
+            "pro",
+            pattern.group(1),
+            "the pro family failed 5 of 6 rounds — never a candidate",
+        )
+        self.assertIn('if not ident.endswith("-flash-high"):', resolver)
 
     def test_agy_preflight_ping_is_allocated_per_run(self):
         """A shared `/tmp/agy-ping.txt` lets a dead CLI read as healthy.
@@ -1109,29 +1136,45 @@ class DeepReviewP2Fixes(unittest.TestCase):
         self.assertIn('grep -qi pong "$PING"', wrapper)
 
     def test_gemini_skill_quotes_the_model_the_wrapper_actually_defaults_to(self):
-        """The skill QUOTES the wrapper's default line, so the two can drift silently.
+        """The skill describes the RULE the wrapper runs, and nothing pins a version (COREDEV-2875).
 
-        They did: the script moved to `gemini-3.6-flash-high` while the skill still quoted
-        `gemini-3.1-pro-high` and told operators to fall back by editing `settings.json` — a route the
-        wrapper makes inert, because it always passes `--model` (deep review, codex inline). Bind the
-        quotation to the source rather than pinning either to a literal.
+        It once quoted the wrapper's default line, so the two drifted: the script moved to a flash-high
+        model while the skill still quoted `gemini-3.1-pro-high` and told operators to fall back by
+        editing `settings.json` — a route the wrapper makes inert, because it always passes `--model`
+        (deep review, codex inline). Now there is no default to quote: the skill, the wrapper's comment
+        and CLAUDE.md name the rule, and a versioned flash-high literal in any of them fails here.
         """
         script = _read("scripts/review/isolated-agy-review.sh")
+        resolver = _read("scripts/review/agy-newest-model.sh")
         skill = _read("skills/gemini-review/SKILL.md")
-        match = re.search(r'^MODEL="\$\{MODEL:-([^}]+)\}"$', script, re.M)
-        self.assertIsNotNone(match)
-        default = match.group(1)
+        claude = _read("CLAUDE.md")
 
         self.assertIn(
-            'MODEL="${MODEL:-' + default + '}"',
+            "(binary `agy`, model: the newest `gemini-*-flash-high` that `agy models` lists)",
             skill,
-            "the skill quotes a different wrapper default than the wrapper has",
+            "the skill's frontmatter description must state the rule the wrapper runs",
         )
         self.assertIn(
-            "(binary `agy`, model `" + default + "`)",
+            "scripts/review/agy-newest-model.sh",
             skill,
-            "the skill's frontmatter description names a different model than the wrapper runs",
+            "the skill must name the resolver",
         )
+        self.assertIn(
+            "the newest `gemini-*-flash-high` that `agy models` lists", claude
+        )
+        versioned = re.compile(r"gemini-\d+(?:\.\d+)?-flash-high")
+        for name, text in (
+            ("the wrapper", script),
+            ("the resolver", resolver),
+            ("the gemini-review skill", skill),
+            ("CLAUDE.md", claude),
+        ):
+            with self.subTest(file=name):
+                self.assertEqual(
+                    [],
+                    versioned.findall(text),
+                    f"{name} pins a versioned flash-high model",
+                )
         self.assertNotIn(
             "temporarily edit settings.json and restore after",
             skill,
@@ -1488,6 +1531,25 @@ class COREDEV2780_TheEnforcedShellcheckGateMatchesTheDocumentedOne(unittest.Test
         """The specific omission this class was written for, named so a regression is legible."""
         self.assertIn("scripts/ci/*.sh", self._documented())
         self.assertIn("scripts/ci/*.sh", self._enforced())
+
+
+class COREDEV2875_CodexNamesNoModel(unittest.TestCase):
+    """The codex arm follows the operator's config; the skill pins no model (COREDEV-2875 §2.2, cell M6)."""
+
+    def test_codex_review_assigns_no_model_value_anywhere(self):
+        """A pin in a command goes stale silently: the skill pinned `gpt-6-astra`, then `gpt-6.1-sol`,
+        each after the config had moved on. Commands AND setup text are checked; prose that names the
+        keys without a value (`leave review_model unset`) passes."""
+        skill = _read("skills/codex-review/SKILL.md")
+        pins = re.findall(
+            r"\b(?:review_)?model\s*=\s*[\"']?[A-Za-z0-9][^\s`\"']*", skill
+        )
+        self.assertEqual(
+            [],
+            pins,
+            "codex-review assigns a model value; let ~/.codex/config.toml supply it",
+        )
+        self.assertIn("Leave `review_model` unset", skill)
 
 
 if __name__ == "__main__":
