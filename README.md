@@ -17,8 +17,8 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 - **Codex:** the skill pinned `gpt-6-astra` inline on `codex review` after the configured model had
   moved to `gpt-6.1-sol`. That is now corrected. The skill also shows how to read the model and effort
   a run actually used from its session record.
-- **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus 5.5 and Sonnet 5.5 default to `medium`
-  effort, so set a level explicitly for any review or gate session.
+- **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus, Sonnet and Haiku 5.5 default to `medium`
+  effort (Opus 4.7 to `xhigh`), so set a level explicitly for any review or gate session.
 
 ### v2.8.27
 
