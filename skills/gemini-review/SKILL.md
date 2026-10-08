@@ -13,17 +13,17 @@ description: Plan and debug review via the Antigravity CLI (binary `agy`, model 
 # "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
 # CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
 # An Edit(path) allow rule covers all built-in file-editing tools on that path, the Write tool included.
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Edit(.agy-prompt-*.md), Read
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(agy models), Edit(.agy-prompt-*.md), Read
 ---
 
 # Antigravity (`agy`) Review
 
 All plans and debugging sessions must be reviewed by the `agy` CLI before implementation. Non-negotiable — paired with `/codex-review`. **The canonical invocation is the namespaced `/unleashed-mail:gemini-review`** — the plugin registers its skills namespaced, so that form always resolves; the bare `/gemini-review` resolves only where the consumer workspace ships its own local copy (AGENT_CONTRACTS Cross-references; 2026-08-17 audit, AF-6). The `gemini` name is kept for muscle memory while the underlying CLI is Antigravity (Google retired the older `gemini` CLI in May 2026).
 
-| Trigger | When |
-|---------|------|
+| Trigger                           | When                       |
+| --------------------------------- | -------------------------- |
 | New plan or architecture decision | BEFORE any code is written |
-| Bug investigation or debugging | BEFORE proposing fixes |
+| Bug investigation or debugging    | BEFORE proposing fixes     |
 
 ## Scope and round hygiene (read before dispatching)
 
@@ -56,11 +56,11 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 ## Setup
 
-- **Tool:** Antigravity CLI binary `agy` — resolve via `$PATH` (typical install: `~/.local/bin/agy`). Current verified version: 1.0.1 (2026-05-23). Call it directly via Bash — do NOT use an MCP wrapper.
+- **Tool:** Antigravity CLI binary `agy` — resolve via `$PATH` (typical install: `~/.local/bin/agy`). Current verified version: 1.2.16 (2026-10-03, `agy --help` and `agy models` re-read). It now has an `--effort` flag (`low`…`max`) that the wrapper does NOT pass, so a wrapper round runs at the CLI's default effort (changing that changes how the gemini arm runs, so it is deferred to the guidance refresh, not made here; COREDEV-2872 records it). Call it directly via Bash — do NOT use an MCP wrapper.
 - **Auth:** OAuth-personal handled by the CLI's own login. Creds cached at `~/.gemini/oauth_creds.json` (the `~/.gemini/` dir is reused by Antigravity for backward compatibility). DO NOT set `GEMINI_API_KEY` or `GOOGLE_CLOUD_PROJECT` (user rejected Vertex 2026-04-20).
-- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success). Allocate a PER-RUN ping path — a shared `/tmp` file lets a preflight that dies before writing leave the PREVIOUS run's `pong` in place, so a dead CLI reads as healthy, and two concurrent preflights overwrite each other (deep review, P2): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"` — ONE granted command that allocates its own per-run ping path, hard-codes `-p "ping"`, and checks the path it allocated. It replaces `Bash(agy *)`, which let `agy` run OUTSIDE `isolated-agy-review.sh` even though this skill documents that agy has no read-only mode (deep review, P1). It greps `-qi pong` (**case-insensitive, and do not require the `!`** — across 3 measured runs agy answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let me know how I can help you today.`; a `Pong!`-exact check calls a healthy CLI unavailable ~1 run in 3). Any of those from a real terminal is valid. If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
-- **`--print-timeout` is REQUIRED for a real review.** `agy -p` defaults to `--print-timeout 5m0s`; a plan review that reads several files routinely exceeds it and dies with `Error: timeout waiting for response` (a ~36-byte transcript, exit 1). Always pass `agy --print-timeout 28m -p "Read and follow <the per-round prompt file>"` — the slim-argv form recommended below, NOT `-p "$(cat …)"`, which inlines the whole prompt into argv. **A healthy ping (`grep -qi pong`) plus a failed review means the invocation is wrong, NOT that the CLI is unavailable** — fix the flag and re-run; do not treat it as a reviewer-unavailable case. A tiny transcript is a *failure*, never a verdict, and never an APPROVE.
-- **Model selection — `--model` EXISTS; the short `-m` does not.** `agy --help` lists `--model  Model for the current CLI session`, and `agy models` lists the valid names. A session flag OVERRIDES the global default in `~/.gemini/settings.json` (`"model": { "name": "gemini-3.1-pro" }`), which governs only invocations that pass no flag. **The wrapper passes `--model` explicitly** (`MODEL="${MODEL:-gemini-3.6-flash-high}"` in `scripts/review/isolated-agy-review.sh`, overridable via the `MODEL` environment variable), so wrapper rounds run that model and NOT the settings.json one. This documentation previously claimed the flag was removed while the wrapper was passing it — one of the two had to be wrong, and it was this text (PR #63 review, gap 6). **A fallback must therefore go through `MODEL`, not settings.json** — editing the global setting cannot affect a wrapper round, because the wrapper always supplies `--model`. To fall back for one plan review, pass the model as the SIXTH OPERAND — not as a `MODEL=` prefix, which is a different command shape and does not match this skill's capture grant: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" <ticket> <round> <prompt> <plan> 1800 gemini-2.5-pro`, and check `agy models` for the current valid names. Verify what a bare `agy` would use with `cat ~/.gemini/settings.json | grep model`, but do not mistake that for what the gate ran. For debug review: NO fallback — fail the review rather than degrade.
+- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success). Allocate a PER-RUN ping path — a shared `/tmp` file lets a preflight that dies before writing leave the PREVIOUS run's `pong` in place, so a dead CLI reads as healthy, and two concurrent preflights overwrite each other (deep review, P2): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"` — ONE granted command that allocates its own per-run ping path, hard-codes `-p "ping"`, and checks the path it allocated. It replaces `Bash(agy *)`, which let `agy` run OUTSIDE `isolated-agy-review.sh` even though this skill documents that agy has no read-only mode (deep review, P1). It greps `-qi pong` (**case-insensitive, and do not require the `!`** — across 3 measured runs agy answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let me know how I can help you today.`; a `Pong!`-exact check calls a healthy CLI unavailable ~1 run in 3). Any of those from a real terminal is valid. If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the _user_ choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+- **`--print-timeout` is REQUIRED for a real review.** `agy -p` defaults to `--print-timeout 5m0s`; a plan review that reads several files routinely exceeds it and dies with `Error: timeout waiting for response` (a ~36-byte transcript, exit 1). Always pass `agy --print-timeout 28m -p "Read and follow <the per-round prompt file>"` — the slim-argv form recommended below, NOT `-p "$(cat …)"`, which inlines the whole prompt into argv. **A healthy ping (`grep -qi pong`) plus a failed review means the invocation is wrong, NOT that the CLI is unavailable** — fix the flag and re-run; do not treat it as a reviewer-unavailable case. A tiny transcript is a _failure_, never a verdict, and never an APPROVE.
+- **Model selection — `--model` EXISTS; the short `-m` does not.** `agy --help` lists `--model  Model for the current CLI session`, and `agy models` lists the valid names. A session flag OVERRIDES the global default in `~/.gemini/settings.json` (`"model": { "name": "gemini-3.1-pro" }`), which governs only invocations that pass no flag. **The wrapper passes `--model` explicitly** (`MODEL="${MODEL:-gemini-3.6-flash-high}"` in `scripts/review/isolated-agy-review.sh`, overridable via the `MODEL` environment variable), so wrapper rounds run that model and NOT the settings.json one. This documentation previously claimed the flag was removed while the wrapper was passing it — one of the two had to be wrong, and it was this text (PR #63 review, gap 6). **A fallback must therefore go through `MODEL`, not settings.json** — editing the global setting cannot affect a wrapper round, because the wrapper always supplies `--model`. To fall back for one plan review, pass the model as the SIXTH OPERAND — not as a `MODEL=` prefix, which is a different command shape and does not match this skill's capture grant: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" <ticket> <round> <prompt> <plan> 1800 <model>`. **Pick `<model>` from `agy models` at the time**: a currently listed `gemini-*-flash-high` other than the primary. `agy models` is granted EXACTLY in this skill's `allowed-tools`, so the fallback needs no extra permission prompt. It runs no prompt and reads no workspace, so it does not reopen the `Bash(agy *)` grant removed above, which let `agy` review outside the isolation wrapper (PR #106 review). Do **not** fall back to `gemini-3.1-pro-high`, which failed to emit a parseable verdict in 5 of 6 rounds (see the wrapper's `MODEL` comment). This text previously named `gemini-2.5-pro`, which `agy models` no longer lists (agy 1.2.16, 2026-10-03, COREDEV-2872). A dead name in a fallback fails exactly when the fallback is needed, so no model name is written here. Verify what a bare `agy` would use with `cat ~/.gemini/settings.json | grep model`, but do not mistake that for what the gate ran. For debug review: NO fallback — fail the review rather than degrade.
 - **NO `-o` flag.** Output is plaintext only.
 - **Workspace access — NOT persistent.** Each `agy -p` invocation is a fresh session. Either pass `--add-dir /absolute/path/to/workspace` on every invocation, OR use absolute paths in the prompt. The interactive `/add-dir` slash command (inside `agy -i` sessions) updates persistent state but doesn't affect `-p` runs.
 
@@ -74,18 +74,18 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 >
 > On 2026-07-29 a plan review **implemented the plan instead of reviewing it**: 6 shipped scripts
 > modified, 5 files created, including a stray `marketplace.json` at the repo root (COREDEV-2607). It
-> emitted no `VERDICT:` line so the gate failed closed — the *fortunate* failure mode — but the edits
+> emitted no `VERDICT:` line so the gate failed closed — the _fortunate_ failure mode — but the edits
 > persisted. The concurrent `codex` review only stayed trustworthy because it independently
 > re-anchored its citations to committed `HEAD`; nothing in the gate required that.
 >
 > **These flags were TESTED and none of them prevents writes. Do not re-try them:**
 >
-> | invocation | wrote the file? |
-> |---|---|
-> | `agy` (no flags) | **yes** |
-> | `agy --mode plan` | **yes** |
-> | `agy --sandbox` | **yes** |
-> | `agy --sandbox --mode plan` | **yes** |
+> | invocation                  | wrote the file? |
+> | --------------------------- | --------------- |
+> | `agy` (no flags)            | **yes**         |
+> | `agy --mode plan`           | **yes**         |
+> | `agy --sandbox`             | **yes**         |
+> | `agy --sandbox --mode plan` | **yes**         |
 >
 > All four exited 0. `--mode` is "agent execution mode (accept-edits, plan)" and `--sandbox` is
 > "terminal restrictions"; neither restricts file writes in print mode. This is the asymmetry with
@@ -96,7 +96,7 @@ Interface: `capture-gemini-review.sh <ticket> <round> <prompt-file> <plan> [time
 
 **`isolated-agy-review.sh` is the harness that entrypoint calls, not a command to run directly.** This
 skill's `allowed-tools` grants the capture wrapper and not the harness, so invoking the harness yourself
-prompts or is denied; and the plan is its *fourth* operand, so a hand-written three-argument call skips
+prompts or is denied; and the plan is its _fourth_ operand, so a hand-written three-argument call skips
 plan staging entirely and `agy` reviews the COMMITTED plan instead of the uncommitted edits that are the
 normal state during review iteration (PR #63 recheck, P2). Two recipes here documented that stale
 three-argument shape. Use the complete recipe under "Required invocation inputs" below; never derive or
@@ -136,11 +136,12 @@ exit 124 instead of `agy`'s diagnosable `Error: timeout waiting for response`.
 
 **Do not "correct" a recipe back to a smaller number.** This prose previously still described the
 retired 18m/1500s pair while the wrapper had already moved to 28m/1800s, so following it produced a
-wrapper cap *below* the print-timeout — killing live reviews at 25 minutes, the exact failure the
+wrapper cap _below_ the print-timeout — killing live reviews at 25 minutes, the exact failure the
 invariant exists to prevent (PR #63 review, gaps 10-12 and bot thread 4). If you change one value,
 re-check the other and the contract test that binds them.
 
 Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across four Codex + Gemini review rounds):
+
 - **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
 - **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` (agy's text-drip, codex) render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
 - **Sane PTY window size** — a fresh PTY in a non-TTY context reports `0x0`; the wrapper sets `TIOCSWINSZ` (inherits `COLUMNS`/`LINES`, else 80×24) so width-aware CLIs don't wrap to nothing or emit empty/garbled transcripts.
@@ -158,6 +159,7 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 - **Drain before close on every path** — the read loop drains on natural exit, and the cancellation (`SIGTERM`/`SIGHUP`) path drains the PTY again after reaping and before closing, so final diagnostics the CLI emits while handling the signal (and bytes buffered when `select` was interrupted) still reach `<out-path>`. Both drains are bounded (≤ 0.5 s).
 
 **Things that do NOT work from non-TTY context:**
+
 - `agy -p "..." > /tmp/out.txt` — 0 bytes
 - `agy -p "..." | tee /tmp/out.txt` — same
 - `script -q out.txt agy -p "..."` — errors `tcgetattr/ioctl: Operation not supported on socket`
@@ -171,6 +173,7 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 
 Put the full review/task spec in a PER-ROUND workspace markdown file — `.agy-prompt-${TICKET}r${ROUND}.md`, never a shared `.agy-prompt.md`, because two concurrent rounds sharing one prompt cross-wire prompt and transcript (deep review, P1) — then pass a short `-p` that points to it. Keeps argv small AND makes the prompt editable/version-controllable.
 
+```bash
 # 1. WRITE the prompt to the per-round workspace file with the **Write tool**, not a shell heredoc.
 #    This skill grants `Edit(.agy-prompt-*.md)` (the Edit-form rule pre-approves all built-in
 #    file-editing tools on that path, Write included; a Write-form rule is never consulted on
@@ -185,7 +188,6 @@ Put the full review/task spec in a PER-ROUND workspace markdown file — `.agy-p
 #          and provide architectural assessment.
 #          Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
 
-```bash
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
 # --print-timeout 28m: agy's own default is 5m and a real plan review blows past it (see above).
@@ -217,7 +219,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
 The drip animation renders to a real TTY directly. Read the output in your terminal; do NOT pipe to a file (the drip cannot capture through a pipe — that's the whole reason the PTY wrapper exists for non-TTY contexts).
 
 > **Even here, `agy` can write to the workspace** (COREDEV-2607). Interactively that is at least
-> *visible* — you are watching it — but for anything gate-bearing prefer the isolated wrapper, and
+> _visible_ — you are watching it — but for anything gate-bearing prefer the isolated wrapper, and
 > check `git status` afterwards either way.
 
 ```bash
@@ -237,6 +239,7 @@ agy -i "Review the v3 plan and continue the discussion"
 ### Interactive slash commands (require `agy -i` real TTY)
 
 Inside an `agy -i` session you can use:
+
 - `/goal` — long-running task; tells the agent to be extra thorough and not stop until the goal is achieved.
 - `/schedule` — recurring/timed instruction or one-time wake-up timer.
 - `/grill-me` — interactive interview where agy asks YOU questions to clarify design.
@@ -246,24 +249,26 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 
 ## Key flags (`agy --help`)
 
-| Flag | Purpose |
-|------|---------|
-| `-p` / `--print` / `--prompt` | Non-interactive single prompt |
-| `-i` / `--prompt-interactive` | Run initial prompt and stay interactive |
-| `-c` / `--continue` | Resume the most recent conversation |
-| `--conversation <ID>` | Resume specific conversation by ID |
-| `--add-dir <path>` | Add workspace directory (repeatable, per-invocation) |
-| `--print-timeout` | Print-mode wait timeout (default 5m) |
-| `--sandbox` | Run with terminal restrictions enabled |
-| `--dangerously-skip-permissions` | Auto-approve all tool permission requests |
+| Flag                             | Purpose                                              |
+| -------------------------------- | ---------------------------------------------------- |
+| `-p` / `--print` / `--prompt`    | Non-interactive single prompt                        |
+| `-i` / `--prompt-interactive`    | Run initial prompt and stay interactive              |
+| `-c` / `--continue`              | Resume the most recent conversation                  |
+| `--conversation <ID>`            | Resume specific conversation by ID                   |
+| `--add-dir <path>`               | Add workspace directory (repeatable, per-invocation) |
+| `--print-timeout`                | Print-mode wait timeout (default 5m)                 |
+| `--sandbox`                      | Run with terminal restrictions enabled               |
+| `--dangerously-skip-permissions` | Auto-approve all tool permission requests            |
 
 **Removed/changed since the old gemini-cli:**
+
 - `--model` → supported (session override; `-m` short form is NOT). `~/.gemini/settings.json` is the default when the flag is absent
 - `-o / --output-format` → removed (always plaintext)
 - `--include-directories` → renamed `--add-dir`
 
 ## Workflow
 
+<!-- prettier-ignore -->
 1. **Smoke-test:** `agy -p "ping"` → expect a `pong` (case-insensitive; the `!` is not guaranteed). If empty, re-login interactively.
 2. **Check the model the GATE will use:** the wrapper passes `--model` explicitly, so read `MODEL=` in `scripts/review/isolated-agy-review.sh` (or your `MODEL` override) — currently `gemini-3.6-flash-high`. `~/.gemini/settings.json` governs only a bare `agy` invocation.
 3. **Write the task** to a PER-ROUND workspace prompt file (`.agy-prompt-${TICKET}r${ROUND}.md`) with all context including absolute paths to any files agy must read.
@@ -315,7 +320,7 @@ If `agy -p` is failing, check in order:
 
 The two system prompts below are written for an **interactive** session (`agy -i`): they invite
 clarifying questions and end with "Start by asking me…". The automated gate feeds them to a **one-shot**
-`agy -p` through `pty-capture.py` — a reviewer following them verbatim replies with a *counter-question*,
+`agy -p` through `pty-capture.py` — a reviewer following them verbatim replies with a _counter-question_,
 producing a transcript `/unleashed-mail:review-synthesis` cannot parse, which burns a gate round.
 
 **So when building the per-round prompt file for the one-shot path, prepend this preamble** (it overrides the
@@ -323,6 +328,7 @@ ask-first/opener instructions below) and append the target path:
 
 ```markdown
 ONE-SHOT MODE — you have exactly ONE response; there is no follow-up turn.
+
 - Do NOT ask clarifying questions and do NOT ask what to review. Review the artifact at the absolute
   path given below, right now, using only what you can read from disk.
 - If something is genuinely unresolvable from the files, state the assumption you made and continue —
@@ -344,6 +350,7 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > When I share a development plan, feature spec, architecture document, or technical approach, review and discuss the following aspects conversationally:
 >
 > **Architecture & Design**
+>
 > - Overall system architecture and component relationships
 > - Design pattern selection and appropriateness
 > - Separation of concerns and modularity
@@ -351,12 +358,14 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > - Data flow and state management approach
 >
 > **Framework & Technology Choices**
+>
 > - Framework suitability for the stated requirements
 > - Dependency evaluation (maturity, maintenance status, licensing)
 > - Compatibility between chosen technologies
 > - Performance implications of the tech stack
 >
 > **Planning & Requirements**
+>
 > - Completeness of requirements and acceptance criteria
 > - Edge cases, error scenarios, and failure modes not accounted for
 > - Dependency mapping and sequencing of work
@@ -364,6 +373,7 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > - Scope clarity — anything ambiguous or underspecified
 >
 > **Code Quality & Standards**
+>
 > - Adherence to modern best practices as documented in current official documentation (always reference Context7 for the latest documentation on any frameworks, libraries, or tools being discussed)
 > - API design and contract clarity
 > - Security considerations and potential vulnerabilities
@@ -371,12 +381,14 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > - Accessibility and compliance requirements where applicable
 >
 > **Developer Experience & Maintainability**
+>
 > - Naming conventions and organizational structure
 > - Documentation needs
 > - CI/CD and deployment considerations
 > - Logging, monitoring, and observability planning
 >
 > Important guidelines:
+>
 > - Always consult and reference Context7 for the most current documentation, best practices, and API references for any technology being discussed. Do not rely on potentially outdated training data when current docs are available.
 > - Be conversational — ask clarifying questions, challenge assumptions, and propose alternatives through discussion rather than code.
 > - Flag risks and concerns with clear reasoning, not just warnings.
@@ -398,35 +410,41 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > When I share a bug report, error log, unexpected behavior, or code snippet for investigation, work through the following conversationally:
 >
 > **Issue Characterization**
+>
 > - Clarify the expected vs. actual behavior
 > - Identify whether the issue is deterministic or intermittent
 > - Establish the scope — is this isolated or potentially systemic
 > - Determine when the issue was introduced if possible (recent change, always existed, environmental)
 >
 > **Codebase Analysis**
+>
 > - Trace the execution path related to the issue
 > - Identify relevant components, modules, and their interactions
 > - Examine data flow, state transitions, and side effects along the path
 > - Review error handling and boundary conditions in the affected area
 >
 > **Root Cause Investigation**
+>
 > - Develop and evaluate hypotheses for the root cause
 > - Identify the most likely cause and explain the reasoning
 > - Consider secondary or contributing factors
 > - Check for related issues that may share the same root cause
 >
 > **Context & Best Practices Validation**
+>
 > - Always reference Context7 for the latest documentation on any frameworks, libraries, or APIs involved in the issue. Verify that current usage aligns with documented behavior and best practices — do not rely on potentially outdated training data.
 > - Identify if the issue stems from deprecated patterns, misused APIs, or deviation from documented conventions.
 > - Note if the relevant library or framework version has known issues or breaking changes.
 >
 > **Fix Strategy & Prevention**
+>
 > - Describe the conceptual approach to fixing the issue (without writing the fix)
 > - Identify what areas of the codebase would need to change
 > - Suggest what tests should be added or updated to cover this case
 > - Recommend any preventive measures to avoid similar issues (architectural, process, or tooling)
 >
 > Important guidelines:
+>
 > - Always consult and reference Context7 for current documentation and known issues related to any technology involved. This is critical for ensuring any diagnosis accounts for the actual documented behavior of dependencies.
 > - Be conversational — walk through the investigation like a pair debugging session. Ask me questions about behavior, environment, and reproduction steps.
 > - Think out loud — share your reasoning as you narrow down hypotheses so I can follow and contribute.
