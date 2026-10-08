@@ -498,11 +498,11 @@ Consequence for tier selection: it is a _capability_ decision, made on the assum
 is run at an appropriate effort. If a maintainer needs a guaranteed minimum, it must be set on the
 session (or via `CLAUDE_CODE_EFFORT_LEVEL`), not requested from the plugin.
 
-**What an unset session runs at (Claude Code docs, model-config, re-read 2026-10-03; COREDEV-2872).**
-With nothing set, **Opus 5.5 and Sonnet 5.5 default to `medium`**, not `high`. Every other
-effort-capable model defaults to `high`. The plugin's agents and skills omit `effort:`, so in a 5.5
-session that sets no level they run at `medium` too, including the review agents and the gate. The
-session level is resolved in this order:
+**What an unset session runs at (Claude Code docs, model-config, re-read 2026-10-08; COREDEV-2872).**
+With nothing set, **Opus 5.5, Sonnet 5.5 and Haiku 5.5 default to `medium`**, and Opus 4.7 to `xhigh`.
+Every other effort-capable model defaults to `high`. An organization's default level replaces that
+default for the organization's default model. The plugin's agents and skills omit `effort:`, so a 5.5
+session that sets no level runs them at `medium`, review agents and gate included. Resolution order:
 
 1. an explicit choice: `CLAUDE_CODE_EFFORT_LEVEL`, launching with `--effort`, or `/effort`;
 2. saved settings: the per-model level or `effortLevel`;

@@ -424,9 +424,9 @@
       "destination": {
         "line": 16,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Edit(.agy-prompt-*.md), Read"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(agy models), Edit(.agy-prompt-*.md), Read"
         ],
-        "payloadSha256": "3f07e0bd106eb9ad2bbb7073b40fc9edbd75178c1fa3d0fdd71aabd7d17f4471"
+        "payloadSha256": "15b3ff082be3c696afd9e326122300d46c1a0861fb48469d3b8a726f78329703"
       },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,
