@@ -1,6 +1,6 @@
 # COREDEV-2875 — Model currency: every caller in the plugin uses the newest model
 
-**Status:** Planning, revision 9. Gate round 8: agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking).
+**Status:** Planning, revision 10. Gate round 9: agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking, 2 notes).
 **Ticket:** COREDEV-2875 (parent Epic COREDEV-2485). **Branch / worktree:**
 `feat/COREDEV-2875-model-currency`, `.claude/worktrees/model-currency`. It is cut from PR #107's head
 (`692576a`), which already carries PR #106, because both PRs edit the same files. The PR for this
@@ -187,6 +187,37 @@ branch opens against `main` once those two merge.
 >   * 6 non-launch probes: four non-session commands, the prose span `agy -p`, and a path ending in
 >     `agy`.
 >   * The `:226` comment's exclusion.
+>
+> **r9** `f72408a` (revision 9): agy `APPROVE`, codex `REQUEST_CHANGES`.
+> 1. **(P2) The matcher's `--help` exemption scanned the WHOLE rest of the line.** So prompt text,
+>    a comment, or a second command exempted a real launch. Codex executed all four:
+>    * `agy -p "Explain --help in agy"`;
+>    * `agy -p ping # check --help later`;
+>    * `agy -p ping && agy --help`;
+>    * `agy --add-dir "$(pwd)" -p "Explain --help in agy"`.
+>
+>    The command-word positions also missed `env agy`, `MODEL=old agy` and `command agy`.
+>
+> Notes:
+> * Delete §2.1's obsolete quoted-prompt definition and its stale "table below".
+> * Say that M10 removes EVERY qualifying warning marker.
+> * Say how M11 keeps listing calls apart from review launches.
+>
+> **Revision 10 tokenizes instead of regex-matching.** This is the fourth round of edge cases in one
+> regex matcher. A regex over shell text cannot see quoting, comments or command boundaries, so the
+> class is fixed by Python's `shlex`, which can.
+> * An invocation starts at EVERY token whose basename is `agy`. That covers `env`, `VAR=`, `command`,
+>   `timeout`, `--` and absolute paths, with no wrapper list.
+> * The only exemption is a CLOSED list of presence probes (`command -v`/`-V`, `which`, `type`, `hash`).
+> * The non-session test reads only the invocation's FIRST argument.
+> * Executed (`launch-scan.py`, rev 10; rev 9's copy kept beside it):
+>   * the same 14 lines;
+>   * 0 untokenizable texts, once trailing-backslash continuations are joined as the shell does;
+>   * all 33 controls (21 launch, 12 non-launch), including codex's seven, plus the `:226` exclusion.
+> * Without the probe rule, `preflight-agy.sh:22` (`command -v agy`) is reported. That was observed,
+>   and it serves as the probe rule's deletion control.
+> * An instrument of MINE was wrong this round. A `git grep -E` for `command -v … agy` found nothing,
+>   because POSIX ERE has no `\s`. The tokenizer found it.
 
 ## 0. The direction, and the two decisions behind it
 
@@ -398,30 +429,38 @@ over `skills`, `agents`, `scripts`, `hooks`, `CLAUDE.md` and `AGENT_CONTRACTS.md
 git grep -nIE '(^|[`"( ]|-- )agy( +-[-a-z]|  *models)'
 ```
 
-On `8716979` it returns 44 lines. A narrower scan, for an agy LAUNCH in any mode, returns exactly the
-ten launch sites in the table below plus the four historical demonstrations (`SKILL.md:163–165`,
-`:168`). A launch is `agy` with `-p`/`--print`/`--prompt` or `-i`/`--prompt-interactive` and a quoted
-prompt, or with `-c`/`--continue`/`--conversation`.
+On `8716979` it returns 44 lines.
 
-**The gates' launch definition depends on POSITION** (executed: `launch-scan.py`).
-* **Command lines use the INVERTED rule.** Command lines are the non-comment lines of fenced markdown
-  blocks, and the non-comment lines of other files.
-  * `agy` as a command word is a session launch UNLESS its first argument is one of agy's non-session
-    subcommands, or it carries `--help`, `-h` or `--version`.
+**The gates' launch definition is TOKENIZED** (executed: `~/.claude/handoffs/coredev-2875/launch-scan.py`).
+* **What is read.** There are two kinds of text:
+  * COMMAND lines: the non-comment lines of fenced markdown blocks, and the non-comment lines of other
+    files. They are joined across trailing-backslash continuations, as the shell joins them.
+  * INLINE code spans, taken as they are.
+* **Tokenized with `shlex`** (POSIX mode, `#` comments, punctuation `();<>|&`), so quoting, comments and
+  `;`/`&&`/`||`/`|` boundaries are real. A text that contains the word `agy` and cannot be tokenized
+  FAILS the gate, and the message names the line.
+* **An invocation starts at EVERY token whose basename is `agy`.** It does not matter where the token
+  sits, so `env agy`, `MODEL=x agy`, `command agy`, `timeout 5 agy`, `-- agy` and `/path/to/agy` need
+  no wrapper list. Its arguments run to the next operator token.
+  * The one exception is a CLOSED list of presence probes immediately before the token: `command -v`,
+    `command -V`, `which`, `type`, `hash`.
+  * Anything else that names agy is read as running it, which fails closed.
+* **On a command line,** an invocation is a session launch UNLESS its FIRST argument is one of agy's
+  non-session subcommands, or `--help`, `-h` or `--version`.
   * The subcommands, from `agy --help` (1.2.16): `agent`, `agents`, `changelog`, `help`, `install`,
     `mcp`, `mic-serve`, `models`, `plugin`, `plugins`, `remote-control`, `update`.
-  * A command word is `agy` at line start, or after `;`, `&`, `|`, `(`, `$(`, `--`, `exec` or
-    `timeout N`.
-  * A bare `agy`, or a flags-only `agy --add-dir d`, is a launch: it opens an interactive session on
-    agy's global setting.
-* **Inline code spans use a POSITIVE rule,** because prose names flags inline ("`agy -p` writes 0
-  bytes"). A launch is `agy`, any flags, then either:
-  * `-p`/`--print`/`--prompt` or `-i`/`--prompt-interactive` WITH an argument, quoted or not; or
-  * `-c`/`--continue`/`--conversation`.
+  * A bare `agy`, or a flags-only `agy --add-dir d`, is a launch: it opens an interactive session.
+  * A `--help` anywhere later (in a prompt, a comment, or a following command) exempts nothing.
+* **In an inline span,** where prose names flags ("`agy -p` writes 0 bytes"), an invocation is a launch
+  if its arguments contain either:
+  * a prompt mode (`-p`/`--print`/`--prompt`/`-i`/`--prompt-interactive`) followed by any token; or
+  * a continuation flag (`-c`/`--continue`/`--conversation`).
 
-  Flags may precede either form, so `agy --add-dir dir -c` is a launch (codex r8).
-* **Executed on the shipped tree,** it returns the same 14 lines: the 10 launch sites and the 4
-  historical demonstrations. The fenced comment at `SKILL.md:226` is excluded.
+  Flags may precede either.
+* **Executed on the shipped tree,** it returns exactly 14 lines: the ten launch sites in the table
+  above, and the four historical demonstrations (`SKILL.md:163–165`, `:168`). Each hit is reported at
+  the physical line that holds `agy`. No text is untokenizable. The fenced comment at `SKILL.md:226` is
+  excluded, and so is `command -v agy` at `preflight-agy.sh:22`.
 
 **The checked form** is `MODEL="$(bash …/agy-newest-model.sh)" && agy --model "$MODEL" …`. A failed
 command substitution does not stop the command it is embedded in: codex reproduced `agy --model "$(…)"`
@@ -653,6 +692,8 @@ note links to the model-config page for any other model.
   * It instead recognizes an agy launch (§2.1's definition) whose arguments include `--add-dir "$(pwd)"`
     in ANY position.
   * It asserts that it found at least one such launch, so it can never pass vacuously.
+* **The gates share §2.1's tokenized launch definition, and they fail on an untokenizable text** that
+  names agy.
 * **A recipe gate** scans shipped markdown and script docstrings for an agy LAUNCH in any mode (§2.1's
   definition). Each one must use the checked form, or appear in a closed exemption list of historical
   demonstrations. That list holds `SKILL.md:163–165` and `:168`, keyed by exact line text with a
@@ -670,11 +711,11 @@ note links to the model-config page for any other model.
 | M4 | production runs the resolved model, and records it beside the transcript | `MODEL` is unset by the test (not merely operand six omitted), and the real capture entrypoint stops passing `--model <newest>`, or stops writing the `.model` sidecar |
 | M5 | no concrete id ships in frontmatter | direct field tests: a concrete id or `default` is rejected WITH the model-specific message, for an agent and for a skill. Any integration test asserts that model-specific message, never merely a non-zero exit, because §11's tier parser already rejects a concrete agent id incidentally (F2) |
 | M6 | the review skills name no pinned model | a `-c review_model=…` command or the `-c model=…` setup example returns to codex-review; a versioned flash-high literal returns to the wrapper, the resolver, any line of the gemini-review skill, or `CLAUDE.md`; the `settings.json` assertion still holds |
-| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; a NEW bare launch is added to a skill, once each as `agy -p "…"`, `agy -p ping` (unquoted), `agy -i $PROMPT` (unquoted), `agy -c`, the flag-prefixed `agy --add-dir d -c` / `--continue` / `--conversation 123` (inline), and a bare `agy` and a flags-only `agy --add-dir d` on a fenced command line; NON-launches stay unflagged (`agy models`, `agy --version`, the prose span `agy -p`), so the gate cannot pass by flagging everything; the checked form's `&&` becomes `;` (the executed recipe then launches agy after a failed resolution) |
+| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; a NEW bare launch is added to a skill in each of these forms (each must fail the gate): <br>• `agy -p "…"`, `agy -p ping`, `agy -i $PROMPT` and `agy -c`; <br>• the flag-prefixed `agy --add-dir d -c` / `--continue` / `--conversation 123`; <br>• a bare `agy` and a flags-only `agy --add-dir d` on a fenced command line; <br>• codex r9's four `--help` hiders: a prompt containing `--help`, a trailing `# … --help` comment, `… && agy --help`, and `agy --add-dir "$(pwd)" -p "… --help …"`; <br>• the prefixed forms `env agy -p ping`, `MODEL=old agy -p ping` and `command agy -p ping`; <br>• an untokenizable fenced line naming agy. <br>NON-launches stay unflagged, so the gate cannot pass by flagging everything: `agy models`, `agy --version`, `command -v agy`, `which agy`, and the prose span `agy -p`. Separately, the checked form's `&&` becomes `;`, and the executed recipe then launches agy after a failed resolution |
 | M8 | every model id is one token before launch | TWO mutations, one per check. **Capture's early operand-six check removed:** isolated's later check still refuses the round, so only the NO-LEAF-CONSUMED assertion catches it — the bad operand now allocates a transcript leaf. **Isolated's check removed** (the environment `MODEL` path, which capture never sees): a newline override and a `-`-led override then reach the stub agy's argv (its call log is non-empty) and write a multi-line `.model`. Each asserts the REASON — the grammar message, no leaf, an empty call log, and no `.model` — not merely a failure |
 | M9 | a silent reviewer is still MISSING | the model is written INTO the transcript (for example, revision 4's banner is restored). With the rest of the evidence valid, `persist-verdict.sh` then ACCEPTS `gemini=APPROVE` instead of dying with its missing-transcript message, and the direct `review-verdict.py write` accepts it instead of refusing it as EMPTY |
-| M10 | the raw-checkout warning gate reads every raw launch | the warning above `SKILL.md:229` is removed with the checked form's flag order in place (the test must fail); an UNWARNED `agy --add-dir "$(pwd)" -p ping` (unquoted) is added, and an unwarned flags-only `agy --add-dir "$(pwd)"` on a fenced command line (an interactive session) — each must fail the test; the test's matcher reverts to the exact substring (its found-at-least-one assertion must fail) |
-| M11 | the `.model` record is created exclusively, never through an existing entry | each mutation has its own measured outcome (macOS, 2026-10-08; `oexcl-probe.py`, `noclobber-probe.sh`). **A `set -C` redirect writer** (bash 3.2) refuses the regular file and both symlinks, and HANGS on the FIFO, so only the FIFO case catches it; the test's timeout makes the hang a failure. bash(1) documents the rule for every version: noclobber refuses only an existing REGULAR file. **`O_EXCL` dropped**, `O_NOFOLLOW` kept: the regular file is written over, the FIFO case hangs, and both symlink cases stay refused (ELOOP). **Both flags dropped:** the symlink also writes through to its target, and the dangling one creates it. **`O_NOFOLLOW` dropped alone** is an EQUIVALENT mutant (all four still refused with EEXIST). It is kept for parity with `bind-prompt.py`, and it has no separate control |
+| M10 | the raw-checkout warning gate reads every raw launch | EVERY qualifying warning marker (`SUPERSEDED`, `can write`, `NOT READ-ONLY`, `isolated wrapper`, `COREDEV-2607`) is removed from the window above `SKILL.md:229`, with the checked form's flag order in place, and the test must fail. Each of these is added UNWARNED, and each must fail the test: `agy --add-dir "$(pwd)" -p ping` (unquoted); a flags-only `agy --add-dir "$(pwd)"` on a fenced command line; `agy --add-dir "$(pwd)" -p "… --help …"` (codex r9); `env agy --add-dir "$(pwd)" -p x`. Separately, the test's matcher reverts to the exact substring, and its found-at-least-one assertion must fail |
+| M11 | the `.model` record is created exclusively, never through an existing entry | each mutation has its own measured outcome (macOS, 2026-10-08; `oexcl-probe.py`, `noclobber-probe.sh`). **A `set -C` redirect writer** (bash 3.2) refuses the regular file and both symlinks, and HANGS on the FIFO, so only the FIFO case catches it; the test's timeout makes the hang a failure. bash(1) documents the rule for every version: noclobber refuses only an existing REGULAR file. **`O_EXCL` dropped**, `O_NOFOLLOW` kept: the regular file is written over, the FIFO case hangs, and both symlink cases stay refused (ELOOP). **Both flags dropped:** the symlink also writes through to its target, and the dangling one creates it. **`O_NOFOLLOW` dropped alone** is an EQUIVALENT mutant (all four still refused with EEXIST). It is kept for parity with `bind-prompt.py`, and it has no separate control. These cases run with an explicit `MODEL`, so the stub agy's call log holds only review launches and no listing call. "Nothing launched" therefore means an EMPTY log |
 
 ## 5. Rollout
 
@@ -697,6 +738,9 @@ note links to the model-config page for any other model.
   alias in shipped frontmatter can control.
 * **The listing itself.** The resolver trusts the listing `agy models` returns. If agy's catalog lags
   Google's, so does the selected model.
+* **Indirection.** The tokenized gates read the text as written. An agy launched through a variable
+  (`$AGY`), `eval`, an alias or a shell function is not seen. Behavioural tests, not the text gate, cover
+  the shipped scripts' real launches (M4, M7).
 * **Inline flags-only spans.** The gates read an inline code span as a launch only when it names a
   session mode (§2.1). A prose span such as "`agy --add-dir d`" is not read as a launch, because inline
   code in these documents names flags far more often than it gives commands. Fenced command lines
