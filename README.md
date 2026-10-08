@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.29
+# UnleashedMail — Claude Code Plugin v2.8.30
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -8,6 +8,16 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ## What's New
 
+### v2.8.30
+
+**Cell 11's contract mutants are now generated from the registry, so the two cannot drift.** The
+registry said cell 11 generated one mutant per case, but 138 hand-written recipes built them instead.
+11 asserted diagnostics, 28 mutants and 19 operators no longer matched the case they claimed to run.
+A grammar-strict generator now builds all 222 structural mutants from each case's `op`, `target`
+and `payload`, and proves each one: the declared value is there, and nothing else changed, placement
+included. The 8 raw-text mutants are written verbatim over their pinned spans. actionlint accepts
+every mutant, raw text included. The resolver family runs as its 24 executions through the real
+boundary. Two `local-divergence` cases that had never run their declared op now run it.
 ### v2.8.29
 
 **The agents' guidance is corrected against primary sources (COREDEV-2873).**

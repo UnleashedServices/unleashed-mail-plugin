@@ -19,6 +19,7 @@ message proves reachability, not discrimination.
 
 from __future__ import annotations
 
+import ast
 import copy
 import errno
 import hashlib
@@ -34,6 +35,7 @@ import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -74,10 +76,9 @@ MODULE_PATH = Path(__file__).resolve()
 CANARY_CONTEXT = "trunk-check-push"
 CANARY_PATH = REPO / ".github/workflows/trunk-check-push.yml"
 HARNESS_PATH = REPO / ".github/workflows/trunk-parity-harness.yml"
-# Executed by Cell16_TheCanaryMeetsItsWholeContract against INJECTED ruleset observations — the
-# `remote_relation` kind mutates the observation, never the live ruleset.
 # Executed by C6AndC6aGuardsExecuteAgainstFixtureTrees, which runs the SHIPPED guard bodies against a
-# temporary tree rather than deferring them to a real CI run.
+# temporary tree rather than deferring them to a real CI run. Cell 11 holds this set EQUAL to the
+# registry's `fixture` class, both ways (COREDEV-2869).
 FIXTURE_EXECUTED_CASES = {
     "C6.no-repository-supplied-launcher/trunk-bin",
     "C6.no-repository-supplied-launcher/tools-trunk",
@@ -89,22 +90,11 @@ FIXTURE_EXECUTED_CASES = {
     "C6.no-repository-supplied-launcher/user-trunk-yaml",
     "C6a.resolver-pinned-by-digest/edit-resolver",
 }
-# Raw-TEXT mutants (codex, r59): a YAML 1.1 boolean synonym is a property of the BYTES, so a mutation of an
-# already-parsed dictionary cannot express it. Executed per entry by `RawYamlSynonymsAreNotThePinnedBooleans`.
-RAW_YAML_CASES = {
-    "C0.raw-text-canonical/tag-bool-yes",
-    "C0.raw-text-canonical/tag-int-underscore",
-    "C0.raw-text-canonical/respell-plus-15",
-    "C0.raw-text-canonical/respell-TRUE",
-    "C3.runner-and-timeout-pinned/yaml-11-octal-017",
-    "C4.save-annotations-required/yaml-11-synonym-yes",
-    "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
-    "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
-}
+# Executed by Cell16_TheCanaryMeetsItsWholeContract against an INJECTED ruleset observation — the
+# remote side mutates the observation, never the live ruleset. The two `local-divergence` cases were
+# listed here too, and their declared LOCAL op never ran; they are structural now (COREDEV-2869).
 CELL16_INJECTED_CASES = {
     "C16.canary-not-required/present",
-    "C16.canary-branches-equal-resolved-target-set/local-divergence",
-    "C2.branches-equal-resolved-target-set/local-divergence",
 }
 EXPECTED_STEPS = [
     "checkout",
@@ -275,6 +265,21 @@ def _recorded_remote_halves():
         ) from error
 
 
+# The obligation kinds the registry may declare (2780 plan, §1's kind table). A CLOSED set: a misspelt
+# kind would otherwise fall out of every kind-keyed branch without failing anything (PR #108, codex).
+OBLIGATION_KINDS = frozenset(
+    {"yaml", "repo_fixture", "content_digest", "remote_relation", "raw_text"}
+)
+
+# The two target-set diagnostics, as the registry's `target_set_resolution` family declares them. The
+# checker emits `D: detail`; cell 11 matches `D` (COREDEV-2869).
+TARGET_SET_MISMATCH = (
+    "target set mismatch: workflow branches != resolved ruleset target set"
+)
+TARGET_SET_UNRESOLVABLE = (
+    "target set unresolvable: refusing to compare an unenumerable pattern"
+)
+
 # Each entry's own record of its `branches:` in the committed evidence, keyed by registry entry id.
 _RECORDED_BRANCHES_KEY = {
     "required": "requiredWorkflowBranches",
@@ -282,12 +287,19 @@ _RECORDED_BRANCHES_KEY = {
 }
 
 
+def _branches(workflow: dict, entry: str):
+    """One workflow's `branches:` for its entry: `pull_request` for `required`, `push` for `canary`.
+    The shipped read and the mutated read share it (COREDEV-2869)."""
+    event = "push" if entry == "canary" else "pull_request"
+    return _on(workflow)[event]["branches"]
+
+
 def _shipped_branches() -> dict[str, set[str]]:
     """Each entry's `branches:`, keyed by registry entry id."""
     canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
     return {
-        "required": set(_on(_load_workflow())["pull_request"]["branches"]),
-        "canary": set(_on(canary)["push"]["branches"]),
+        "required": set(_branches(_load_workflow(), "required")),
+        "canary": set(_branches(canary, "canary")),
     }
 
 
@@ -326,10 +338,12 @@ def _target_set_problems(
     """
     if branches == resolved:
         return []
+    # `D: detail` (COREDEV-2869): `D` is the registry's family diagnostic, and the detail carries the
+    # entry and both sets, which a registry string cannot.
     return [
         (
-            f"{entry}: `branches:` {sorted(branches)} is not the ruleset's resolved target set "
-            f"{sorted(resolved)}"
+            f"{TARGET_SET_MISMATCH}: {entry} branches {sorted(branches)}, "
+            f"resolved {sorted(resolved)}"
         )
     ]
 
@@ -800,9 +814,7 @@ def _resolve_target_set() -> set[str] | None:
 def _resolve_ref_name(ref_name: dict, default_branch: str) -> set[str]:
     def expand(entry: str) -> str:
         if entry == "~ALL" or any(ch in entry for ch in "*?["):
-            raise ValueError(
-                f"target set unresolvable: refusing to enumerate {entry!r}"
-            )
+            raise ValueError(f"{TARGET_SET_UNRESOLVABLE}: {entry!r}")
         if entry == "~DEFAULT_BRANCH":
             return default_branch
         return entry.removeprefix("refs/heads/")
@@ -2944,20 +2956,6 @@ class Cell15_TargetSetResolution(unittest.TestCase):
             ),
         )
 
-    def test_patterns_and_all_fail_closed_on_both_sides(self):
-        for side in ("include", "exclude"):
-            for payload in (
-                "~ALL",
-                "refs/heads/a*",
-                "refs/heads/mai?",
-                "refs/heads/mai[a-z]",
-            ):
-                with self.subTest(side=side, payload=payload):
-                    ref_name = {"include": ["refs/heads/main"], "exclude": []}
-                    ref_name[side] = ref_name[side] + [payload]
-                    with self.assertRaises(ValueError):
-                        _resolve_ref_name(ref_name, "main")
-
     def test_the_shipped_workflow_matches_the_live_resolved_set(self):
         self.assertEqual([], _target_set_results(self)["required"])
 
@@ -2978,7 +2976,7 @@ class Cell15_TargetSetResolution(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.assertEqual(1, len(problems))
                 self.assertIn("sentinel-coredev-2869", problems[0])
-                self.assertTrue(problems[0].startswith(f"{entry}: "))
+                self.assertIn(f": {entry} branches ", problems[0])
         # Governed in the other direction too: a sentinel equal to each entry's branches clears both.
         shipped = _shipped_branches()
         self.assertEqual(shipped["required"], shipped["canary"])
@@ -3312,20 +3310,658 @@ class Cell4_TheLinterSetMembershipIsFrozen(unittest.TestCase):
         )
 
 
-class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
-    """One mutant per mutation CASE, keyed by id — never a hand-written list.
+# ---- COREDEV-2869: cell 11's mutants are GENERATED from the registry ---------------------------------
+# The registry's header said so for months while 130 hand-written recipes and 8 hand-written tuples built
+# them instead, and they drifted: 11 diagnostics, 28 mutants and 19 operators no longer matched the case
+# they claimed to execute. Nothing here is keyed by a case id. A case that this code cannot build exactly
+# as declared FAILS, naming the case, rather than being skipped or approximated.
 
-    This class executes the `yaml`-kind cases, which are the ones a workflow-parsing owner can
-    construct and evaluate. The `repo_fixture`, `content_digest` and `remote_relation` kinds need a
-    checked-out tree, a real run or an authenticated ruleset read, and are owned elsewhere (M2b/M2c and
-    the rollout evidence artifact); they are reported here as deferred rather than silently counted, so
-    this cell never reads as covering more than it does.
+SHIPPED_MILESTONE = "M3"
+_CASE_FIELDS = frozenset(
+    {
+        "id",
+        "op",
+        "side",
+        "target",
+        "payload",
+        "to",
+        "before",
+        "at",
+        "validity",
+        "diagnostic",
+        "actionlint_allow",
+        "declares_support_job",
+        "fixture",
+    }
+)
+_REQUIRED_CASE_FIELDS = ("id", "op", "side", "target", "validity", "diagnostic")
+_STRUCTURAL_OPS = frozenset(
+    {"add", "set", "remove", "append", "move", "duplicate", "insert"}
+)
+_PAYLOAD_REQUIRED = frozenset({"add", "set", "append", "insert"})
+_PAYLOAD_FORBIDDEN = frozenset({"remove", "move", "duplicate"})
+_SEGMENT = re.compile(
+    r"\.(?:steps\[(?P<step>[A-Za-z0-9_-]+)\]|(?P<key><job>|[A-Za-z0-9_-]+))"
+)
+_ABSENT = object()
+_COMPANION_FIELDS = frozenset({"id", "why", "runs-on", "steps"})
+_INJECTED_OBSERVATION = "injected ruleset observation"
+
+
+def _injected_context(case: dict) -> str:
+    """The required-status-check context an `injected` case adds to the ruleset observation: its
+    payload must parse to exactly `{context: <string>}`, which is all cell 16 knows how to inject.
     """
+    observation = _parsed_payload(case)
+    if (
+        not isinstance(observation, dict)
+        or set(observation) != {"context"}
+        or not isinstance(observation["context"], str)
+    ):
+        raise _case_failure(
+            case,
+            f"an injected payload must be `{{context: <string>}}`, found {observation!r}",
+        )
+    return observation["context"]
+
+
+def _case_failure(case: dict, why: str) -> AssertionError:
+    return AssertionError(f"{case.get('id', '<no id>')}: {why}")
+
+
+def _classify(case: dict) -> str:
+    """Exactly one executor per case, decided by `(op, side, target)` (plan §2.1). The rows are
+    disjoint and the else-branch fails, so a case nothing can run is named, never skipped.
+    """
+    target = case.get("target")
+    rooted = isinstance(target, str) and target.startswith("$")
+    side, op = case.get("side"), case.get("op")
+    rows = (
+        ("structural", side == "local" and op in _STRUCTURAL_OPS and rooted),
+        ("raw", side == "local" and op == "edit_bytes" and rooted),
+        (
+            "fixture",
+            side == "local"
+            and (op == "materialise" or (op == "edit_bytes" and not rooted)),
+        ),
+        # ONLY the shape cell 16 implements: an `add` to the injected ruleset observation. A remote case
+        # with any other op or target matches no row and fails here (PR #108 second review, codex).
+        (
+            "injected",
+            side == "remote" and op == "add" and target == _INJECTED_OBSERVATION,
+        ),
+    )
+    matched = [name for name, hit in rows if hit]
+    if len(matched) != 1:
+        raise _case_failure(
+            case, f"matches executor(s) {matched or 'none'}; exactly one is required"
+        )
+    return matched[0]
+
+
+def _schema_problems(case: dict) -> list[str]:
+    """The case schema is CLOSED (plan §2.3): a misspelt or invented key such as `anchor:` must not become "no anchor"."""
+    problems = [
+        f"{case.get('id', '<no id>')}: unknown field `{key}`"
+        for key in sorted(set(case) - _CASE_FIELDS)
+    ]
+    problems.extend(
+        f"{case.get('id', '<no id>')}: missing field `{key}`"
+        for key in _REQUIRED_CASE_FIELDS
+        if key not in case
+    )
+    return problems
+
+
+def _strict_equal(left, right) -> bool:
+    """Recursive and TYPE-STRICT: `False` != `0` and `15` != `15.0` at every depth. Python's `==`
+    would let an unrelated `timeout-minutes: 15` -> `15.0` edit through a frame check.
+    """
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _strict_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _strict_equal(a, b) for a, b in zip(left, right)
+        )
+    return bool(left == right)
+
+
+def _parse_target(case: dict, field: str = "target") -> list[tuple[str, str]]:
+    """`$` followed by `.name`, `.<job>` or `.steps[name]` segments (plan §2.2), nothing else."""
+    path = case.get(field)
+    if not isinstance(path, str) or not path.startswith("$"):
+        raise _case_failure(case, f"`{field}` {path!r} is not a `$`-rooted path")
+    rest, segments = path[1:], []
+    while rest:
+        match = _SEGMENT.match(rest)
+        if match is None:
+            raise _case_failure(case, f"`{field}` {path!r}: cannot parse {rest!r}")
+        segments.append(
+            ("step", match["step"]) if match["step"] else ("key", match["key"])
+        )
+        rest = rest[match.end() :]
+    if not segments:
+        raise _case_failure(case, f"`{field}` {path!r} names the document root")
+    return segments
+
+
+def _step_index(case: dict, steps, name: str) -> int:
+    if not isinstance(steps, list):
+        raise _case_failure(case, f"`steps[{name}]` is not inside a sequence")
+    hits = [
+        index
+        for index, step in enumerate(steps)
+        if isinstance(step, dict) and step.get("name") == name
+    ]
+    if len(hits) != 1:
+        # `_step()` returns the first match silently; a hidden second `checkout` is why the
+        # duplicate-step cases exist (2780 plan, revision 44).
+        raise _case_failure(case, f"`steps[{name}]` matches {len(hits)} steps, not 1")
+    return hits[0]
+
+
+def _key_name(segment: tuple[str, str], job: str) -> str:
+    return job if segment[1] == "<job>" else segment[1]
+
+
+def _locate(workflow: dict, case: dict, job: str, field: str = "target"):
+    """(container, kind, name-or-index) for the LAST segment of `field`; every earlier one must exist."""
+    segments = _parse_target(case, field)
+    node: Any = workflow
+    for segment in segments[:-1]:
+        if segment[0] == "step":
+            node = node.get("steps") if isinstance(node, dict) else None
+            node = node[_step_index(case, node, segment[1])]
+            continue
+        key = _key_name(segment, job)
+        if not isinstance(node, dict) or key not in node:
+            raise _case_failure(case, f"`{case[field]}`: `{key}` is absent")
+        node = node[key]
+    last = segments[-1]
+    if last[0] == "step":
+        steps = node.get("steps") if isinstance(node, dict) else None
+        return steps, "step", _step_index(case, steps, last[1])
+    if not isinstance(node, dict):
+        raise _case_failure(case, f"`{case[field]}` does not end in a mapping key")
+    return node, "key", _key_name(last, job)
+
+
+def _parsed_payload(case: dict):
+    """A STRING of YAML 1.2 text, read by the workflow loader: "false" is the boolean, "'false'" the
+    string. A non-string means PyYAML 1.1 already read it (an unquoted `yes` or `017`), so it fails.
+    """
+    payload = case.get("payload")
+    if not isinstance(payload, str):
+        raise _case_failure(
+            case,
+            f"payload must be YAML text (a string), found {type(payload).__name__}",
+        )
+    return _load_actions_yaml(payload)
+
+
+def _companion(case: dict) -> tuple[str, dict] | None:
+    """The one companion edit (plan §2.5), its shape CLOSED so nothing can mask the failure."""
+    declared = case.get("declares_support_job")
+    if declared is None:
+        return None
+    if not isinstance(declared, dict) or set(declared) != _COMPANION_FIELDS:
+        raise _case_failure(
+            case,
+            f"`declares_support_job` must hold exactly {sorted(_COMPANION_FIELDS)}",
+        )
+    steps = declared["steps"]
+    if (
+        not isinstance(steps, list)
+        or len(steps) != 1
+        or not isinstance(steps[0], dict)
+        or set(steps[0]) != {"run"}
+    ):
+        raise _case_failure(
+            case, "`declares_support_job` must have exactly one step holding only `run`"
+        )
+    return declared["id"], {
+        key: copy.deepcopy(value)
+        for key, value in declared.items()
+        if key not in ("id", "why")
+    }
+
+
+def _check_operator_fields(case: dict, op: str, kind: str) -> None:
+    if op not in _STRUCTURAL_OPS:
+        raise _case_failure(case, f"unknown structural op `{op}`")
+    if op in _PAYLOAD_REQUIRED and "payload" not in case:
+        raise _case_failure(case, f"`{op}` requires a payload")
+    if op in _PAYLOAD_FORBIDDEN and "payload" in case:
+        raise _case_failure(case, f"`{op}` takes no payload")
+    if "to" in case and not (op == "move" and kind == "key"):
+        raise _case_failure(case, "`to` is legal only on a key `move`")
+    positional = op in ("duplicate", "insert") or (op == "move" and kind == "step")
+    placed = [key for key in ("before", "at") if key in case]
+    if positional and len(placed) != 1:
+        raise _case_failure(case, f"`{op}` needs exactly one of `before` / `at`")
+    if not positional and placed:
+        raise _case_failure(case, f"`{placed[0]}` is not legal on `{op}`")
+    if "at" in case and case["at"] != "end":
+        raise _case_failure(case, f"`at` must be `end`, found {case['at']!r}")
+    if op == "move" and kind == "key" and "to" not in case:
+        raise _case_failure(case, "a key `move` needs `to`")
+
+
+def _anchor_index(case: dict, steps: list, job: str) -> int:
+    """The index a placed step must END UP at: immediately before the anchor, or last."""
+    if case.get("at") == "end":
+        return len(steps)
+    return _step_index(case, steps, _anchor_name(case))
+
+
+def _anchor_name(case: dict) -> str:
+    """`before` must name a step of the SAME job's `steps`: `$.jobs.<job>.steps[name]`, nothing else,
+    and never the step being placed (a step cannot stand immediately before itself)."""
+    segments = _parse_target(case, "before")
+    if (
+        segments[:-1] != [("key", "jobs"), ("key", "<job>")]
+        or segments[-1][0] != "step"
+    ):
+        raise _case_failure(
+            case, f"`before` {case['before']!r} is not `$.jobs.<job>.steps[name]`"
+        )
+    target = _parse_target(case)
+    if target[-1] == segments[-1]:
+        raise _case_failure(case, "a step cannot be placed immediately before itself")
+    return segments[-1][1]
+
+
+def _mutate(base: dict, case: dict, entry: str, registry: dict) -> dict:
+    """Build ONE structural mutant exactly as the case declares it, from a copy of `base`, and prove it
+    (plan §2.3): the declared VALUE is there, and NOTHING outside the declared edit changed.
+    """
+    job = registry["entries"][entry]["job"]
+    workflow = copy.deepcopy(base)
+    if job not in workflow.get("jobs", {}):
+        raise _case_failure(
+            case, f"entry `{entry}` declares job `{job}`, which is absent"
+        )
+    companion = _companion(case)
+    if companion is not None:
+        name, mapping = companion
+        if name in workflow["jobs"]:
+            raise _case_failure(case, f"companion job `{name}` already exists")
+        workflow["jobs"][name] = mapping
+    before = copy.deepcopy(workflow)
+    container, kind, where = _locate(workflow, case, job)
+    op = case["op"]
+    _check_operator_fields(case, op, kind)
+    location = (container, where)
+    if kind == "step":
+        _mutate_steps(workflow, before, case, job, location)
+    elif op == "insert":
+        _mutate_insert(workflow, before, case, job, location)
+    else:
+        _mutate_key(workflow, before, case, job, location)
+    return workflow
+
+
+def _without(workflow: dict, case: dict, job: str, field: str = "target") -> dict:
+    stripped = copy.deepcopy(workflow)
+    container, kind, where = _locate(stripped, case, job, field)
+    assert kind == "key"
+    container.pop(where, None)
+    return stripped
+
+
+def _mutate_key(workflow, before, case, job, location) -> None:
+    container, key = location
+    op, present = case["op"], key in container
+    if op == "add":
+        if present:
+            raise _case_failure(case, f"`add` needs `{case['target']}` absent")
+        container[key] = _parsed_payload(case)
+    elif op == "set":
+        if not present:
+            raise _case_failure(case, f"`set` needs `{case['target']}` present")
+        value = _parsed_payload(case)
+        if _strict_equal(container[key], value):
+            raise _case_failure(case, f"`set` changes nothing at `{case['target']}`")
+        container[key] = value
+    elif op == "remove":
+        if not present:
+            raise _case_failure(case, f"`remove` needs `{case['target']}` present")
+        del container[key]
+    elif op == "append":
+        if not present or not isinstance(container[key], str):
+            raise _case_failure(case, "`append` needs a present string target")
+        if not isinstance(case["payload"], str):
+            raise _case_failure(case, "`append` needs a string payload")
+        container[key] = container[key] + case["payload"]
+    elif op == "move":
+        if not present:
+            raise _case_failure(case, f"`move` needs `{case['target']}` present")
+        destination, dest_kind, dest_key = _locate(workflow, case, job, "to")
+        if dest_kind != "key" or dest_key in destination:
+            raise _case_failure(
+                case, f"`move` needs `to` {case['to']!r} to be an absent key"
+            )
+        destination[dest_key] = container.pop(key)
+    else:
+        raise _case_failure(case, f"`{op}` does not apply to a key")
+    _check_key_postconditions(before, workflow, case, job)
+
+
+def _check_key_postconditions(before: dict, after: dict, case: dict, job: str) -> None:
+    op = case["op"]
+    if op == "move":
+        old = _value_at(before, case, job)
+        if _value_at(after, case, job) is not _ABSENT:
+            raise _case_failure(
+                case, "postcondition: the moved source is still present"
+            )
+        if not _strict_equal(_value_at(after, case, job, "to"), old):
+            raise _case_failure(
+                case, "postcondition: `to` does not hold the moved value"
+            )
+        if not _strict_equal(
+            _without(before, case, job), _without(after, case, job, "to")
+        ):
+            raise _case_failure(
+                case, "postcondition: something outside the move changed"
+            )
+        return
+    value = _value_at(after, case, job)
+    if op in ("add", "set") and not _strict_equal(value, _parsed_payload(case)):
+        raise _case_failure(case, "postcondition: the target does not hold the payload")
+    if op == "append" and value != _value_at(before, case, job) + case["payload"]:
+        raise _case_failure(case, "postcondition: the target is not old + payload")
+    if op == "remove" and value is not _ABSENT:
+        raise _case_failure(case, "postcondition: the removed key is still present")
+    if not _strict_equal(_without(before, case, job), _without(after, case, job)):
+        raise _case_failure(case, "postcondition: something outside the target changed")
+
+
+def _value_at(workflow: dict, case: dict, job: str, field: str = "target"):
+    container, kind, where = _locate(copy.deepcopy(workflow), case, job, field)
+    assert kind == "key"
+    return container.get(where, _ABSENT)
+
+
+def _job_steps(workflow: dict, job: str) -> list:
+    steps: list = workflow["jobs"][job]["steps"]
+    return steps
+
+
+def _outside_steps(workflow: dict, job: str) -> dict:
+    rest = copy.deepcopy(workflow)
+    rest["jobs"][job].pop("steps")
+    return rest
+
+
+def _mutate_steps(workflow, before, case, job, location) -> None:
+    steps, index = location
+    op = case["op"]
+    if op == "remove":
+        del steps[index]
+    elif op == "move":
+        moved = steps.pop(index)
+        steps.insert(_anchor_index(case, steps, job), moved)
+    elif op == "duplicate":
+        steps.insert(_anchor_index(case, steps, job), copy.deepcopy(steps[index]))
+    else:
+        raise _case_failure(case, f"`{op}` does not apply to a step")
+    _check_step_postconditions(before, workflow, case, job)
+
+
+def _mutate_insert(workflow, before, case, job, location) -> None:
+    container, key = location
+    steps = container.get(key)
+    if key != "steps" or not isinstance(steps, list):
+        raise _case_failure(case, "`insert` needs the `steps` sequence as its target")
+    step = _parsed_payload(case)
+    if not isinstance(step, dict):
+        raise _case_failure(case, "`insert` needs a payload that parses to a mapping")
+    steps.insert(_anchor_index(case, steps, job), step)
+    _check_step_postconditions(before, workflow, case, job)
+
+
+def _check_step_postconditions(before: dict, after: dict, case: dict, job: str) -> None:
+    """Placement is part of the mutant: a duplicate `checkout` BEFORE the guards still produces the
+    duplicate-name diagnostic (codex, r1), so the diagnostic cannot be what proves where it went.
+    """
+    if not _strict_equal(_outside_steps(before, job), _outside_steps(after, job)):
+        raise _case_failure(case, "postcondition: something outside `steps` changed")
+    old, new, op = _job_steps(before, job), _job_steps(after, job), case["op"]
+    # The placed step's name: every step operator targets a step, except `insert` (the sequence).
+    name = "" if op == "insert" else _parse_target(case)[-1][1]
+    if op == "remove":
+        index = _step_index(case, old, name)
+        if any(step.get("name") == name for step in new) or not _strict_equal(
+            old[:index] + old[index + 1 :], new
+        ):
+            raise _case_failure(case, "postcondition: not exactly that step removed")
+        return
+    if op == "insert":
+        placed, value = _placed_index(case, new, job), _parsed_payload(case)
+    else:
+        value = old[_step_index(case, old, name)]
+        placed = _placed_index(case, new, job)
+    if not _strict_equal(new[placed], value):
+        raise _case_failure(
+            case, "postcondition: the placed step is not the declared one"
+        )
+    if op == "move":
+        rest = new[:placed] + new[placed + 1 :]
+        index = _step_index(case, old, name)
+        expected = old[:index] + old[index + 1 :]
+    else:
+        rest, expected = new[:placed] + new[placed + 1 :], old
+    if len(new) != len(old) + (0 if op == "move" else 1) or not _strict_equal(
+        rest, expected
+    ):
+        raise _case_failure(case, "postcondition: something else in `steps` changed")
+
+
+def _placed_index(case: dict, steps: list, job: str) -> int:
+    """Where the placed step must stand: immediately before the anchor, or last."""
+    if case.get("at") == "end":
+        return len(steps) - 1
+    anchor = _anchor_name(case)
+    hits = [index for index, step in enumerate(steps) if step.get("name") == anchor]
+    if len(hits) != 1 or hits[0] == 0:
+        raise _case_failure(
+            case, "postcondition: the anchor is not where placement needs it"
+        )
+    return hits[0] - 1
+
+
+def _diagnostic_matches(
+    diagnostic: str, problems: list[str], relation: list[str]
+) -> bool:
+    """Exact membership for the checker's messages. The relation comparator's message carries the
+    observed sets as detail, so for that ONE source a `diagnostic: detail` form also matches.
+    """
+    return diagnostic in problems or any(
+        message == diagnostic or message.startswith(diagnostic + ": ")
+        for message in relation
+    )
+
+
+def _relation_problems(
+    mutant: dict, entry: str, obligation: dict, resolved
+) -> list[str]:
+    if obligation["kind"] != "remote_relation":
+        return []
+    try:
+        branches = _branches(mutant, entry)
+    except (KeyError, TypeError):
+        return []  # `contract_problems` reports the absence
+    if branches is None:
+        return []
+    return _target_set_problems(resolved, entry, set(branches))
+
+
+def _registry_cases(registry: dict, executor: str):
+    """(obligation, case) for every case of one executor class."""
+    return [
+        (obligation, case)
+        for obligation in registry["obligations"]
+        for case in obligation.get("cases", [])
+        if _classify(case) == executor
+    ]
+
+
+def _bases() -> dict[str, dict]:
+    return {
+        "required": _load_workflow(),
+        "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
+    }
+
+
+def _raw_pinned_path(case: dict, workflow: dict, job: str) -> tuple[str, ...]:
+    """Validate the WHOLE raw target against the entry, THEN reduce it (plan §2.7). `_pinned_pairs`
+    searches every job and step, so a target naming the wrong one would reduce to the same tuple.
+    """
+    container, kind, where = _locate(workflow, case, job)
+    if kind != "key" or where not in container:
+        raise _case_failure(
+            case, f"raw target `{case['target']}` is absent in this entry"
+        )
+    segments = _parse_target(case)
+    shape = [segment[0] for segment in segments]
+    names = [segment[1] for segment in segments]
+    if shape == ["key"] * 3 and names[:2] == ["jobs", "<job>"]:
+        pinned: tuple[str, ...] = (names[2],)
+    elif (
+        shape == ["key", "key", "step", "key", "key"]
+        and names[:2] == ["jobs", "<job>"]
+        and names[3] == "with"
+    ):
+        pinned = (names[2], names[4])
+    else:
+        raise _case_failure(
+            case, f"raw target `{case['target']}` is not a pinned-path shape"
+        )
+    if pinned not in PINNED_PATHS.values():
+        raise _case_failure(
+            case, f"raw target reduces to {pinned}, which is not pinned"
+        )
+    return pinned
+
+
+def _raw_mutation(case: dict, entry: str, source: str, registry: dict) -> str:
+    """The raw case's payload written VERBATIM over the pinned value's source span, and nothing else.
+    A diagnostic cannot show which bytes were written: `yes` and `on` fail identically (codex, r1).
+    """
+    job = registry["entries"][entry]["job"]
+    pinned = _raw_pinned_path(case, _load_actions_yaml(source), job)
+    payload = case.get("payload")
+    if not isinstance(payload, str):
+        raise _case_failure(case, "a raw payload must be a string")
+    key = next(name for name, path in PINNED_PATHS.items() if path == pinned)
+    pairs = _pinned_pairs(yaml.compose(source, Loader=_ActionsYamlLoader), pinned)
+    if len(pairs) != 1:
+        raise _case_failure(case, f"{pinned} has {len(pairs)} source spans, not 1")
+    start, end = pairs[0][1].start_mark.index, pairs[0][1].end_mark.index
+    mutated = _respell(source, key, payload)
+    # Source offsets, not a re-parse: a tagged payload (`!!int 1_5`) re-composes without its tag.
+    if (
+        mutated[start : start + len(payload)] != payload
+        or mutated[:start] != source[:start]
+        or mutated[start + len(payload) :] != source[end:]
+    ):
+        raise _case_failure(
+            case, "postcondition: the raw span is not the payload, verbatim"
+        )
+    return mutated
+
+
+def _raw_problems(case: dict, obligation: dict, mutated: str, entry: str) -> list[str]:
+    """The checker a raw case's obligation KIND names. Any other kind FAILS: a kind this does not name
+    would otherwise fall through to a checker nobody chose (PR #108 review, codex)."""
+    if obligation["kind"] == "raw_text":
+        return raw_workflow_problems(mutated, entry=entry)
+    if obligation["kind"] == "yaml":
+        return contract_problems(
+            _load_actions_yaml(mutated), milestone=SHIPPED_MILESTONE, entry=entry
+        )
+    raise _case_failure(
+        case,
+        f"raw case in a `{obligation['kind']}` obligation, which no raw checker handles",
+    )
+
+
+def _family_executions(registry: dict) -> list[dict]:
+    """(obligation, entry, side, form) for the target-set family: `applies_to` x `sides` x `forms`.
+    Each obligation it applies to names exactly ONE entry, or the unpacking fails."""
+    family = registry["families"]["target_set_resolution"]
+    # CLOSED, like the case schema: an `expect: refusl` typo fell through to the refusal branch and
+    # passed (PR #108 third review, codex).
+    if not set(family["sides"]) <= {"include", "exclude"}:
+        raise AssertionError(f"target-set family: unknown side in {family['sides']}")
+    # No duplicate dimension: `sides: [include, include]` kept the 24-execution census while running
+    # half the distinct executions and no exclude side at all (local review of PR #108, codex).
+    for name, values in (
+        ("sides", family["sides"]),
+        ("applies_to", family["applies_to"]),
+        ("form ids", [form.get("id") for form in family["forms"]]),
+    ):
+        if len(values) != len(set(values)):
+            raise AssertionError(f"target-set family: duplicate {name}: {values}")
+    for form in family["forms"]:
+        if set(form) != {"id", "expect", "payload"} or form["expect"] not in (
+            "equality",
+            "refusal",
+        ):
+            raise AssertionError(f"target-set family form {form.get('id')!r}: {form}")
+    obligations = {
+        obligation["id"]: obligation for obligation in registry["obligations"]
+    }
+    single_entry = {}
+    for obligation_id in family["applies_to"]:
+        (single_entry[obligation_id],) = obligations[obligation_id]["entries"]
+    return [
+        {
+            "obligation": obligation_id,
+            "entry": single_entry[obligation_id],
+            "side": side,
+            "form": form,
+        }
+        for obligation_id in family["applies_to"]
+        for side in family["sides"]
+        for form in family["forms"]
+    ]
+
+
+class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
+    """One mutant per mutation CASE, GENERATED from the registry's `op` / `target` / `payload`.
+
+    COREDEV-2869. `_classify` gives every case exactly one executor: `structural` cases are built here by
+    `_mutate`, `raw` cases by `_raw_mutation` (in the two raw-text classes), and the `fixture` and
+    `injected` classes stay with the tests that run their trees and observations, accounted for here
+    against the hand-kept sets those tests own. Nothing in this class is keyed by a case id.
+    """
+
+    # The CENSUS, pinned. A registry case added or removed changes these on purpose: the test that runs
+    # the cases is the one that has to notice (COREDEV-2869 plan, §7).
+    STRUCTURAL_EXECUTIONS = 222
+    FAMILY_EXECUTIONS = 24
+    # Raw (case, entry) pairs, pinned INDEPENDENTLY: every raw expectation below is derived from the
+    # registry, so deleting a raw case shrank the check with its input (PR #108 third review, codex).
+    RAW_EXECUTIONS = 16
 
     @classmethod
     def setUpClass(cls):
         cls.registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
-        cls.workflow = _load_workflow()
+        cls.bases = _bases()
+
+    def _structural(self):
+        """Every (obligation, case, entry, mutant) the generator builds, in registry order."""
+        for obligation, case in _registry_cases(self.registry, "structural"):
+            for entry in obligation.get("entries", []):
+                yield obligation, case, entry, _mutate(
+                    self.bases[entry], case, entry, self.registry
+                )
 
     def test_every_case_declares_the_five_required_fields(self):
         for obligation in self.registry["obligations"]:
@@ -3361,854 +3997,601 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         ):
             self.assertIn(clause, clauses)
 
-    # ---- the generated mutants -------------------------------------------------------------------
-    # Each entry is (case id, mutate(workflow), expected diagnostic). The mutation is applied to a deep
-    # copy of the SHIPPED workflow, so a case that cannot be constructed fails loudly here rather than
-    # silently passing.
-    def _yaml_mutants(self):
-        def at_root(key, value):
-            def apply(w):
-                w[key] = value
-
-            return apply
-
-        def at_job(key, value):
-            def apply(w):
-                _job(w)[key] = value
-
-            return apply
-
-        def drop_job(key):
-            def apply(w):
-                _job(w).pop(key, None)
-
-            return apply
-
-        def at_event(key, value):
-            def apply(w):
-                _on(w)["pull_request"][key] = value
-
-            return apply
-
-        def at_with(step, key, value):
-            def apply(w):
-                _step(w, step).setdefault("with", {})[key] = value
-
-            return apply
-
-        def drop_with(step, key):
-            def apply(w):
-                _step(w, step)["with"].pop(key, None)
-
-            return apply
-
-        def append_to(step, line):
-            def apply(w):
-                _step(w, step)["run"] = _step(w, step)["run"] + "\n" + line
-
-            return apply
-
-        def set_on(step, key, value):
-            def apply(w):
-                _step(w, step)[key] = value
-
-            return apply
-
-        def per_step():
-            """Cell 11's PER-STEP minimum (codex, r44): the registry declared the four injection forms
-            and the shell/working-directory changes on `guard-empty-diff` only, no step-level `if:` at
-            all, and `continue-on-error` on `trunk` only. One case per (step, form), each named.
-            """
-            run_steps = (
-                "guard-resolver-digest",
-                "guard-empty-diff",
-                "guard-launcher-path",
-            )
-            all_steps = ("checkout", *run_steps, "trunk")
-            injections = (
-                (
-                    "creates-c6-path",
-                    "install -D /bin/true tools/trunk",
-                    "creates a prohibited launcher path",
-                ),
-                (
-                    "github-env-trunk-path",
-                    'echo TRUNK_PATH=/bin/true >> "$GITHUB_ENV"',
-                    "writes to $GITHUB_ENV",
-                ),
-                (
-                    "github-env-bash-env",
-                    'echo BASH_ENV=/tmp/x >> "$GITHUB_ENV"',
-                    "writes to $GITHUB_ENV",
-                ),
-                ("github-path", 'echo X >> "$GITHUB_PATH"', "writes to $GITHUB_PATH"),
-            )
-            cases = []
-            for step in ("guard-resolver-digest", "guard-launcher-path"):
-                for form, line, message in injections:
-                    # Only the C6 guard may NAME a launcher path, so in that step the planted path is
-                    # caught by the body digest rather than by the path census.
-                    exempt = step == "guard-launcher-path" and form == "creates-c6-path"
-                    diagnostic = "run body digest mismatch" if exempt else message
-                    cases.append(
-                        (
-                            f"C8.run-bodies-frozen/{form}-{step}",
-                            append_to(step, line),
-                            f"step `{step}`: {diagnostic}",
-                        )
-                    )
-                cases.append(
-                    (
-                        f"C8.run-bodies-frozen/changed-shell-{step}",
-                        set_on(step, "shell", "sh"),
-                        f"step `{step}`: `shell:` is prohibited",
-                    )
-                )
-                cases.append(
-                    (
-                        f"C8.run-bodies-frozen/changed-working-directory-{step}",
-                        set_on(step, "working-directory", "/tmp"),
-                        f"step `{step}`: `working-directory:` is prohibited",
-                    )
-                )
-            # "Omission" as a VALID workflow: removing or emptying `run:` is a schema error, so each
-            # guard is neutralised with a no-op body instead.
-            cases.extend(
-                (
-                    f"C8.run-bodies-frozen/no-op-body-{step}",
-                    set_on(step, "run", ":"),
-                    f"step `{step}`: run body digest mismatch",
-                )
-                for step in run_steps
-            )
-            for step in all_steps:
-                cases.append(
-                    (
-                        f"C3.nothing-skips-or-masks/step-if-{step}",
-                        set_on(step, "if", "false"),
-                        f"step `{step}`: `if:` is prohibited",
-                    )
-                )
-                if step != "trunk":
-                    cases.append(
-                        (
-                            f"C3.nothing-skips-or-masks/step-continue-on-error-{step}",
-                            set_on(step, "continue-on-error", True),
-                            f"step `{step}`: `continue-on-error:` is prohibited",
-                        )
-                    )
-            # A DUPLICATE known step (codex, r45): the sequence check diagnosed missing, unknown and
-            # reordered names, so a second `checkout` (with `ref: main`) placed AFTER the guards
-            # passed, and replaced the PR tree behind them. `_step()` only ever sees the first one.
-            for step in all_steps:
-
-                def duplicate(w, step=step):
-                    extra = copy.deepcopy(_step(w, step))
-                    position = len(_steps(w)) if step == "trunk" else len(_steps(w)) - 1
-                    _steps(w).insert(position, extra)
-
-                cases.append(
-                    (
-                        f"C8.step-sequence-allowlist/duplicate-{step}",
-                        duplicate,
-                        f"step sequence: `{step}` appears 2 times",
-                    )
-                )
-            return cases
-
-        return [
-            (
-                "C0.permissions-pinned-at-root/write-all",
-                at_root("permissions", "write-all"),
-                "root permissions: expected `contents: read`, found 'write-all'",
-            ),
-            (
-                "C0.permissions-pinned-at-root/absent",
-                lambda w: w.pop("permissions"),
-                "root permissions: expected `contents: read`, found None",
-            ),
-            (
-                "C0.no-concurrency/workflow",
-                at_root("concurrency", {"group": "x"}),
-                "workflow-level `concurrency` is prohibited",
-            ),
-            (
-                "C0.no-concurrency/job",
-                at_job("concurrency", {"group": "x"}),
-                "job-level `concurrency` is prohibited",
-            ),
-            (
-                "C0.root-mapping-allowlist/arbitrary-key",
-                at_root("run-name", "drift"),
-                "root mapping: unlisted key `run-name`",
-            ),
-            (
-                "C1.single-event/add-workflow-dispatch",
-                lambda w: _on(w).update({"workflow_dispatch": {}}),
-                "event set: unlisted event `workflow_dispatch`",
-            ),
-            (
-                "C1.single-event/arbitrary-event",
-                lambda w: _on(w).update({"schedule": [{"cron": "0 0 * * *"}]}),
-                "event set: unlisted event `schedule`",
-            ),
-            (
-                "C7.no-merge-group/present",
-                lambda w: _on(w).update({"merge_group": {}}),
-                "event set: `merge_group` is prohibited (check_mode=none is a false success)",
-            ),
-            (
-                "C1.event-option-allowlist/paths",
-                at_event("paths", ["**.py"]),
-                "pull_request options: `paths` narrows reachability",
-            ),
-            (
-                "C1.event-option-allowlist/arbitrary-option",
-                lambda w: _on(w)["pull_request"].update(
-                    {"branches-ignore": _on(w)["pull_request"].pop("branches")}
-                ),
-                "pull_request options: unlisted option `branches-ignore`",
-            ),
-            (
-                "C2.branches-equal-resolved-target-set/absent",
-                lambda w: _on(w)["pull_request"].pop("branches"),
-                "branches: key is absent",
-            ),
-            (
-                "C2.types-required/reduced-to-default",
-                at_event("types", ["opened", "synchronize", "reopened"]),
-                "types: `edited` is missing from the activity set",
-            ),
-            (
-                "C2.types-required/removed",
-                lambda w: _on(w)["pull_request"].pop("types"),
-                "types: key is absent",
-            ),
-            (
-                "C3.job-mapping-allowlist/arbitrary-key",
-                at_job("container", "ubuntu:24.04"),
-                "job mapping: unlisted key `container`",
-            ),
-            (
-                "C3.job-mapping-allowlist/needs",
-                lambda w: (
-                    w["jobs"].update(
-                        {
-                            "support": {
-                                "runs-on": "ubuntu-latest",
-                                "steps": [{"run": "exit 1"}],
-                            }
-                        }
-                    ),
-                    _job(w).update({"needs": ["support"]}),
-                ),
-                "job mapping: unlisted key `needs`",
-            ),
-            (
-                "C3.job-mapping-allowlist/strategy-matrix",
-                at_job("strategy", {"matrix": {"n": [1, 2]}}),
-                "job mapping: unlisted key `strategy`",
-            ),
-            (
-                "C3.permissions-pinned-at-job/write-all",
-                at_job("permissions", "write-all"),
-                "job permissions: expected `contents: read`, found 'write-all'",
-            ),
-            (
-                "C3.permissions-pinned-at-job/absent",
-                drop_job("permissions"),
-                "job permissions: expected `contents: read`, found None",
-            ),
-            (
-                "C3.nothing-skips-or-masks/job-if",
-                at_job("if", "false"),
-                "job: `if:` is prohibited (a skipped job reports Success)",
-            ),
-            (
-                "C3.no-defaults-run/workflow",
-                at_root("defaults", {"run": {"shell": "sh"}}),
-                "workflow `defaults.run` is prohibited",
-            ),
-            (
-                "C3.no-defaults-run/job",
-                at_job("defaults", {"run": {"shell": "sh"}}),
-                "job `defaults.run` is prohibited",
-            ),
-            (
-                "C3.exactly-one-trunk-invocation/two",
-                lambda w: _steps(w).append(copy.deepcopy(_step(w, "trunk"))),
-                "steps: expected exactly one Trunk invocation, found 2",
-            ),
-            (
-                "C5.no-env-any-scope/workflow",
-                at_root("env", {"TRUNK_PATH": "/bin/true"}),
-                "workflow-level `env:` is prohibited",
-            ),
-            (
-                "C5.no-env-any-scope/job",
-                at_job("env", {"TRUNK_PATH": "/bin/true"}),
-                "job-level `env:` is prohibited",
-            ),
-            (
-                "C5.no-env-any-scope/step",
-                lambda w: _step(w, "trunk").update(
-                    {"env": {"TRUNK_PATH": "/bin/true"}}
-                ),
-                "step `trunk`: `env:` is prohibited",
-            ),
-            (
-                "C4.with-inputs-allowlist/trunk-path",
-                at_with("trunk", "trunk-path", "/bin/true"),
-                "action inputs: unlisted input `trunk-path`",
-            ),
-            (
-                "C4.with-inputs-allowlist/post-init",
-                at_with("trunk", "post-init", "echo hi"),
-                "action inputs: unlisted input `post-init`",
-            ),
-            (
-                "C4.with-inputs-allowlist/arbitrary-input",
-                at_with("trunk", "check-mode", "popular"),
-                "action inputs: unlisted input `check-mode`",
-            ),
-            (
-                "C4.arguments-required-literal/absent",
-                drop_with("trunk", "arguments"),
-                "action inputs: `arguments` is absent",
-            ),
-            (
-                "C4.arguments-required-literal/appended",
-                at_with("trunk", "arguments", ARGUMENTS_LITERAL + " --fix"),
-                "action inputs: `arguments` does not equal the declared literal",
-            ),
-            (
-                "C4.save-annotations-required/absent",
-                drop_with("trunk", "save-annotations"),
-                "action inputs: `save-annotations` is absent",
-            ),
-            (
-                "C4.save-annotations-required/false",
-                at_with("trunk", "save-annotations", False),
-                "action inputs: `save-annotations` must be true",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/sparse-checkout",
-                at_with("checkout", "sparse-checkout", "scripts/"),
-                "checkout inputs: unlisted input `sparse-checkout`",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/ref",
-                at_with("checkout", "ref", "main"),
-                "checkout inputs: unlisted input `ref`",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/filter",
-                at_with("checkout", "filter", "blob:none"),
-                "checkout inputs: unlisted input `filter`",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/lfs-removed",
-                drop_with("checkout", "lfs"),
-                "checkout inputs: `lfs` is absent",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/lfs-false",
-                at_with("checkout", "lfs", False),
-                "checkout inputs: `lfs` must be true",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/persist-credentials-removed",
-                drop_with("checkout", "persist-credentials"),
-                "checkout inputs: `persist-credentials` is absent",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/persist-credentials-true",
-                at_with("checkout", "persist-credentials", True),
-                "checkout inputs: `persist-credentials` must be false",
-            ),
-            (
-                "C9.action-pinned-by-sha/tag",
-                lambda w: _step(w, "trunk").update(
-                    {"uses": "trunk-io/trunk-action@v2.0.0"}
-                ),
-                "action pin: `trunk-io/trunk-action` is not pinned by SHA",
-            ),
-            (
-                "C9.action-pinned-by-sha/different-sha",
-                lambda w: _step(w, "trunk").update(
-                    {"uses": "trunk-io/trunk-action@" + "0" * 40}
-                ),
-                "action pin: not pinned to the expected SHA",
-            ),
-            (
-                "C8.step-sequence-allowlist/delete-guard-launcher-path",
-                lambda w: _steps(w).remove(_step(w, "guard-launcher-path")),
-                "step sequence: `guard-launcher-path` is absent",
-            ),
-            (
-                "C8.step-sequence-allowlist/delete-guard-empty-diff",
-                lambda w: _steps(w).remove(_step(w, "guard-empty-diff")),
-                "step sequence: `guard-empty-diff` is absent",
-            ),
-            (
-                "C8.step-sequence-allowlist/delete-guard-resolver-digest",
-                lambda w: _steps(w).remove(_step(w, "guard-resolver-digest")),
-                "step sequence: `guard-resolver-digest` is absent",
-            ),
-            (
-                "C8.run-bodies-frozen/github-env-trunk-path",
-                lambda w: _step(w, "guard-empty-diff").update(
-                    {
-                        "run": _step(w, "guard-empty-diff")["run"]
-                        + '\necho TRUNK_PATH=/bin/true >> "$GITHUB_ENV"'
-                    }
-                ),
-                "step `guard-empty-diff`: writes to $GITHUB_ENV",
-            ),
-            (
-                "C8.run-bodies-frozen/github-path",
-                lambda w: _step(w, "guard-empty-diff").update(
-                    {
-                        "run": _step(w, "guard-empty-diff")["run"]
-                        + '\necho X >> "$GITHUB_PATH"'
-                    }
-                ),
-                "step `guard-empty-diff`: writes to $GITHUB_PATH",
-            ),
-            (
-                "C8.run-bodies-frozen/changed-shell",
-                lambda w: _step(w, "guard-empty-diff").update({"shell": "sh"}),
-                "step `guard-empty-diff`: `shell:` is prohibited",
-            ),
-            (
-                "C8.run-bodies-frozen/changed-working-directory",
-                lambda w: _step(w, "guard-empty-diff").update(
-                    {"working-directory": "/tmp"}
-                ),
-                "step `guard-empty-diff`: `working-directory:` is prohibited",
-            ),
-            (
-                "C8.step-sequence-allowlist/arbitrary-step-key",
-                lambda w: _step(w, "guard-empty-diff").update({"id": "x"}),
-                "step `guard-empty-diff`: unlisted key `id`",
-            ),
-            (
-                "C3.nothing-skips-or-masks/step-continue-on-error",
-                lambda w: _step(w, "trunk").update({"continue-on-error": True}),
-                "step `trunk`: `continue-on-error:` is prohibited",
-            ),
-            # ---- the sixteen this cell's own coverage check found missing -------------------------
-            (
-                "C0.permissions-pinned-at-root/widened-scope",
-                at_root("permissions", {"contents": "read", "checks": "write"}),
-                "root permissions: expected `contents: read`, found {'contents': 'read', 'checks': 'write'}",
-            ),
-            (
-                "C3.permissions-pinned-at-job/widened-scope",
-                at_job("permissions", {"contents": "read", "checks": "write"}),
-                "job permissions: expected `contents: read`, found {'contents': 'read', 'checks': 'write'}",
-            ),
-            (
-                "C1.single-event/add-push",
-                lambda w: _on(w).update({"push": {"branches": ["main"]}}),
-                "event set: unlisted event `push`",
-            ),
-            (
-                "C1.single-event/remove-pull-request",
-                lambda w: (
-                    _on(w).pop("pull_request"),
-                    _on(w).update({"push": {"branches": ["main"]}}),
-                ),
-                "event set: `pull_request` is absent",
-            ),
-            (
-                "C1.event-option-allowlist/paths-ignore",
-                at_event("paths-ignore", ["docs/**"]),
-                "pull_request options: `paths-ignore` narrows reachability",
-            ),
-            # M3 REMOVED the advisory exemption, so this case now RE-ADDS it. Until M3 the shipped
-            # workflow carried the key and the case mutated nothing by design — at M3 that
-            # formulation is vacuous, because the unmutated workflow is clean and a checker that had
-            # stopped looking would pass it just as happily.
-            (
-                "C3.no-job-continue-on-error/present",
-                lambda w: w["jobs"][EXPECTED_CONTEXT].update(
-                    {"continue-on-error": True}
-                ),
-                "job: `continue-on-error:` is prohibited",
-                "M3",
-            ),
-            (
-                "C3.exactly-one-trunk-invocation/zero",
-                lambda w: _steps(w).remove(_step(w, "trunk")),
-                "steps: expected exactly one Trunk invocation, found 0",
-            ),
-            (
-                "C8.step-sequence-allowlist/extra-step",
-                lambda w: _steps(w).insert(4, {"name": "extra", "run": "echo hi"}),
-                "step sequence: unexpected step before `trunk`",
-            ),
-            (
-                "C8.step-sequence-allowlist/guard-moved",
-                lambda w: _steps(w).insert(2, _steps(w).pop(3)),
-                "step sequence: `guard-launcher-path` is not immediately before `trunk`",
-            ),
-            (
-                "C8.step-sequence-allowlist/delete-checkout",
-                lambda w: _steps(w).remove(_step(w, "checkout")),
-                "step sequence: `checkout` is absent",
-            ),
-            (
-                "C8.step-sequence-allowlist/delete-trunk",
-                lambda w: _steps(w).remove(_step(w, "trunk")),
-                "step sequence: `trunk` is absent",
-            ),
-            (
-                "C8.run-bodies-frozen/github-env-bash-env",
-                lambda w: _step(w, "guard-empty-diff").update(
-                    {
-                        "run": _step(w, "guard-empty-diff")["run"]
-                        + '\necho BASH_ENV=/tmp/x >> "$GITHUB_ENV"'
-                    }
-                ),
-                "step `guard-empty-diff`: writes to $GITHUB_ENV",
-            ),
-            (
-                "C8.run-bodies-frozen/creates-c6-path",
-                lambda w: _step(w, "guard-empty-diff").update(
-                    {
-                        "run": _step(w, "guard-empty-diff")["run"]
-                        + "\ninstall -D /bin/true tools/trunk"
-                    }
-                ),
-                "step `guard-empty-diff`: creates a prohibited launcher path",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/repository",
-                at_with("checkout", "repository", "other/repo"),
-                "checkout inputs: unlisted input `repository`",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/path",
-                at_with("checkout", "path", "sub"),
-                "checkout inputs: unlisted input `path`",
-            ),
-            (
-                "C8.checkout-inputs-allowlist/arbitrary-input",
-                at_with("checkout", "submodules", True),
-                "checkout inputs: unlisted input `submodules`",
-            ),
-            # Each run step gets its OWN independently identified body-digest case: a validator could
-            # otherwise pin two of the three and let the newest guard become `exit 0`.
-            (
-                "C8.run-bodies-frozen/body-digest-guard-resolver-digest",
-                lambda w: _step(w, "guard-resolver-digest").update(
-                    {"run": _step(w, "guard-resolver-digest")["run"] + "\n:"}
-                ),
-                "step `guard-resolver-digest`: run body digest mismatch",
-            ),
-            (
-                "C8.run-bodies-frozen/body-digest-guard-empty-diff",
-                lambda w: _step(w, "guard-empty-diff").update(
-                    {"run": _step(w, "guard-empty-diff")["run"] + "\n:"}
-                ),
-                "step `guard-empty-diff`: run body digest mismatch",
-            ),
-            (
-                "C8.run-bodies-frozen/body-digest-guard-launcher-path",
-                lambda w: _step(w, "guard-launcher-path").update(
-                    {"run": _step(w, "guard-launcher-path")["run"] + "\n:"}
-                ),
-                "step `guard-launcher-path`: run body digest mismatch",
-            ),
-            # ---- three SURVIVORS of the shipped checker (codex, r44), each reproduced first --------
-            (
-                "C2.types-required/not-the-exact-set",
-                lambda w: _on(w)["pull_request"].update(
-                    {"types": ["opened", "reopened", "edited"]}
-                ),
-                "types: the activity set is not exactly `opened, synchronize, reopened, edited`",
-            ),
-            (
-                "C8.step-sequence-allowlist/sibling-key",
-                set_on("guard-empty-diff", "timeout-minutes", 1),
-                "step `guard-empty-diff`: unlisted key `timeout-minutes`",
-            ),
-            (
-                "C8.checkout-sha-pinned/tag",
-                set_on("checkout", "uses", "actions/checkout@v4"),
-                "checkout: `uses` is not `actions/checkout` pinned by a full commit SHA",
-            ),
-            *per_step(),
-            # ---- the EFFECTIVE context (codex, r46): `name:` decides what context a job emits ------
-            (
-                "C3.effective-context-pinned-required/named-validate",
-                lambda w: _job(w).update({"name": "validate"}),
-                "job: effective context `validate` is not `trunk-check`",
-            ),
-            (
-                "C3.effective-context-pinned-required/named-as-canary",
-                lambda w: _job(w).update({"name": CANARY_CONTEXT}),
-                "job: effective context `trunk-check-push` is not `trunk-check`",
-            ),
-            (
-                # A PRESENT null name fell back to the job ID through `is None` (codex, r64).
-                "C3.effective-context-pinned-required/named-null",
-                lambda w: _job(w).update({"name": None}),
-                "job: effective context `None` is not `trunk-check`",
-            ),
-            (
-                # A PRESENT but falsey name fell back to the job ID by truthiness (codex, r63).
-                "C3.effective-context-pinned-required/named-false",
-                lambda w: _job(w).update({"name": False}),
-                "job: effective context `False` is not `trunk-check`",
-            ),
-            # The runner and the timeout as OPERANDS (codex, r50): both are enforced, but the registry had
-            # no case for either, so the timeout-360 survivor was bound to an unrelated container key.
-            (
-                "C3.runner-and-timeout-pinned/timeout-360",
-                lambda w: _job(w).update({"timeout-minutes": 360}),
-                "job: expected `timeout-minutes: 15`, found 360",
-            ),
-            (
-                "C3.runner-and-timeout-pinned/other-runner",
-                lambda w: _job(w).update({"runs-on": "macos-latest"}),
-                "job: expected `runs-on: ubuntu-latest`, found 'macos-latest'",
-            ),
-            (
-                "C3.runner-and-timeout-pinned/timeout-absent",
-                lambda w: _job(w).pop("timeout-minutes"),
-                "job: expected `timeout-minutes: 15`, found None",
-            ),
-            # TYPE is part of the operand (codex, r57): `15.0 == 15` in Python.
-            (
-                "C3.runner-and-timeout-pinned/timeout-float",
-                lambda w: _job(w).update({"timeout-minutes": 15.0}),
-                "job: expected `timeout-minutes: 15`, found 15.0",
-            ),
-            # fetch-depth is an OPERAND, per entry (codex, r56): the required job needs HEAD^1 (2),
-            # and depth 1 or omission (checkout's default is 1) leaves it absent.
-            (
-                "C8.checkout-fetch-depth-required/absent",
-                lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
-                "checkout inputs: `fetch-depth` must be 2, found None",
-            ),
-            (
-                "C8.checkout-fetch-depth-required/one",
-                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": 1}),
-                "checkout inputs: `fetch-depth` must be 2, found 1",
-            ),
-            # A SIBLING job (both arms, r47): every check reads `_job()`, the FIRST job, so a second
-            # job appended under `jobs:` was never inspected, and could emit `validate`.
-            (
-                "C3.single-job/required-sibling-named-validate",
-                lambda w: w["jobs"].update(
-                    {
-                        "context-decoy": {
-                            "name": "validate",
-                            "runs-on": "ubuntu-latest",
-                            "timeout-minutes": 15,
-                            "steps": [{"name": "Context decoy", "run": "true"}],
-                        }
-                    }
-                ),
-                "jobs: expected exactly one job, found 2",
-            ),
-        ]
-
-    def _canary_mutants(self):
-        """The canary's own cases. Its contract differs in exactly two places, so it gets exactly the
-        mutants those two places imply — plus the shared ones, which the required entry already runs
-        against the SAME checker, so duplicating them here would add executions and no discrimination.
+    # ---- V1, V2: classification and the closed schema ---------------------------------------------
+    def test_every_case_has_exactly_one_executor_and_the_owned_sets_agree(self):
+        """V1. The fixture and injected sets are OWNERSHIP BOOKKEEPING, compared both ways: a fixture
+        case added to the registry fails here until the set the per-entry accounting reads lists it.
         """
+        classes: dict[str, set[str]] = {}
+        for obligation in self.registry["obligations"]:
+            for case in obligation.get("cases", []):
+                classes.setdefault(_classify(case), set()).add(case["id"])
+        self.assertEqual(FIXTURE_EXECUTED_CASES, classes.get("fixture", set()))
+        self.assertEqual(CELL16_INJECTED_CASES, classes.get("injected", set()))
+        for name, case in (
+            (
+                "unknown op",
+                {"id": "x/rename", "op": "rename", "side": "local", "target": "$.a"},
+            ),
+            (
+                "unrooted target",
+                {"id": "x/bare", "op": "add", "side": "local", "target": "steps[a].b"},
+            ),
+        ):
+            with self.subTest(control=name), self.assertRaisesRegex(
+                AssertionError, "x/"
+            ):
+                _classify(case)
 
-        def move_to_step(w):
-            _job(w).pop("continue-on-error")
-            _step(w, "trunk")["continue-on-error"] = True
+    def test_every_obligation_declares_a_known_kind(self):
+        """The kind decides which checker a raw case meets and whether the comparator runs, so it is a
+        closed set too: `kind: yml` must fail here, not silently skip a diagnostic (PR #108, codex).
+        """
+        for obligation in self.registry["obligations"]:
+            with self.subTest(obligation=obligation["id"]):
+                self.assertIn(obligation["kind"], OBLIGATION_KINDS)
 
-        return [
-            (
-                "C16.canary-continue-on-error-job-scope/absent",
-                lambda w: _job(w).pop("continue-on-error"),
-                "canary: job-scoped `continue-on-error` is absent",
-            ),
-            (
-                "C16.canary-continue-on-error-job-scope/step-scope",
-                move_to_step,
-                "step `trunk`: `continue-on-error:` is prohibited",
-            ),
-            (
-                # COREDEV-2850: `contract_problems` now selects the canary's literal on `is_canary`.
-                # Without a canary case that branch has no mutant at all.
-                "C4.arguments-canary-literal/appended",
-                lambda w: _step(w, "trunk")["with"].__setitem__(
-                    "arguments", CANARY_ARGUMENTS_LITERAL + " --fix"
-                ),
-                "action inputs: `arguments` does not equal the declared literal",
-            ),
-            (
-                # A passing canary named `validate` would emit a REQUIRED context without running the
-                # contract suites (codex, r46). The job ID never changed, so the ID check passed.
-                "C3.effective-context-pinned-canary/named-validate",
-                lambda w: _job(w).update({"name": "validate"}),
-                "job: effective context `validate` is not `trunk-check-push`",
-            ),
-            (
-                "C3.effective-context-pinned-canary/named-as-required",
-                lambda w: _job(w).update({"name": EXPECTED_CONTEXT}),
-                "job: effective context `trunk-check` is not `trunk-check-push`",
-            ),
-            (
-                "C3.effective-context-pinned-canary/named-null",
-                lambda w: _job(w).update({"name": None}),
-                "job: effective context `None` is not `trunk-check-push`",
-            ),
-            (
-                "C3.effective-context-pinned-canary/named-false",
-                lambda w: _job(w).update({"name": False}),
-                "job: effective context `False` is not `trunk-check-push`",
-            ),
-            # ---- the canary's OWN event contract (codex, r52): C1's required-entry cases are written
-            # against `pull_request`, so nothing in the registry could test the canary's `push`.
-            (
-                "C1.canary-single-event/add-workflow-dispatch",
-                lambda w: _on(w).update({"workflow_dispatch": {}}),
-                "event set: unlisted event `workflow_dispatch`",
-            ),
-            (
-                "C1.canary-single-event/add-pull-request",
-                lambda w: _on(w).update({"pull_request": {"branches": ["main"]}}),
-                "event set: unlisted event `pull_request`",
-            ),
-            (
-                "C1.canary-single-event/arbitrary-event",
-                lambda w: _on(w).update({"schedule": [{"cron": "0 0 * * *"}]}),
-                "event set: unlisted event `schedule`",
-            ),
-            (
-                "C4.arguments-canary-literal/absent",
-                lambda w: _step(w, "trunk")["with"].pop("arguments"),
-                "action inputs: `arguments` is absent",
-            ),
-            # The canary needs FULL history: `before` is HEAD~N for an N-commit push, and at depth 2
-            # that object is absent and the guard reads an EMPTY DIFF (codex, r56).
-            (
-                "C8.checkout-fetch-depth-canary/absent",
-                lambda w: _step(w, "checkout")["with"].pop("fetch-depth"),
-                "checkout inputs: `fetch-depth` must be 0, found None",
-            ),
-            (
-                # `False == 0` in Python, so the canary's depth check accepted `false` (codex, r57).
-                "C8.checkout-fetch-depth-canary/boolean-false",
-                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": False}),
-                "checkout inputs: `fetch-depth` must be 0, found False",
-            ),
-            (
-                "C8.checkout-fetch-depth-canary/two",
-                lambda w: _step(w, "checkout")["with"].update({"fetch-depth": 2}),
-                "checkout inputs: `fetch-depth` must be 0, found 2",
-            ),
-            (
-                "C1.canary-push-option-allowlist/paths",
-                lambda w: _on(w)["push"].update({"paths": ["**.py"]}),
-                "push options: unlisted option `paths`",
-            ),
-            (
-                "C1.canary-push-option-allowlist/tags",
-                lambda w: _on(w)["push"].update({"tags": ["v*"]}),
-                "push options: unlisted option `tags`",
-            ),
-            (
-                "C1.canary-push-option-allowlist/branches-ignore",
-                lambda w: _on(w)["push"].update(
-                    {"branches-ignore": _on(w)["push"].pop("branches")}
-                ),
-                "push options: unlisted option `branches-ignore`",
-            ),
-            (
-                "C3.single-job/canary-sibling-named-validate",
-                lambda w: w["jobs"].update(
-                    {
-                        "context-decoy": {
-                            "name": "validate",
-                            "runs-on": "ubuntu-latest",
-                            "timeout-minutes": 15,
-                            "steps": [{"name": "Context decoy", "run": "true"}],
-                        }
-                    }
-                ),
-                "jobs: expected exactly one job, found 2",
-            ),
-        ]
+    def test_every_obligation_declares_at_least_one_known_entry(self):
+        """Every count and loop in this file iterates `entries`. An empty list runs a case on NOTHING
+        while each aggregate stays satisfied, so it fails here (PR #108 second review, codex).
+        """
+        known = set(self.registry["entries"])
+        for obligation in self.registry["obligations"]:
+            with self.subTest(obligation=obligation["id"]):
+                entries = obligation.get("entries")
+                self.assertTrue(entries, "declares no entry")
+                self.assertEqual(set(), set(entries) - known, "names an unknown entry")
+                # A repeated entry runs one entry twice and the other never, under an unchanged count
+                # (local review of PR #108, codex).
+                self.assertEqual(len(entries), len(set(entries)), "repeats an entry")
 
-    def test_every_canary_mutant_fails_with_its_own_diagnostic(self):
-        canary = _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(
-            [],
-            contract_problems(copy.deepcopy(canary), entry="canary"),
-            "the shipped canary must be a passing positive control",
-        )
-        for case_id, mutate, diagnostic in self._canary_mutants():
-            with self.subTest(case=case_id):
-                mutant = copy.deepcopy(canary)
-                mutate(mutant)
-                problems = contract_problems(mutant, entry="canary")
-                self.assertIn(
-                    diagnostic,
-                    problems,
-                    f"{case_id} did not produce its own diagnostic",
+    def test_obligation_ids_are_unique(self):
+        ids = [obligation["id"] for obligation in self.registry["obligations"]]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate obligation ids")
+
+    def test_the_registry_has_no_duplicate_mapping_key(self):
+        """PyYAML keeps the LAST of two equal keys, silently: a pasted second `payload:` or `entries:`
+        would replace the first with no error. Checked on the composed nodes, before construction.
+        """
+        root = yaml.compose(REGISTRY_PATH.read_text(encoding="utf-8"))
+        duplicates: list[str] = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, yaml.MappingNode):
+                keys = [
+                    key.value
+                    for key, _ in node.value
+                    if isinstance(key, yaml.ScalarNode)
+                ]
+                duplicates.extend(
+                    f"line {node.start_mark.line + 1}: `{key}`"
+                    for key in sorted({k for k in keys if keys.count(k) > 1})
                 )
+                stack.extend(value for _, value in node.value)
+            elif isinstance(node, yaml.SequenceNode):
+                stack.extend(node.value)
+        self.assertEqual([], duplicates)
 
-    def test_the_shipped_workflow_is_a_passing_positive_control(self):
-        """Every mutant below starts from a GREEN baseline, or it proves nothing."""
-        self.assertEqual(
-            [], contract_problems(copy.deepcopy(self.workflow), milestone="M3")
+    def test_the_raw_census_is_pinned(self):
+        """RAW_EXECUTIONS, asserted where nothing can skip. The actionlint test asserts it too, but that
+        test skips where actionlint is absent (`darwin-suite`)."""
+        raw_pairs = {
+            (case["id"], entry)
+            for obligation, case in _registry_cases(self.registry, "raw")
+            for entry in obligation.get("entries", [])
+        }
+        self.assertEqual(self.RAW_EXECUTIONS, len(raw_pairs))
+
+    def test_the_injected_case_adds_the_canarys_own_context(self):
+        """`C16.canary-not-required` is about the CANARY's context. This check never skips; the cell-16
+        execution beside it needs an authenticated ruleset read and can."""
+        injected = _registry_cases(self.registry, "injected")
+        self.assertEqual(1, len(injected))
+        ((_, case),) = injected
+        self.assertEqual(CANARY_CONTEXT, _injected_context(case))
+
+    def test_every_case_uses_only_the_declared_fields(self):
+        """V2. A misspelt or invented key must not silently become "no anchor"."""
+        for obligation in self.registry["obligations"]:
+            for case in obligation.get("cases", []):
+                with self.subTest(case=case["id"]):
+                    self.assertEqual([], _schema_problems(case))
+        typo = dict(_registry_cases(self.registry, "structural")[0][1], anchor="x")
+        self.assertIn(f"{typo['id']}: unknown field `anchor`", _schema_problems(typo))
+        bare = {key: value for key, value in typo.items() if key != "diagnostic"}
+        self.assertIn(
+            f"{typo['id']}: missing field `diagnostic`", _schema_problems(bare)
         )
+
+    # ---- V5: every structural (case, entry), built and diagnosed -----------------------------------
+    def test_the_shipped_workflows_are_passing_positive_controls(self):
+        """Every mutant below starts from a GREEN baseline, or it proves nothing."""
+        for entry, base in self.bases.items():
+            with self.subTest(entry=entry):
+                self.assertEqual(
+                    [],
+                    contract_problems(
+                        copy.deepcopy(base), milestone=SHIPPED_MILESTONE, entry=entry
+                    ),
+                )
 
     def test_every_generated_mutant_fails_with_its_own_diagnostic(self):
-        for case in self._yaml_mutants():
-            case_id, mutate, diagnostic = case[0], case[1], case[2]
-            milestone = case[3] if len(case) > 3 else "M2"
-            with self.subTest(case=case_id):
-                mutant = copy.deepcopy(self.workflow)
-                mutate(mutant)
-                # EVERY mutant, no milestone carve-out. The exemption existed because one M3 case
-                # mutated nothing while M2's shipped workflow carried the advisory key; M3 removed
-                # the key and that case now re-adds it, so the carve-out has no remaining subject.
-                # A mutant that changes nothing cannot prove a checker sees anything.
-                self.assertNotEqual(
-                    yaml.safe_dump(self.workflow, sort_keys=True),
-                    yaml.safe_dump(mutant, sort_keys=True),
+        """V5. Each structural case on each entry its obligation declares: built exactly as declared,
+        different from its base, and failing with ITS OWN registry diagnostic at the shipped milestone.
+        A `remote_relation` obligation's problems include the comparator's, against ONE resolution.
+        """
+        resolved = _resolve_once(self, _shipped_branches())
+        executed: set[tuple[str, str]] = set()
+        for obligation, case, entry, mutant in self._structural():
+            executed.add((case["id"], entry))
+            with self.subTest(case=case["id"], entry=entry):
+                self.assertFalse(
+                    _strict_equal(self.bases[entry], mutant),
                     "the mutant must actually change the workflow",
                 )
-                problems = contract_problems(mutant, milestone=milestone)
-                self.assertIn(
-                    diagnostic,
-                    problems,
-                    f"{case_id} did not produce its own diagnostic",
+                problems = contract_problems(
+                    mutant, milestone=SHIPPED_MILESTONE, entry=entry
                 )
+                relation = _relation_problems(mutant, entry, obligation, resolved)
+                self.assertTrue(
+                    _diagnostic_matches(case["diagnostic"], problems, relation),
+                    f"{case['id']} on {entry}: expected {case['diagnostic']!r}, "
+                    f"found {problems + relation}",
+                )
+        # DISTINCT (case, entry) pairs: `entries: [canary, canary]` kept a 222 iteration count while
+        # dropping the required workflow's mutant (local review of PR #108, codex).
+        self.assertEqual(self.STRUCTURAL_EXECUTIONS, len(executed))
 
-    def test_every_generated_mutant_names_a_declared_registry_case(self):
-        declared = {
-            case["id"]
-            for obligation in self.registry["obligations"]
-            for case in obligation.get("cases", [])
+    def test_the_companion_job_fails_and_keeps_its_closed_shape(self):
+        """Plan §2.5: "the support job must fail" is EXECUTED, and nothing can be added that masks it."""
+        companions = [
+            case
+            for _, case in _registry_cases(self.registry, "structural")
+            if "declares_support_job" in case
+        ]
+        self.assertEqual(1, len(companions))
+        (case,) = companions
+        companion = _companion(case)
+        assert companion is not None
+        _, mapping = companion
+        (step,) = mapping["steps"]
+        completed = subprocess.run(
+            ["bash", "-c", step["run"]], capture_output=True, check=False
+        )
+        self.assertNotEqual(0, completed.returncode, "the companion's body must fail")
+        for name, mutate in (
+            (
+                "masked step",
+                lambda d: d["steps"][0].update({"continue-on-error": True}),
+            ),
+            ("masked job", lambda d: d.update({"continue-on-error": True})),
+            ("second step", lambda d: d["steps"].append({"run": "true"})),
+        ):
+            declared = copy.deepcopy(case["declares_support_job"])
+            mutate(declared)
+            with self.subTest(control=name), self.assertRaisesRegex(
+                AssertionError, case["id"]
+            ):
+                _companion(dict(case, declares_support_job=declared))
+
+    # ---- V3: the generator fails closed --------------------------------------------------------------
+    def test_the_generator_fails_closed_on_every_requirement(self):
+        """V3. One synthetic case per requirement of plan §2.2-§2.4, each failing for ITS OWN reason. A
+        control that accepted any failure naming the case passed with its guard deleted, because a
+        LATER guard fired instead (defence in depth masks a missing check), so each names the reason.
+        """
+        steps = "$.jobs.<job>.steps"
+
+        def two_trunks(w):
+            return _steps(w).append(copy.deepcopy(_step(w, "trunk")))
+
+        def two_checkouts(w):
+            return _steps(w).append(copy.deepcopy(_step(w, "checkout")))
+
+        controls = (
+            (
+                "unparsable target",
+                {"op": "add", "target": "$.jobs..x", "payload": "1"},
+                "cannot parse",
+                None,
+            ),
+            (
+                "step matches 0",
+                {"op": "remove", "target": f"{steps}[nope]"},
+                "matches 0 steps",
+                None,
+            ),
+            (
+                "step matches 2",
+                {"op": "remove", "target": f"{steps}[trunk]"},
+                "matches 2 steps",
+                two_trunks,
+            ),
+            (
+                "add on a present key",
+                {"op": "add", "target": "$.permissions", "payload": "{}"},
+                "`add` needs",
+                None,
+            ),
+            (
+                "set on an absent key",
+                {"op": "set", "target": "$.run-name", "payload": "x"},
+                "`set` needs",
+                None,
+            ),
+            (
+                "set to an equal value",
+                {"op": "set", "target": "$.permissions", "payload": "{contents: read}"},
+                "changes nothing",
+                None,
+            ),
+            (
+                "remove an absent key",
+                {"op": "remove", "target": "$.run-name"},
+                "`remove` needs",
+                None,
+            ),
+            (
+                "remove an absent step",
+                {"op": "remove", "target": f"{steps}[absent]"},
+                "matches 0 steps",
+                None,
+            ),
+            (
+                "append to a non-string",
+                {"op": "append", "target": "$.permissions", "payload": "x"},
+                "present string target",
+                None,
+            ),
+            (
+                "move an absent source",
+                {"op": "move", "target": "$.run-name", "to": "$.run-name2"},
+                "`move` needs",
+                None,
+            ),
+            (
+                "move to a present key",
+                {"op": "move", "target": "$.permissions", "to": "$.name"},
+                "to be an absent key",
+                None,
+            ),
+            (
+                "non-string payload",
+                {"op": "add", "target": "$.run-name", "payload": 1},
+                "YAML text",
+                None,
+            ),
+            (
+                "missing payload on add",
+                {"op": "add", "target": "$.run-name"},
+                "requires a payload",
+                None,
+            ),
+            (
+                "missing payload on set",
+                {"op": "set", "target": "$.name"},
+                "requires a payload",
+                None,
+            ),
+            (
+                "missing payload on append",
+                {"op": "append", "target": "$.name"},
+                "requires a payload",
+                None,
+            ),
+            (
+                "missing payload on insert",
+                {"op": "insert", "target": steps, "at": "end"},
+                "requires a payload",
+                None,
+            ),
+            (
+                "payload on remove",
+                {"op": "remove", "target": "$.name", "payload": "x"},
+                "takes no payload",
+                None,
+            ),
+            (
+                "payload on move",
+                {"op": "move", "target": "$.name", "to": "$.n2", "payload": "x"},
+                "takes no payload",
+                None,
+            ),
+            (
+                "payload on duplicate",
+                {
+                    "op": "duplicate",
+                    "target": f"{steps}[trunk]",
+                    "at": "end",
+                    "payload": "x",
+                },
+                "takes no payload",
+                None,
+            ),
+            (
+                "insert payload not a mapping",
+                {"op": "insert", "target": steps, "at": "end", "payload": "[1]"},
+                "parses to a mapping",
+                None,
+            ),
+            (
+                "insert target not a sequence",
+                {"op": "insert", "target": "$.name", "at": "end", "payload": "run: x"},
+                "`steps` sequence",
+                None,
+            ),
+            (
+                "`to` on a step move",
+                {"op": "move", "target": f"{steps}[trunk]", "to": "$.x", "at": "end"},
+                "`to` is legal only",
+                None,
+            ),
+            (
+                "both `before` and `at`",
+                {
+                    "op": "duplicate",
+                    "target": f"{steps}[trunk]",
+                    "at": "end",
+                    "before": f"{steps}[checkout]",
+                },
+                "exactly one of",
+                None,
+            ),
+            (
+                "neither `before` nor `at`",
+                {"op": "duplicate", "target": f"{steps}[trunk]"},
+                "exactly one of",
+                None,
+            ),
+            (
+                "`at` other than end",
+                {"op": "duplicate", "target": f"{steps}[trunk]", "at": "start"},
+                "`at` must be `end`",
+                None,
+            ),
+            (
+                "unknown op",
+                {"op": "rename", "target": "$.name"},
+                "unknown structural op",
+                None,
+            ),
+            (
+                "`before` malformed",
+                {"op": "duplicate", "target": f"{steps}[trunk]", "before": "$.jobs..x"},
+                "cannot parse",
+                None,
+            ),
+            (
+                "`before` not a step",
+                {
+                    "op": "duplicate",
+                    "target": f"{steps}[trunk]",
+                    "before": "$.permissions",
+                },
+                "is not `",
+                None,
+            ),
+            (
+                "`before` another job",
+                {
+                    "op": "duplicate",
+                    "target": f"{steps}[trunk]",
+                    "before": "$.jobs.other.steps[checkout]",
+                },
+                "is not `",
+                None,
+            ),
+            (
+                "`before` absent",
+                {
+                    "op": "duplicate",
+                    "target": f"{steps}[trunk]",
+                    "before": f"{steps}[absent]",
+                },
+                "matches 0 steps",
+                None,
+            ),
+            (
+                "`before` itself",
+                {
+                    "op": "move",
+                    "target": f"{steps}[trunk]",
+                    "before": f"{steps}[trunk]",
+                },
+                "before itself",
+                None,
+            ),
+            (
+                "`before` ambiguous",
+                {
+                    "op": "duplicate",
+                    "target": f"{steps}[trunk]",
+                    "before": f"{steps}[checkout]",
+                },
+                "matches 2 steps",
+                two_checkouts,
+            ),
+        )
+        for name, spec, reason, prepare in controls:
+            case_id = f"V3/{name}"
+            case: dict = {"id": case_id, "side": "local", **spec}
+            base = copy.deepcopy(self.bases["required"])
+            if prepare:
+                prepare(base)
+            with self.subTest(control=name), self.assertRaisesRegex(
+                AssertionError, re.escape(case_id) + ".*" + re.escape(reason)
+            ):
+                _mutate(base, case, "required", self.registry)
+        # The set-equal check compares TYPES: `15.0` is a change from `15`, and must build.
+        float_case = {
+            "id": "V3/float",
+            "side": "local",
+            "op": "set",
+            "target": "$.jobs.<job>.timeout-minutes",
+            "payload": "15.0",
         }
-        for case in self._yaml_mutants():
-            with self.subTest(case=case[0]):
-                self.assertIn(case[0], declared)
+        self.assertEqual(
+            15.0,
+            _job(
+                _mutate(self.bases["required"], float_case, "required", self.registry)
+            )["timeout-minutes"],
+        )
 
-    def test_the_named_execution_sets_reference_only_declared_cases(self):
-        """A stale id in these sets would silently inflate the coverage the test above reports."""
-        declared = {
-            case["id"]
-            for obligation in self.registry["obligations"]
-            for case in obligation.get("cases", [])
+    # ---- V4: every postcondition catches a wrong effect ------------------------------------------
+    def test_every_postcondition_catches_a_wrong_effect(self):
+        """V4. One wrong effect per row of plan §2.3's table, applied AFTER a correct build, and the
+        postcondition must name the case. The diagnostic alone passes several of these: a duplicate
+        placed before the guards still says "appears 2 times" (codex, r1)."""
+        job = self.registry["entries"]["required"]["job"]
+        base = self.bases["required"]
+        # Full ids: short ids such as `absent` repeat across obligations.
+        cases = {
+            case["id"]: case for _, case in _registry_cases(self.registry, "structural")
         }
-        for case_id in sorted(FIXTURE_EXECUTED_CASES | CELL16_INJECTED_CASES):
-            with self.subTest(case=case_id):
-                self.assertIn(case_id, declared)
 
+        def checkout_first(w):
+            s = _steps(w)
+            copies = [i for i, step in enumerate(s) if step.get("name") == "checkout"]
+            s.insert(1, s.pop(copies[-1]))
+
+        def wrong_index(w):
+            s = _steps(w)
+            s.insert(
+                0,
+                s.pop(
+                    next(
+                        i
+                        for i, step in enumerate(s)
+                        if step.get("name") == "guard-launcher-path"
+                    )
+                ),
+            )
+
+        def after_anchor(w):
+            s = _steps(w)
+            k = next(i for i, step in enumerate(s) if step == {"run": "echo hi"})
+            s.insert(k + 1, s.pop(k))
+
+        def wrong_step_removed(w):
+            s = _steps(w)
+            s.insert(0, copy.deepcopy(_step(base, "checkout")))
+            s.remove(next(step for step in s if step.get("name") == "guard-empty-diff"))
+
+        def extra_newline(w):
+            step = _step(w, "guard-empty-diff")
+            payload = cases["C8.run-bodies-frozen/github-env-trunk-path"]["payload"]
+            step["run"] = step["run"][: -len(payload)] + "\n" + payload
+
+        def stray_type_edit(w):
+            _job(w)["timeout-minutes"] = float(_job(w)["timeout-minutes"])
+
+        def wrong_destination(w):
+            on = _on(w)
+            on["pull_request"]["branches-ignore"] = ["other"]
+
+        def key_still_present(w):
+            w["permissions"] = {"contents": "read"}
+
+        def wrong_value(w):
+            _job(w)["container"] = None
+
+        def modified_copy(w):
+            # Right place, wrong content: only the placement VALUE check sees it.
+            copies = [step for step in _steps(w) if step.get("name") == "checkout"]
+            copies[-1].setdefault("with", {})["ref"] = "main"
+
+        def stray_step_edit(w):
+            # Right copy, right place, and ANOTHER step changed: only the step FRAME sees it.
+            _step(w, "guard-empty-diff")["run"] += ":"
+
+        def wrong_place(w):
+            _job(w).pop("container")
+            w["container"] = "ubuntu:24.04"
+
+        controls = (
+            ("add: wrong value", "C3.job-mapping-allowlist/arbitrary-key", wrong_value),
+            (
+                "add: written to the parent",
+                "C3.job-mapping-allowlist/arbitrary-key",
+                wrong_place,
+            ),
+            (
+                "set: stray second edit",
+                "C3.runner-and-timeout-pinned/timeout-360",
+                lambda w: w.update({"run-name": "x"}),
+            ),
+            (
+                "remove (key): still present",
+                "C0.permissions-pinned-at-root/absent",
+                key_still_present,
+            ),
+            (
+                "append: extra newline",
+                "C8.run-bodies-frozen/github-env-trunk-path",
+                extra_newline,
+            ),
+            (
+                "move (key): wrong destination value",
+                "C1.event-option-allowlist/arbitrary-option",
+                wrong_destination,
+            ),
+            (
+                "remove (step): a different step",
+                "C8.step-sequence-allowlist/delete-checkout",
+                wrong_step_removed,
+            ),
+            (
+                "move (step): wrong index",
+                "C8.step-sequence-allowlist/guard-moved",
+                wrong_index,
+            ),
+            (
+                "duplicate: before the guards",
+                "C8.step-sequence-allowlist/duplicate-checkout",
+                checkout_first,
+            ),
+            (
+                "duplicate: a modified copy",
+                "C8.step-sequence-allowlist/duplicate-checkout",
+                modified_copy,
+            ),
+            (
+                "duplicate: a stray edit to another step",
+                "C8.step-sequence-allowlist/duplicate-checkout",
+                stray_step_edit,
+            ),
+            (
+                "insert: after the anchor",
+                "C8.step-sequence-allowlist/extra-step",
+                after_anchor,
+            ),
+            ("type-only stray edit", "C0.no-concurrency/workflow", stray_type_edit),
+        )
+        for name, case_id, wrong in controls:
+            case = cases[case_id]
+            with self.subTest(control=name, case=case["id"]):
+                correct = _mutate(base, case, "required", self.registry)
+                perturbed = copy.deepcopy(correct)
+                wrong(perturbed)
+                self.assertFalse(
+                    _strict_equal(correct, perturbed), "the control changed nothing"
+                )
+                before = copy.deepcopy(base)
+                check = (
+                    _check_step_postconditions
+                    if case["op"] in ("duplicate", "insert")
+                    or _parse_target(case)[-1][0] == "step"
+                    else _check_key_postconditions
+                )
+                with self.assertRaisesRegex(
+                    AssertionError, re.escape(case["id"]) + ": postcondition: "
+                ):
+                    check(before, perturbed, case, job)
+        # `==` would pass the type-only edit; the strict comparison is what catches it.
+        self.assertFalse(_strict_equal({"t": 15}, {"t": 15.0}))
+
+    # ---- V6: constructible = actionlint accepts it -------------------------------------------------
     def test_validate_installs_actionlint_before_the_scripts_suite(self):
         """COREDEV-2869. Cell 11's validity rule runs inside the scripts suite, so `validate` must have
         actionlint on PATH by then. It installed it AFTER the suite, which is why the rule was a
@@ -4230,11 +4613,13 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
         self.assertLess(install, suite)
 
     def test_every_mutant_is_a_workflow_github_would_accept(self):
-        """Cell 11's validity rule, EXECUTED (COREDEV-2869; codex, r42). Each mutant must fail its own
-        contract diagnostic, not schema validation, so actionlint must accept it:
-        `actionlint -shellcheck= -pyflakes=` reports nothing for any (case, entry) pair except the
-        kinds that case's `actionlint_allow` declares. An allowance that no longer fires is stale and
-        fails too, so the allowlist cannot become a blanket exemption."""
+        """Cell 11's validity rule, EXECUTED, over BOTH generators (COREDEV-2869; codex, r42 and r4).
+        Each mutant must fail its own contract diagnostic, not schema validation, so actionlint must
+        accept it: `actionlint -shellcheck= -pyflakes=` reports nothing except the kinds the case's
+        `actionlint_allow` declares, and an allowance that no longer fires is stale. Structural mutants
+        are dumped; RAW mutants are written as their source TEXT, because a parse and re-dump would erase
+        the spelling they exist to test (`lfs: []` passes its span, frame and diagnostic, and GitHub
+        rejects it)."""
         actionlint = shutil.which("actionlint")
         if actionlint is None:
             if os.environ.get("GITHUB_JOB") == "validate":
@@ -4245,33 +4630,45 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             self.skipTest(
                 "actionlint is not installed here; `validate` runs this and cannot skip"
             )
-        recipes = {case[0]: case for case in self._yaml_mutants()} | {
-            case[0]: case for case in self._canary_mutants()
-        }
-        bases = {
-            "required": _load_workflow(),
-            "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
-        }
-        allowed: dict[str, set[str]] = {}
         names: dict[str, tuple[str, str]] = {}
+        allowed: dict[str, set[str]] = {}
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["git", "init", "-q", tmp], check=True)
             workflows = Path(tmp) / ".github" / "workflows"
             workflows.mkdir(parents=True)
-            for obligation in self.registry["obligations"]:
-                for case in obligation.get("cases", []):
-                    recipe = recipes.get(case["id"])
-                    if recipe is None:
-                        continue
-                    allowed[case["id"]] = set(case.get("actionlint_allow", []))
-                    for entry in obligation.get("entries", []):
-                        mutant = copy.deepcopy(bases[entry])
-                        recipe[1](mutant)
-                        name = f"m{len(names):03d}.yml"
-                        names[name] = (case["id"], entry)
-                        (workflows / name).write_text(
-                            yaml.safe_dump(mutant, sort_keys=False), encoding="utf-8"
+
+            def write(case_id: str, entry: str, text: str) -> None:
+                name = f"m{len(names):04d}.yml"
+                names[name] = (case_id, entry)
+                (workflows / name).write_text(text, encoding="utf-8")
+
+            for _, case, entry, mutant in self._structural():
+                allowed[case["id"]] = set(case.get("actionlint_allow", []))
+                write(case["id"], entry, yaml.safe_dump(mutant, sort_keys=False))
+            structural = len(names)
+            self.assertEqual(
+                structural,
+                len(set(names.values())),
+                "duplicate structural (case, entry) pairs",
+            )
+            for obligation, case in _registry_cases(self.registry, "raw"):
+                allowed[case["id"]] = set(case.get("actionlint_allow", []))
+                for entry in obligation.get("entries", []):
+                    path = WORKFLOW_PATH if entry == "required" else CANARY_PATH
+                    for source in _all_permitted_sources(
+                        path.read_text(encoding="utf-8")
+                    ).values():
+                        write(
+                            case["id"],
+                            entry,
+                            _raw_mutation(case, entry, source, self.registry),
                         )
+            on_disk = {path.name for path in workflows.iterdir()}
+            written = len(on_disk)
+            # The raw (case, entry) pairs whose TEXT is in the lint tree, read from the files themselves.
+            raw_written = [
+                names[name] for name in list(names)[structural:] if name in on_disk
+            ]
             completed = subprocess.run(
                 [actionlint, "-shellcheck=", "-pyflakes=", "-format", "{{json .}}"],
                 cwd=tmp,
@@ -4280,10 +4677,29 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 check=False,
             )
         self.assertIn(completed.returncode, (0, 1), completed.stderr)
-        findings = json.loads(completed.stdout.strip() or "null") or []
-        self.assertGreater(
-            len(names), 200, "the mutant set is smaller than the registry declares"
+        self.assertEqual(self.STRUCTURAL_EXECUTIONS, structural)
+        # Counted from the FILES in the lint tree, not from a counter beside the write: a counter
+        # kept counting when the write was dropped.
+        raw_texts = written - structural
+        spellings = {
+            entry: len(_all_permitted_sources(path.read_text(encoding="utf-8")))
+            for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH))
+        }
+        expected_raw = 0
+        for obligation, _ in _registry_cases(self.registry, "raw"):
+            for entry in obligation.get("entries", []):
+                expected_raw += spellings[entry]
+        self.assertEqual(expected_raw, raw_texts)
+        raw_pairs = {
+            (case["id"], entry)
+            for obligation, case in _registry_cases(self.registry, "raw")
+            for entry in obligation.get("entries", [])
+        }
+        self.assertEqual(self.RAW_EXECUTIONS, len(raw_pairs))
+        self.assertEqual(
+            raw_pairs, set(raw_written), "raw pairs the lint tree never received"
         )
+        findings = json.loads(completed.stdout.strip() or "null") or []
         problems: list[str] = []
         used: set[tuple[str, str]] = set()
         for finding in findings:
@@ -4302,118 +4718,150 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             set(), stale, "an actionlint allowance no longer fires — remove it"
         )
 
-    def test_every_case_holds_on_every_entry_its_obligation_declares(self):
-        """A registry `entries:` list is a CLAIM that each case applies to each entry (codex, r49 and r52).
-        Run every case on every entry its obligation names. It must change that entry's workflow and
-        produce its OWN diagnostic there, so a generator that follows the registry cannot emit a mutant
-        that changes nothing or reports another entry's diagnostic, and an obligation cannot claim the
-        canary without the canary being tested."""
-        recipes = {case[0]: case for case in self._yaml_mutants()} | {
-            case[0]: case for case in self._canary_mutants()
+    # ---- V8: the target-set family, through the real boundary --------------------------------------
+    def test_the_resolver_family_runs_through_the_real_boundary(self):
+        """V8. Each (obligation, side, form): the recorded raw target set with ONE side replaced by the
+        form's payload. `_resolve_target_set` — the live read, the default-branch lookup and the
+        resolution — is replaced by a CALLABLE that runs the real `_resolve_ref_name` when called, so a
+        refusal raises inside `_resolve_once`; the boundary and the comparator run unmodified.
+        """
+        family = self.registry["families"]["target_set_resolution"]
+        equality, refusal = (
+            family["diagnostics"]["equality"],
+            family["diagnostics"]["refusal"],
+        )
+        self.assertFalse(equality.startswith(refusal) or refusal.startswith(equality))
+        recorded = _recorded_remote_halves()["rawTargetSet"]
+        executions = _family_executions(self.registry)
+        for execution in executions:
+            form, entry = execution["form"], execution["entry"]
+            injected = copy.deepcopy(recorded)
+            if form["expect"] == "refusal":
+                # AFTER a valid entry: a resolver that validates only the first item of a side must
+                # still fail. The removed hand-written test covered that mixed list; a singleton
+                # replacement did not (local review of PR #108, codex).
+                valid = injected[execution["side"]] or ["refs/heads/alpha"]
+                injected[execution["side"]] = [*valid, form["payload"]]
+            else:
+                injected[execution["side"]] = [form["payload"]]
+            boundary = unittest.mock.patch.object(
+                sys.modules[__name__],
+                "_resolve_target_set",
+                side_effect=lambda injected=injected: _resolve_ref_name(
+                    injected, "main"
+                ),
+            )
+            with self.subTest(
+                obligation=execution["obligation"],
+                side=execution["side"],
+                form=form["id"],
+            ), boundary:
+                if form["expect"] == "equality":
+                    problems = _target_set_results(self)[entry]
+                    self.assertEqual(1, len(problems), problems)
+                    self.assertTrue(
+                        _diagnostic_matches(equality, [], problems), problems
+                    )
+                elif form["expect"] == "refusal":
+                    with self.assertRaises(ValueError) as raised:
+                        _target_set_results(self)
+                    self.assertTrue(
+                        _diagnostic_matches(refusal, [], [str(raised.exception)]),
+                        str(raised.exception),
+                    )
+                else:
+                    self.fail(f"form {form['id']!r}: unknown expect {form['expect']!r}")
+        self.assertEqual(self.FAMILY_EXECUTIONS, len(executions))
+        distinct = {
+            (execution["obligation"], execution["side"], execution["form"]["id"])
+            for execution in executions
         }
-        bases = {
-            "required": _load_workflow(),
-            "canary": _load_actions_yaml(CANARY_PATH.read_text(encoding="utf-8")),
+        self.assertEqual(self.FAMILY_EXECUTIONS, len(distinct), "duplicate executions")
+
+    # ---- V9: no hand-written recipe is declared again --------------------------------------------
+    def test_no_hand_written_recipe_is_declared_again(self):
+        """V9, scoped to what it checks: no function, method or assignment is DECLARED with one of the
+        retired names, and no class assigns a literal tuple to `CASES`. It reads declarations through
+        `ast`, so this test's own list of names cannot trip it; a renamed recipe would evade it, and
+        the generator wiring above is what makes a recipe pointless."""
+        retired = {
+            "_yaml_mutants",
+            "_canary_mutants",
+            "RAW_YAML_CASES",
+            "test_patterns_and_all_fail_closed_on_both_sides",
+        }
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        declared: set[str] = set()
+        literal_cases = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                declared.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        declared.add(target.id)
+                        if target.id == "CASES" and isinstance(node.value, ast.Tuple):
+                            literal_cases.append(node.lineno)
+        self.assertEqual(set(), declared & retired)
+        self.assertEqual([], literal_cases)
+
+    # ---- the accounting: no declared case is executed nowhere --------------------------------------
+    def test_the_named_execution_sets_reference_only_declared_cases(self):
+        """A stale id in these sets would silently inflate the coverage the tests above report."""
+        declared = {
+            case["id"]
+            for obligation in self.registry["obligations"]
+            for case in obligation.get("cases", [])
+        }
+        for case_id in sorted(FIXTURE_EXECUTED_CASES | CELL16_INJECTED_CASES):
+            with self.subTest(case=case_id):
+                self.assertIn(case_id, declared)
+
+    def test_every_non_structural_case_is_owned_on_every_entry_it_declares(self):
+        """Per (case, ENTRY), not per case id: a fixture case declared for two entries but run against
+        one hid eight canary executions behind a covered id (codex, r53)."""
+        fixture_entries = {
+            C6AndC6aGuardsExecuteAgainstFixtureTrees.ENTRY,
+            C6AndC6aGuardsExecuteAgainstTheCanarysOwnBodies.ENTRY,
         }
         for obligation in self.registry["obligations"]:
             for case in obligation.get("cases", []):
-                recipe = recipes.get(case["id"])
-                if recipe is None:
-                    # Not a YAML/body recipe. Account for it per (case, ENTRY), not per case id: a
-                    # fixture case declared for two entries but run against one hid eight canary
-                    # executions behind a covered id (codex, r53).
-                    if case["id"] in FIXTURE_EXECUTED_CASES:
-                        fixture_entries = {
-                            C6AndC6aGuardsExecuteAgainstFixtureTrees.ENTRY,
-                            C6AndC6aGuardsExecuteAgainstTheCanarysOwnBodies.ENTRY,
-                        }
-                        for entry in obligation.get("entries", []):
-                            with self.subTest(case=case["id"], entry=entry):
-                                self.assertIn(entry, fixture_entries)
-                    elif case["id"] in RAW_YAML_CASES:
-                        # The raw-text test runs every case on BOTH entries.
-                        for entry in obligation.get("entries", []):
-                            with self.subTest(case=case["id"], entry=entry):
-                                self.assertIn(entry, {"required", "canary"})
-                    elif case["id"] in CELL16_INJECTED_CASES:
-                        with self.subTest(case=case["id"]):
-                            self.assertEqual(1, len(obligation.get("entries", [])))
-                    continue  # anything else is deferred; the coverage test below accounts for it
+                executor = _classify(case)
                 for entry in obligation.get("entries", []):
                     with self.subTest(case=case["id"], entry=entry):
-                        mutant = copy.deepcopy(bases[entry])
-                        recipe[1](mutant)
-                        self.assertNotEqual(
-                            yaml.safe_dump(bases[entry], sort_keys=True),
-                            yaml.safe_dump(mutant, sort_keys=True),
-                            "the case changes nothing on this entry",
-                        )
-                        milestone = recipe[3] if len(recipe) > 3 else "M2"
-                        self.assertIn(
-                            recipe[2],
-                            contract_problems(mutant, milestone=milestone, entry=entry),
-                        )
+                        if executor == "fixture":
+                            self.assertIn(entry, fixture_entries)
+                        elif executor == "raw":
+                            self.assertIn(entry, {"required", "canary"})
+                        elif executor == "injected":
+                            self.assertEqual(1, len(obligation.get("entries", [])))
 
     def test_every_declared_case_is_executed_here_or_provably_needs_external_machinery(
         self,
     ):
-        """No silent gap between what the registry declares and what this cell runs.
-
-        Classification is PER CASE, not per obligation: `C8.run-bodies-frozen` is a `content_digest`
-        obligation whose `shell`, `working-directory`, `$GITHUB_ENV` and `$GITHUB_PATH` cases are
-        plain structural checks a parser can evaluate, while its `body-digest-*` cases genuinely need
-        the digest mechanism. Bucketing by obligation kind would have deferred the four this cell
-        already kills — reporting LESS coverage than exists, which is the mirror of the defect this
-        test exists to prevent.
+        """No silent gap between what the registry declares and what runs. "Executed" is DERIVED from
+        the classifier: structural and raw cases run in this file from the registry itself, and the
+        fixture and injected classes run in the tests that own their sets, which V1 holds equal.
         """
-        executed = (
-            {case[0] for case in self._yaml_mutants()}
-            | {case[0] for case in self._canary_mutants()}
-            | CELL16_INJECTED_CASES
-            | FIXTURE_EXECUTED_CASES
-            | RAW_YAML_CASES
-        )
-        declared, deferred = set(), []
+        declared, executed = set(), set()
         for obligation in self.registry["obligations"]:
             for case in obligation.get("cases", []):
                 declared.add(case["id"])
-                if case["id"] in executed:
-                    continue
-                deferred.append(
-                    (
-                        case["id"],
-                        obligation["kind"],
-                        case["op"],
-                        case["side"],
-                        obligation.get("entries", []),
-                    )
-                )
-        # NAMES THE OFFENDERS. `assertTrue(executed <= declared)` reports "False is not true"
-        # and leaves you diffing two case sets by hand (github-code-quality, PR #84).
+                executor = _classify(case)
+                # A raw case runs only in the raw class whose KIND is its obligation's kind; any other
+                # kind is a raw case NOTHING diagnoses (PR #108, codex).
+                raw_run = executor == "raw" and obligation["kind"] in _RAW_CLASS_KINDS
+                if (
+                    executor == "structural"
+                    or raw_run
+                    or (executor == "fixture" and case["id"] in FIXTURE_EXECUTED_CASES)
+                    or (executor == "injected" and case["id"] in CELL16_INJECTED_CASES)
+                ):
+                    executed.add(case["id"])
         self.assertEqual(
-            set(),
-            executed - declared,
-            "cases executed here that the registry does not declare",
+            set(), declared - executed, "declared cases that are executed nowhere"
         )
-        for case_id, kind, op, side, entries in deferred:
-            with self.subTest(case=case_id):
-                # A deferred case must NEED a tree, a real run, an authenticated remote read, or an
-                # ENTRY THIS MILESTONE HAS NOT SHIPPED — the canary is M2b. Anything else is a gap.
-                self.assertTrue(
-                    op in ("materialise", "edit_bytes")
-                    or side == "remote"
-                    or kind in ("repo_fixture", "remote_relation")
-                    or "required" not in entries,
-                    f"{case_id} ({kind}/{op}/{side}) is executable here and must not be deferred",
-                )
-        self.assertGreater(len(executed), 0)
-        # Every declared case is now executed somewhere in this file. The deferral machinery above is
-        # kept because it is what KEEPS that true: a case added to the registry that nothing runs will
-        # land in `deferred` and must then justify itself, rather than quietly reducing coverage.
-        self.assertEqual(
-            [], deferred, f"{len(deferred)} declared case(s) are executed nowhere"
-        )
-        self.assertEqual(declared, executed & declared)
+        self.assertEqual(set(), executed - declared)
 
 
 class SurvivorCorpusIsIntactAndIndependent(unittest.TestCase):
@@ -4564,8 +5012,9 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         self.assertEqual([], _target_set_results(self)["canary"])
 
     def test_an_injected_divergent_target_set_is_detected(self):
-        """C16.canary-branches-equal-resolved-target-set/local-divergence — the resolved set moves
-        while every string in the repository stays put."""
+        """A remote-side retarget probe: the resolved set moves while every string in the repository
+        stays put. It never ran the `local-divergence` cases' declared LOCAL op, which cell 11 now
+        executes through the comparator (COREDEV-2869)."""
         resolved = _resolve_ref_name(
             {"include": ["~DEFAULT_BRANCH", "refs/heads/alpha"], "exclude": []}, "trunk"
         )
@@ -4588,15 +5037,19 @@ class Cell16_TheCanaryMeetsItsWholeContract(unittest.TestCase):
         live = _live_ruleset()
         if live is None:
             self.skipTest(_REMOTE_HALF_SKIP)
+        # The context comes from the registry CASE, so the case is what this executes (PR #108).
+        registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+        ((_, case),) = _registry_cases(registry, "injected")
+        context = _injected_context(case)
         injected = copy.deepcopy(live)
         for rule in injected["rules"]:
             if rule["type"] == "required_status_checks":
                 rule["parameters"]["required_status_checks"].append(
-                    {"context": CANARY_CONTEXT, "integration_id": 15368}
+                    {"context": context, "integration_id": 15368}
                 )
         contexts = _required_contexts(injected)
         self.assertIn(
-            CANARY_CONTEXT, contexts, "the injected observation must be constructible"
+            context, contexts, "the injected observation must be constructible"
         )
         # And the live one is still clean — the mutation touched the copy only.
         ruleset = _live_ruleset()
@@ -4747,6 +5200,105 @@ class TheSourceGeneratorsFailByName(unittest.TestCase):
             _source_variants(flow)
 
 
+def _assert_raw_cases_rejected(test: unittest.TestCase, kind: str) -> None:
+    """Every raw case whose obligation is of `kind`, on every entry it declares and every permitted
+    spelling of that entry's source: built by `_raw_mutation`, and rejected with its OWN diagnostic.
+    """
+    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    ran = 0
+    owed: set[tuple[str, str]] = set()
+    executed: set[tuple[str, str]] = set()
+    for obligation, case in _registry_cases(registry, "raw"):
+        if obligation["kind"] != kind:
+            continue
+        # Per CASE, not in aggregate: a raw obligation with no entries ran none of its cases while
+        # the other obligations kept `ran > 0` true (PR #108 second review, codex).
+        test.assertTrue(
+            obligation.get("entries"), f"{case['id']}: its obligation declares no entry"
+        )
+        owed.update((case["id"], entry) for entry in obligation["entries"])
+        for entry in obligation.get("entries", []):
+            path = WORKFLOW_PATH if entry == "required" else CANARY_PATH
+            for spelling, source in _all_permitted_sources(
+                path.read_text(encoding="utf-8")
+            ).items():
+                with test.subTest(case=case["id"], entry=entry, source=spelling):
+                    mutated = _raw_mutation(case, entry, source, registry)
+                    test.assertIn(
+                        case["diagnostic"],
+                        _raw_problems(case, obligation, mutated, entry),
+                    )
+                    ran += 1
+                    executed.add((case["id"], entry))
+    test.assertGreater(ran, 0, f"no raw case of kind {kind!r} ran")
+    test.assertEqual(set(), owed - executed, "raw (case, entry) pairs that never ran")
+
+
+class RawMutationsAreTheRegistrysPayloadVerbatim(unittest.TestCase):
+    """V7 (COREDEV-2869). A diagnostic cannot show WHICH bytes a raw case wrote: `save-annotations: yes`
+    and `: on` fail identically (codex, r1), so the payload's presence is proved directly.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+        cls.source = WORKFLOW_PATH.read_text(encoding="utf-8")
+        ((_, cls.case),) = [
+            (obligation, case)
+            for obligation, case in _registry_cases(cls.registry, "raw")
+            if case["target"].endswith(".save-annotations")
+            and obligation["kind"] == "yaml"
+        ]
+
+    def test_a_changed_payload_changes_the_mutant(self):
+        """The substitution control: a different hazardous spelling must reach the text."""
+        original = _raw_mutation(self.case, "required", self.source, self.registry)
+        changed = _raw_mutation(
+            dict(self.case, payload="on"), "required", self.source, self.registry
+        )
+        self.assertNotEqual(original, changed)
+        self.assertIn("save-annotations: on", changed)
+        self.assertEqual(
+            _raw_problems(self.case, {"kind": "yaml"}, original, "required"),
+            _raw_problems(self.case, {"kind": "yaml"}, changed, "required"),
+            "the two spellings must diagnose identically, or this control proves nothing",
+        )
+
+    def test_a_raw_target_must_name_this_entrys_own_step_and_a_pinned_path(self):
+        for name, target in (
+            ("wrong step", "$.jobs.<job>.steps[checkout].with.save-annotations"),
+            ("not pinned", "$.jobs.<job>.steps[trunk].with.arguments"),
+            ("another job", "$.jobs.other.steps[trunk].with.save-annotations"),
+        ):
+            with self.subTest(control=name), self.assertRaisesRegex(
+                AssertionError, re.escape(self.case["id"])
+            ):
+                _raw_mutation(
+                    dict(self.case, target=target),
+                    "required",
+                    self.source,
+                    self.registry,
+                )
+
+    def test_the_span_postcondition_rejects_a_write_outside_the_span(self):
+        """`_raw_mutation` checks the span against SOURCE offsets; a respell that also edits elsewhere
+        must fail it."""
+
+        def spill(text, key, replacement):
+            return _respell_original(text, key, replacement).replace(
+                "timeout-minutes: 15", "timeout-minutes: 16", 1
+            )
+
+        _respell_original = _respell
+        spilling = unittest.mock.patch.object(
+            sys.modules[__name__], "_respell", side_effect=spill
+        )
+        with spilling, self.assertRaisesRegex(
+            AssertionError, re.escape(self.case["id"])
+        ):
+            _raw_mutation(self.case, "required", self.source, self.registry)
+
+
 class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
     """GitHub parses workflows as YAML 1.2. Under PyYAML's 1.1 default, `save-annotations: yes` loaded
     as True and `timeout-minutes: 017` as octal 15, and the checker accepted them while the runner
@@ -4754,79 +5306,20 @@ class RawYamlSynonymsAreNotThePinnedBooleans(unittest.TestCase):
     YAML path, on both entries AND on every permitted spelling of the source (codex, r63).
     """
 
-    CASES = (
-        (
-            "C3.runner-and-timeout-pinned/yaml-11-octal-017",
-            "timeout-minutes",
-            "017",
-            "job: expected `timeout-minutes: 15`, found 17",
-        ),
-        (
-            "C4.save-annotations-required/yaml-11-synonym-yes",
-            "save-annotations",
-            "yes",
-            "action inputs: `save-annotations` must be true",
-        ),
-        (
-            "C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes",
-            "lfs",
-            "yes",
-            "checkout inputs: `lfs` must be true",
-        ),
-        (
-            "C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no",
-            "persist-credentials",
-            "no",
-            "checkout inputs: `persist-credentials` must be false",
-        ),
-    )
+    KIND = "yaml"
 
     def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
-        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            for spelling, source in _all_permitted_sources(
-                path.read_text(encoding="utf-8")
-            ).items():
-                for case_id, key, replacement, diagnostic in self.CASES:
-                    with self.subTest(case=case_id, entry=entry, source=spelling):
-                        mutated = _respell(source, key, replacement)
-                        self.assertIn(
-                            diagnostic,
-                            contract_problems(
-                                _load_actions_yaml(mutated), milestone="M3", entry=entry
-                            ),
-                        )
+        """Built from the registry's `edit_bytes` cases of this KIND (COREDEV-2869): the payload is
+        written verbatim over the pinned span, and nothing else changes (`_raw_mutation`).
+        """
+        _assert_raw_cases_rejected(self, self.KIND)
 
 
 class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
     """C0.raw-text-canonical, on BOTH entries and every permitted spelling of the source (codex, r61
     to r63)."""
 
-    CASES = (
-        (
-            "C0.raw-text-canonical/tag-bool-yes",
-            "save-annotations",
-            "!!bool yes",
-            "workflow: explicit YAML tag `tag:yaml.org,2002:bool` is not permitted",
-        ),
-        (
-            "C0.raw-text-canonical/tag-int-underscore",
-            "timeout-minutes",
-            "!!int 1_5",
-            "workflow: explicit YAML tag `tag:yaml.org,2002:int` is not permitted",
-        ),
-        (
-            "C0.raw-text-canonical/respell-plus-15",
-            "timeout-minutes",
-            "+15",
-            "timeout-minutes: spelled `+15`, not the canonical `15`",
-        ),
-        (
-            "C0.raw-text-canonical/respell-TRUE",
-            "lfs",
-            "TRUE",
-            "lfs: spelled `TRUE`, not the canonical `true`",
-        ),
-    )
+    KIND = "raw_text"
 
     def test_every_permitted_spelling_of_the_source_is_accepted(self):
         """The positive control the builders were missing: a comment, a quoted key, or flow style
@@ -4845,16 +5338,8 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
                     )
 
     def test_each_case_is_rejected_on_both_entries_and_every_spelling(self):
-        for entry, path in (("required", WORKFLOW_PATH), ("canary", CANARY_PATH)):
-            for spelling, source in _all_permitted_sources(
-                path.read_text(encoding="utf-8")
-            ).items():
-                for case_id, key, replacement, diagnostic in self.CASES:
-                    with self.subTest(case=case_id, entry=entry, source=spelling):
-                        mutated = _respell(source, key, replacement)
-                        self.assertIn(
-                            diagnostic, raw_workflow_problems(mutated, entry=entry)
-                        )
+        """Built from the registry's `edit_bytes` cases of this KIND (COREDEV-2869)."""
+        _assert_raw_cases_rejected(self, self.KIND)
 
     def test_a_decoy_line_inside_a_block_string_cannot_launder_a_respelling(self):
         """codex, r62: a line search accepted `+15` when a decoy `timeout-minutes: 15` sat inside a
@@ -4891,6 +5376,16 @@ class RawWorkflowTextIsUntaggedAndCanonical(unittest.TestCase):
                     )
             # A skip that took every source would leave this test unable to fail.
             self.assertGreater(placed, 0, f"{entry}: the decoy was placed in no source")
+
+
+# The obligation kinds the two raw classes actually run. Cell 11's accounting reads THIS, so a raw case
+# of any other kind counts as executed nowhere.
+_RAW_CLASS_KINDS = frozenset(
+    {
+        RawYamlSynonymsAreNotThePinnedBooleans.KIND,
+        RawWorkflowTextIsUntaggedAndCanonical.KIND,
+    }
+)
 
 
 class C6AndC6aGuardsExecuteAgainstFixtureTrees(unittest.TestCase):

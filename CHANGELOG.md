@@ -13,6 +13,44 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.30] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2780 cell 11: mutants are GENERATED from the registry (COREDEV-2869 part 1).** The
+  registry's header said cell 11 generated one mutant per case. In fact 130 hand-written recipes and
+  8 hand-written raw tuples built them, and none of them read the registry's `op`, `target` or
+  `payload`. Eleven asserted diagnostics (21 executions), 28 mutants and 19 operators had drifted
+  from their cases.
+  - `_classify` gives every one of the 149 cases exactly one executor.
+  - `_mutate` builds the 222 structural (case, entry) mutants. Its per-operator postconditions are
+    type-strict, and check both the declared VALUE and that nothing outside the edit changed,
+    including where a step is placed.
+  - `_raw_mutation` writes the raw cases verbatim and lints them as text: 304 texts, 0 findings.
+  - The target-set family runs as its 24 executions through the real resolve-once boundary.
+  - The C2 and C16 `local-divergence` cases now execute their declared local op. They had been
+    counted as injected, and only the comparator catches them.
+  - The registry's case fields now follow one grammar, documented in its header: 157 fields across
+    95 cases.
+  - Four payloads that contradicted cell 11's minimum list are corrected to it: `job-if`, the two
+    `defaults`, and C5's step-scope `env`.
+  - 63 red controls, each run against the shipped code: all 63 go red.
+  - **PR #108 review (codex):** a raw case whose obligation kind no raw class runs was counted as
+    executed and diagnosed by nothing. Obligation kinds are now a closed set, raw accounting is keyed
+    on the kinds the raw classes actually run, and `_raw_problems` fails closed.
+  - **PR #108 second review (codex).**
+    - A remote case is `injected` only in the shape cell 16 implements, an `add` of `{context: …}` to
+      the observation. Cell 16 reads its context from the case.
+    - Every obligation must declare at least one known entry.
+    - Raw execution is tracked per (case, entry), so a raw-only obligation with no entries can no
+      longer pass untested.
+  - **PR #108 third review (codex).** The raw census is pinned independently (`RAW_EXECUTIONS = 16`), so
+    deleting a raw case can no longer shrink every check with it. The target-set family's schema is
+    closed, so a misspelt `expect` fails rather than falling through to the refusal branch.
+  - **Local diff review (codex).** Duplicate family dimensions are rejected. Refusal forms now place the
+    forbidden pattern after a valid entry, so a resolver that validates only the first item of a side
+    fails. Duplicates are closed as a class: censuses count distinct (case, entry) pairs, an obligation
+    may not repeat an entry, obligation ids are unique, and the registry may not repeat a mapping key.
 ## [2.8.29] — 2026-10-03
 
 ### Fixed
