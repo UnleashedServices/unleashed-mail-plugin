@@ -1,6 +1,6 @@
 # COREDEV-2875 — Model currency: every caller in the plugin uses the newest model
 
-**Status:** Planning, revision 7. Gate round 6: agy `APPROVE`, codex `REQUEST_CHANGES` (2 blocking, 1 note).
+**Status:** Planning, revision 8. Gate round 7: agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking, 4 notes).
 **Ticket:** COREDEV-2875 (parent Epic COREDEV-2485). **Branch / worktree:**
 `feat/COREDEV-2875-model-currency`, `.claude/worktrees/model-currency`. It is cut from PR #107's head
 (`692576a`), which already carries PR #106, because both PRs edit the same files. The PR for this
@@ -147,6 +147,26 @@ branch opens against `main` once those two merge.
 > * The skip-malformed mutant selects the older model in every malformed case, so M2's control
 >   discriminates.
 > * The whitespace-split mutant agrees with the spec in every case, as M1 states.
+>
+> **r7** `82dae7e` (revision 7): agy `APPROVE`, codex `REQUEST_CHANGES`.
+> 1. **(P2) The gates' launch definition required a QUOTED prompt.** A future `agy -p ping` or
+>    `agy -i $PROMPT` would escape both the recipe gate and M10's raw-launch matcher. No shipped caller
+>    is missed today.
+>
+> Notes:
+> * Pair the unrecognized-version case with a valid older candidate. Otherwise a skip still fails as
+>   "no candidate", and the M2 mutant hides.
+> * Spell the persist argument `gemini=APPROVE:<transcript>`. A bare `gemini=APPROVE` dies at
+>   `persist-verdict.sh:99` first.
+> * A `NaN` timeout survives `min(max(…))`. Measured: the clamp yields `nan`, and `subprocess.run`
+>   accepts it.
+> * Keep M8's no-leaf-consumed assertion. Without it, isolated's later check masks a capture mutant.
+>
+> **Revision 8** recognizes a launch with ANY argument, in COMMAND positions only. Executed with
+> `~/.claude/handoffs/coredev-2875/launch-scan.py`:
+> * it returns exactly the 14 known lines (10 launch sites and 4 historical demonstrations);
+> * it recognizes the unquoted probes;
+> * it excludes the fenced shell comment at `SKILL.md:226`, which the line-wide form matched.
 
 ## 0. The direction, and the two decisions behind it
 
@@ -315,6 +335,11 @@ stdout. On any failure it exits non-zero and prints nothing on stdout.
 * **Bounded.** `agy models` runs under a 60-second timeout (a `python3` subprocess timeout).
   `AGY_MODELS_TIMEOUT_S` may LOWER the bound, clamped to 1–60, so a test can prove it in seconds. It can
   never raise it. The PTY timeout starts only after resolution.
+  * Unset or empty means 60.
+  * Any other value must parse as a FINITE number, or the resolution fails with a message naming the
+    variable.
+  * Measured: `NaN` survives a bare `min(max(value, 1), 60)`, and `subprocess.run` accepts a `NaN`
+    timeout.
 * **Every stdout line has a DECLARED shape (F11), and a line that breaks it fails the resolution.**
   * A non-empty line must FULLY match `<id>\t<label>`. `<id>` is one or more printable ASCII bytes
     other than space and TAB, and exactly one TAB follows it. The label may contain spaces.
@@ -357,6 +382,16 @@ On `8716979` it returns 44 lines. A narrower scan, for an agy LAUNCH in any mode
 ten launch sites in the table below plus the four historical demonstrations (`SKILL.md:163–165`,
 `:168`). A launch is `agy` with `-p`/`--print`/`--prompt` or `-i`/`--prompt-interactive` and a quoted
 prompt, or with `-c`/`--continue`/`--conversation`.
+
+**The gates' launch definition is broader than that scan.**
+* **Flags:** `agy`, optional flags, then `-p`/`--print`/`--prompt` or `-i`/`--prompt-interactive`, followed
+  by ANY argument, quoted or not. Or `agy` with `-c`/`--continue`/`--conversation`.
+* **Positions:** it is recognized only in COMMAND positions:
+  * in markdown, inline-code contents and the non-comment lines of fenced blocks;
+  * in other files, non-comment lines.
+* **Executed** (`launch-scan.py`) on the shipped tree: the same 14 lines. It recognizes
+  `agy -p ping`, `agy -i $PROMPT` and `agy --add-dir "$(pwd)" -p ping`. It excludes the fenced comment at
+  `SKILL.md:226` ("agy -p with workspace flag…"), which a line-wide match reads as a launch.
 
 | Site | Today | After |
 |---|---|---|
@@ -541,7 +576,10 @@ note links to the model-config page for any other model.
     message. Only the byte guard can catch this case;
   * `Fetching available models...` on stderr is ignored;
   * a set `MODEL` wins, and the stub records that `models` was never called;
-  * an unrecognized candidate (`gemini-3.10.1-flash-high`) fails;
+  * an unrecognized candidate (`gemini-3.10.1-flash-high`) BESIDE A VALID OLDER candidate fails with
+    the unrecognized-form message (a skip would select the older one);
+  * `AGY_MODELS_TIMEOUT_S` set to `nan`, `inf` or `abc` fails with the variable's message, and
+    nothing is listed;
   * a FINITE slow stub (5 s) with `AGY_MODELS_TIMEOUT_S=1` fails, so a removed timeout fails in bounded
     time;
   * an id with a newline, a space or a control byte is refused before launch. Via operand six, no leaf
@@ -561,8 +599,9 @@ note links to the model-config page for any other model.
   * **a SILENT reviewer stays MISSING, at BOTH layers, each with its own diagnostic.** A stub agy that
     prints nothing and exits 1 runs through the real capture entrypoint, with a successful `models`
     answer and otherwise valid evidence. Then:
-    * `persist-verdict.sh` with `gemini=APPROVE` must die with "a missing transcript cannot produce
-      approval" (`:109–123`), as it does today;
+    * `persist-verdict.sh` with `--reviewer gemini=APPROVE:<transcript>` must die with "a missing
+      transcript cannot produce approval" (`:109–123`), as it does today. The path is part of the
+      spec: a bare `gemini=APPROVE` dies earlier, at `:99`;
     * `review-verdict.py write` called directly with `gemini=APPROVE:<transcript>` must refuse with
       "transcript is EMPTY and therefore MISSING" (`:1142`).
 * **Every one of the draft's 56 failures (F4) is answered:**
@@ -608,15 +647,15 @@ note links to the model-config page for any other model.
 | # | property | must go red when |
 |---|---|---|
 | M1 | the resolver selects the newest flash-high | string comparison: `3.10` vs `3.9` is tested ALONE (no `4` in the list); the id is taken from the wrong field: a NEWER second-column decoy wins; `-preview` is admitted: a NEWER `-flash-high-preview` wins. Splitting the id on whitespace instead of the first TAB is an EQUIVALENT mutant once the shape rule holds, because a well-formed `<id>` contains no whitespace; it has no separate control |
-| M2 | it fails closed | the non-zero listing stub PRINTS A VALID candidate and exits 1 (so only the status check can catch it); the shape rule SKIPS a malformed line instead of failing: the leading-only and trailing-only whitespace cases then select the valid OLDER candidate (each case asserts the shape message, so a failure for any other reason does not count); an unrecognized newer form is skipped instead of failing; the control-byte check is removed (the second-column-label case then SUCCEEDS, and the fused-entry case fails with the grammar message instead of the byte message); the timeout is removed (a 5 s stub with a 1 s bound then succeeds) |
+| M2 | it fails closed | the non-zero listing stub PRINTS A VALID candidate and exits 1 (so only the status check can catch it); the shape rule SKIPS a malformed line instead of failing: the leading-only and trailing-only whitespace cases then select the valid OLDER candidate (each case asserts the shape message, so a failure for any other reason does not count); an unrecognized newer form is skipped instead of failing (paired with a valid older candidate, so the skip SELECTS it; the case asserts the unrecognized-form message); the finite check on `AGY_MODELS_TIMEOUT_S` is removed (`nan` then passes the clamp and the listing runs); the control-byte check is removed (the second-column-label case then SUCCEEDS, and the fused-entry case fails with the grammar message instead of the byte message); the timeout is removed (a 5 s stub with a 1 s bound then succeeds) |
 | M3 | the override wins without a listing | the selected model is not the override, OR the stub's call log shows `models` was called. This is checked for the environment `MODEL` and for capture operand six |
 | M4 | production runs the resolved model, and records it beside the transcript | `MODEL` is unset by the test (not merely operand six omitted), and the real capture entrypoint stops passing `--model <newest>`, or stops writing the `.model` sidecar |
 | M5 | no concrete id ships in frontmatter | direct field tests: a concrete id or `default` is rejected WITH the model-specific message, for an agent and for a skill. Any integration test asserts that model-specific message, never merely a non-zero exit, because §11's tier parser already rejects a concrete agent id incidentally (F2) |
 | M6 | the review skills name no pinned model | a `-c review_model=…` command or the `-c model=…` setup example returns to codex-review; a versioned flash-high literal returns to the wrapper, the resolver, any line of the gemini-review skill, or `CLAUDE.md`; the `settings.json` assertion still holds |
-| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; a NEW bare launch is added to a skill, once each as `agy -p "…"`, `agy -i "…"` and `agy -c`; the checked form's `&&` becomes `;` (the executed recipe then launches agy after a failed resolution) |
-| M8 | every model id is one token before launch | the id grammar check is removed. A newline override, and a `-`-led override, then reach the stub agy's argv (its call log is non-empty) and write a multi-line `.model`. The cell asserts the REASON — the grammar message, an empty call log, and no `.model` — not merely a failure |
+| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; a NEW bare launch is added to a skill, once each as `agy -p "…"`, `agy -p ping` (unquoted), `agy -i $PROMPT` (unquoted) and `agy -c`; the checked form's `&&` becomes `;` (the executed recipe then launches agy after a failed resolution) |
+| M8 | every model id is one token before launch | TWO mutations, one per check. **Capture's early operand-six check removed:** isolated's later check still refuses the round, so only the NO-LEAF-CONSUMED assertion catches it — the bad operand now allocates a transcript leaf. **Isolated's check removed** (the environment `MODEL` path, which capture never sees): a newline override and a `-`-led override then reach the stub agy's argv (its call log is non-empty) and write a multi-line `.model`. Each asserts the REASON — the grammar message, no leaf, an empty call log, and no `.model` — not merely a failure |
 | M9 | a silent reviewer is still MISSING | the model is written INTO the transcript (for example, revision 4's banner is restored). With the rest of the evidence valid, `persist-verdict.sh` then ACCEPTS `gemini=APPROVE` instead of dying with its missing-transcript message, and the direct `review-verdict.py write` accepts it instead of refusing it as EMPTY |
-| M10 | the raw-checkout warning gate reads every raw launch | the warning above `SKILL.md:229` is removed with the checked form's flag order in place (the test must fail); the test's matcher reverts to the exact substring (its found-at-least-one assertion must fail) |
+| M10 | the raw-checkout warning gate reads every raw launch | the warning above `SKILL.md:229` is removed with the checked form's flag order in place (the test must fail); an UNWARNED `agy --add-dir "$(pwd)" -p ping` (unquoted) is added (the test must fail); the test's matcher reverts to the exact substring (its found-at-least-one assertion must fail) |
 | M11 | the `.model` record is created exclusively, never through an existing entry | each mutation has its own measured outcome (macOS, 2026-10-08; `oexcl-probe.py`, `noclobber-probe.sh`). **A `set -C` redirect writer** (bash 3.2) refuses the regular file and both symlinks, and HANGS on the FIFO, so only the FIFO case catches it; the test's timeout makes the hang a failure. bash(1) documents the rule for every version: noclobber refuses only an existing REGULAR file. **`O_EXCL` dropped**, `O_NOFOLLOW` kept: the regular file is written over, the FIFO case hangs, and both symlink cases stay refused (ELOOP). **Both flags dropped:** the symlink also writes through to its target, and the dangling one creates it. **`O_NOFOLLOW` dropped alone** is an EQUIVALENT mutant (all four still refused with EEXIST). It is kept for parity with `bind-prompt.py`, and it has no separate control |
 
 ## 5. Rollout
