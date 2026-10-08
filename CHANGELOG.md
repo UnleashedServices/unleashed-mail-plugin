@@ -63,6 +63,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     fail every call. The example now sends effort only where the Models API reports
     `capabilities.effort.supported`. The 5.5 rules and `concurrency-reviewer`'s request-shape item
     say so too.
+  - **PR #107 third review (gemini).** `validate-hooks.py` drops two ranges, `0x2060–0x2064` and
+    `0x2065–0x2069`, that `0x2060–0x206F` already covered. The predicate is identical on all 1,114,112
+    code points. The `MIN-20` comment moves above a loop that black had wrapped across five lines.
 
 ## [2.8.28] — 2026-10-03
 

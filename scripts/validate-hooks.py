@@ -204,8 +204,6 @@ def _is_default_ignorable(ch: str) -> bool:
     o = ord(ch)
     return (
         o in (0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0)
-        or 0x2060 <= o <= 0x2064
-        or 0x2065 <= o <= 0x2069
         or 0x180B <= o <= 0x180F
         or 0x200B <= o <= 0x200F
         or 0x202A <= o <= 0x202E
@@ -451,11 +449,8 @@ def main() -> int:
                 if not isinstance(hook, dict):
                     problems.append(f"{whereh}: must be an object")
                     continue
-                for (
-                    key
-                ) in (
-                    hook
-                ):  # MIN-20: an unknown hook key (typo'd `timeout`/`command`) is silently ignored
+                # MIN-20: an unknown hook key (typo'd `timeout`/`command`) is silently ignored
+                for key in hook:
                     if key not in ("type", "command", "args", "timeout"):
                         warnings.append(
                             f"{whereh}: unknown hook key {key!r} "
