@@ -1,6 +1,6 @@
 # COREDEV-2875 — Model currency: every caller in the plugin uses the newest model
 
-**Status:** Planning, revision 5. Gate round 4: agy `APPROVE`, codex `REQUEST_CHANGES` (2 blocking, 1 factual).
+**Status:** Planning, revision 6. Gate round 5: agy `APPROVE`, codex `REQUEST_CHANGES` (1 blocking, 4 notes).
 **Ticket:** COREDEV-2875 (parent Epic COREDEV-2485). **Branch / worktree:**
 `feat/COREDEV-2875-model-currency`, `.claude/worktrees/model-currency`. It is cut from PR #107's head
 (`692576a`), which already carries PR #106, because both PRs edit the same files. The PR for this
@@ -103,6 +103,26 @@ branch opens against `main` once those two merge.
 > failure signatures and `test_end_to_end_gate.py:156`'s first-line assertion then all hold unchanged,
 > and none of them needs new code. The banner was revision 2's answer to r1's "visible did not reach
 > the transcript". The sidecar answers that too: it persists with the transcript's own leaf name.
+>
+> **r5** `3475faf` (revision 5): agy `APPROVE`, codex `REQUEST_CHANGES`.
+> 1. **(P2) `set -C` is not exclusive creation.** bash's noclobber refuses only an existing REGULAR file
+>    (bash(1): "exists and is a regular file"). It opens a planted FIFO and hangs before the PTY
+>    timeout starts. The repository already records the same hang (`test_plugin_state_mutants.py:637`,
+>    row 116).
+>
+> Notes:
+> * F3's inventory omitted the `agy -i` launch at `SKILL.md:236`, which §2.1 already fixes.
+> * "A refused round leaves none" overstated the guarantee. `pty-capture.py` validates the reservation
+>   and `.launch` AFTER the wrapper's write.
+> * The draft's `line.split()` discards an empty first field, so `\tgemini-9-flash-high` promotes a label
+>   to a candidate. Measured: `"\tgemini-9-flash-high\tlabel".split()[0]` is `gemini-9-flash-high`.
+> * Resolver-path fixtures must REMOVE an inherited `MODEL`, not merely leave it unset.
+>
+> **Revision 6** takes all five. The sidecar is written through one `os.open(O_WRONLY | O_CREAT | O_EXCL
+> | O_NOFOLLOW)`, the primitive `bind-prompt.py`'s `write_sidecar_bytes` (`:242`) already uses. M11's
+> controls were measured with `~/.claude/handoffs/coredev-2875/oexcl-probe.py` before they were written.
+> Revision 6's first draft of M11 was wrong: it claimed that dropping `O_EXCL` lets a symlink be written
+> through, but `O_NOFOLLOW` still refuses it.
 
 ## 0. The direction, and the two decisions behind it
 
@@ -141,10 +161,12 @@ inside that direction were put to the maintainer and decided:
 
   **More callers bypass it.** `preflight-agy.sh:71` runs `agy -p "ping"` with no `--model`, so it uses
   agy's global setting: `~/.gemini/settings.json`'s model, or agy's built-in default when that file
-  names none, as on this machine. Neither is chosen by the gate. Six more recipes launch agy with no
+  names none, as on this machine. Neither is chosen by the gate. Eight more launches start agy with no
   `--model`:
   * the review recipe (`SKILL.md:62`);
   * the terminal example (`:229`);
+  * the `agy -i "…"` launch in the same block (`:236`), a NEW session with an initial prompt;
+  * the "continue with `agy -c` or `agy -i`" step (`:276`);
   * two pings (`:272`, `:314`);
   * a PTY-wrapped ping (`skills/implement/SKILL.md:107`);
   * the `pty-capture.py:30–32` docstring.
@@ -269,8 +291,13 @@ stdout. On any failure it exits non-zero and prints nothing on stdout.
 * **Bounded.** `agy models` runs under a 60-second timeout (a `python3` subprocess timeout).
   `AGY_MODELS_TIMEOUT_S` may LOWER the bound, clamped to 1–60, so a test can prove it in seconds. It can
   never raise it. The PTY timeout starts only after resolution.
-* **Candidates** are every FIRST-column token ending in `-flash-high`. Each one must FULLY match
-  `gemini-<major>[.<minor>]-flash-high`.
+* **Columns are positional.** A line's FIRST column is every byte before its first TAB, or the whole
+  line when it has none, which is agy's `<id>\t<label>` format (F11). It is never the first
+  whitespace-separated word. A line whose first column is EMPTY (a TAB-led row) has no candidate, so
+  its label can never become one.
+* **Candidates** are every first column ending in `-flash-high`. Each one must FULLY match
+  `gemini-<major>[.<minor>]-flash-high`. Surrounding spaces fail that match, and so fail the
+  resolution.
   * A token that ends in `-flash-high` but does not match, such as `gemini-3.10.1-flash-high`, FAILS the
     resolution rather than being skipped. An unrecognized version form means "newest" cannot be
     decided, and skipping it could pick an older model silently.
@@ -343,13 +370,19 @@ deep review P1), so it pings the resolved default. A round run with operand six 
 failure shows as a tiny transcript, never a verdict.
 
 **The model is recorded BESIDE the transcript, never in it.**
-* **The record.** `isolated-agy-review.sh` writes `${OUT}.model` immediately before the PTY child starts,
-  after every precondition has passed, so a refused round leaves none. It holds one line,
-  `<id>\t<source>\n`.
-  * It is written by exclusive create through ONE open: `set -C` plus a single redirect, so the create
-    and the write are the same descriptor.
-  * An existing `.model` fails the round as void, as an existing non-empty leaf does.
-  * `<source>` is a literal the wrapper sets, `override` or `newest`, and never caller text.
+* **The record.** `isolated-agy-review.sh` writes `${OUT}.model` after its own preconditions and
+  immediately before it hands off to `pty-capture.py`. It holds one line, `<id>\t<source>\n`.
+  * **One `os.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)`, then a full write through
+    that descriptor.** This is the primitive of `bind-prompt.py`'s `write_sidecar_bytes` (`:242`).
+    `set -C` is NOT used: bash's noclobber refuses only an existing regular file, and opens a FIFO.
+  * **ANY existing entry at that name refuses the round promptly,** before agy launches. That covers a
+    regular file, a FIFO, a symlink and a dangling symlink, because `O_CREAT | O_EXCL` fails on every
+    existing name and never follows a symlink. A short write removes the partial file and refuses.
+  * **`<source>` is a literal the wrapper sets,** `override` or `newest`, and never caller text.
+* **What it records, exactly:** the model selected for an ATTEMPTED launch. `pty-capture.py` validates
+  the reservation and the `.launch` record AFTER this write (`:227–344`). A launch it refuses therefore
+  leaves a `.model` beside an EMPTY transcript. That transcript is MISSING to the verdict writer, as
+  today, and the record is not evidence (below).
 * **The sidecar contract.** `.model` joins `DERIVED_SIBLING_SUFFIXES` (`pty-capture.py:690`), whose
   comment states the contract: "Anything appended to the leaf belongs in this tuple". The
   basename limit is unchanged, because it reserves room for the longest suffix (`.promptsha256`,
@@ -465,6 +498,9 @@ note links to the model-config page for any other model.
   `agy-newest-model.sh` with a stub `agy` on `PATH`:
   * the newest wins, compared numerically (`3.10` beats `3.9`, `4` beats `3.10`);
   * `-preview`, `pro-high` and second-column text are excluded;
+  * a TAB-led row (`\tgemini-9-flash-high\tlabel`) beside a valid candidate does not select
+    `gemini-9-flash-high`;
+  * a first column with surrounding spaces fails the resolution;
   * an empty list fails closed, with the message;
   * `agy models` exiting non-zero fails closed;
   * a listing with `\r\x1b[K` fused to the NEWEST entry fails WITH the forbidden-byte message. It is a
@@ -486,6 +522,10 @@ note links to the model-config page for any other model.
   * `preflight-agy.sh`'s ping receives `--model <newest listed>`;
   * a resolver failure in the checked form launches nothing. The test EXECUTES the skill's and the
     docstring's recipe text with a failing resolver stub and a recording agy stub;
+  * **a pre-existing `${OUT}.model` refuses the round promptly, and nothing launches.** The case runs
+    once each with a regular file, a FIFO and a symlink (dangling, and pointing at a writable file). Each
+    run sits under a subprocess timeout, so a hang is a bounded FAILURE. Each asserts the refusal
+    message, an empty stub-agy call log, and an unchanged symlink target;
   * a SILENT reviewer stays MISSING. A stub agy that prints nothing and exits 1 runs through the real
     capture entrypoint, then through `persist-verdict.sh` with `gemini=APPROVE`. The writer must refuse
     it with the EMPTY-and-therefore-MISSING message, exactly as it does today.
@@ -493,11 +533,12 @@ note links to the model-config page for any other model.
   * **The 37 stubbed-reviewer tests** set `MODEL` explicitly in the environment they build. They test
     binding, isolation and status propagation, not selection, and selection is covered above.
   * **`test_end_to_end_gate` (9)** keeps exercising the production path. Its stub agy gains a
-    side-effect-free `models` answer listing one flash-high model, and `MODEL` stays unset. The
+    side-effect-free `models` answer listing one flash-high model. Its environment REMOVES `MODEL`
+    (`env.pop`), so an inherited value cannot hide the resolver path. The
     whole-chain assertion at `:156` is UNCHANGED, because the transcript gains no line. One assertion
     is added: the gemini transcript's `.model` sidecar names the stub's model.
   * **`test_preflight_agy_isolation` (2):** its stubs gain the same `models` answer and keep their ping
-    behaviour. A new case asserts that a failed resolution reports unavailable and runs no ping.
+    behaviour. Its environment removes `MODEL` too. A new case asserts that a failed resolution reports unavailable and runs no ping.
   * **`test_validate_plugin_assembly` (4):**
     * the two concrete-id cases and `test_valid_model_ids_pass` become rejections (§2.3);
     * the every-key fixture (`:309`) keeps EVERY key, with a legal value for `model` (`inherit`).
@@ -530,7 +571,7 @@ note links to the model-config page for any other model.
 
 | # | property | must go red when |
 |---|---|---|
-| M1 | the resolver selects the newest flash-high | string comparison: `3.10` vs `3.9` is tested ALONE (no `4` in the list); the `$1` filter is dropped: a NEWER second-column decoy wins; `-preview` is admitted: a NEWER `-flash-high-preview` wins |
+| M1 | the resolver selects the newest flash-high | string comparison: `3.10` vs `3.9` is tested ALONE (no `4` in the list); the first-column filter is dropped: a NEWER second-column decoy wins; columns are split on WHITESPACE instead of the first TAB: the TAB-led row's `gemini-9-flash-high` wins; `-preview` is admitted: a NEWER `-flash-high-preview` wins |
 | M2 | it fails closed | the non-zero listing stub PRINTS A VALID candidate and exits 1 (so only the status check can catch it); an unrecognized newer form is skipped instead of failing; the control-byte check is removed (the second-column-label case then SUCCEEDS, and the fused-entry case fails with the grammar message instead of the byte message); the timeout is removed (a 5 s stub with a 1 s bound then succeeds) |
 | M3 | the override wins without a listing | the selected model is not the override, OR the stub's call log shows `models` was called. This is checked for the environment `MODEL` and for capture operand six |
 | M4 | production runs the resolved model, and records it beside the transcript | `MODEL` is unset by the test (not merely operand six omitted), and the real capture entrypoint stops passing `--model <newest>`, or stops writing the `.model` sidecar |
@@ -540,6 +581,7 @@ note links to the model-config page for any other model.
 | M8 | every model id is one token before launch | the id grammar check is removed. A newline override, and a `-`-led override, then reach the stub agy's argv (its call log is non-empty) and write a multi-line `.model`. The cell asserts the REASON — the grammar message, an empty call log, and no `.model` — not merely a failure |
 | M9 | a silent reviewer is still MISSING | the model is written INTO the transcript (for example, revision 4's banner is restored). The silent-stub case then has `persist-verdict.sh` ACCEPT `gemini=APPROVE`, instead of refusing it as EMPTY and therefore MISSING |
 | M10 | the raw-checkout warning gate reads every raw launch | the warning above `SKILL.md:229` is removed with the checked form's flag order in place (the test must fail); the test's matcher reverts to the exact substring (its found-at-least-one assertion must fail) |
+| M11 | the `.model` record is created exclusively, never through an existing entry | measured, all four entry kinds (macOS, 2026-10-08): the writer becomes a `set -C` redirect, or `O_EXCL` is dropped — the regular file is written over and the FIFO case HANGS (the test's timeout makes that a failure), while the symlink cases stay refused by `O_NOFOLLOW` (ELOOP); BOTH flags dropped — the symlink writes through to its target and the dangling one creates it. Dropping only `O_NOFOLLOW` is an EQUIVALENT mutant (measured: all four still refused with EEXIST, as POSIX specifies for `O_CREAT \| O_EXCL`); it is kept for parity with `bind-prompt.py` and has no separate control |
 
 ## 5. Rollout
 
