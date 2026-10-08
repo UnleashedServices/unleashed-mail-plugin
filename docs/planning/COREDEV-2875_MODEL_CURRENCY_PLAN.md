@@ -1,6 +1,6 @@
 # COREDEV-2875 — Model currency: every caller in the plugin uses the newest model
 
-**Status:** Planning, revision 11. Gate round 10: agy `APPROVE`, codex `REQUEST_CHANGES` (2 blocking).
+**Status:** Planning, revision 12. Gate round 11: agy `APPROVE`, codex `REQUEST_CHANGES` (3 blocking).
 **Ticket:** COREDEV-2875 (parent Epic COREDEV-2485). **Branch / worktree:**
 `feat/COREDEV-2875-model-currency`, `.claude/worktrees/model-currency`. It is cut from PR #107's head
 (`692576a`), which already carries PR #106, because both PRs edit the same files. The PR for this
@@ -242,6 +242,37 @@ branch opens against `main` once those two merge.
 > * the continuation-comment trick leaves the `agy` line as a unit of its own;
 > * the six approved forms pass, including the real `${CLAUDE_PLUGIN_ROOT}` recipe path;
 > * on today's tree, 30 units await their approved form or exemption.
+>
+> **r11** `2e7241c` (revision 11): agy `APPROVE`, codex `REQUEST_CHANGES`.
+> 1. **(P2) The checked form allowed a later `--model`,** for example `--model "$OTHER"` or
+>    `--model=gemini-3.6-flash-high`. agy's scalar flag takes the last value.
+> 2. **(P2) "A whole-line comment executes nothing" is false.** A `#` that begins a line INSIDE a
+>    multi-line quoted string is data, and a `$(agy …)` on it runs. Tilde fences were also not read.
+> 3. **(P2) The `pty-capture.py` example had no approved form.** Its launch is wrapped
+>    (`python3 pty-capture.py … -- agy …`), and §3 tested only its failing path.
+>
+> **Scored by the stopping rule** (recorded after COREDEV-2691/2771/2780: continue on Q1 only):
+> * Q1 is a defect in what SHIPS. Q2 is a defect in a regression gate's matcher.
+> * Rounds 8–10 were Q1 = 0, all matcher bypasses, so the rule should have stopped the loop at r10.
+>   It did not, because the rounds were never scored.
+> * r11 has ONE Q1: item 3, the shipped docstring.
+>
+> **Revision 12:**
+> * fixes the Q1 (a PTY-wrapped template, plus a SUCCESS control that executes it);
+> * applies the two CHEAP Q2 fixes in flight (no second model option; tilde fences);
+> * TICKETS the expensive one. Item 2 needs quote-state lexing, or a comment exemption that adds 23
+>   noisy units (measured), so it is **COREDEV-2876**, a declared boundary in §6.
+>
+> The next round asks the Q1 question explicitly. If it returns Q1 = 0, the loop stops, and the
+> decision goes to the maintainer.
+>
+> **Also restored: §2.1's launch-site table.** Revision 9's slice replacement deleted it, and codex r10
+> noticed ("a launch-site 'table' that this revision does not contain"). I misread that as stale
+> wording. It is restored from revision 8, with the docstring row updated.
+>
+> Executed (`launch-decl.py`, rev 12; rev 11's copy kept): 7 model overrides stay unapproved, the
+> wrapped form passes, a quoted prompt that merely names `--model` stays legal, and a tilde fence is
+> read. Every rev-11 control still holds.
 
 ## 0. The direction, and the two decisions behind it
 
@@ -455,6 +486,20 @@ git grep -nIE '(^|[`"( ]|-- )agy( +-[-a-z]|  *models)'
 
 On `8716979` it returns 44 lines.
 
+The ten LAUNCH sites, and what each becomes:
+
+| Site | Today | After |
+|---|---|---|
+| `isolated-agy-review.sh:71`, `:263` | the default literal | a non-empty `MODEL` wins, and the resolver is not called; otherwise the resolver's output |
+| `preflight-agy.sh:71` | a bare ping | resolve, then `--model "$MODEL"`; a resolution failure is a preflight failure |
+| `skills/gemini-review/SKILL.md:62` (review recipe) | bare | the checked form (below) |
+| `SKILL.md:229` (terminal example) | bare | the checked form (below) |
+| `SKILL.md:236` (`agy -i "…"`, a NEW session with an initial prompt) | bare | the checked form (below) |
+| `SKILL.md:276` ("continue with `agy -c` or `agy -i`") | bare | refers to the example's checked form, without spelling a bare launch |
+| `SKILL.md:272` (smoke test), `:314` (troubleshooting) | a bare ping | `bash …/preflight-agy.sh` |
+| `skills/implement/SKILL.md:107` | a PTY-wrapped bare ping | `bash …/preflight-agy.sh` |
+| `scripts/pty-capture.py:30–32` (docstring) | bare | ONE line in the PTY-wrapped checked form (resolve, then the capture wrapper, then `agy --model "$MODEL"`) |
+
 **The gates are a DECLARATION, not a detector** (executed: `~/.claude/handoffs/coredev-2875/launch-decl.py`).
 No shell is parsed, so no quoting, substitution, prefix or continuation can hide a launch from it.
 * **Units.** A unit is any of the following that names the word `agy` (not as part of a longer name or
@@ -463,18 +508,28 @@ No shell is parsed, so no quoting, substitution, prefix or continuation can hide
     (`-p`/`--print`/`--prompt`/`-i`/`--prompt-interactive`) followed by any token, or a continuation
     flag (`-c`/`--continue`/`--conversation`). This over-approximates. Prose that names a flag
     ("`agy -p` writes 0 bytes") is not a unit;
-  * any markdown fenced line, except a whole-line comment;
+  * any markdown fenced line, in a backtick OR tilde fence (CommonMark's closing rule), except a
+    whole-line comment;
   * any line of any other shipped file, except a whole-line comment.
 
-  A whole-line comment executes nothing, even after a trailing backslash. The comment ends the
-  continued command, and the next line is a unit of its own (codex r10).
+  **Skipping a whole-line comment is safe only at top level.** After a trailing backslash, the comment
+  ends the continued command, and the next line is a unit of its own (codex r10). But a `#` that
+  begins a line INSIDE a multi-line quoted string or heredoc is data, and a command substitution on it
+  runs. The gate does not track quote state, so that form is a declared boundary (§6, COREDEV-2876).
 * **Every unit must FULLY match an approved template, or be EXEMPT.** The templates are:
   * **the checked form**, on one line: `MODEL="$(bash <path>/agy-newest-model.sh)" && agy --model "$MODEL"`
     followed only by arguments.
     * `<path>` is a plain path, or `"${CLAUDE_PLUGIN_ROOT}/scripts/review/"`.
     * Each argument is a bare word, a double-quoted string whose only expansion is `$NAME`/`${NAME}`,
       or the literal `"$(pwd)"`.
-    * No `;`, `&`, `|`, `<`, `>`, backtick or other `$(` is allowed, so nothing can be appended;
+    * No `;`, `&`, `|`, `<`, `>`, backtick or other `$(` is allowed, so nothing can be appended.
+    * NO argument may set a model. `--model`, `-model` and either spelling with `=` are refused, so
+      `"$MODEL"` is the only model the launch can run (codex r11). A quoted prompt that merely mentions
+      `--model` is not an option, and stays legal;
+  * **the checked form, PTY-wrapped**, on one line:
+    `MODEL="$(bash <path>/agy-newest-model.sh)" && python3 <path>pty-capture.py <capture args> -- agy --model "$MODEL"`
+    followed by the same restricted arguments. `<capture args>` are `--timeout N`, bare words, or
+    double-quoted strings. This is the `pty-capture.py` docstring's form (codex r11);
   * **a non-session command:** exactly `agy models`, `agy --help`, `agy -h` or `agy --version`.
 * **The exemption list is CLOSED.** Each entry is a file plus the unit's EXACT text, with a reason from
   a fixed set:
@@ -682,6 +737,10 @@ note links to the model-config page for any other model.
   * `preflight-agy.sh`'s ping receives `--model <newest listed>`;
   * a resolver failure in the checked form launches nothing. The test EXECUTES the skill's and the
     docstring's recipe text with a failing resolver stub and a recording agy stub;
+  * **the docstring's PTY-wrapped recipe SUCCEEDS** (codex r11). Executed with a resolver stub that
+    prints a model, and a recording agy stub that prints known bytes, two things must hold:
+    * agy's argv begins `--model <that model>`, with no second model option;
+    * `pty-capture.py`'s transcript holds exactly the stub's bytes.
   * **a pre-existing `${OUT}.model` refuses the round promptly, and nothing launches.** The case runs
     once each with a regular file, a FIFO and a symlink (dangling, and pointing at a writable file). Each
     run sits under a subprocess timeout, so a hang is a bounded FAILURE. Each asserts the refusal
@@ -702,8 +761,9 @@ note links to the model-config page for any other model.
     (`env.pop`), so an inherited value cannot hide the resolver path. The
     whole-chain assertion at `:156` is UNCHANGED, because the transcript gains no line. One assertion
     is added: the gemini transcript's `.model` sidecar names the stub's model.
-  * **`test_preflight_agy_isolation` (2):** its stubs gain the same `models` answer and keep their ping
-    behaviour. Its environment removes `MODEL` too. A new case asserts that a failed resolution reports unavailable and runs no ping.
+  * **`test_preflight_agy_isolation` (2):** EVERY stub gains the same side-effect-free `models` answer,
+    the mutation stubs included, so an isolation test still exercises the ping rather than failing in
+    the listing (codex r11). The stubs keep their ping behaviour, and the environment removes `MODEL`. A new case asserts that a failed resolution reports unavailable and runs no ping.
   * **`test_validate_plugin_assembly` (4):**
     * the two concrete-id cases and `test_valid_model_ids_pass` become rejections (§2.3);
     * the every-key fixture (`:309`) keeps EVERY key, with a legal value for `model` (`inherit`).
@@ -743,7 +803,7 @@ note links to the model-config page for any other model.
 | M4 | production runs the resolved model, and records it beside the transcript | `MODEL` is unset by the test (not merely operand six omitted), and the real capture entrypoint stops passing `--model <newest>`, or stops writing the `.model` sidecar |
 | M5 | no concrete id ships in frontmatter | direct field tests: a concrete id or `default` is rejected WITH the model-specific message, for an agent and for a skill. Any integration test asserts that model-specific message, never merely a non-zero exit, because §11's tier parser already rejects a concrete agent id incidentally (F2) |
 | M6 | the review skills name no pinned model | a `-c review_model=…` command or the `-c model=…` setup example returns to codex-review; a versioned flash-high literal returns to the wrapper, the resolver, any line of the gemini-review skill, or `CLAUDE.md`; the `settings.json` assertion still holds |
-| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; each of these is added as a NEW unit, and each must fail the gate: `agy -p "…"`, `agy -p ping`, `agy -i $PROMPT`, `agy -c`, `agy --add-dir d -c`, a bare `agy` and `agy --add-dir d` on a fenced line, codex r9's four `--help` hiders and three prefixed forms (`env`, `MODEL=old`, `command`), codex r10's `echo "$(agy -p ping)"`, `result="$(agy --add-dir "$(pwd)" -p ping)"`, an inline `agy -p "|"` and the continuation-comment trick, and three appends to the checked form (`; agy -p y`, a `$(cat f)` prompt, `;` in place of `&&`); an exempt line is EDITED (it must then fail until it is re-entered); approved forms and the exempt list still pass, so the gate cannot pass by failing everything — `agy models`, `agy --version`, and the checked form with `${CLAUDE_PLUGIN_ROOT}`; separately, the checked form's `&&` becomes `;`, and the EXECUTED recipe then launches agy after a failed resolution |
+| M7 | every agy caller resolves, and a failed resolution launches nothing | `preflight-agy.sh` stops passing `--model`; any row of §2.1's table reverts to a bare launch; each of these is added as a NEW unit, and each must fail the gate: `agy -p "…"`, `agy -p ping`, `agy -i $PROMPT`, `agy -c`, `agy --add-dir d -c`, a bare `agy` and `agy --add-dir d` on a fenced line, codex r9's four `--help` hiders and three prefixed forms (`env`, `MODEL=old`, `command`), codex r10's `echo "$(agy -p ping)"`, `result="$(agy --add-dir "$(pwd)" -p ping)"`, an inline `agy -p "|"` and the continuation-comment trick, three appends to the checked form (`; agy -p y`, a `$(cat f)` prompt, `;` in place of `&&`), four second model options (`--model "$OTHER_MODEL"`, `--model=gemini-3.6-flash-high`, `-model old`, and the same inside the PTY-wrapped form), and a launch in a TILDE fence; an exempt line is EDITED (it must then fail until it is re-entered); approved forms and the exempt list still pass, so the gate cannot pass by failing everything — `agy models`, `agy --version`, and the checked form with `${CLAUDE_PLUGIN_ROOT}`; separately, the checked form's `&&` becomes `;`, and the EXECUTED recipe then launches agy after a failed resolution |
 | M8 | every model id is one token before launch | TWO mutations, one per check. **Capture's early operand-six check removed:** isolated's later check still refuses the round, so only the NO-LEAF-CONSUMED assertion catches it — the bad operand now allocates a transcript leaf. **Isolated's check removed** (the environment `MODEL` path, which capture never sees): a newline override and a `-`-led override then reach the stub agy's argv (its call log is non-empty) and write a multi-line `.model`. Each asserts the REASON — the grammar message, no leaf, an empty call log, and no `.model` — not merely a failure |
 | M9 | a silent reviewer is still MISSING | the model is written INTO the transcript (for example, revision 4's banner is restored). With the rest of the evidence valid, `persist-verdict.sh` then ACCEPTS `gemini=APPROVE` instead of dying with its missing-transcript message, and the direct `review-verdict.py write` accepts it instead of refusing it as EMPTY |
 | M10 | the raw-checkout warning gate reads every raw launch | the gate now reads the SAME units as §2.1, and needs a warning marker in the window above any skill unit containing `--add-dir` with a value other than `"$TREE"`. It must fail when EVERY qualifying marker (`SUPERSEDED`, `can write`, `NOT READ-ONLY`, `isolated wrapper`, `COREDEV-2607`) is removed above `SKILL.md:229`. It must also fail for each of these added unwarned: `agy --add-dir "$(pwd)" -p ping`, a flags-only `agy --add-dir "$(pwd)"` on a fenced line, `result="$(agy --add-dir "$(pwd)" -p ping)"`, `agy -p "|" --add-dir "$(pwd)"`, and `env agy --add-dir "$(pwd)" -p x`. Its found-at-least-one assertion must fail when no unit is read |
@@ -772,7 +832,14 @@ note links to the model-config page for any other model.
   Google's, so does the selected model.
 * **Indirection and obfuscation.** The declaration reads the word `agy` as written. An agy launched
   through a variable (`$AGY`), `eval`, an alias, a shell function or a quote-split name (`a"g"y`) is not
-  a unit. Behavioural tests, not the text gate, cover
+  a unit.
+* **A `#`-led line inside a multi-line quoted string or heredoc** is skipped as a comment, although a
+  command substitution on it runs (codex r11, reproduced). **COREDEV-2876** weighs three fixes:
+  * a fail-closed quote tracker;
+  * units for `$(` before the `agy` word;
+  * a lint that forbids such lines.
+
+  Each is costed there. Behavioural tests, not the text gate, cover
   the shipped scripts' real launches (M4, M7).
 * **Inline flags-only spans.** An inline code span is a unit only when it is launch-shaped (§2.1). A prose span such as "`agy --add-dir d`" is not read as a launch, because inline
   code in these documents names flags far more often than it gives commands. Fenced command lines
