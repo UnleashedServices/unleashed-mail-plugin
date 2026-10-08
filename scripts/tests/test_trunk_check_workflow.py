@@ -3895,6 +3895,16 @@ def _family_executions(registry: dict) -> list[dict]:
     """(obligation, entry, side, form) for the target-set family: `applies_to` x `sides` x `forms`.
     Each obligation it applies to names exactly ONE entry, or the unpacking fails."""
     family = registry["families"]["target_set_resolution"]
+    # CLOSED, like the case schema: an `expect: refusl` typo fell through to the refusal branch and
+    # passed (PR #108 third review, codex).
+    if not set(family["sides"]) <= {"include", "exclude"}:
+        raise AssertionError(f"target-set family: unknown side in {family['sides']}")
+    for form in family["forms"]:
+        if set(form) != {"id", "expect", "payload"} or form["expect"] not in (
+            "equality",
+            "refusal",
+        ):
+            raise AssertionError(f"target-set family form {form.get('id')!r}: {form}")
     obligations = {
         obligation["id"]: obligation for obligation in registry["obligations"]
     }
@@ -3927,6 +3937,9 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
     # the cases is the one that has to notice (COREDEV-2869 plan, §7).
     STRUCTURAL_EXECUTIONS = 222
     FAMILY_EXECUTIONS = 24
+    # Raw (case, entry) pairs, pinned INDEPENDENTLY: every raw expectation below is derived from the
+    # registry, so deleting a raw case shrank the check with its input (PR #108 third review, codex).
+    RAW_EXECUTIONS = 16
 
     @classmethod
     def setUpClass(cls):
@@ -4019,6 +4032,16 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                 entries = obligation.get("entries")
                 self.assertTrue(entries, "declares no entry")
                 self.assertEqual(set(), set(entries) - known, "names an unknown entry")
+
+    def test_the_raw_census_is_pinned(self):
+        """RAW_EXECUTIONS, asserted where nothing can skip. The actionlint test asserts it too, but that
+        test skips where actionlint is absent (`darwin-suite`)."""
+        raw_pairs = {
+            (case["id"], entry)
+            for obligation, case in _registry_cases(self.registry, "raw")
+            for entry in obligation.get("entries", [])
+        }
+        self.assertEqual(self.RAW_EXECUTIONS, len(raw_pairs))
 
     def test_the_injected_case_adds_the_canarys_own_context(self):
         """`C16.canary-not-required` is about the CANARY's context. This check never skips; the cell-16
@@ -4593,7 +4616,12 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                             entry,
                             _raw_mutation(case, entry, source, self.registry),
                         )
-            written = len(list(workflows.iterdir()))
+            on_disk = {path.name for path in workflows.iterdir()}
+            written = len(on_disk)
+            # The raw (case, entry) pairs whose TEXT is in the lint tree, read from the files themselves.
+            raw_written = [
+                names[name] for name in list(names)[structural:] if name in on_disk
+            ]
             completed = subprocess.run(
                 [actionlint, "-shellcheck=", "-pyflakes=", "-format", "{{json .}}"],
                 cwd=tmp,
@@ -4615,6 +4643,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
             for entry in obligation.get("entries", []):
                 expected_raw += spellings[entry]
         self.assertEqual(expected_raw, raw_texts)
+        raw_pairs = {
+            (case["id"], entry)
+            for obligation, case in _registry_cases(self.registry, "raw")
+            for entry in obligation.get("entries", [])
+        }
+        self.assertEqual(self.RAW_EXECUTIONS, len(raw_pairs))
+        self.assertEqual(
+            raw_pairs, set(raw_written), "raw pairs the lint tree never received"
+        )
         findings = json.loads(completed.stdout.strip() or "null") or []
         problems: list[str] = []
         used: set[tuple[str, str]] = set()
@@ -4671,13 +4708,15 @@ class Cell11_MutantsAreGeneratedFromTheRegistry(unittest.TestCase):
                     self.assertTrue(
                         _diagnostic_matches(equality, [], problems), problems
                     )
-                else:
+                elif form["expect"] == "refusal":
                     with self.assertRaises(ValueError) as raised:
                         _target_set_results(self)
                     self.assertTrue(
                         _diagnostic_matches(refusal, [], [str(raised.exception)]),
                         str(raised.exception),
                     )
+                else:
+                    self.fail(f"form {form['id']!r}: unknown expect {form['expect']!r}")
         self.assertEqual(self.FAMILY_EXECUTIONS, len(executions))
 
     # ---- V9: no hand-written recipe is declared again --------------------------------------------

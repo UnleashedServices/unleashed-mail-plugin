@@ -157,7 +157,21 @@ green again, so that fix is the one doing the catching. Both reproductions are n
   least one known entry. The raw helper also tracks execution per (case, entry), so an empty or partial
   list is reported per case, not hidden in an aggregate.
 
-All three reproductions are in the battery, which stands at 56 controls, all 56 red.
+All three reproductions are in the battery.
+
+**PR #108 third review (codex, two P2s), fixed.**
+* **The raw census shrank with its input.** Every raw expectation was derived from the registry, so
+  deleting an unreferenced raw case dropped it from the writer, both raw classes, the accounting and the
+  expected count together, and the suite stayed green. Reproduced with
+  `C0.raw-text-canonical/respell-TRUE`. `RAW_EXECUTIONS = 16` (case, entry) pairs is now pinned
+  independently, like the structural and family pins. It is asserted where nothing skips, and in the
+  actionlint test against the pairs actually present in the lint tree.
+* **The family's `expect` was an open field.** `expect: refusl` fell through to the refusal branch and
+  passed. Reproduced. The family schema is now closed: each form holds exactly `id`, `expect` and
+  `payload`; `expect` is `equality` or `refusal`; and sides are a subset of include and exclude. V8's
+  dispatch fails on anything else.
+
+Both reproductions are in the battery, which stands at 58 controls, all 58 red.
 
 **Registry migration:** 157 fields across 95 cases, self-verified. The script reloads the result,
 requires every case to equal its specified form, and requires every other key to be unchanged.
