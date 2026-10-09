@@ -3,7 +3,12 @@
 **Status:** Planning, revision 66 (ungated; see the revision 63 to 66 log entries). The re-gate opened
 at revision 38 (COREDEV-2850) was **CLOSED BY MAINTAINER DECISION after round 66 (2026-10-02); NOT
 passed.** See the **r66** log entry. Every edit after revision 62 is ungated by construction.
-**Implementation status:** the ROLLOUT stands at M3 (v2.8.26). Two later surfaces were built
+**Implementation status:** the ROLLOUT stands at **M4a (2026-10-09)**: `trunk-check` is a required context in
+ruleset `Control`, cell 17 was observed, and the §6.2a rollback was rehearsed as a substitution. See the
+rollout evidence keys `m4RequiredContextAdded`, `cell17EnforcementSmokeTest`, `m4aRollbackRehearsal`. Cell 2's
+M4 rule-satisfaction half is HALF observed: the rule is satisfied by the new run, but that run was computed
+against the OLD base's range (a stale merge-ref race), so it stays open as **COREDEV-2879**
+(`cell2RuleSatisfactionObservation`). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
 respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
@@ -1773,7 +1778,7 @@ alternative turned out to be complementary rather than competing.
       completing the rollout (codex, r5). Then observe **one genuinely strict green run and one
       deliberately red run on each base**. *Revision 1 would have promoted a context observed only while failures
       were suppressed — one that had never been able to fail.*
-- [ ] **M4** — add the required context to ruleset `Control`, **only after M3's red runs on both
+- [x] **M4** — *(DONE 2026-10-09 on maintainer instruction; evidence `m4RequiredContextAdded`)* — add the required context to ruleset `Control`, **only after M3's red runs on both
       bases**, and only with explicit maintainer instruction (§6.2). **This gates `main` AND `alpha`
       simultaneously** — `Control` targets both — so the context must be satisfiable on both, which
       **M0 + M2a + M3 together** make true; no one of them suffices. **Evidence required on BOTH
@@ -1879,7 +1884,7 @@ alternative turned out to be complementary rather than competing.
       that test **before** the ruleset write. **M4 is also resumable**: after any interruption,
       re-audit both refresh provenance and canonical ruleset state before continuing, since a
       half-completed M4 is indistinguishable from an untouched one by timestamp alone.
-- [ ] **M4a** (**immediately after M4 — the plan reached revision 27 requiring neither of these**) —
+- [x] **M4a** *(DONE 2026-10-09; evidence `cell17EnforcementSmokeTest`, `m4aRollbackRehearsal`)* (**immediately after M4 — the plan reached revision 27 requiring neither of these**) —
       **prove the gate does what it exists to do, then prove it can be turned off.**
       1. **Cell 17, the enforcement smoke test — READ-ONLY.** Record that the deliberately-red
          sacrificial PR is **`blocked`** with the reason naming `trunk-check`, and that a green PR is
