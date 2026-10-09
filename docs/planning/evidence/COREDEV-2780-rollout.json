@@ -1010,8 +1010,8 @@
     },
     "witnessesClosedNeitherMerged": [110, 111],
     "baseTipsUnchangedAfterwards": {
-      "main": "665796e",
-      "alpha": "10d57dd"
+      "main": "665796eed931a5e478c8977a646e1283045af948",
+      "alpha": "10d57dd9323f63df66891514a6d07e0116a85493"
     },
     "finalState": "trunk-check required with integration_id 15368, no placeholder, canonical ruleset identical to its pre-M4a bytes."
   },
