@@ -309,7 +309,13 @@
         ],
         "whatISObserved": "cell2RetargetObservation: the `edited` clause fires, and the range is re-resolved against the new base \u2014 by the action's own upstream SHA, not by inference.",
         "whatIsNOTObserved": "That a retarget causes the RULE to be satisfied by the new run rather than by the earlier same-SHA result. Structurally unobservable until trunk-check is a required context.",
-        "resolvesAt": "M4",
+        "resolvesAt": "COREDEV-2879",
+        "observedAtM4": {
+          "what": "Observed 2026-10-09 with `trunk-check` required (see `cell2RuleSatisfactionObservation`). HALF of the criterion holds and half does not.",
+          "holds": "THE CONTEXT THAT SATISFIES THE RULE IS A NEW RUN: after retargeting PR #110 main -> alpha, the PR read BLOCKED while the new run was IN_PROGRESS (the earlier same-SHA success did not satisfy the rule), then CLEAN when it completed.",
+          "doesNotHold": "AGAINST THE NEW BASE'S RANGE: that new run checked out a STALE refs/pull/110/merge. The action echoed HEAD^1 = 665796e (main's tip), not alpha's tip 10d57dd, so the context that satisfied alpha's rule was computed against main's range (1 file; main..alpha differs in 46).",
+          "whyStillOpen": "Closing the observed half and calling the item closed is the defect this list exists to prevent. Remedy and re-observation are COREDEV-2879."
+        },
         "discriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' \u2014 this item can only be closed once that list contains `trunk-check`.",
         "resolvesAtMeans": "An M4 acceptance item, not an M3 gap that further M3 work can close. It must be observed as part of promoting the context \u2014 not assumed by it. REVISION NOTE: `resolvesAt` first held this whole sentence, which made the discriminator below print a paragraph instead of the token it claimed. The field is now the machine-readable value and the prose lives here."
       },
@@ -453,8 +459,9 @@
         "cell3a": "cell3DiffScopeControls.cell3a",
         "cell3b": "cell3DiffScopeControls.cell3b"
       },
-      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"2 ['COREDEV-2850', 'M4']\".",
+      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"2 ['COREDEV-2850', 'COREDEV-2879']\".",
       "whatIsStillNotClaimed": [
+        "SUPERSEDED 2026-10-09: M4 and M4a were applied and observed. See `m4RequiredContextAdded`, `cell17EnforcementSmokeTest`, `m4aRollbackRehearsal` and `cell2RuleSatisfactionObservation`. The lines below are the M3-time record.",
         "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in",
         "ruleset Control needs explicit maintainer instruction.",
         "ITS ONLY LIVE BLOCKER IS COREDEV-2850 (the gate over-reaches on formatters).",
@@ -890,5 +897,153 @@
         "same defect as closing an item on the half where it holds."
       ]
     }
+  },
+  "m4RequiredContextAdded": {
+    "milestone": "M4",
+    "observedAt": "2026-10-09T20:52:03Z",
+    "maintainerInstruction": [
+      "2026-10-09: 'move on to the next milestone; M4', then, after the auto-mode classifier",
+      "refused the write, the explicit 'approve the M4 ruleset write'."
+    ],
+    "preflightReadFresh": {
+      "baseTips": {
+        "main": "665796eed931a5e478c8977a646e1283045af948",
+        "alpha": "10d57dd9323f63df66891514a6d07e0116a85493"
+      },
+      "enforcement": "active",
+      "bypassActors": [],
+      "mergeQueueRulePresent": false,
+      "strictRequiredStatusChecksPolicy": false,
+      "resolvedTargetSet": ["alpha", "main"],
+      "resolvedTargetSetEqualsBothWorkflowsBranches": true,
+      "workflowBlobsByteIdenticalOnBothTips": {
+        ".github/workflows/trunk-check.yml": "38848ada1d789cd28983188b463c48d2ea390e72",
+        ".github/workflows/trunk-check-push.yml": "13021a885896a182965d10edabac89c4ebc16ad2"
+      },
+      "requiredJobHasContinueOnError": false,
+      "canaryRequired": false,
+      "openPRsOnEitherBase": 0,
+      "forkPrContributorApprovalPolicy": "first_time_contributors",
+      "alphaProducesTheContextWithTheCurrentBytes": "PR #105 (into alpha, 2026-10-03, after the 2026-10-02 trunk-check.yml change) ran trunk-check 3x, github-actions, all success.",
+      "gapRecorded": "No DELIBERATE RED on alpha under the post-COREDEV-2850 bytes. The cell 17 red witness on main is a red under the current bytes."
+    },
+    "integrationId": {
+      "value": 15368,
+      "appSlug": "github-actions",
+      "readFrom": "PR #109's audited trunk-check check run 113584224225 (head 303f3b3, run attempt 1, pull_request event)"
+    },
+    "write": "One PUT of the writable projection {name,target,enforcement,bypass_actors,conditions,rules}; never a piped GET.",
+    "readback": {
+      "direction": "`trunk-check` absent before, present after with integration_id 15368.",
+      "remainder": "Everything outside that entry byte-identical. An independent jq diff of the before/after projections shows exactly the one added entry.",
+      "rulesetUpdatedAt": {
+        "before": "2026-08-07T22:27:24.651-06:00",
+        "after": "2026-10-09T14:52:02.633-06:00"
+      }
+    },
+    "requiredContextsAfter": [
+      "validate",
+      "py39-smoke",
+      "secret-scan",
+      "load-check",
+      "redactor-equivalence (ubuntu-latest)",
+      "trunk-check"
+    ]
+  },
+  "cell17EnforcementSmokeTest": {
+    "observedAt": "2026-10-09T21:01:22Z",
+    "mergeEndpointCalled": false,
+    "red": {
+      "pr": 111,
+      "headSha": "dd96149d3d0c1f557ce1501ac307a102f0320e87",
+      "mergeStateStatus": "BLOCKED",
+      "restMergeableState": "blocked",
+      "failingRequiredContexts": ["trunk-check"],
+      "everyOtherRequiredContext": "success",
+      "fixture": "harness-fixtures/m4a-red-witness.sh (SC2086, SC2250)",
+      "howTheRedCommitWasMade": "Through the GitHub contents API, so the local pre-commit trunk gate, which correctly refuses it, was never bypassed with --no-verify (contrast M3's red, recorded in howTheRedCommitWasMade above)."
+    },
+    "green": {
+      "pr": 110,
+      "headSha": "942013a77fcf3d4515f37f69952be5a32d044e41",
+      "observedAt": "2026-10-09T21:10:06Z",
+      "mergeStateStatus": "CLEAN",
+      "restMergeableState": "clean",
+      "allTenChecks": "success",
+      "closedImmediatelyAfterTheObservation": true
+    }
+  },
+  "m4aRollbackRehearsal": {
+    "model": "SUBSTITUTION, never a removal: the repository stays blocked throughout (plan §6.2a).",
+    "substitution": {
+      "at": "2026-10-09T21:13:05Z",
+      "direction": "`trunk-check` gone, `trunk-check-rollback-rehearsal` present (integration 15368)",
+      "remainder": "byte-identical",
+      "state": "REHEARSAL",
+      "maintainerInstruction": "'approve the M4a rehearsal writes' (the classifier had refused the write as CI Bypass)"
+    },
+    "underThePlaceholder": {
+      "pr": 111,
+      "at": "2026-10-09T21:13:16Z",
+      "mergeStateStatus": "BLOCKED",
+      "trunkCheckRunsConclusion": "failure",
+      "trunkCheckRunsRequired": false,
+      "presentFailingRequiredContexts": [],
+      "meaning": "Still blocked, and the block no longer names trunk-check: the documented call removes the entry it targets."
+    },
+    "restore": {
+      "at": "2026-10-09T21:13:30Z",
+      "direction": "placeholder gone, `trunk-check` present (integration 15368)",
+      "netResultEqualsPreM4aCanonicalRuleset": true
+    },
+    "afterRestore": {
+      "pr": 111,
+      "at": "2026-10-09T21:13:40Z",
+      "mergeStateStatus": "BLOCKED",
+      "failingRequiredContexts": ["trunk-check"]
+    },
+    "greenReobserved": {
+      "pr": 110,
+      "reopenedAt": "2026-10-09T21:13:52Z",
+      "at": "2026-10-09T21:28:35Z",
+      "mergeStateStatus": "CLEAN"
+    },
+    "witnessesClosedNeitherMerged": [110, 111],
+    "baseTipsUnchangedAfterwards": {
+      "main": "665796e",
+      "alpha": "10d57dd"
+    },
+    "finalState": "trunk-check required with integration_id 15368, no placeholder, canonical ruleset identical to its pre-M4a bytes."
+  },
+  "cell2RuleSatisfactionObservation": {
+    "pr": 110,
+    "headSha": "942013a77fcf3d4515f37f69952be5a32d044e41",
+    "retarget": "main -> alpha via `gh pr edit --base alpha`",
+    "retargetedAt": "2026-10-09T21:28:57Z",
+    "whyItDiscriminates": "plugin-ci's pull_request takes the default types (no `edited`), so trunk-check is the ONLY required context that re-runs on a retarget. While its new run is pending the PR is BLOCKED if the rule is evaluated against the new run, and stays CLEAN if the earlier same-SHA success still satisfies it.",
+    "whilePending": {
+      "at": "2026-10-09T21:29:02Z",
+      "base": "alpha",
+      "mergeStateStatus": "BLOCKED",
+      "requiredNotPassing": [["trunk-check", "IN_PROGRESS"]]
+    },
+    "afterNewRun": {
+      "at": "2026-10-09T21:29:47Z",
+      "base": "alpha",
+      "mergeStateStatus": "CLEAN",
+      "workflowRunId": 37993706657,
+      "checkRunId": 114034182483,
+      "conclusion": "success"
+    },
+    "counterexample": {
+      "actionResolvedUpstreamSha": "665796eed931a5e478c8977a646e1283045af948",
+      "newBaseTipAtRunTime": "10d57dd9323f63df66891514a6d07e0116a85493",
+      "upstreamEqualsNewBaseTip": false,
+      "rangeFileCount": 1,
+      "rangeAgainstAlphaWouldInclude": "the 46 files main..alpha differ in",
+      "meaning": "The only post-retarget run checked out refs/pull/110/merge before GitHub recomputed it against the new base. M3's #99 run fired 4 s after its retarget and happened to see the new ref; its `doesNotEstablish` named this race as unobserved. It is now observed.",
+      "ticket": "COREDEV-2879"
+    },
+    "relatedPreExisting": "The other five required contexts (plugin-ci) do not re-run on a retarget at all, so their OLD-base results satisfy the new base's rule. Recorded on COREDEV-2879."
   }
 }
