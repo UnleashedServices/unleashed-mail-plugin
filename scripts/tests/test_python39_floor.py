@@ -371,8 +371,9 @@ _JOB_DIGESTS = {
     # COREDEV-2869: actionlint is installed BEFORE the scripts suite (in RUNNER_TEMP), so cell 11's
     # validity rule runs inside the suite instead of being a one-off sweep. COREDEV-2873: the Claude
     # Code CLI pin moved to 2.1.289 and the strict validate names the marketplace manifest explicitly.
+    # COREDEV-2875: the pin moved to 2.1.294 (Haiku 5.5's alias needs 2.1.293+), in both jobs.
     ("plugin-ci.yml", "validate"): (
-        "aa7bcb19a7a1addddb448c63a608f4e716d680bf0d9c3e59db57757ae0544c8e"
+        "8f87a883058dbcb26df59c5d5c18094199651e44a6d809c80ae26f6ade817d12"
     ),
     ("plugin-ci.yml", "py39-smoke"): (
         "e87d60109f929643f84ee362d581e4306ab54bf98cf8c3e269e814163b3f7de7"
@@ -381,7 +382,7 @@ _JOB_DIGESTS = {
         "9364cf91c8d53c02b357618450f37ecf61aa320657983615bd9361e96bb3e904"
     ),
     ("plugin-ci.yml", "load-check"): (
-        "6f346f790c2fbebbb25821dd1c8563f1983bc90dcdac6efa7a1809ff886d9a25"
+        "2db500ee0a2608fc91d6c1c8f43fa186103a3099e3ad2bc958a20854c19f5890"
     ),
     ("plugin-ci.yml", "redactor-equivalence"): (
         "4fea961a111c1c7670a2a51f5c573076a907013e2491893576852134b3a67e72"

@@ -27,15 +27,16 @@ Examples
     python3 pty-capture.py --allocated "$CODEX_TRANSCRIPT" -- \
         codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt-$TICKET-r$ROUND.md)"
 
-    # Antigravity (agy) review.
-    python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- \
-        agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt-$TICKET-r$ROUND.md"
+    # Antigravity (agy) review. Resolve the newest flash-high model FIRST, as its own command, and launch
+    # only if that succeeded: inside `--model "$(...)"` a failed resolution would still launch agy.
+    MODEL="$(bash review/agy-newest-model.sh)" && python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- agy --model "$MODEL" --add-dir "$(pwd)" -p "Read and follow .agy-prompt-$TICKET-r$ROUND.md"
 
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 = failure). Captured output is written to <out-path>, which is REQUIRED — there
 is no shared default, because a fixed path lets a run that died before writing
 leave stale bytes for the next reader to trust.
 """
+
 # REQUIRED for macOS's stock /usr/bin/python3 (3.9.6): `main()`'s `timeout: float | None` is a PEP-604
 # union evaluated AT IMPORT in a module-level def, so 3.9 raises `TypeError: unsupported operand type(s)
 # for |: 'type' and 'NoneType'` before anything runs — which would take BOTH mandatory review gates down
@@ -55,10 +56,10 @@ import sys
 import termios
 import time
 
-ANSI_RE = re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')
-SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
+ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]")
+SIGTERM_GRACE_SEC = 5.0  # bounded grace period before SIGKILL
 POLL_INTERVAL_SEC = 0.1
-SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
+SIGKILL_REAP_SEC = 2.0  # bounded wait for the SIGKILL'd child to be reaped
 # THE CAPTURE BUFFER IS BOUNDED (PR #63 recheck, P2). `--timeout` bounds wall-clock and nothing bounded
 # BYTES: a reviewer stuck in an output loop accumulated everything it printed in memory for the whole
 # 28-minute budget, which is tens of gigabytes at PTY speeds and takes the machine down rather than the
@@ -75,7 +76,8 @@ MAX_CAPTURE_BYTES = 64 * 1024 * 1024
 # `test_doc_gates` asserts the pairs are identical so the copies cannot drift.
 _RUN_ID_HEX_LENGTH = 16 * 2
 _LAUNCH_RECORD_RE = re.compile(
-    rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii")
+    rb"\A([0-9a-f]{"
+    + str(_RUN_ID_HEX_LENGTH).encode("ascii")
     + rb"}) ([A-Za-z0-9][A-Za-z0-9-]*)\n\Z"
 )
 _ALLOCATED_LEAF_RE = re.compile(
@@ -95,7 +97,9 @@ _ROUND_COMPONENT_RE = re.compile(r"[0-9]+")
 #: immediately refused it). The bound is derived from the grammar, not restated: run id, one space, the
 #: reviewer, one newline.
 _LAUNCH_RECORD_READ_BYTES = 128
-_MAX_REVIEWER_LENGTH = _LAUNCH_RECORD_READ_BYTES - _RUN_ID_HEX_LENGTH - len(" ") - len("\n")
+_MAX_REVIEWER_LENGTH = (
+    _LAUNCH_RECORD_READ_BYTES - _RUN_ID_HEX_LENGTH - len(" ") - len("\n")
+)
 
 
 def _report_overflow() -> bool:
@@ -151,14 +155,23 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     # closing the victim-rewrite hole — strictly better than O_EXCL, which would have refused the honest
     # overwrite too.
     create_flags = 0 if allocated else os.O_CREAT
-    flags = os.O_WRONLY | create_flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags = (
+        os.O_WRONLY
+        | create_flags
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
 
     def _opener(p, _flags):
-        fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW/O_NONBLOCK), not open()'s default
+        fd = os.open(
+            p, flags, 0o600
+        )  # our flags (incl. O_NOFOLLOW/O_NONBLOCK), not open()'s default
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode):
-                raise NonRegularCaptureTargetError(errno.ENOTSUP, "refusing a non-regular capture target", p)
+                raise NonRegularCaptureTargetError(
+                    errno.ENOTSUP, "refusing a non-regular capture target", p
+                )
             # A HARD LINK IS A REGULAR FILE, so `O_NOFOLLOW` and `S_ISREG` both accept one. A
             # same-account process that replaces the reserved leaf with a link to any other file it
             # owns turns the `fchmod`/write/`ftruncate` below into a rewrite of THAT file — reproduced
@@ -176,9 +189,11 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
                     "rewrite whatever else shares the inode",
                     p,
                 )
-            os.fchmod(fd, 0o600)        # tighten an already-existing 0644 file (O_CREAT mode is create-only)
+            os.fchmod(
+                fd, 0o600
+            )  # tighten an already-existing 0644 file (O_CREAT mode is create-only)
         except BaseException:
-            os.close(fd)                # open() hasn't taken ownership yet, so we must close it here
+            os.close(fd)  # open() hasn't taken ownership yet, so we must close it here
             raise
         return fd
 
@@ -202,16 +217,18 @@ def _signal_child(pid: int, sig: int) -> None:
     prevent the direct kill of the leader.
     """
     try:
-        os.killpg(pid, sig)   # reach helpers (works on Linux; advisory on macOS)
+        os.killpg(pid, sig)  # reach helpers (works on Linux; advisory on macOS)
     except (ProcessLookupError, PermissionError, OSError):
         pass
     try:
-        os.kill(pid, sig)     # reliable: terminate the leader itself
+        os.kill(pid, sig)  # reliable: terminate the leader itself
     except (ProcessLookupError, PermissionError):
         pass
 
 
-def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated: bool = False) -> int:
+def main(
+    out_path: str, cmd: list[str], timeout: float | None = None, allocated: bool = False
+) -> int:
     if not cmd:
         raise SystemExit("no command given after `--`")
     # PREFLIGHT the reservation BEFORE spawning anything. In allocated mode the reservation was
@@ -281,7 +298,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
         try:
             launch_fd = os.open(
                 launch_path,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
             )
         except OSError as error:
             print(
@@ -334,7 +353,10 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                 return 1
             # A renamed leaf is caught here too: the record is the allocator's attestation, the
             # filename is the caller's spelling, and a mismatch means one of them was rewritten.
-            if leaf_match.group("reviewer").casefold() != launch_match.group(2).decode("ascii").casefold():
+            if (
+                leaf_match.group("reviewer").casefold()
+                != launch_match.group(2).decode("ascii").casefold()
+            ):
                 print(
                     f"pty-capture: allocated transcript's launch record names reviewer "
                     f"{launch_match.group(2).decode('ascii')!r} but its filename says "
@@ -346,8 +368,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
     # or terminal hangup / SSH disconnect — turn the signal into a SystemExit so
     # the `finally` block still runs: it reaps the child and persists whatever we
     # captured instead of orphaning agy/codex.
-    _term_signals = [s for s in (signal.SIGTERM, getattr(signal, "SIGHUP", None))
-                     if s is not None]
+    _term_signals = [
+        s for s in (signal.SIGTERM, getattr(signal, "SIGHUP", None)) if s is not None
+    ]
 
     def _on_term_signal(signum, frame):
         # Disarm both handlers immediately so a second signal arriving while we
@@ -386,8 +409,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
     try:
         cols = int(os.environ.get("COLUMNS") or 80)
         rows = int(os.environ.get("LINES") or 24)
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ,
-                    struct.pack("HHHH", rows, cols, 0, 0))
+        fcntl.ioctl(
+            master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0)
+        )
     except (OSError, ValueError, AttributeError):
         pass
     raw = bytearray()
@@ -405,7 +429,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             if timeout is not None and time.monotonic() - start >= timeout:
                 timed_out = True
                 try:
-                    sys.stderr.write(f"pty-capture: timed out after {timeout:g}s; terminating child\n")
+                    sys.stderr.write(
+                        f"pty-capture: timed out after {timeout:g}s; terminating child\n"
+                    )
                     sys.stderr.flush()
                 except OSError:
                     pass
@@ -560,7 +586,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             if out_dir and not allocated:
                 os.makedirs(out_dir, exist_ok=True)
             # PTYs translate \n -> \r\n (ONLCR); normalize to Unix newlines.
-            cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
+            cleaned = ANSI_RE.sub(b"", bytes(raw)).replace(b"\r\n", b"\n")
             # SESSION-SAFE write (#44 review §4). Review transcripts can quote message bodies / tokens,
             # and the recipes use predictable /tmp paths, so a pre-created symlink or a 0644 file is a
             # local hazard: another user could replace the reserved `<out-path>` with a symlink to redirect the
@@ -574,7 +600,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             # failure here must not fail the capture, so it never touches `capture_error`. Same 0600 /
             # O_NOFOLLOW discipline as the transcript.
             try:
-                _write_private(out_path + '.captureid', (os.urandom(16).hex() + '\n').encode())
+                _write_private(
+                    out_path + ".captureid", (os.urandom(16).hex() + "\n").encode()
+                )
             except OSError:
                 # A pre-existing SYMLINK at the sidecar makes _write_private (O_NOFOLLOW) fail. Leaving it
                 # would let a pre-seeded `.captureid` (attacker-chosen value) survive and be trusted by
@@ -583,7 +611,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                 # value is read; a capture with NO sidecar is safe — review-verdict treats a missing
                 # captureId as "no proof", not as authoritative (round 3: codex).
                 try:
-                    os.unlink(out_path + '.captureid')
+                    os.unlink(out_path + ".captureid")
                 except OSError:
                     pass
         except OSError as e:
@@ -609,7 +637,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
         # the first MAX_CAPTURE_BYTES, which is evidence of what happened, not a reviewable capture.
         exit_status = 125
     elif timed_out:
-        exit_status = 124  # conventional timeout exit code; partial transcript already written
+        exit_status = (
+            124  # conventional timeout exit code; partial transcript already written
+        )
     return exit_status
 
 
@@ -625,7 +655,9 @@ def _parse_timeout_value(val: str) -> float:
     if not (0 < t < float("inf")):
         # rejects <=0 AND non-finite (nan/inf): `nan <= 0` is False, and with nan the deadline check
         # `elapsed >= timeout` is always False -> the timeout silently no-ops.
-        raise SystemExit("error: --timeout must be a positive, finite number of seconds")
+        raise SystemExit(
+            "error: --timeout must be a positive, finite number of seconds"
+        )
     return t
 
 
@@ -645,12 +677,14 @@ def parse_pre_args(pre: list[str]) -> "tuple[float | None, str, bool]":
     while i < len(pre):
         if pre[i] == "--timeout":
             if i + 1 >= len(pre):
-                raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [--allocated] [out-path] -- <cmd>\n"
-                                 "error: --timeout requires a value")
+                raise SystemExit(
+                    "usage: pty-capture.py [--timeout SECONDS] [--allocated] [out-path] -- <cmd>\n"
+                    "error: --timeout requires a value"
+                )
             timeout = _parse_timeout_value(pre[i + 1])
             i += 2
         elif pre[i].startswith("--timeout="):
-            timeout = _parse_timeout_value(pre[i][len("--timeout="):])
+            timeout = _parse_timeout_value(pre[i][len("--timeout=") :])
             i += 1
         elif pre[i] == "--allocated":
             allocated = True
@@ -686,8 +720,9 @@ RUN_ID_BYTES = 16
 # chars) was added by the capture helpers and is longer than `.captureid` (10) — until it was listed
 # here, a ticket producing a basename near NAME_MAX allocated fine and then failed to record its
 # prompt binding with ENAMETOOLONG (deep review, codex inline). Anything appended to the leaf belongs
-# in this tuple; that is the whole contract.
-DERIVED_SIBLING_SUFFIXES = (".launch", ".captureid", ".promptsha256")
+# in this tuple; that is the whole contract. `.model` (COREDEV-2875) is the gemini arm's record of the
+# model it launched — shorter than `.promptsha256`, so the reserved headroom is unchanged.
+DERIVED_SIBLING_SUFFIXES = (".launch", ".captureid", ".promptsha256", ".model")
 _COMPONENT_RE = re.compile(r"[A-Za-z0-9._-]+")
 _ALLOCATE_OPTIONS = ("--repo-hash", "--ticket", "--round", "--reviewer")
 
@@ -723,7 +758,10 @@ def is_valid_round_component(value: str) -> bool:
     full 12-28 minute review ran, and `review-verdict.py` then refused the transcript because its
     `_ALLOCATOR_BASENAME` requires `r[0-9]+` (PR #63 recheck, P2).
     """
-    return is_valid_transcript_component(value) and _ROUND_COMPONENT_RE.fullmatch(value) is not None
+    return (
+        is_valid_transcript_component(value)
+        and _ROUND_COMPONENT_RE.fullmatch(value) is not None
+    )
 
 
 def _identity(path: str):
@@ -816,7 +854,9 @@ def _unsafe_ancestor_reason(path: str, info) -> "str | None":
     return None
 
 
-def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, str | None]":
+def _validate_base_candidate(
+    candidate: str, home: str
+) -> "tuple[str | None, str | None]":
     """Return (canonical candidate, None), or (None, rejection reason)."""
     if not candidate:
         return None, "value is empty"
@@ -825,14 +865,19 @@ def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, st
     if not os.path.isabs(candidate):
         return None, "value is not an absolute path"
     if not home or not os.path.isabs(home):
-        return None, "HOME is unavailable or not absolute, so protected roots cannot be validated"
+        return (
+            None,
+            "HOME is unavailable or not absolute, so protected roots cannot be validated",
+        )
 
     canonical = os.path.realpath(candidate)
     if "\n" in canonical or "\r" in canonical:
         return None, "canonical path contains a line terminator"
     protected_root = os.path.realpath(os.path.join(home, ".claude"))
     worktree_exception = os.path.realpath(os.path.join(home, ".claude", "worktrees"))
-    if _path_is_within(canonical, protected_root) and not _path_is_within(canonical, worktree_exception):
+    if _path_is_within(canonical, protected_root) and not _path_is_within(
+        canonical, worktree_exception
+    ):
         return None, "canonical path is inside the protected .claude root"
 
     probe = canonical
@@ -844,7 +889,10 @@ def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, st
     if not os.path.isdir(probe):
         return None, f"nearest existing path {probe!r} is not a directory"
     if not os.access(probe, os.W_OK | os.X_OK):
-        return None, f"nearest existing directory {probe!r} is not writable and searchable"
+        return (
+            None,
+            f"nearest existing directory {probe!r} is not writable and searchable",
+        )
     try:
         probe_info = os.stat(probe)
     except OSError as error:
@@ -957,7 +1005,9 @@ def _validate_existing_private_directory(path: str, metadata=None) -> None:
         raise AllocationError(f"nested transcript parent {path!r} is not a directory")
     mode = stat.S_IMODE(info.st_mode)
     if mode != 0o700:
-        raise AllocationError(f"nested transcript parent {path!r} has mode {mode:#06o}, expected 0o0700")
+        raise AllocationError(
+            f"nested transcript parent {path!r} has mode {mode:#06o}, expected 0o0700"
+        )
     if info.st_uid != os.geteuid():
         raise AllocationError(
             f"nested transcript parent {path!r} has owner {info.st_uid}, expected {os.geteuid()}"
@@ -986,7 +1036,9 @@ def _generate_run_id() -> str:
     return os.urandom(RUN_ID_BYTES).hex()
 
 
-def _allocation_basename(ticket: str, round_value: str, reviewer: str, run_id: str) -> str:
+def _allocation_basename(
+    ticket: str, round_value: str, reviewer: str, run_id: str
+) -> str:
     return f"{ticket}r{round_value}-{reviewer}-{run_id}.txt"
 
 
@@ -1044,7 +1096,9 @@ def _create_launch_record(path: str, run_id: str, reviewer: str) -> bool:
     return True
 
 
-def _validate_basename_length(parent: str, ticket: str, round_value: str, reviewer: str) -> None:
+def _validate_basename_length(
+    parent: str, ticket: str, round_value: str, reviewer: str
+) -> None:
     limit = _basename_limit(parent)
     expected_name = _allocation_basename(
         ticket,
@@ -1059,11 +1113,15 @@ def _validate_basename_length(parent: str, ticket: str, round_value: str, review
         )
 
 
-def _reserve_transcript(parent: str, ticket: str, round_value: str, reviewer: str) -> str:
+def _reserve_transcript(
+    parent: str, ticket: str, round_value: str, reviewer: str
+) -> str:
     leaf_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     for _attempt in range(ALLOCATION_ATTEMPTS):
         run_id = _generate_run_id()
-        path = os.path.join(parent, _allocation_basename(ticket, round_value, reviewer, run_id))
+        path = os.path.join(
+            parent, _allocation_basename(ticket, round_value, reviewer, run_id)
+        )
         try:
             leaf_fd = os.open(path, leaf_flags, 0o600)
         except FileExistsError:
@@ -1128,13 +1186,17 @@ def allocate_transcript(
         if not checker(value):
             reason = ""
             if label == "round":
-                reason = (" — the round must be digits only, because review-verdict.py's allocator "
-                          "grammar requires `r<digits>` and would reject the transcript AFTER the "
-                          "review had run")
+                reason = (
+                    " — the round must be digits only, because review-verdict.py's allocator "
+                    "grammar requires `r<digits>` and would reject the transcript AFTER the "
+                    "review had run"
+                )
             elif label == "reviewer" and len(value) > _MAX_REVIEWER_LENGTH:
-                reason = (f" — at most {_MAX_REVIEWER_LENGTH} characters, because the launch record "
-                          f"`<run id> <reviewer>` must fit the {_LAUNCH_RECORD_READ_BYTES} bytes both "
-                          "readers read; a longer one allocates a leaf that `--allocated` then refuses")
+                reason = (
+                    f" — at most {_MAX_REVIEWER_LENGTH} characters, because the launch record "
+                    f"`<run id> <reviewer>` must fit the {_LAUNCH_RECORD_READ_BYTES} bytes both "
+                    "readers read; a longer one allocates a leaf that `--allocated` then refuses"
+                )
             raise AllocationError(f"invalid {label} component: {value!r}" + reason)
 
     env = dict(os.environ if environ is None else environ)
@@ -1173,12 +1235,16 @@ def _parse_allocate_args(args: list[str]) -> "tuple[str, str, str, str]":
     return tuple(values[option] for option in _ALLOCATE_OPTIONS)
 
 
-def cli_main(argv: "list[str] | None" = None, environ: "dict[str, str] | None" = None) -> int:
+def cli_main(
+    argv: "list[str] | None" = None, environ: "dict[str, str] | None" = None
+) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "--allocate":
         try:
             repo_hash, ticket, round_value, reviewer = _parse_allocate_args(args[1:])
-            path = allocate_transcript(repo_hash, ticket, round_value, reviewer, environ=environ)
+            path = allocate_transcript(
+                repo_hash, ticket, round_value, reviewer, environ=environ
+            )
         except AllocationError as exc:
             sys.stderr.write(f"pty-capture: {exc}\n")
             sys.stderr.flush()
@@ -1188,10 +1254,12 @@ def cli_main(argv: "list[str] | None" = None, environ: "dict[str, str] | None" =
         return 0
 
     if "--" not in args:
-        raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]")
+        raise SystemExit(
+            "usage: pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]"
+        )
     separator = args.index("--")
     timeout, out_path, allocated = parse_pre_args(args[:separator])
-    return main(out_path, args[separator + 1:], timeout, allocated=allocated)
+    return main(out_path, args[separator + 1 :], timeout, allocated=allocated)
 
 
 if __name__ == "__main__":

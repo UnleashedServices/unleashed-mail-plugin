@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.30
+# UnleashedMail — Claude Code Plugin v2.8.31
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,24 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.31
+
+**Every model caller the plugin ships now uses the newest model.**
+
+- **Gemini review arm:** picks the newest flash-high model `agy models` lists, at run time. It was
+  pinned to `gemini-3.6-flash-high` while 3.7 and 3.8 were available. Every agy launch the plugin
+  ships resolves its model first: the review wrapper, the preflight ping, the skill recipes and the
+  `pty-capture.py` example. An odd listing fails the round rather than picking an older model.
+- **The model a round ran is recorded** in `<transcript>.model`. The transcript stays the reviewer's
+  bytes alone.
+- **Codex:** the skill no longer pins a model. Leave `review_model` unset and keep `model` current in
+  `~/.codex/config.toml`.
+- **CI rejects a concrete model id** in agent or skill frontmatter. Use an alias (`opus`, `sonnet`,
+  `haiku`, `fable`, …) or `inherit`.
+- **App guidance:** `ai-engineer` defaults to `claude-opus-5-5`, with `claude-haiku-5-5` for cheap
+  routes and its request rules. `concurrency-reviewer` flags Haiku 5.5's three 400s.
+- CI validates with Claude Code 2.1.294.
 
 ### v2.8.30
 
@@ -18,6 +36,7 @@ and `payload`, and proves each one: the declared value is there, and nothing els
 included. The 8 raw-text mutants are written verbatim over their pinned spans. actionlint accepts
 every mutant, raw text included. The resolver family runs as its 24 executions through the real
 boundary. Two `local-divergence` cases that had never run their declared op now run it.
+
 ### v2.8.29
 
 **The agents' guidance is corrected against primary sources (COREDEV-2873).**
@@ -44,7 +63,7 @@ boundary. Two `local-divergence` cases that had never run their declared op now 
   moved to `gpt-6.1-sol`. That is now corrected. The skill also shows how to read the model and effort
   a run actually used from its session record.
 - **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus, Sonnet and Haiku 5.5 default to `medium`
-  effort (Opus 4.7 to `xhigh`), so set a level explicitly for any review or gate session.
+  effort, so set a level explicitly for any review or gate session.
 
 ### v2.8.27
 

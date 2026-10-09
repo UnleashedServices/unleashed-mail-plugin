@@ -42,7 +42,8 @@ from pathlib import Path
 # Supported Claude Code hook events — the COMPLETE documented set (33). Source:
 # https://code.claude.com/docs/en/hooks.md and https://code.claude.com/docs/en/plugins-reference.md
 # § "Hooks" (re-verified against the docs 2026-10-03, Claude Code 2.1.289; COREDEV-2873 added
-# DirectoryAdded, PreModelSwitch and PostModelSwitch). An event NOT in this
+# DirectoryAdded, PreModelSwitch and PostModelSwitch). Re-verified against the 2.1.294 binary's
+# hook-event array, 2026-10-08 (COREDEV-2875): the 33 events are unchanged. An event NOT in this
 # set will silently never fire. If CI fails here on an event you intend to use, confirm it
 # against the docs above and add it in the SAME PR.
 KNOWN_EVENTS = {

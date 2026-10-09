@@ -255,9 +255,11 @@ jobs:
           # cover this. Bump it alongside the actionlint/gitleaks version pins below.
           # Opus 5 requires >= 2.1.219 (COREDEV-2583 §4.8). This pin drives
           # `claude plugin validate`, so the schema authority must not sit below the
-          # floor the plugin targets. 2.1.289 is the `latest` dist-tag (2026-10-03); pinning ahead of
-          # `stable` is deliberate because stable is below the Opus 5 floor.
-          CLAUDE_CODE_VERSION: 2.1.289
+          # floor the plugin targets. 2.1.294 is the `latest` dist-tag (2026-10-08); pinning ahead of
+          # `stable` is deliberate because stable is below the Opus 5 floor, and Haiku 5.5's `haiku`
+          # alias needs 2.1.293 or later (COREDEV-2875). On every bump, re-check the three sets the
+          # validators transcribe from the CLI: MODEL_ALIASES, KNOWN_SKILL_KEYS, KNOWN_EVENTS.
+          CLAUDE_CODE_VERSION: 2.1.294
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
@@ -531,7 +533,7 @@ jobs:
           # validates proves less than it appears to. That job scopes CLAUDE_CODE_VERSION to a single
           # STEP, so `${{ env.CLAUDE_CODE_VERSION }}` is EMPTY here; the value is repeated instead and
           # `scripts/tests/test_shell_primitive_drift.py` asserts the two pins agree.
-          CLAUDE_CODE_VERSION: 2.1.289
+          CLAUDE_CODE_VERSION: 2.1.294
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"

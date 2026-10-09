@@ -75,7 +75,8 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
     private let session: URLSession
     private let endpoint: URL
     let supportedFeatures: Set<AIProviderFeature> = [.streaming, .toolCalling, .visionInput, .systemMessages]
-    let defaultModel = "claude-sonnet-5-5"   // current; `claude-sonnet-5` is a legacy model (still served)
+    // The default, and the newest Opus (COREDEV-2875). Cheap and bulk routes pass "claude-haiku-5-5".
+    let defaultModel = "claude-opus-5-5"
 
     init(apiKey: String, endpoint: URL, session: URLSession = NetworkService.shared.session) {
         self.apiKey = apiKey
@@ -115,8 +116,8 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
         // Effort is per MODEL. Haiku 4.5 does not support it, so an unconditional field fails every
         // request whose `model` override names it. `supportsEffort` reads the Models API's
         // `capabilities.effort.supported` (`GET /v1/models/{id}`, cached per model id).
-        // Where supported, set it explicitly: the API default differs by model (medium on Opus 5.5,
-        // high on Sonnet 5.5). Effort sets thinking DEPTH on both. It is Opus 5.5's only thinking
+        // Where supported, set it explicitly: the API default differs by model (medium on Opus 5.5 and
+        // Haiku 5.5, high on Sonnet 5.5). Effort sets thinking DEPTH on both. It is Opus 5.5's only thinking
         // control; Sonnet 5.5 also takes `thinking: {"type": "between_tools"}` to skip up-front
         // thinking, which is legal only at low/medium/high. See "Claude 5.5 request rules".
         if supportsEffort(model) {
@@ -134,25 +135,36 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
 - All providers must support both streaming (`stream(_:)`) and non-streaming (`complete(_:)`) modes
 - Provider-specific request/response types are internal — only `AIProviderResponse` / `AIProviderChunk` cross the boundary
 
-#### Claude 5.5 request rules (API facts, re-verified 2026-10-03)
+#### Claude 5.5 request rules (API facts, re-verified 2026-10-03; Haiku 5.5 added 2026-10-08)
 
-Source: platform.claude.com, _Migrating to Claude Opus 5.5_ and _Migrating to Claude Sonnet 5.5_. Both
-`claude-opus-5-5` and `claude-sonnet-5-5` **reject each of these with a 400**, so a request carrying one
-fails on every call. Each row gives the replacement that the guides themselves name:
+Source: platform.claude.com, _Migrating to Claude Opus 5.5_ and _Migrating to Claude Sonnet 5.5_, and the
+Claude API model reference for `claude-haiku-5-5` (COREDEV-2875). `claude-opus-5-5` and
+`claude-sonnet-5-5` **reject each of these with a 400**, so a request carrying one fails on every call.
+`claude-haiku-5-5`, the cheap and bulk-route model, differs where its column says. Each row gives the
+replacement that the guides themselves name:
 
-| Rejected on 5.5                                            | Use instead (per the migration guides)                                             |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `thinking: {"type": "enabled", "budget_tokens": N}`        | adaptive thinking (send no `thinking` field) plus `output_config.effort`           |
-| `thinking: {"type": "disabled"}`                           | an effort level; on Sonnet 5.5 only, `thinking: {"type": "between_tools"}` (below) |
-| non-default `temperature`, `top_p` or `top_k`              | omit them, and guide the behaviour in the prompt                                   |
-| a prefilled final assistant turn                           | structured outputs, or instructions in the system prompt                           |
-| `tool_choice` `{"type": "any"}` or `{"type": "tool", ...}` | `tool_choice: auto` (the default) plus strict tool use or structured outputs       |
+| Rejected on Opus 5.5 and Sonnet 5.5                        | Haiku 5.5                                  | Use instead (per the migration guides)                                             |
+| ---------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `thinking: {"type": "enabled", "budget_tokens": N}`        | also a 400                                 | adaptive thinking (send no `thinking` field) plus `output_config.effort`           |
+| `thinking: {"type": "disabled"}`                           | ACCEPTED at `low`/`medium`/`high` effort   | an effort level; on Sonnet 5.5 only, `thinking: {"type": "between_tools"}` (below) |
+| non-default `temperature`, `top_p` or `top_k`              | also a 400                                 | omit them, and guide the behaviour in the prompt                                   |
+| a prefilled final assistant turn                           | also a 400                                 | structured outputs, or instructions in the system prompt                           |
+| `tool_choice` `{"type": "any"}` or `{"type": "tool", ...}` | ACCEPTED; the response then skips thinking | `tool_choice: auto` (the default) plus strict tool use or structured outputs       |
 
+- **Which model.** `claude-opus-5-5` is the default — the API reference's own default, and the newest
+  Opus. Cheap and bulk routes (classification, extraction, short summaries) use `claude-haiku-5-5`. Name
+  a model only through these two choices; an older id is never a route's choice.
+- **Refusals.** On Opus 5.5, branch on `stop_reason == "refusal"` BEFORE reading `content`, and on the
+  Claude API opt into server-side fallbacks: `fallbacks: "default"` with the beta header
+  `server-side-fallback-2026-07-01`. Haiku 5.5 has **no** server-side fallback — never send `fallbacks`
+  to it; handle its refusal in the client.
 - **Effort is per model.** Send `output_config.effort` only to a model that supports it: the Models
-  API reports `capabilities.effort.supported`, and each level, per model. Claude Haiku 4.5 does not
-  support effort, so an unconditional field breaks every request that overrides `model` with it.
-- **A specific tool call can no longer be FORCED on 5.5.** Code that relied on forcing one must check the
-  model's choice and handle the case where no tool was called.
+  API reports `capabilities.effort.supported`, and each level, per model. Opus 5.5 and Haiku 5.5 support
+  it (default `medium`); an older model such as Claude Haiku 4.5 does not, so an unconditional field
+  breaks every request that overrides `model` with it.
+- **A specific tool call can no longer be FORCED on Opus 5.5 or Sonnet 5.5.** Code that relied on forcing
+  one must check the model's choice and handle the case where no tool was called. Haiku 5.5 still accepts
+  a forced `tool_choice`, but its response then skips thinking.
 - **Sonnet 5.5 only:** `thinking: {"type": "between_tools"}` is its lowest thinking setting. It is accepted
   at `low`, `medium` and `high` effort and is a 400 at `xhigh` or `max`. While it is set, changing the effort
   on a single message is also a 400. Opus 5.5's thinking is always on.

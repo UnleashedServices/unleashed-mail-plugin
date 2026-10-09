@@ -13,6 +13,72 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.31] — 2026-10-08
+
+### Changed
+
+- **Every model caller the plugin ships uses the newest model (COREDEV-2875).**
+  - **The gemini arm resolves its model at run time.** `scripts/review/agy-newest-model.sh` prints
+    the newest recognized `gemini-<major>[.<minor>]-flash-high` that `agy models` lists. The pinned
+    `gemini-3.6-flash-high` had gone stale while 3.7 and 3.8 were listed. The resolver fails closed,
+    and never skips, on any of these:
+    - a timeout (60 s, lowerable only, and finite);
+    - a non-zero listing;
+    - a control or non-ASCII byte (a PTY-attached agy fuses `\r\x1b[K` to the newest entry);
+    - a line that is not `<id>TAB<label>`;
+    - an unrecognized flash-high version form;
+    - no candidate.
+
+    An explicit `MODEL`, or the capture wrapper's sixth operand, still wins.
+
+  - **Every agy launch resolves.** That covers the isolated wrapper, `preflight-agy.sh` (whose bare
+    ping used agy's global setting), the gemini-review recipes (`-p`, `-i` and `-c` alike),
+    `implement`'s health check, and the `pty-capture.py` example. Recipes use the checked form,
+    `MODEL="$(bash …/agy-newest-model.sh)" && agy --model "$MODEL" …`, because a failed `$(…)`
+    inside `--model` would still launch agy.
+  - **Every model id is one token** (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`) before it reaches an argv
+    or a record. The capture wrapper checks its sixth operand before allocating a leaf.
+  - **The model a round ran is recorded in `<transcript>.model`.** It is written with one
+    `O_CREAT|O_EXCL|O_NOFOLLOW` open, never `set -C`, which opens a FIFO. It is not written into the
+    transcript: a banner line there made a silent reviewer's transcript non-empty, and the verdict
+    writer would then have accepted it. `.model` joins `DERIVED_SIBLING_SUFFIXES`.
+  - **Codex:** `codex-review` pins no model. The skill says to leave `review_model` unset and keep
+    `~/.codex/config.toml`'s `model` current. The Kimi stand-in follows its own config, as stated.
+  - **Frontmatter:** `validate-plugin-assembly.py` accepts in `model:` only a runtime alias or
+    `inherit`, for agents and, newly, for skills. A concrete model id and `default` are rejected,
+    with a message naming the family's alias.
+  - **App guidance:** `ai-engineer` defaults to `claude-opus-5-5`. Cheap and bulk routes use
+    `claude-haiku-5-5`. The request rules gain a Haiku 5.5 column: it accepts `thinking: disabled`
+    at low–high effort and a forced `tool_choice`, and it has no server-side fallback. Opus 5.5
+    gets the refusal and `fallbacks` rules. `concurrency-reviewer` flags Haiku 5.5's three 400s, and
+    the AGENT_CONTRACTS §13 anchor moves to `:287`.
+  - **CI pins Claude Code 2.1.294** in the `validate` and `load-check` jobs, which clears Haiku
+    5.5's 2.1.293 floor. `MODEL_ALIASES`, `KNOWN_SKILL_KEYS` and `KNOWN_EVENTS` were re-verified
+    against that binary and are unchanged.
+  - **`skills/implement/SKILL.md` is exempt from prettier** (`.trunk/trunk.yaml`; the frozen
+    config digest and ignore-list literal are re-pinned with the reason). Its recipe bytes are
+    frozen by `test_callers_scan`'s M5.13–M5.15 contract, and prettier re-indents them. This
+    change is the first edit to that file under the blocking pre-commit gate, so it is the first
+    to meet the conflict. It is a deviation from the plan, recorded here because the gated plan
+    cannot be edited without voiding its verdict.
+  - **The touched shell and Python files are formatter-clean**, as the pre-commit gate requires.
+    shfmt re-tabs the agy harness scripts, so the diff for those files is larger than the change.
+
+### Added
+
+- `scripts/tests/test_agy_model_resolution.py`: the resolver, the production capture path, the
+  override, the one-token id, `.model` exclusivity (regular file, FIFO, symlinks), a silent reviewer
+  at both layers, and the shipped recipe text executed.
+- `scripts/tests/test_agy_recipe_gate.py`: every shipped unit naming agy must FULLY match an
+  approved template, or appear by exact text in a closed, reasoned exemption list. It is a
+  declaration, not a detector: five review rounds bypassed a shell matcher. The raw-checkout warning
+  gate reads the same units.
+
+### Deferred
+
+- COREDEV-2876: a `#`-led line inside a multi-line quoted string or heredoc is skipped as a comment
+  by the recipe gate, although a substitution on it runs (a declared boundary).
+
 ## [2.8.30] — 2026-10-03
 
 ### Fixed
@@ -51,6 +117,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     forbidden pattern after a valid entry, so a resolver that validates only the first item of a side
     fails. Duplicates are closed as a class: censuses count distinct (case, entry) pairs, an obligation
     may not repeat an entry, obligation ids are unique, and the registry may not repeat a mapping key.
+
 ## [2.8.29] — 2026-10-03
 
 ### Fixed
