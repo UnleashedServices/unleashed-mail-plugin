@@ -1,6 +1,6 @@
 # COREDEV-2879 — A retargeted PR must not satisfy `Control` with contexts computed against its OLD base
 
-**Status:** Planning, revision 3. Round 2: codex `REQUEST_CHANGES` (Q1: 2); gemini produced no review again (see the log).
+**Status:** Planning, revision 4. Round 3: codex `REQUEST_CHANGES`, gemini `APPROVE_WITH_NOTES`, **both Q1: 0**. Their Q2 findings are fixed here.
 **Ticket:** COREDEV-2879 (High). Found while observing COREDEV-2780 M4.
 **Branch / worktree:** `feat/COREDEV-2879-retarget-current-base`, `.claude/worktrees/2879-retarget`, cut
 from `origin/main` at `665796e`.
@@ -23,6 +23,25 @@ from `origin/main` at `665796e`.
   3. **(Q2) The §4 procedure ran resolver mutations against digest-pinned tests, and V8 named the wrong
      check.** **Fix:** behaviour mutants run against the behaviour module only, and V8 executes the C6a
      guard and asserts `digest mismatch` (§4).
+- **Round 3 (revision 3), codex `REQUEST_CHANGES`, Q1: 0.** It found no shipping defect, only two Q2
+  findings, both real:
+  1. **V4 could not fail under revision 3.** The first-parent walk never traverses the merge commit's second
+     parent, so comparing against the merge commit instead of its first parent just adds one commit above
+     the same chain. Its recorded rc 0 came from revision 2's ancestry resolver. **Fix:** V4 is replaced by
+     a discriminating slip, the merge ref's `^2` (the PR head) in place of `^1`. The old mutation is
+     recorded as a SURVIVOR, not called equivalent (it shifts the 64-commit bound by one).
+  2. **F8 named `resolver.draft2.sh` as §2.1's text.** It is `resolver.draft3.sh`. Every behaviour mutant
+     was RE-EXECUTED against draft 3 (`resolver.r3v*.sh`), and §4 now records those results, with V10 in
+     the procedure.
+
+  It also asked §6 to carry the inherited COREDEV-2780 scope limits, and §6 now does.
+- **Round 3 (revision 3), gemini `APPROVE_WITH_NOTES`, Q1: 0.** This was its first completed review: the
+  sandbox-safe prompt worked, at 16 KB. Its one Q2 is codex's V4 finding, fixed above. It also pointed out
+  that plugin-ci carries `concurrency: plugin-ci-${{ github.ref }}` with `cancel-in-progress: true`. That was
+  verified against the file and is now F10, with its consequence in §2.2. **Discounted:** some of its §1
+  "verifications" were fabricated. It named the required contexts as `unit-tests`, `lint`, `typecheck` and
+  so on, which do not exist (they are §0's six), and it cited a "PR #41" that has nothing to do with this.
+  Its verdict stands on its design reasoning, not those claims.
 - **Round 2 (revision 2), codex `REQUEST_CHANGES`, Q1: 2.** Both Q1 findings were real.
   1. **Ancestry does not identify a BRANCH.** alpha's `10d57dd` has main's `dd84d82` as its SECOND parent (a
      catch-up merge), so an old main tip is an ancestor of BOTH bases. Revision 2 then failed in two ways:
@@ -99,7 +118,7 @@ of the event's base branch, and the first parent of the PR's current merge ref. 
 - **F8. Both checks were EXECUTED against real objects** (`~/.claude/handoffs/coredev-2879/exec/`). The
   fixtures are real main `665796e`, alpha `10d57dd` and #110's head `942013a`, merged with
   `git merge-tree --write-tree`. Each fixture is cloned at depth 2, as checkout does, against a bare origin
-  carrying `refs/heads/{main,alpha}` and a settable `refs/pull/110/merge`. `resolver.draft2.sh` is §2.1's
+  carrying `refs/heads/{main,alpha}` and a settable `refs/pull/110/merge`. `resolver.draft3.sh` is §2.1's
   text.
 
   | # | Case | Shipped resolver | §2.1 |
@@ -116,6 +135,10 @@ of the event's base branch, and the first parent of the PR's current merge ref. 
 
   An earlier draft (revision 1's Part A) also passed nine payload cases. Those cases were withdrawn with
   Part A.
+- **F10. plugin-ci cancels its own superseded runs.** `plugin-ci.yml` declares `concurrency: group:
+  plugin-ci-${{ github.ref }}` with `cancel-in-progress: true`. On a PR, `github.ref` is
+  `refs/pull/<n>/merge`, so the group is one per PR, and a newer event cancels that PR's in-flight plugin-ci
+  run. `trunk-check.yml` has no concurrency key, because C0 forbids one.
 - **F9. The resolver is shared and digest-pinned.** It is invoked by `trunk-check.yml` (`guard-empty-diff`),
   `trunk-check-push.yml` (the canary, `push` arm only) and `trunk-parity-harness.yml` (`pull_request` into
   `harness-base`). Its sha256 is pinned in the `guard-resolver-digest` step of the first two, and
@@ -211,7 +234,10 @@ the same merge commit, and §2.1 certifies that commit or turns `trunk-check` re
 
 **Cost, stated.** Every title or body edit on a PR into `main` or `alpha` now runs the full plugin-ci matrix,
 `darwin-suite` included. The repository is public, so Actions minutes are not billed, but runner queue time
-is real.
+is real. **Under F10, each edit also CANCELS the PR's in-flight plugin-ci run** and restarts it, so a burst of
+edits delays the green. That works FOR the gate: a run from a stale race event (R1) is cancelled by the next
+event rather than finishing green. A cancelled run concludes `cancelled`, not success, and the newer run's
+contexts are the newest (F3), so cancellation can block but never satisfy.
 
 ### 2.3 Consequences for the three resolver callers
 
@@ -270,25 +296,26 @@ rather than pinning one literal.
 
 **Procedure** (round 1, finding 3):
 
-- **Behaviour mutants** (V1-V6, V9) edit the resolver and run ONLY `test_trunk_upstream_parity.py`'s
+- **Behaviour mutants** (V1-V6, V9, V10, and the V4 survivor) edit the resolver and run ONLY `test_trunk_upstream_parity.py`'s
   behaviour tests. That module asserts no digest, so a mutant is judged on behaviour alone.
 - **V7 and V8 are structural.** They run the named test only.
 - Every run uses `PYTHONDONTWRITEBYTECODE=1`, and every red must show the stated reason.
-- V1-V6 were EXECUTED against the F8 fixtures before this revision; the table records what each actually
-  did.
+- Every behaviour mutant was EXECUTED against `resolver.draft3.sh` (§2.1's text) on fixtures R1, R2, R4, R6,
+  R8, R9 and R10 and base-ref-unset. The table records what each actually did.
 
 | # | Mutation | Must go red | For this reason |
 |---|---|---|---|
-| V1 | delete check 1 | the R1 test | resolves `665796e` instead of `STALE MERGE REF` |
-| V2 | delete check 2 | the R2 test | resolves instead of `OBSOLETE EVENT` |
-| V3 | check 1 uses EQUALITY with the tip | the R4 test | over-strict: refuses an advanced base |
-| V4 | check 2 compares against `refs/trunk-gate/merge` (the merge commit) instead of its first parent | the R2 test | resolves `665796e`: the merge commit's SECOND parent is the PR head, cut from main, so main's tip is its ancestor and only first-parent identity separates the bases (executed: rc 0) |
+| V1 | delete check 1 | the R1 and R8 tests | resolves `665796e` and `dd84d82` instead of `STALE MERGE REF` |
+| V2 | delete check 2 | the R2 and R9 tests | resolves instead of `OBSOLETE EVENT` |
+| V3 | check 1 uses EQUALITY with the tip | the R4 and R10 tests | over-strict: refuses an advanced base |
+| V4 | check 2 reads the merge ref's `^2` (the PR head) instead of `^1` | the R2, R9 and R4 tests | fails OPEN on R2 and R9 (the head's own first-parent chain runs through main) and refuses R4 as `OBSOLETE EVENT` |
+| V4-old (survivor) | check 2 starts at the merge commit instead of its first parent | nothing on these fixtures | SURVIVES: a first-parent walk from the merge commit is the same chain plus one commit. It is recorded, not claimed red, and not called universally equivalent, since it shifts the 64-commit bound by one |
 | V5 | the fetch failure is ignored | the R6 test | the REASON: it still exits 1, but as `STALE MERGE REF`. The later checks find no refs and misreport a fetch failure as staleness (executed). Only the reason assertion separates it; an rc-only cell would pass it |
 | V6 | an empty `GITHUB_BASE_REF` skips the checks | the base-ref-unset test | fails OPEN |
 | V7 | plugin-ci's `types:` loses `edited` | the trigger-equality test | §2.2's invariant |
 | V8 | resolver edited, digest NOT re-pinned | the `guard-resolver-digest` run body, EXTRACTED from `trunk-check.yml` and executed directly against the mutated tree (not via the unit test, which copies the mutation into its own positive control and fails before the reason) | rc ≠ 0 AND stderr contains `digest mismatch` |
-| V10 | first-parent membership replaced by plain ancestry (`git merge-base --is-ancestor`) in both checks | the R8 and R9 tests | resolves `dd84d82`: ancestry cannot tell a branch from one it absorbed (executed: revision 2's resolver accepted both) |
-| V9 (equivalent) | depth 64 → 128 | nothing | must SURVIVE: depth is a bound, not a property |
+| V10 | first-parent membership replaced by plain ancestry (`git merge-base --is-ancestor`) in the helper | the R8 and R9 tests | resolves `dd84d82`: ancestry cannot tell a branch from one it absorbed |
+| V9 (survivor) | depth and walk bound 64 → 128 | nothing | must SURVIVE: the bound is not the property (executed: identical on every fixture) |
 
 ## 5. Rollout
 
@@ -329,6 +356,15 @@ rather than pinning one literal.
   checkouts and five digest re-pins. That is a low-odds path, so under the standing remediation rule it is
   **ticketed, not fixed here**. The same applies to a re-run of an obsolete `trunk-check` inside the
   recomputation window (seconds), where both references can still be stale.
+- **Inherited COREDEV-2780 scope limits** (round 3), which this plan does not widen:
+  - **A retarget made with a workflow token** fires `edited` but produces NO workflow run (COREDEV-2780 §1,
+    C1), so nothing re-runs. No workflow in this repository retargets PRs.
+  - **One head targeting both bases at once** is a substitution path COREDEV-2780 already prohibits.
+  - **alpha is uncovered until its catch-up** (§5 step 8): a PR whose merge ref carries alpha's workflow
+    bytes runs the old resolver and plugin-ci triggers.
+  - **Pre-ship history also includes PRs closed before ship and reopened after.** The reopen is a new event
+    that runs the fixed workflow, so the residual is only the manual re-run of a pre-ship run (the boundary
+    above).
 - **Private repositories.** The anonymous fetch fails there, and `trunk-check` fails closed.
 - **Merge queue.** C7 forbids it, and `Control` has no merge-queue rule (M4 preflight).
 - **A base that advanced more than 64 commits** between the merge commit and the job is refused, and a push
