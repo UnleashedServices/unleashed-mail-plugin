@@ -35,6 +35,17 @@ die() {
 	exit 1
 }
 
+# FIRST-PARENT membership, not ancestry (COREDEV-2879 round 2). A branch ADVANCES along its first parents
+# (GitHub's merge commit takes the base's previous tip as parent 1; squash and rebase are linear), while a
+# catch-up merge brings the OTHER branch in as parent 2. alpha's 10d57dd has main's dd84d82 as its second
+# parent, so plain ancestry called an old main tip "on alpha". Captured, not piped into `grep -q`: under
+# `pipefail` an early grep exit SIGPIPEs rev-list and a MATCH would report as a failure.
+on_first_parent_chain() {
+	local chain
+	chain="$(git rev-list --first-parent --max-count=64 "$2")" || return 1
+	[[ $'\n'"${chain}"$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+
 event="${GITHUB_EVENT_NAME-}"
 [[ -n ${event} ]] || die "GITHUB_EVENT_NAME is unset — refusing to guess the event"
 
@@ -59,6 +70,32 @@ pull_request)
 	ref_name="${GITHUB_REF_NAME-}"
 	if [[ ${ref_name} == */merge ]]; then
 		upstream="$(git rev-parse HEAD^1)" || die "HEAD^1 is unavailable — fetch-depth must be >= 2"
+		# THE UPSTREAM MUST BE ON THE PR'S CURRENT BASE (COREDEV-2879), checked against TWO live
+		# references because each covers a case the other cannot:
+		#   (1) the live tip of the EVENT's base branch catches a merge ref GitHub had not yet
+		#       recomputed after a retarget (the event is the retarget, the merge commit predates it);
+		#   (2) the PR's CURRENT refs/pull/<n>/merge catches a RE-RUN of an event from before the
+		#       retarget, whose payload still names the old base (a re-run keeps the original
+		#       GITHUB_SHA and payload), once GitHub has recomputed the merge ref for the new base.
+		# First-parent MEMBERSHIP (on_first_parent_chain, above), never equality: a base that merely
+		# ADVANCED since the merge commit was computed is the ordinary case and must stay green.
+		base_ref="${GITHUB_BASE_REF-}"
+		[[ -n ${base_ref} ]] || die "GITHUB_BASE_REF is unset on a pull_request event"
+		pr="${ref_name%/merge}"
+		[[ ${pr} =~ ^[0-9]+$ ]] || die "cannot read a PR number from GITHUB_REF_NAME '${ref_name}'"
+		git fetch --quiet --no-tags --depth=64 origin \
+			"+refs/heads/${base_ref}:refs/trunk-gate/base" "+refs/pull/${pr}/merge:refs/trunk-gate/merge" ||
+			die "could not fetch the PR's current base \`${base_ref}\` and refs/pull/${pr}/merge to check the merge ref against them"
+		base_tip="$(git rev-parse refs/trunk-gate/base)" || die "the fetched base \`${base_ref}\` has no tip"
+		# shellcheck disable=SC2310  # the helper RETURNS its verdict; set -e is not what fails it
+		if ! on_first_parent_chain "${upstream}" refs/trunk-gate/base; then
+			die "STALE MERGE REF: HEAD^1 ${upstream} is not on the event's base \`${base_ref}\` (tip ${base_tip}) — GitHub had not recomputed refs/pull/${pr}/merge. Push a commit, or close and reopen the PR (a re-run reuses this merge commit)"
+		fi
+		current_base="$(git rev-parse refs/trunk-gate/merge^1)" || die "refs/pull/${pr}/merge has no first parent"
+		# shellcheck disable=SC2310  # as above: the verdict is the return status
+		if ! on_first_parent_chain "${upstream}" "${current_base}"; then
+			die "OBSOLETE EVENT: HEAD^1 ${upstream} is not on the base of the PR's CURRENT merge ref (${current_base}) — this run belongs to an event from before a retarget. Push a commit, or close and reopen the PR"
+		fi
 	else
 		# The action's fallback, reached only when the merge ref is not checked out. The action reads
 		# its own synthesised variable; that is absent here, so the value comes from the event payload
