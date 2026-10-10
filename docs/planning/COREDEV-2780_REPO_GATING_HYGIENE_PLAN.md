@@ -1778,7 +1778,7 @@ alternative turned out to be complementary rather than competing.
       completing the rollout (codex, r5). Then observe **one genuinely strict green run and one
       deliberately red run on each base**. *Revision 1 would have promoted a context observed only while failures
       were suppressed — one that had never been able to fail.*
-- [x] **M4** — *(DONE 2026-10-09 on maintainer instruction; evidence `m4RequiredContextAdded`)* — add the required context to ruleset `Control`, **only after M3's red runs on both
+- [x] **M4** — *(DONE 2026-10-09 on maintainer instruction; evidence `m4RequiredContextAdded`. Its alpha deliberate-red prerequisite under the post-COREDEV-2850 bytes was satisfied POST HOC on 2026-10-10, via PR #116 (`alphaDeliberateRedUnderCurrentBytes`), and is not backdated)* — add the required context to ruleset `Control`, **only after M3's red runs on both
       bases**, and only with explicit maintainer instruction (§6.2). **This gates `main` AND `alpha`
       simultaneously** — `Control` targets both — so the context must be satisfiable on both, which
       **M0 + M2a + M3 together** make true; no one of them suffices. **Evidence required on BOTH

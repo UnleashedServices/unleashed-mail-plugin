@@ -296,7 +296,7 @@
     ],
     "stillOpenForM3": [
       {
-        "what": "Cell 2's RULE-SATISFACTION half: 'assert THE CONTEXT THAT SATISFIES THE RULE is a new run against the new base's range'. The range half is observed (`cell2RetargetObservation`); the rule half is NOT.",
+        "what": "Cell 2's RULE-SATISFACTION half: 'assert THE CONTEXT THAT SATISFIES THE RULE is a new run against the new base's range'. Observed at M4 only IN PART. whatISObserved and whatIsNOTObserved state it once (codex, PR #112): an `observedAtM4` block beside the old fields had given readers two contradictory answers.",
         "why": [
           "`trunk-check` is not one of ruleset Control's required contexts until M4, so pre-M4 NO rule is",
           "satisfied by it and there is no 'context that satisfies the rule' to observe. The criterion as",
@@ -307,15 +307,9 @@
           "reads for M4 readiness \u2014 so the contradiction resolved in favour of 'done' exactly where it is",
           "most costly. Closing the observable half and calling the item closed is the defect."
         ],
-        "whatISObserved": "cell2RetargetObservation: the `edited` clause fires, and the range is re-resolved against the new base \u2014 by the action's own upstream SHA, not by inference.",
-        "whatIsNOTObserved": "That a retarget causes the RULE to be satisfied by the new run rather than by the earlier same-SHA result. Structurally unobservable until trunk-check is a required context.",
+        "whatISObserved": "M3 (cell2RetargetObservation): the `edited` clause fires and the range is re-resolved against the new base. M4, 2026-10-09 (cell2RuleSatisfactionObservation): the rule IS satisfied by the NEW run. After PR #110 was retargeted from main to alpha, it read BLOCKED while that run was IN_PROGRESS, so the earlier same-SHA success did not satisfy the rule. It read CLEAN once the run completed.",
+        "whatIsNOTObserved": "That the new run's range is against the NEW base. On PR #110 the run checked out a STALE refs/pull/110/merge. The action echoed HEAD^1 = 665796e (main's tip), not alpha's 10d57dd, so the context that satisfied alpha's rule was computed against main's range: 1 file, where main..alpha differs in 46. Remedy: COREDEV-2879 (PR #113). This item closes only on that fix's LIVE re-observation.",
         "resolvesAt": "COREDEV-2879",
-        "observedAtM4": {
-          "what": "Observed 2026-10-09 with `trunk-check` required (see `cell2RuleSatisfactionObservation`). HALF of the criterion holds and half does not.",
-          "holds": "THE CONTEXT THAT SATISFIES THE RULE IS A NEW RUN: after retargeting PR #110 main -> alpha, the PR read BLOCKED while the new run was IN_PROGRESS (the earlier same-SHA success did not satisfy the rule), then CLEAN when it completed.",
-          "doesNotHold": "AGAINST THE NEW BASE'S RANGE: that new run checked out a STALE refs/pull/110/merge. The action echoed HEAD^1 = 665796e (main's tip), not alpha's tip 10d57dd, so the context that satisfied alpha's rule was computed against main's range (1 file; main..alpha differs in 46).",
-          "whyStillOpen": "Closing the observed half and calling the item closed is the defect this list exists to prevent. Remedy and re-observation are COREDEV-2879."
-        },
         "discriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' \u2014 this item can only be closed once that list contains `trunk-check`.",
         "resolvesAtMeans": "An M4 acceptance item, not an M3 gap that further M3 work can close. It must be observed as part of promoting the context \u2014 not assumed by it. REVISION NOTE: `resolvesAt` first held this whole sentence, which made the discriminator below print a paragraph instead of the token it claimed. The field is now the machine-readable value and the prose lives here."
       },
@@ -925,7 +919,40 @@
       "openPRsOnEitherBase": 0,
       "forkPrContributorApprovalPolicy": "first_time_contributors",
       "alphaProducesTheContextWithTheCurrentBytes": "PR #105 (into alpha, 2026-10-03, after the 2026-10-02 trunk-check.yml change) ran trunk-check 3x, github-actions, all success.",
-      "gapRecorded": "No DELIBERATE RED on alpha under the post-COREDEV-2850 bytes. The cell 17 red witness on main is a red under the current bytes."
+      "alphaDeliberateRedUnderCurrentBytes": {
+        "why": "M4 requires a strict green AND a deliberate red on BOTH bases. alpha's red was last observed under the pre-COREDEV-2850 workflow (#97). Recording that as a gap while marking M4 done claimed the checklist passed when it had not (codex, PR #112, P1). It is now OBSERVED.",
+        "orderingStated": "This observation was made AFTER the M4 write (2026-10-10, not before 2026-10-09's write), so the prerequisite was satisfied post hoc, not in the plan's intended order. It is recorded as such and not backdated.",
+        "pr": 116,
+        "base": "alpha",
+        "headSha": "1d93bb20a81213d6cd0f11cffe7d5d051020e5f4",
+        "workflowPath": ".github/workflows/trunk-check.yml",
+        "event": "pull_request",
+        "workflowRunId": 38090527887,
+        "workflowRunConclusion": "failure",
+        "checkRunId": 114325846769,
+        "checkRunConclusion": "failure",
+        "trunkStepNumber": 6,
+        "trunkStepName": "trunk",
+        "trunkStepConclusion": "failure",
+        "actionResolvedUpstreamSha": "10d57dd9323f63df66891514a6d07e0116a85493",
+        "upstreamEqualsAlphaTip": true,
+        "boundDiagnostic": {
+          "path": "harness-fixtures/m4-alpha-red-witness.sh",
+          "line": 10,
+          "column": 6,
+          "linters": ["shellcheck/SC2086", "shellcheck/SC2250"]
+        },
+        "enforcementObserved": {
+          "observedAt": "2026-10-10T22:22:43Z",
+          "mergeStateStatus": "BLOCKED",
+          "restMergeableState": "blocked",
+          "failingRequiredContexts": ["trunk-check"],
+          "everyOtherRequiredContext": "success"
+        },
+        "howTheRedCommitWasMade": "Through the GitHub contents API; the local pre-commit trunk gate was not bypassed.",
+        "closedNeverMerged": true,
+        "alphaTipUnchangedAfterwards": "10d57dd9323f63df66891514a6d07e0116a85493"
+      }
     },
     "integrationId": {
       "value": 15368,
@@ -1013,7 +1040,75 @@
       "main": "665796eed931a5e478c8977a646e1283045af948",
       "alpha": "10d57dd9323f63df66891514a6d07e0116a85493"
     },
-    "finalState": "trunk-check required with integration_id 15368, no placeholder, canonical ruleset identical to its pre-M4a bytes."
+    "finalState": "trunk-check required with integration_id 15368, no placeholder, canonical ruleset identical to its pre-M4a bytes.",
+    "decidingReads": {
+      "what": "The read taken IMMEDIATELY BEFORE each of the three ruleset writes, recorded per transition (codex, PR #112: the outcome records alone could not show that these reads happened). Every value below is DERIVED from the full ruleset snapshot the driver saved at that read, not retyped.",
+      "reads": [
+        {
+          "transition": "M4 write",
+          "write": "add trunk-check",
+          "snapshot": "20261009T205202Z-m4-before.json",
+          "rulesetUpdatedAt": "2026-08-07T22:27:24.651-06:00",
+          "stateAtTheDecidingRead": "UNGATED",
+          "enforcement": "active",
+          "bypassActors": [],
+          "strictRequiredStatusChecksPolicy": false,
+          "mergeQueueRulePresent": false,
+          "resolvedTargets": ["alpha", "main"],
+          "requiredContexts": [
+            "validate",
+            "py39-smoke",
+            "secret-scan",
+            "load-check",
+            "redactor-equivalence (ubuntu-latest)"
+          ]
+        },
+        {
+          "transition": "rehearsal substitution",
+          "write": "trunk-check -> placeholder",
+          "snapshot": "20261009T211304Z-sub-before.json",
+          "rulesetUpdatedAt": "2026-10-09T14:52:02.633-06:00",
+          "stateAtTheDecidingRead": "GATED",
+          "enforcement": "active",
+          "bypassActors": [],
+          "strictRequiredStatusChecksPolicy": false,
+          "mergeQueueRulePresent": false,
+          "resolvedTargets": ["alpha", "main"],
+          "requiredContexts": [
+            "validate",
+            "py39-smoke",
+            "secret-scan",
+            "load-check",
+            "redactor-equivalence (ubuntu-latest)",
+            "trunk-check"
+          ],
+          "remainderEqualsSavedPreM4aRemainder": true
+        },
+        {
+          "transition": "rehearsal restore",
+          "write": "placeholder -> trunk-check",
+          "snapshot": "20261009T211329Z-restore-before.json",
+          "rulesetUpdatedAt": "2026-10-09T15:13:04.627-06:00",
+          "stateAtTheDecidingRead": "REHEARSAL",
+          "enforcement": "active",
+          "bypassActors": [],
+          "strictRequiredStatusChecksPolicy": false,
+          "mergeQueueRulePresent": false,
+          "resolvedTargets": ["alpha", "main"],
+          "requiredContexts": [
+            "validate",
+            "py39-smoke",
+            "secret-scan",
+            "load-check",
+            "redactor-equivalence (ubuntu-latest)",
+            "trunk-check-rollback-rehearsal"
+          ],
+          "remainderEqualsSavedPreM4aRemainder": true
+        }
+      ],
+      "checkedButNotSnapshotted": "At each deciding read the driver also listed the open PRs against main and alpha, and refused to write if any had auto-merge armed. For the M4 write it additionally re-checked both base tips' workflow blobs, the effective check name, and that the canary is not required (`m4.py` invariants()). Those reads returned inside the driver and were NOT saved as separate snapshots. Each one is a hard stop in the driver, so a write that proceeded is the evidence they passed. This is stated, not reconstructed.",
+      "driver": "~/.claude/handoffs/coredev-2780/m4/m4.py (deciding_read / invariants); its selftest is mutation-verified 6/6."
+    }
   },
   "cell2RuleSatisfactionObservation": {
     "pr": 110,
