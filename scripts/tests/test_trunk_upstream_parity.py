@@ -568,8 +568,13 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
         The merge-ref branch now certifies HEAD^1 against the PR's CURRENT base, which it fetches:
         `refs/heads/<base>` and `refs/pull/<n>/merge`. A bare repo stands in for GitHub, holding `main`
         at HEAD^1 and each named PR's merge ref at HEAD, which is the ordinary, current state.
+
+        Its OWN temporary directory, cleaned up with the test: `root` is a `TemporaryDirectory` itself,
+        so a sibling path beside it escaped that cleanup and leaked a bare repo per run (codex review).
         """
-        bare = Path(str(root) + ".origin.git")
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        bare = Path(holder.name) / "origin.git"
         subprocess.run(
             ["git", "clone", "-q", "--bare", str(root), str(bare)],
             check=True,
