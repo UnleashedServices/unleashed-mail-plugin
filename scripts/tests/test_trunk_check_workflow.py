@@ -5654,11 +5654,18 @@ class EveryRequiredContextRerunsOnTheSameEvents(unittest.TestCase):
     equality, rather than pinning one literal, so it reds whichever side drifts.
     """
 
-    @staticmethod
-    def _types(path):
-        document = _load_actions_yaml(path.read_text(encoding="utf-8"))
-        pull_request = _on(document)["pull_request"]
-        return set(pull_request.get("types") or ())
+    # GitHub's activity types for `pull_request` when `types:` is absent. Modelled, not assumed empty: a
+    # bare `pull_request:` (null) is valid and means exactly this set, `edited` excluded (gemini, PR #113).
+    DEFAULT_TYPES = frozenset({"opened", "synchronize", "reopened"})
+
+    @classmethod
+    def _types(cls, path):
+        """The activity set the workflow ACTUALLY runs on: empty when it has no `pull_request` trigger."""
+        on = _on(_load_actions_yaml(path.read_text(encoding="utf-8"))) or {}
+        if "pull_request" not in on:
+            return set()
+        options = on["pull_request"] or {}
+        return set(options.get("types") or cls.DEFAULT_TYPES)
 
     def test_plugin_ci_reruns_on_exactly_trunk_checks_pull_request_events(self):
         required = self._types(WORKFLOW_PATH)
