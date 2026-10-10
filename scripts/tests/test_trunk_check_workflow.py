@@ -179,14 +179,15 @@ M2_ADVISORY_EXEMPTION = {"continue-on-error"}
 # Per ENTRY, because the two files' guards genuinely differ: the required workflow's empty-diff guard
 # echoes the changed-file list, the canary's does not, and each C6a guard pins its own copy of the
 # resolver digest.
+# COREDEV-2879: both `guard-resolver-digest` bodies carry the resolver's new pinned digest.
 EXPECTED_RUN_BODY_DIGESTS = {
     "required": {
-        "guard-resolver-digest": "4bec1e760e705bdb5427a9327cecb8c55d03d4f512fef15a568144c1638ab0cc",
+        "guard-resolver-digest": "ee93cb82bfc3c20d560963bd582439b7ff0c353f97b84b68dad0c24909bce2a2",
         "guard-empty-diff": "ad22812ba8cd73408bf2bebabd07f73bff3e492c64fe3e7a921594a2fdaed8b5",
         "guard-launcher-path": "5ddf9995fb1b73487506d47d0d32abbd4ca866cf1e2fd586cc397a0b37512df9",
     },
     "canary": {
-        "guard-resolver-digest": "011054c609a1f896f8fb73b3584f7048b666acc84bba82a65824563b106b7bd9",
+        "guard-resolver-digest": "df8dd1dadde8366f1832aaf70489035ccc92c9c66711b9cdb630e7e8cb00e376",
         "guard-empty-diff": "9825dbd46b05c59173d8792d7aafb42cbe1e3ebb0623d6066850279a0902e5db",
         "guard-launcher-path": "5ddf9995fb1b73487506d47d0d32abbd4ca866cf1e2fd586cc397a0b37512df9",
     },
@@ -5638,6 +5639,35 @@ class TheRemoteReadsSurviveAMachineWithoutGh(unittest.TestCase):
                     completed.stdout.strip(),
                     "the remote read must report None so its assertions skip",
                 )
+
+
+PLUGIN_CI_PATH = REPO / ".github/workflows/plugin-ci.yml"
+
+
+class EveryRequiredContextRerunsOnTheSameEvents(unittest.TestCase):
+    """COREDEV-2879 §2.2: plugin-ci's `pull_request` activity set EQUALS trunk-check's.
+
+    Five of `Control`'s six required contexts come from plugin-ci. When its set lacked `edited` (the
+    event a RETARGET fires), a retarget re-ran trunk-check alone, and a later title edit turned
+    trunk-check green over five OLD-base plugin-ci results. Equal sets mean every event re-runs all six
+    on one merge commit, which trunk-check's resolver certifies. The test names the INVARIANT, set
+    equality, rather than pinning one literal, so it reds whichever side drifts.
+    """
+
+    @staticmethod
+    def _types(path):
+        document = _load_actions_yaml(path.read_text(encoding="utf-8"))
+        pull_request = _on(document)["pull_request"]
+        return set(pull_request.get("types") or ())
+
+    def test_plugin_ci_reruns_on_exactly_trunk_checks_pull_request_events(self):
+        required = self._types(WORKFLOW_PATH)
+        self.assertIn("edited", required, "trunk-check must re-run on a retarget (C2)")
+        self.assertEqual(
+            required,
+            self._types(PLUGIN_CI_PATH),
+            "plugin-ci's pull_request types must equal trunk-check's (COREDEV-2879)",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

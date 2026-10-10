@@ -562,6 +562,46 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
         run("merge", "-q", "--no-ff", "topic", "-m", "merge")
         return root
 
+    def _publish(self, root, prs):
+        """Give the fixture the `origin` a real checkout has (COREDEV-2879).
+
+        The merge-ref branch now certifies HEAD^1 against the PR's CURRENT base, which it fetches:
+        `refs/heads/<base>` and `refs/pull/<n>/merge`. A bare repo stands in for GitHub, holding `main`
+        at HEAD^1 and each named PR's merge ref at HEAD, which is the ordinary, current state.
+        """
+        bare = Path(str(root) + ".origin.git")
+        subprocess.run(
+            ["git", "clone", "-q", "--bare", str(root), str(bare)],
+            check=True,
+            capture_output=True,
+        )
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD", "HEAD^1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        subprocess.run(
+            ["git", "-C", str(bare), "update-ref", "refs/heads/main", head[1]],
+            check=True,
+        )
+        for pr in prs:
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(bare),
+                    "update-ref",
+                    f"refs/pull/{pr}/merge",
+                    head[0],
+                ],
+                check=True,
+            )
+        subprocess.run(
+            ["git", "-C", str(root), "remote", "add", "origin", bare.as_uri()],
+            check=True,
+        )
+
     def _resolve(self, root, **env):
         environment = {"PATH": os.environ["PATH"], "HOME": str(root)}
         environment.update(env)
@@ -577,6 +617,7 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
     def test_a_pull_request_resolves_with_no_action_supplied_variables(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._fixture(tmp)
+            self._publish(root, ["84"])
             expected = subprocess.run(
                 ["git", "-C", str(root), "rev-parse", "HEAD^1"],
                 capture_output=True,
@@ -584,21 +625,28 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
                 check=True,
             ).stdout.strip()
             completed = self._resolve(
-                root, GITHUB_EVENT_NAME="pull_request", GITHUB_REF_NAME="84/merge"
+                root,
+                GITHUB_EVENT_NAME="pull_request",
+                GITHUB_REF_NAME="84/merge",
+                GITHUB_BASE_REF="main",
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
             self.assertEqual("upstream=" + expected, completed.stdout.strip())
 
     def test_the_merge_ref_is_detected_by_pattern_not_by_the_pr_number(self):
-        """Any `<n>/merge` works, because the number itself is never needed."""
+        """Any `<n>/merge` works: the number selects which merge ref to certify against."""
         with tempfile.TemporaryDirectory() as tmp:
             root = self._fixture(tmp)
+            self._publish(root, ["1", "84", "99999"])
             for ref in ("1/merge", "84/merge", "99999/merge"):
                 with self.subTest(ref=ref):
                     completed = self._resolve(
-                        root, GITHUB_EVENT_NAME="pull_request", GITHUB_REF_NAME=ref
+                        root,
+                        GITHUB_EVENT_NAME="pull_request",
+                        GITHUB_REF_NAME=ref,
+                        GITHUB_BASE_REF="main",
                     )
-                    self.assertEqual(0, completed.returncode)
+                    self.assertEqual(0, completed.returncode, completed.stderr)
                     self.assertTrue(completed.stdout.startswith("upstream="))
 
     def test_a_zero_before_push_still_fails_closed(self):
@@ -680,6 +728,220 @@ class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
                     completed = self._resolve(root, GITHUB_EVENT_NAME=event)
                     self.assertNotEqual(0, completed.returncode)
                     self.assertIn("unsupported event", completed.stderr)
+
+
+class TheMergeCommitMustSitOnTheCurrentBase(unittest.TestCase):
+    """COREDEV-2879: a retargeted PR must not satisfy `trunk-check` with a run against its OLD base.
+
+    Observed on PR #110 (main -> alpha): the retarget's run checked out a merge commit GitHub had not yet
+    recomputed, linted main's range and went green. The resolver therefore certifies HEAD^1 against two
+    live references, by FIRST-PARENT membership: the event's base branch tip (catches that race) and the
+    PR's current `refs/pull/<n>/merge` (catches a re-run of a pre-retarget event, whose payload still
+    names the old base).
+
+    THE TOPOLOGY IS THE ONE THAT BROKE REVISION 2 (plan F8). alpha absorbs an OLD main tip as the SECOND
+    parent of a catch-up merge, exactly as alpha `10d57dd` absorbs main `dd84d82`, so plain ancestry
+    calls that main tip "on alpha". Every checkout is a depth-2 clone, as `actions/checkout` makes one,
+    against a bare origin whose refs each case sets.
+
+        main:   c0 - m1 - m2                      (m1 is the OLD main tip alpha absorbs)
+        alpha:  c0 - a1 - A(a1, m1) - a2          (A is the catch-up merge; m1 is its parent 2)
+        head:   m2 - h1                           (the PR, cut from main)
+    """
+
+    RESOLVER = REPO / "scripts/ci/resolve-trunk-range.sh"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        full = self.tmp / "full"
+
+        def git(*args):
+            return subprocess.run(
+                ["git", "-C", str(full), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        def commit(name):
+            (full / name).write_text(name + "\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-qm", name)
+            return git("rev-parse", "HEAD")
+
+        git_init = ["git", "init", "-q", "-b", "main", str(full)]
+        subprocess.run(git_init, check=True, capture_output=True)
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        self.c0 = commit("c0")
+        self.m1 = commit("m1")
+        self.m2 = commit("m2")
+        git("checkout", "-qb", "alpha", self.c0)
+        self.a1 = commit("a1")
+        git("merge", "-q", "--no-ff", "-m", "A", self.m1)
+        self.A = git("rev-parse", "HEAD")
+        self.a2 = commit("a2")
+        git("checkout", "-qb", "head", self.m2)
+        self.h1 = commit("h1")
+
+        def merge_on(base, name):
+            git("checkout", "-q", "--detach", base)
+            git("merge", "-q", "--no-ff", "-m", name, self.h1)
+            sha = git("rev-parse", "HEAD")
+            git("branch", "-f", name, sha)
+            return sha
+
+        self.stale = merge_on(self.m2, "on-main")
+        self.fresh = merge_on(self.a2, "on-alpha")
+        self.older = merge_on(self.A, "on-alpha-before-a2")
+        self.catch = merge_on(self.m1, "on-old-main")
+        self.origin = self.tmp / "origin.git"
+        subprocess.run(
+            ["git", "clone", "-q", "--bare", str(full), str(self.origin)],
+            check=True,
+            capture_output=True,
+        )
+        self.full = full
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _checkout(self, branch):
+        """A depth-2 clone of one merge commit, its `origin` pointed at the bare repo."""
+        work = self.tmp / ("co-" + branch)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "-q",
+                "--depth=2",
+                "--branch",
+                branch,
+                self.full.as_uri(),
+                str(work),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(work),
+                "remote",
+                "set-url",
+                "origin",
+                self.origin.as_uri(),
+            ],
+            check=True,
+        )
+        return work
+
+    def _merge_ref(self, sha):
+        """Set (or, with None, delete) the PR's CURRENT merge ref on the origin."""
+        if sha is None:
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.origin),
+                    "update-ref",
+                    "-d",
+                    "refs/pull/7/merge",
+                ],
+                check=False,
+                capture_output=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "-C", str(self.origin), "update-ref", "refs/pull/7/merge", sha],
+                check=True,
+            )
+
+    def _resolve(self, branch, base, merge_ref, ref_name="7/merge"):
+        self._merge_ref(merge_ref)
+        environment = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(self.tmp),
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF_NAME": ref_name,
+        }
+        if base is not None:
+            environment["GITHUB_BASE_REF"] = base
+        return subprocess.run(
+            ["bash", str(self.RESOLVER)],
+            check=False,
+            cwd=str(self._checkout(branch)),
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def assertResolves(self, completed, upstream):
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual("upstream=" + upstream, completed.stdout.strip())
+
+    def assertRefused(self, completed, reason):
+        self.assertNotEqual(0, completed.returncode, completed.stdout)
+        self.assertIn(reason, completed.stderr)
+        self.assertEqual("", completed.stdout, "a refused run must print no upstream")
+
+    def test_R1_the_race_a_merge_ref_not_yet_recomputed_after_a_retarget(self):
+        """The #110 observation: the event names alpha, the merge commit is still head + main."""
+        self.assertRefused(
+            self._resolve("on-main", "alpha", self.stale), "STALE MERGE REF"
+        )
+
+    def test_R2_a_re_run_of_a_pre_retarget_event_once_the_merge_ref_has_moved(self):
+        """A re-run keeps the old payload (base main) and merge commit; the PR now targets alpha."""
+        self.assertRefused(
+            self._resolve("on-main", "main", self.fresh), "OBSOLETE EVENT"
+        )
+
+    def test_R3_an_ordinary_current_merge_resolves_its_first_parent(self):
+        self.assertResolves(self._resolve("on-alpha", "alpha", self.fresh), self.a2)
+
+    def test_R4_a_base_that_merely_advanced_is_not_refused(self):
+        """The merge commit was computed on A; alpha has since advanced to a2. That is ordinary."""
+        self.assertResolves(
+            self._resolve("on-alpha-before-a2", "alpha", self.fresh), self.A
+        )
+
+    def test_R5_an_ordinary_main_pull_request_resolves(self):
+        self.assertResolves(self._resolve("on-main", "main", self.stale), self.m2)
+
+    def test_R6_an_unfetchable_merge_ref_fails_closed_naming_the_fetch(self):
+        """The REASON is asserted: ignoring the fetch failure still exits 1, but misreports it as
+        `STALE MERGE REF` (plan §4 V5), which only a reason assertion can tell apart."""
+        self.assertRefused(self._resolve("on-alpha", "alpha", None), "could not fetch")
+
+    def test_R8_the_catch_up_race_is_refused_although_m1_is_an_ancestor_of_alpha(self):
+        """m1 reaches alpha only through the catch-up merge's SECOND parent."""
+        self.assertRefused(
+            self._resolve("on-old-main", "alpha", self.catch), "STALE MERGE REF"
+        )
+
+    def test_R9_a_catch_up_obsolete_re_run_is_refused(self):
+        """The case revision 2's ancestry check accepted after recomputation (codex, round 2)."""
+        self.assertRefused(
+            self._resolve("on-old-main", "main", self.fresh), "OBSOLETE EVENT"
+        )
+
+    def test_R10_a_main_merge_on_an_older_main_tip_is_ordinary_advancement(self):
+        """m1 is on main's first-parent chain: refusing it would red unrelated main PRs."""
+        self.assertResolves(self._resolve("on-old-main", "main", self.catch), self.m1)
+
+    def test_an_unset_base_ref_fails_closed(self):
+        self.assertRefused(
+            self._resolve("on-main", None, self.stale), "GITHUB_BASE_REF is unset"
+        )
+
+    def test_a_merge_ref_name_without_a_pr_number_fails_closed(self):
+        self.assertRefused(
+            self._resolve("on-main", "main", self.stale, ref_name="topic/merge"),
+            "cannot read a PR number",
+        )
 
 
 class TheHarnessEvidenceIsAcceptedAgainstTheSchema(unittest.TestCase):

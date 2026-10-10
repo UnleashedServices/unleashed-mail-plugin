@@ -393,14 +393,16 @@ _JOB_DIGESTS = {
     ("plugin-ci.yml", "secret-scan"): (
         "054002e2d1f9657955831df0b242439e59ecae4d2b26146d800dd251a6eed1a0"
     ),
+    # COREDEV-2879: the resolver's pinned digest moved (it certifies HEAD^1 against the PR's current
+    # base), so both trunk jobs' `guard-resolver-digest` literal — and with it these digests — moved.
     ("trunk-check-push.yml", "trunk-check-push"): (
-        "aaea34984148bfcf2e375e07fbd21a22a012e5e50ba22da2a365a7851ef374c5"
+        "16281e7087010c4fa94f40b2305ccdde5ec8d8d41b260b4c8a874eb699d0673e"
     ),
     # M3: the job-scoped `continue-on-error: true` advisory exemption was removed here, so this
     # digest moved. The freeze caught the change, which is the point — re-declaring it is the
     # deliberate act.
     ("trunk-check.yml", "trunk-check"): (
-        "ba363bdaf13c60d1a19c8b5cee9926f73420a495193c764c57b5ec58ec1b9194"
+        "cb4697a78fad94f1573f4f7509f207f4fdbf0b3026c640cb3798e0c8fb7d1070"
     ),
     ("trunk-parity-harness.yml", "parity"): (
         "147aa579e9517a3bb6996118c76f4af35b313a6f2437b6c13c326523476bbd8a"
@@ -471,7 +473,8 @@ _JOBS_ALLOWED_TO_CONTINUE_ON_ERROR = {
 # unstringified raises `TypeError: '<' not supported between instances of 'bool' and 'str'`, which
 # is how this was found.
 _WORKFLOW_LEVEL_DIGESTS = {
-    "plugin-ci.yml": "e64c6c46d7d605d58605839716ed012ee7ae65f1206816b14925a089ea361a19",
+    # COREDEV-2879: `pull_request.types` added, matching trunk-check.yml, so a retarget re-runs plugin-ci.
+    "plugin-ci.yml": "4397a4ce43a0912d870dc6628d19a27c87b66d74d006be190b9d8ba9963d46f9",
     "trunk-check-push.yml": (
         "649aca568e734004f031e7a8c8dd06d7916364a7be656f75b42d93f246ffa125"
     ),

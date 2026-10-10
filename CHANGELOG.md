@@ -13,6 +13,59 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.32] — 2026-10-10
+
+### Fixed
+
+- **A retargeted PR could satisfy ruleset `Control` with checks run against its OLD base
+  (COREDEV-2879).** On PR #110, retargeted from main to alpha, the new `trunk-check` run checked out
+  a merge commit that GitHub had not yet recomputed. It linted main's range (1 file; against alpha
+  the range would have been 46 files) and went green. plugin-ci, whose `pull_request` trigger lacked
+  `edited`, did not re-run at all, so its five required contexts stayed old-base results.
+  - **`scripts/ci/resolve-trunk-range.sh` certifies the merge commit's first parent** against two live
+    references before resolving. Both comparisons use first-parent membership: the commit must once
+    have been a tip of that branch.
+    1. The tip of the event's base branch. This catches a merge ref GitHub had not yet recomputed after
+       a retarget: `STALE MERGE REF`.
+    2. The first parent of the PR's current `refs/pull/<n>/merge`. This catches a re-run of a
+       pre-retarget event, whose payload still names the old base: `OBSOLETE EVENT`.
+
+    Plain ancestry is not enough, because alpha's catch-up merges bring old main tips in as SECOND
+    parents. A base that merely advanced still resolves. On success the output is unchanged
+    (`upstream=HEAD^1`), so guard/action parity holds. The check fails closed if the fetch fails, the
+    base ref is unset, or the PR number cannot be read. The resolver's pinned digest moved in both
+    `guard-resolver-digest` steps.
+
+  - **`plugin-ci.yml`'s `pull_request` takes `types: [opened, synchronize, reopened, edited]`,** equal
+    to trunk-check's. Every event therefore re-runs all six required contexts on the same merge commit.
+    A title or body edit now restarts plugin-ci, cancelling the in-flight run.
+  - **Tests:**
+    - `test_trunk_upstream_parity.py` covers the plan's topology (F8 rows R1-R6 and R8-R10) on depth-2
+      clones against a bare origin, each with its reason asserted. The existing merge-ref fixtures gain
+      an origin.
+    - `test_trunk_check_workflow.py` asserts the two trigger sets are equal.
+    - Five frozen digests are re-derived: two run bodies, two jobs, and plugin-ci's workflow level.
+  - **Plan gate:** six rounds of dual review. Rounds 5 and 6 were both double APPROVE on byte-identical
+    plan bytes (`6a08f76930ff`), with no findings. Rounds 1-4 found and fixed: a title edit after a
+    retarget releasing the gate; a check that read the event's base rather than the PR's current one;
+    ancestry versus first-parent membership; and pre-ship runs. Rounds 5 and 6 are recorded here, not
+    in the plan's review log, because editing the plan would void the verdict bound to those bytes.
+  - **Post-gate deviation (lint-driven, so not covered by the plan approval).** The repository's
+    `enable=all` shellcheck flagged two things the plan's §2.1 block carried:
+    - SC2312: the tip inside the `STALE MERGE REF` message masked a `git rev-parse` status. It is now
+      computed first, with its own fail-closed `die`.
+    - SC2310: `set -e` is off inside an `if` condition. This is intended, because the helper returns its
+      verdict, and a `shellcheck disable` comment with that reason records it.
+
+    Behaviour is unchanged, apart from one side effect: a mutant that ignores the fetch failure now
+    misreports it as "has no tip" rather than `STALE MERGE REF`. It is still caught only by R6's reason
+    assertion (§4 V5; battery 13/13).
+
+  - **Boundaries stated, not covered** (plan §6): manual re-runs of obsolete runs (**COREDEV-2881**); a
+    fresh `workflow_dispatch` of plugin-ci on a PR's branch, which is pre-existing (**COREDEV-2880**);
+    alpha until its catch-up; and runs created before this ships, mitigated by refreshing every PR open
+    at ship time.
+
 ## [2.8.31] — 2026-10-08
 
 ### Changed
