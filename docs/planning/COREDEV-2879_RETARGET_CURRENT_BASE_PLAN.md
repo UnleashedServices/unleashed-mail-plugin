@@ -1,6 +1,6 @@
 # COREDEV-2879 — A retargeted PR must not satisfy `Control` with contexts computed against its OLD base
 
-**Status:** Planning, revision 2. Round 1: codex `REQUEST_CHANGES` (Q1: 2); gemini produced no review (see the log).
+**Status:** Planning, revision 3. Round 2: codex `REQUEST_CHANGES` (Q1: 2); gemini produced no review again (see the log).
 **Ticket:** COREDEV-2879 (High). Found while observing COREDEV-2780 M4.
 **Branch / worktree:** `feat/COREDEV-2879-retarget-current-base`, `.claude/worktrees/2879-retarget`, cut
 from `origin/main` at `665796e`.
@@ -23,6 +23,25 @@ from `origin/main` at `665796e`.
   3. **(Q2) The §4 procedure ran resolver mutations against digest-pinned tests, and V8 named the wrong
      check.** **Fix:** behaviour mutants run against the behaviour module only, and V8 executes the C6a
      guard and asserts `digest mismatch` (§4).
+- **Round 2 (revision 2), codex `REQUEST_CHANGES`, Q1: 2.** Both Q1 findings were real.
+  1. **Ancestry does not identify a BRANCH.** alpha's `10d57dd` has main's `dd84d82` as its SECOND parent (a
+     catch-up merge), so an old main tip is an ancestor of BOTH bases. Revision 2 then failed in two ways:
+     a re-run of a pre-retarget run passed both checks after recomputation (F8 R9), and the race passed too
+     (R8). **Fix:** both checks use FIRST-PARENT membership (§2.1), since a branch advances along its first
+     parents and a catch-up brings the other branch in as parent 2. Executed: R8 and R9 are now refused, and
+     R10 (a main merge on an older main tip) is still accepted.
+  2. **Runs created before this ships** re-run with their OLD resolver, which performs neither check. §6 now
+     states this boundary and §5 adds the mitigation: refresh every PR open at ship time. The residual is
+     ticketed.
+  3. **(Q2) Two re-pins were missing:** `test_python39_floor.py`'s `_JOB_DIGESTS` freezes both trunk jobs
+     whole, so changing the `expected=` literals changes both (codex measured `ba363bda… → 05ad3a6c…` and
+     `aaea3498… → 83c605ce…`). Added to §2.4, §3 and §7.
+  4. **(Q2) V8 did not assert its reason.** The unit test copies a mutated resolver into its own
+     positive-control fixture and fails before reaching `digest mismatch`. **Fix:** V8 executes the extracted
+     guard body directly and asserts rc and reason (§4).
+- **Round 2, gemini: no review, again a 307-byte `read_file` denial.** The likely cause is the prompt, not
+  agy: it invited the reviewer to read the draft files under `~/.claude/handoffs/`, which lie OUTSIDE agy's
+  `--add-dir` sandbox. Round 3's agy prompt withdraws that invitation. Codex's sandbox can read them.
 - **Round 1, gemini: no review.** The transcript was 307 bytes: agy's headless `read_file` was auto-denied,
   a known transient signature, not a finding. The `.model` sidecar recorded `gemini-3.8-flash-high newest`. It was
   not re-run on revision 1, which this revision supersedes.
@@ -42,9 +61,10 @@ context that satisfies the rule to be a new run against the new base's range aft
 | plugin-ci did not run at all (no `edited` in its triggers), so its five contexts stayed pre-retarget results. | **no** |
 
 **The property this plan establishes.** Every required context that can satisfy `Control` comes from a run
-whose checked-out merge commit has its first parent on the PR's CURRENT base branch. A run that cannot show
-that is red. "Current" means two things: the live tip of the event's base branch, and the base of the PR's
-current merge ref.
+whose checked-out merge commit's first parent lies on the FIRST-PARENT CHAIN of the PR's CURRENT base, so it
+was once a tip of that branch. A run that cannot show that is red. "Current" means two things: the live tip
+of the event's base branch, and the first parent of the PR's current merge ref. The boundaries are stated in
+§6, including runs created before this ships.
 
 ## 1. Verified facts (2026-10-09, on `665796e`)
 
@@ -90,6 +110,9 @@ current merge ref.
   | R4 | base ADVANCED: HEAD = head+`alpha^1`, merge ref = head+alpha | `7ed1a6e` | `7ed1a6e` (accepted) |
   | R5 | normal main PR | `665796e` | `665796e` |
   | R6 | no merge ref on origin | `10d57dd` | rc 1, could not fetch |
+  | R8 | CATCH-UP race: event base alpha, HEAD = head+`dd84d82` (an old main tip that alpha contains as a second parent), merge ref not yet recomputed | `dd84d82` (the bug; revision 2's ancestry check also accepted it) | rc 1, `STALE MERGE REF` |
+  | R9 | CATCH-UP obsolete re-run: base main, HEAD = head+`dd84d82`, merge ref recomputed to head+alpha | `dd84d82` (the bug; revision 2 also accepted it) | rc 1, `OBSOLETE EVENT` |
+  | R10 | a main merge on the older main tip `dd84d82` (5th on main's first-parent chain), merge ref the same | `dd84d82` | `dd84d82` (accepted: the base advanced) |
 
   An earlier draft (revision 1's Part A) also passed nine payload cases. Those cases were withdrawn with
   Part A.
@@ -115,14 +138,31 @@ action runs.
 		git fetch --quiet --no-tags --depth=64 origin \
 			"+refs/heads/${base_ref}:refs/trunk-gate/base" "+refs/pull/${pr}/merge:refs/trunk-gate/merge" ||
 			die "could not fetch the PR's current base \`${base_ref}\` and refs/pull/${pr}/merge to check the merge ref against them"
-		if ! git merge-base --is-ancestor "${upstream}" refs/trunk-gate/base; then
+		if ! on_first_parent_chain "${upstream}" refs/trunk-gate/base; then
 			die "STALE MERGE REF: HEAD^1 ${upstream} is not on the event's base \`${base_ref}\` (tip $(git rev-parse refs/trunk-gate/base)) — GitHub had not recomputed refs/pull/${pr}/merge. Push a commit, or close and reopen the PR (a re-run reuses this merge commit)"
 		fi
 		current_base="$(git rev-parse refs/trunk-gate/merge^1)" || die "refs/pull/${pr}/merge has no first parent"
-		if ! git merge-base --is-ancestor "${upstream}" "${current_base}"; then
+		if ! on_first_parent_chain "${upstream}" "${current_base}"; then
 			die "OBSOLETE EVENT: HEAD^1 ${upstream} is not on the base of the PR's CURRENT merge ref (${current_base}) — this run belongs to an event from before a retarget. Push a commit, or close and reopen the PR"
 		fi
 ```
+
+**Membership is on the FIRST-PARENT chain, not ancestry** (round 2). GitHub's merge commit takes the base's
+previous tip as parent 1, and squash and rebase merges are linear, so a branch's own past tips are exactly its
+first-parent chain. A catch-up merge (main into alpha) brings the other branch in as parent 2, which plain
+ancestry cannot tell apart. Both checks therefore use:
+
+```bash
+on_first_parent_chain() {
+	local chain
+	chain="$(git rev-list --first-parent --max-count=64 "$2")" || return 1
+	[[ $'\n'"${chain}"$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+```
+
+The chain is captured, not piped into `grep -q`: under `pipefail`, an early grep exit can SIGPIPE `rev-list`
+and report a MATCH as a failure. The helper is defined once, above the `case`, and the block above calls it
+for both checks.
 
 Each reference covers a case the other cannot:
 
@@ -132,8 +172,8 @@ Each reference covers a case the other cannot:
 - **Check 2, the base of the PR's current merge ref.** It catches a re-run of a pre-retarget event (F2, F3).
   The payload names the old base, so check 1 alone would pass (F8, R2).
 
-**Ancestor-or-equal, never equality.** A base that ADVANCED after the merge commit was computed is the
-ordinary case (F8, R4). Refusing it would red unrelated PRs every time another PR merges. Depth 64 bounds the
+**First-parent membership, never equality.** A base that ADVANCED after the merge commit was computed is the
+ordinary case (F8, R4 and R10). Refusing it would red unrelated PRs every time another PR merges. Depth 64 bounds the
 fetch: a base more than 64 commits ahead of the run's merge commit is refused, and a push or reopen
 recovers.
 
@@ -187,6 +227,8 @@ is real.
 - The resolver's new sha256 goes into both `expected=` literals.
 - The two `guard-resolver-digest` entries in `EXPECTED_RUN_BODY_DIGESTS` are re-derived.
 - The `on:` freeze in `test_python39_floor.py` is re-derived for plugin-ci's `types:` line.
+- `test_python39_floor.py`'s `_JOB_DIGESTS` entries for the two trunk jobs (required and canary) are
+  re-derived, since each job's `guard-resolver-digest` literal changes (round 2).
 - `scripts/review/callers-scan-exemptions.tsv` is regenerated LAST, to a fixed point.
 
 ## 3. Tests
@@ -208,6 +250,13 @@ run against a `file://` bare origin, with no network access.
     a PR number.
 - **The push arm is untouched.** A canary-style `push` run with no `GITHUB_BASE_REF` and no origin still
   resolves `before`.
+
+**New fixture rows R8, R9 and R10** (§1 F8) use a catch-up topology built in the fixture: the base branch
+holds a merge whose SECOND parent is the other branch's older tip. R8 → `STALE MERGE REF`, R9 →
+`OBSOLETE EVENT`, R10 → resolves.
+
+**`scripts/tests/test_python39_floor.py`:** `_JOB_DIGESTS` for both trunk jobs, and plugin-ci's `on:` freeze,
+re-derived.
 
 **`scripts/tests/test_trunk_check_workflow.py`:** the two `guard-resolver-digest` run-body digests are
 re-derived. The C6a case (`edit-resolver`) is unchanged and must still go red.
@@ -237,7 +286,8 @@ rather than pinning one literal.
 | V5 | the fetch failure is ignored | the R6 test | the REASON: it still exits 1, but as `STALE MERGE REF`. The later checks find no refs and misreport a fetch failure as staleness (executed). Only the reason assertion separates it; an rc-only cell would pass it |
 | V6 | an empty `GITHUB_BASE_REF` skips the checks | the base-ref-unset test | fails OPEN |
 | V7 | plugin-ci's `types:` loses `edited` | the trigger-equality test | §2.2's invariant |
-| V8 | resolver edited, digest NOT re-pinned | the C6a guard test, executed | `digest mismatch` |
+| V8 | resolver edited, digest NOT re-pinned | the `guard-resolver-digest` run body, EXTRACTED from `trunk-check.yml` and executed directly against the mutated tree (not via the unit test, which copies the mutation into its own positive control and fails before the reason) | rc ≠ 0 AND stderr contains `digest mismatch` |
+| V10 | first-parent membership replaced by plain ancestry (`git merge-base --is-ancestor`) in both checks | the R8 and R9 tests | resolves `dd84d82`: ancestry cannot tell a branch from one it absorbed (executed: revision 2's resolver accepted both) |
 | V9 (equivalent) | depth 64 → 128 | nothing | must SURVIVE: depth is a bound, not a property |
 
 ## 5. Rollout
@@ -257,12 +307,21 @@ rather than pinning one literal.
       a title edit then re-runs all six on a fresh merge commit.
    3. Re-run an obsolete pre-retarget `trunk-check` run → red `OBSOLETE EVENT`.
    4. Record the observation in `COREDEV-2780-rollout.json` and close its `stillOpenForM3` item.
-7. **alpha catch-up.** alpha keeps the old resolver and plugin-ci triggers until it is caught up to `main`,
+7. **Refresh every PR open on `main` or `alpha` at ship time** (§6), by close/reopen or a push, and record
+   which PRs were refreshed. Ticket the residual.
+8. **alpha catch-up.** alpha keeps the old resolver and plugin-ci triggers until it is caught up to `main`,
    through a PR into `alpha` that needs the maintainer's word. Until then, PRs whose merge ref uses alpha's
    workflow bytes are not covered. Note this on the ticket.
 
 ## 6. Out of scope, and boundaries stated rather than covered
 
+- **Runs created BEFORE this ships.** A re-run reuses the original merge commit, and with it the OLD
+  resolver, which performs neither check (F2). On a PR that is open when this merges, a later retarget plus a
+  manual re-run of one of its pre-ship `trunk-check` runs could therefore create the deciding run with an
+  old-base range. **Mitigation in §5:** after the merge, refresh every open PR on `main` and `alpha` by
+  close/reopen or a push, so its newest runs come from the fixed workflow. **Residual:** a manual re-run of a
+  pre-ship run, from the Actions history, on a PR that was open at ship time. It is low-odds, so it is
+  **ticketed**.
 - **A manual re-run of an obsolete PLUGIN-CI run.** plugin-ci jobs do not certify their own checkout. A
   maintainer who opens the Actions history and re-runs a plugin-ci run from before a retarget creates the
   deciding run (F3) on a pre-retarget merge commit. The PR's checks tab offers re-runs of the LATEST runs
@@ -283,7 +342,7 @@ rather than pinning one literal.
 - `.github/workflows/plugin-ci.yml`: the `types:` line (§2.2).
 - `scripts/tests/test_trunk_upstream_parity.py`: fixture and new tests (§3).
 - `scripts/tests/test_trunk_check_workflow.py`: the two run-body digests, and the trigger-equality test.
-- `scripts/tests/test_python39_floor.py`: plugin-ci's `on:` freeze.
+- `scripts/tests/test_python39_floor.py`: plugin-ci's `on:` freeze, and `_JOB_DIGESTS` for both trunk jobs.
 - `scripts/review/callers-scan-exemptions.tsv`: regenerated.
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `README.md`, `CHANGELOG.md`: 2.8.32.
 - After merge: `docs/planning/evidence/COREDEV-2780-rollout.json` (§5 step 6), on its own PR.
