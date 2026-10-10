@@ -1,6 +1,6 @@
 # COREDEV-2879 — A retargeted PR must not satisfy `Control` with contexts computed against its OLD base
 
-**Status:** Planning, revision 4. Round 3: codex `REQUEST_CHANGES`, gemini `APPROVE_WITH_NOTES`, **both Q1: 0**. Their Q2 findings are fixed here.
+**Status:** Planning, revision 5. Round 4: codex `REQUEST_CHANGES` (Q1: 1, a pre-existing out-of-scope path; now stated and ticketed), gemini `APPROVE` (Q1: 0).
 **Ticket:** COREDEV-2879 (High). Found while observing COREDEV-2780 M4.
 **Branch / worktree:** `feat/COREDEV-2879-retarget-current-base`, `.claude/worktrees/2879-retarget`, cut
 from `origin/main` at `665796e`.
@@ -23,6 +23,23 @@ from `origin/main` at `665796e`.
   3. **(Q2) The §4 procedure ran resolver mutations against digest-pinned tests, and V8 named the wrong
      check.** **Fix:** behaviour mutants run against the behaviour module only, and V8 executes the C6a
      guard and asserts `digest mismatch` (§4).
+- **Round 4 (revision 4), codex `REQUEST_CHANGES`, Q1: 1.**
+  1. **A fresh `workflow_dispatch` of plugin-ci on a PR's head branch** emits the five required context names
+     from a run that checks out the branch tip, not the merge commit, and its `validate` diffs against
+     `origin/main`. After a retarget, it becomes the deciding run (F3) with old-base results. This was
+     outside §6. It is real and PRE-EXISTING, and wider than retargets: a dispatch never tests a PR's merge
+     commit, retarget or not. Closing it means renaming plugin-ci's job contexts per event, which changes
+     the ruleset's load-bearing context names (COREDEV-2767 class). That is its own design. **Disposition:**
+     §0's property is narrowed to PR-EVENT runs, §6 states the dispatch path, and it is ticketed as
+     **COREDEV-2880**.
+  2. **(Q2) V9's row said depth AND walk bound changed, but `resolver.r3v9.sh` changed only the walk
+     bound.** The two-line mutation is now executed as `resolver.r3v9b.sh`, and it survives identically on
+     every fixture.
+
+  It also caught a claim of mine that was not yet true: §6 said two residuals were "ticketed" before any
+  ticket existed. They are now **COREDEV-2881**.
+- **Round 4 (revision 4), gemini `APPROVE`, Q1: 0.** It traced the race, the re-run, title-edit and advanced-base
+  paths, and found no defect.
 - **Round 3 (revision 3), codex `REQUEST_CHANGES`, Q1: 0.** It found no shipping defect, only two Q2
   findings, both real:
   1. **V4 could not fail under revision 3.** The first-parent walk never traverses the merge commit's second
@@ -79,11 +96,13 @@ context that satisfies the rule to be a new run against the new base's range aft
 | That run (workflow run `37993706657`) checked out a merge commit whose `HEAD^1` was `665796e`, main's tip, while alpha's tip was `10d57dd`. It linted a 1-file range (against alpha: 46 files) and went green, and the PR read `CLEAN` on base `alpha`. | **no** |
 | plugin-ci did not run at all (no `edited` in its triggers), so its five contexts stayed pre-retarget results. | **no** |
 
-**The property this plan establishes.** Every required context that can satisfy `Control` comes from a run
-whose checked-out merge commit's first parent lies on the FIRST-PARENT CHAIN of the PR's CURRENT base, so it
-was once a tip of that branch. A run that cannot show that is red. "Current" means two things: the live tip
-of the event's base branch, and the first parent of the PR's current merge ref. The boundaries are stated in
-§6, including runs created before this ships.
+**The property this plan establishes.** Every required context that a **pull_request-event run** produces,
+and that can satisfy `Control`, comes from a run whose checked-out merge commit's first parent lies on the
+FIRST-PARENT CHAIN of the PR's CURRENT base, so it was once a tip of that branch. A run that cannot show that
+is red. "Current" means two things: the live tip of the event's base branch, and the first parent of the PR's
+current merge ref. **Runs from other events are outside this property.** A `workflow_dispatch` of plugin-ci
+on a PR's head branch emits the same required names without testing the merge commit (COREDEV-2880). That
+boundary is stated in §6, with the others, including runs created before this ships.
 
 ## 1. Verified facts (2026-10-09, on `665796e`)
 
@@ -315,7 +334,7 @@ rather than pinning one literal.
 | V7 | plugin-ci's `types:` loses `edited` | the trigger-equality test | §2.2's invariant |
 | V8 | resolver edited, digest NOT re-pinned | the `guard-resolver-digest` run body, EXTRACTED from `trunk-check.yml` and executed directly against the mutated tree (not via the unit test, which copies the mutation into its own positive control and fails before the reason) | rc ≠ 0 AND stderr contains `digest mismatch` |
 | V10 | first-parent membership replaced by plain ancestry (`git merge-base --is-ancestor`) in the helper | the R8 and R9 tests | resolves `dd84d82`: ancestry cannot tell a branch from one it absorbed |
-| V9 (survivor) | depth and walk bound 64 → 128 | nothing | must SURVIVE: the bound is not the property (executed: identical on every fixture) |
+| V9 (survivor) | fetch depth AND walk bound 64 → 128, both lines (`resolver.r3v9b.sh`) | nothing | must SURVIVE: the bound is not the property (executed: identical to draft 3 on every fixture) |
 
 ## 5. Rollout
 
@@ -348,14 +367,21 @@ rather than pinning one literal.
   old-base range. **Mitigation in §5:** after the merge, refresh every open PR on `main` and `alpha` by
   close/reopen or a push, so its newest runs come from the fixed workflow. **Residual:** a manual re-run of a
   pre-ship run, from the Actions history, on a PR that was open at ship time. It is low-odds, so it is
-  **ticketed**.
+  **ticketed as COREDEV-2881**.
 - **A manual re-run of an obsolete PLUGIN-CI run.** plugin-ci jobs do not certify their own checkout. A
   maintainer who opens the Actions history and re-runs a plugin-ci run from before a retarget creates the
   deciding run (F3) on a pre-retarget merge commit. The PR's checks tab offers re-runs of the LATEST runs
   only. Closing this would add the §2.1 check to every plugin-ci job, which needs `fetch-depth: 2` in five
   checkouts and five digest re-pins. That is a low-odds path, so under the standing remediation rule it is
-  **ticketed, not fixed here**. The same applies to a re-run of an obsolete `trunk-check` inside the
-  recomputation window (seconds), where both references can still be stale.
+  **ticketed as COREDEV-2881, not fixed here**. The same applies to a re-run of an obsolete `trunk-check`
+  inside the recomputation window (seconds), where both references can still be stale (COREDEV-2881).
+- **A fresh `workflow_dispatch` of plugin-ci on a PR's head branch** (round 4, PRE-EXISTING). It emits the five
+  required context names from a run that checks out the branch tip, not the merge commit, and `validate`
+  diffs against `origin/main`. As the newest run, it decides the contexts (F3), against the old base after a
+  retarget, and never against the merge result in any case. This needs a deliberate dispatch on a PR branch;
+  this project dispatches plugin-ci for stacked PRs, which is safe only while the dispatch precedes the PR's
+  targeting of `main` or `alpha`. Closing it changes required-context names, which is its own design:
+  **COREDEV-2880**.
 - **Inherited COREDEV-2780 scope limits** (round 3), which this plan does not widen:
   - **A retarget made with a workflow token** fires `edited` but produces NO workflow run (COREDEV-2780 §1,
     C1), so nothing re-runs. No workflow in this repository retargets PRs.
