@@ -310,7 +310,8 @@
         "whatISObserved": "M3 (cell2RetargetObservation): the `edited` clause fires and the range is re-resolved against the new base. M4, 2026-10-09 (cell2RuleSatisfactionObservation): the rule IS satisfied by the NEW run. After PR #110 was retargeted from main to alpha, it read BLOCKED while that run was IN_PROGRESS, so the earlier same-SHA success did not satisfy the rule. It read CLEAN once the run completed.",
         "whatIsNOTObserved": "That the new run's range is against the NEW base. On PR #110 the run checked out a STALE refs/pull/110/merge. The action echoed HEAD^1 = 665796e (main's tip), not alpha's 10d57dd, so the context that satisfied alpha's rule was computed against main's range: 1 file, where main..alpha differs in 46. Remedy: COREDEV-2879 (PR #113). This item closes only on that fix's LIVE re-observation.",
         "resolvesAt": "COREDEV-2879",
-        "discriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' \u2014 this item can only be closed once that list contains `trunk-check`.",
+        "discriminator": "CLOSES ONLY ON A POST-FIX LIVE RETARGET (codex, PR #112): after COREDEV-2879 ships, retarget a witness PR from one base to the other, and require the context that satisfies the rule to be a NEW run whose action-echoed upstream (`Detected merge commit, using HEAD^1 (<sha>)`) equals the NEW base's tip, or is on its first-parent chain. Read it from `gh run view <id> --log`, as cell2RetargetObservation does. A stale merge ref must instead give a RED run naming `STALE MERGE REF`.",
+        "m4PrerequisiteDiscriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' — this item can only be closed once that list contains `trunk-check`. SATISFIED 2026-10-09 (M4). This command shows only that trunk-check is required; it does NOT close this item.",
         "resolvesAtMeans": "An M4 acceptance item, not an M3 gap that further M3 work can close. It must be observed as part of promoting the context \u2014 not assumed by it. REVISION NOTE: `resolvesAt` first held this whole sentence, which made the discriminator below print a paragraph instead of the token it claimed. The field is now the machine-readable value and the prose lives here."
       },
       {
@@ -957,7 +958,7 @@
     "integrationId": {
       "value": 15368,
       "appSlug": "github-actions",
-      "readFrom": "PR #109's audited trunk-check check run 113584224225 (head 303f3b3, run attempt 1, pull_request event)"
+      "readFrom": "cell12DualBaseCheckRuns.strictGreen: PR #91, workflow run 34060576498, check run 101560257395, workflowPath .github/workflows/trunk-check.yml, effectiveCheckName trunk-check, appId 15368, appSlug github-actions. That is the provenance-checked run the plan's M4 names as the source (codex, PR #112). Corroborated at write time by PR #109's live trunk-check check run 113584224225 (head 303f3b3, run attempt 1, pull_request event), which carries the same app id."
     },
     "write": "One PUT of the writable projection {name,target,enforcement,bypass_actors,conditions,rules}; never a piped GET.",
     "readback": {
@@ -967,6 +968,18 @@
         "before": "2026-08-07T22:27:24.651-06:00",
         "after": "2026-10-09T14:52:02.633-06:00"
       }
+    },
+    "postWriteRead": {
+      "what": "The immediate post-write re-read that M4's checklist requires (codex, PR #112). The ruleset values are DERIVED from the post-write snapshot the driver saved.",
+      "snapshot": "20261009T205203Z-m4-after.json",
+      "rulesetUpdatedAt": "2026-10-09T14:52:02.633-06:00",
+      "enforcement": "active",
+      "resolvedTargets": ["alpha", "main"],
+      "canaryRequired": false,
+      "trunkCheckRequired": true,
+      "strictRequiredStatusChecksPolicy": false,
+      "mergeQueueRulePresent": false,
+      "notSnapshottedButComparedByTheDriver": "Immediately after the write, `m4.py m4-apply` re-ran invariants(): a fresh fetch of both base tips, both workflows' blobs, the effective check name, the freshly resolved target set (with ~DEFAULT_BRANCH expanded from the live repository), canary absence, and active enforcement. It compared the result with the pre-write invariants recorded in `preflightReadFresh`, and would have restored the pre-read projection on any difference. The write was not rolled back, so the post-write values EQUAL those recorded pre-write. The post-write fetch itself was not saved as a separate snapshot; that is stated, not reconstructed."
     },
     "requiredContextsAfter": [
       "validate",
@@ -978,9 +991,11 @@
     ]
   },
   "cell17EnforcementSmokeTest": {
-    "observedAt": "2026-10-09T21:01:22Z",
+    "observedAt": "2026-10-09T21:10:06Z",
+    "observedAtMeans": "Completion: both halves observed. The red half was read first, at red.observedAt (codex, PR #112: the object-level time had been the red half's, which is earlier than the mandatory green half).",
     "mergeEndpointCalled": false,
     "red": {
+      "observedAt": "2026-10-09T21:01:22Z",
       "pr": 111,
       "headSha": "dd96149d3d0c1f557ce1501ac307a102f0320e87",
       "mergeStateStatus": "BLOCKED",
