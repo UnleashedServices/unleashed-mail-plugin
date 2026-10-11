@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.31
+# UnleashedMail — Claude Code Plugin v2.8.32
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,21 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.32
+
+**A retargeted PR can no longer pass the required gate on checks run against its old base.**
+
+- **`trunk-check` checks which base it ran against.** Before linting, it confirms that the commit
+  it compares against was a tip of the PR's current base branch. It checks two references: the
+  branch itself, and the PR's current merge commit. If either says otherwise, the check fails and
+  says why. This catches a merge commit GitHub had not yet updated after a retarget, and a re-run
+  of a check from before the retarget. A base that simply moved forward still passes.
+- **`plugin-ci` re-runs when a PR is edited,** retargets included, just as `trunk-check` does. All
+  six required checks then run together on the same commit. A title or body edit now restarts
+  `plugin-ci`.
+- Remaining gaps, each ticketed: manual re-runs of old runs (COREDEV-2881), and a manual
+  `workflow_dispatch` of `plugin-ci` on a PR's branch (COREDEV-2880).
 
 ### v2.8.31
 
