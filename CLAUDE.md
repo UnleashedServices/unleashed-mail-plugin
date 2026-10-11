@@ -34,10 +34,12 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
   under install-defined server prefixes (Atlassian, Context7), **omit `tools:`** and scope with
   `disallowedTools:` (see jira-manager, modern-standards-planner).
 - `model:` ∈ the runtime alias table — `sonnet` | `opus` | `haiku` | `fable` | `best` | `opusplan` |
-  the long-context forms `sonnet[1m]` / `opus[1m]` / `fable[1m]` — plus `inherit` (default) or a full
-  model id. There is **no** `default` alias, and only sonnet/opus/fable take `[1m]`.
+  the long-context forms `sonnet[1m]` / `opus[1m]` / `fable[1m]` — plus `inherit` (default). A **full
+  model id is rejected** by the validator, for agents and skills alike (COREDEV-2875): a pin goes stale
+  silently, while an alias resolves to the newest model of its family. There is **no** `default` alias
+  (it is rejected too), and only sonnet/opus/fable take `[1m]`.
   `opus` is an **alias** that tracks the current Opus generation; `claude-opus-5` is a hard version
-  pin. Prefer the alias. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
+  pin, which CI rejects. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
   conflated the two and is superseded by AGENT_CONTRACTS §11's consequence-based tiering.)
 - **`effort:` is a FLOOR, not a pin** — assets omit `effort:` and **inherit** the session level, so a
   `max` session is not silently pulled down. CI rejects any pin below `xhigh`; `xhigh`/`max` are legal.
@@ -92,7 +94,7 @@ Linux-friendly plugin repo — no Xcode).
 ## Mandatory processes
 
 - **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
-  reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, `gemini-3.6-flash-high`) and `/unleashed-mail:codex-review`
+  reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, the newest `gemini-*-flash-high` that `agy models` lists) and `/unleashed-mail:codex-review`
   (`codex exec -c model_reasoning_effort=ultra -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.

@@ -51,8 +51,11 @@ printf 'VERDICT: APPROVE\\n'
 
 def harnesses_with(marker: str) -> list[Path]:
     """Every shipped isolated harness whose source carries `marker`."""
-    return sorted(p for p in REVIEW.glob("isolated-*-review.sh")
-                  if marker in p.read_text(encoding="utf-8"))
+    return sorted(
+        p
+        for p in REVIEW.glob("isolated-*-review.sh")
+        if marker in p.read_text(encoding="utf-8")
+    )
 
 
 def reviewer_binary(harness: Path) -> str:
@@ -81,7 +84,9 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         # is the whole ambiguity scenario, and it is committed so the harness can stage either one.
         self.shadow_dir = self.repo / "sub"
         (self.shadow_dir / "docs" / "planning").mkdir(parents=True)
-        (self.shadow_dir / self.plan_rel).write_text("# Plan\nSHADOW VERSION\n", encoding="utf-8")
+        (self.shadow_dir / self.plan_rel).write_text(
+            "# Plan\nSHADOW VERSION\n", encoding="utf-8"
+        )
 
         self.witness = self.root / "REVIEWER_RAN.txt"
         stubs = self.root / "stubs"
@@ -113,16 +118,22 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         # `GIT_CONFIG_NOSYSTEM`, so it is set back AFTER sanitising (codex, PR #73).
         self.env["GIT_CONFIG_NOSYSTEM"] = "1"
         self.env["UM_HARNESS_WITNESS"] = str(self.witness)
+        # An explicit gemini-arm model (COREDEV-2875): this fixture tests binding, isolation and status
+        # propagation, not selection — selection is test_agy_model_resolution's. Without it the wrapper
+        # would resolve via `agy models`, which this stub does not answer, and fail closed first.
+        self.env["MODEL"] = "gemini-fixture-flash-high"
 
         self.build_repo(self.repo)
 
     #: The fixture's own git invocations, factored out so a cell can run them against a chosen
     #: directory and prove they are not steerable by the caller's environment.
-    FIXTURE_GIT = (["git", "init", "-q", "."],
-                   ["git", "config", "user.email", "probe@test"],
-                   ["git", "config", "user.name", "probe"],
-                   ["git", "add", "-A"],
-                   ["git", "commit", "-qm", "init"])
+    FIXTURE_GIT = (
+        ["git", "init", "-q", "."],
+        ["git", "config", "user.email", "probe@test"],
+        ["git", "config", "user.name", "probe"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-qm", "init"],
+    )
 
     @staticmethod
     def sanitized(env):
@@ -133,13 +144,21 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         containing a planted `git/config`, `git config --get user.email` returns the planted value;
         with the variable dropped it returns nothing (gemini, PR #73).
         """
-        return {k: v for k, v in env.items()
-                if not k.startswith("GIT_") and k != "XDG_CONFIG_HOME"}
+        return {
+            k: v
+            for k, v in env.items()
+            if not k.startswith("GIT_") and k != "XDG_CONFIG_HOME"
+        }
 
     def build_repo(self, path, env=None):
         for command in self.FIXTURE_GIT:
-            subprocess.run(command, cwd=str(path), check=True, capture_output=True,
-                           env=env if env is not None else self.env)
+            subprocess.run(
+                command,
+                cwd=str(path),
+                check=True,
+                capture_output=True,
+                env=env if env is not None else self.env,
+            )
 
     # ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 
@@ -156,34 +175,61 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         out.write_text(contents, encoding="utf-8")
 
         prompt = base / "prompt.md"
-        prompt.write_text(PROMPT_BODY + f"REVIEW TARGET: {self.plan_rel}\n", encoding="utf-8")
+        prompt.write_text(
+            PROMPT_BODY + f"REVIEW TARGET: {self.plan_rel}\n", encoding="utf-8"
+        )
 
         plan_bytes = (self.repo / self.plan_rel).read_bytes()
         Path(f"{out}.plan").write_text(
-            f"{hashlib.sha256(plan_bytes).hexdigest()}  {self.plan_rel}\n", encoding="utf-8")
+            f"{hashlib.sha256(plan_bytes).hexdigest()}  {self.plan_rel}\n",
+            encoding="utf-8",
+        )
         Path(f"{out}.planbytes").write_bytes(plan_bytes)
         Path(f"{out}.promptsha256").write_text(
-            hashlib.sha256(prompt.read_bytes()).hexdigest() + "  prompt.md\n", encoding="utf-8")
+            hashlib.sha256(prompt.read_bytes()).hexdigest() + "  prompt.md\n",
+            encoding="utf-8",
+        )
         # A canonical launch record. Neither harness reads it before the guards under test — only
         # `pty-capture --allocated` does, downstream — but a fixture should still look like something
         # the allocator could have written.
-        token = "gemini" if reviewer_binary(harness) == "agy" else reviewer_binary(harness)
+        token = (
+            "gemini" if reviewer_binary(harness) == "agy" else reviewer_binary(harness)
+        )
         Path(f"{out}.launch").write_text("a" * 32 + f" {token}\n", encoding="utf-8")
         return out, prompt
 
-    def run_harness(self, harness: Path, prompt: Path, out: Path, *, cwd: Path | None = None,
-                    plan_operand: str | None = None):
+    def run_harness(
+        self,
+        harness: Path,
+        prompt: Path,
+        out: Path,
+        *,
+        cwd: Path | None = None,
+        plan_operand: str | None = None,
+    ):
         result = subprocess.run(
-            ["bash", str(harness), str(prompt), str(out), "30",
-             plan_operand if plan_operand is not None else self.plan_rel],
-            cwd=str(cwd if cwd is not None else self.repo), env=self.env,
-            capture_output=True, text=True, check=False, input="",
+            [
+                "bash",
+                str(harness),
+                str(prompt),
+                str(out),
+                "30",
+                plan_operand if plan_operand is not None else self.plan_rel,
+            ],
+            cwd=str(cwd if cwd is not None else self.repo),
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
         )
         return result, result.stdout + result.stderr
 
     def assertReviewerNeverRan(self, output: str):
-        self.assertFalse(self.witness.exists(),
-                         f"the reviewer was launched despite the refusal: {output}")
+        self.assertFalse(
+            self.witness.exists(),
+            f"the reviewer was launched despite the refusal: {output}",
+        )
 
     # ── the family itself ─────────────────────────────────────────────────────────────────────────
 
@@ -202,8 +248,12 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         victim's config picks up `probe@test`, which the last assertion catches.
         """
         victim = self.root / "victim.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(victim)],
-                       check=True, capture_output=True, env=self.env)
+        subprocess.run(
+            ["git", "init", "-q", "--bare", str(victim)],
+            check=True,
+            capture_output=True,
+            env=self.env,
+        )
         fresh = self.root / "fresh"
         (fresh / "docs" / "planning").mkdir(parents=True)
         (fresh / self.plan_rel).write_text(PLAN_TEXT, encoding="utf-8")
@@ -214,9 +264,14 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         # to `self.env = dict(os.environ)`, an ordinary CI run has no `GIT_DIR` to expose it and this
         # cell stayed green (codex, PR #73). The fixture's REAL construction path has to be the thing
         # under test, so a second instance is built through it with the environment already poisoned.
-        with mock.patch.dict(os.environ, {"GIT_DIR": str(victim),
-                                          "GIT_WORK_TREE": str(victim),
-                                          "XDG_CONFIG_HOME": str(self.root / "xdg")}):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_DIR": str(victim),
+                "GIT_WORK_TREE": str(victim),
+                "XDG_CONFIG_HOME": str(self.root / "xdg"),
+            },
+        ):
             probe = type(self)("test_the_families_are_not_empty")
             # REGISTERED BEFORE `setUp`, not after. `probe.setUp()` creates its temp root and only
             # then runs `git`; if one of those calls fails it raises, this method unwinds, and a
@@ -229,20 +284,37 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
             probe_env = probe.env
             probe_repo = probe.repo
 
-        self.assertNotIn("GIT_DIR", probe_env,
-                         "setUp's environment carried an inherited GIT_DIR — the sanitisation is not "
-                         "wired into the fixture's construction path")
-        self.assertNotIn("GIT_WORK_TREE", probe_env, "setUp's environment carried GIT_WORK_TREE")
-        self.assertNotIn("XDG_CONFIG_HOME", probe_env,
-                         "XDG_CONFIG_HOME survived — git reads $XDG_CONFIG_HOME/git/config even with "
-                         "HOME redirected, so redirecting HOME alone is not hermetic")
-        self.assertTrue((probe_repo / ".git").is_dir(),
-                        "the fixture repo was not built in place — the git calls went elsewhere")
-        config = subprocess.run(["git", "--git-dir", str(victim), "config", "--list", "--local"],
-                                capture_output=True, text=True, env=self.env)
-        self.assertNotIn("probe@test", config.stdout,
-                         f"the fixture's git calls wrote into the repository GIT_DIR named:\n"
-                         f"{config.stdout}")
+        self.assertNotIn(
+            "GIT_DIR",
+            probe_env,
+            "setUp's environment carried an inherited GIT_DIR — the sanitisation is not "
+            "wired into the fixture's construction path",
+        )
+        self.assertNotIn(
+            "GIT_WORK_TREE", probe_env, "setUp's environment carried GIT_WORK_TREE"
+        )
+        self.assertNotIn(
+            "XDG_CONFIG_HOME",
+            probe_env,
+            "XDG_CONFIG_HOME survived — git reads $XDG_CONFIG_HOME/git/config even with "
+            "HOME redirected, so redirecting HOME alone is not hermetic",
+        )
+        self.assertTrue(
+            (probe_repo / ".git").is_dir(),
+            "the fixture repo was not built in place — the git calls went elsewhere",
+        )
+        config = subprocess.run(
+            ["git", "--git-dir", str(victim), "config", "--list", "--local"],
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        self.assertNotIn(
+            "probe@test",
+            config.stdout,
+            f"the fixture's git calls wrote into the repository GIT_DIR named:\n"
+            f"{config.stdout}",
+        )
 
     def test_the_families_are_not_empty(self):
         """Every other cell loops over a family derived by searching for a message. If a message is
@@ -252,9 +324,11 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
             with self.subTest(marker=marker):
                 family = harnesses_with(marker)
                 self.assertGreaterEqual(
-                    len(family), 2,
+                    len(family),
+                    2,
                     f"expected this guard in at least two harnesses, found {[p.name for p in family]}"
-                    f" — if it was deliberately reworded, update the marker here in the same commit")
+                    f" — if it was deliberately reworded, update the marker here in the same commit",
+                )
 
     # ── the ambiguous plan operand ────────────────────────────────────────────────────────────────
 
@@ -263,10 +337,13 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
             with self.subTest(harness=harness.name):
                 self.witness.unlink(missing_ok=True)
                 out, prompt = self.reserved_leaf(harness)
-                result, output = self.run_harness(harness, prompt, out, cwd=self.shadow_dir)
+                result, output = self.run_harness(
+                    harness, prompt, out, cwd=self.shadow_dir
+                )
                 self.assertNotEqual(0, result.returncode, output)
-                self.assertIn(AMBIGUOUS_MARKER, output,
-                              f"refused, but not as ambiguous: {output}")
+                self.assertIn(
+                    AMBIGUOUS_MARKER, output, f"refused, but not as ambiguous: {output}"
+                )
                 self.assertReviewerNeverRan(output)
 
     def test_an_UNAMBIGUOUS_operand_is_not_refused_as_ambiguous(self):
@@ -278,8 +355,11 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
                 self.witness.unlink(missing_ok=True)
                 out, prompt = self.reserved_leaf(harness)
                 _, output = self.run_harness(harness, prompt, out, cwd=self.repo)
-                self.assertNotIn(AMBIGUOUS_MARKER, output,
-                                 f"an unambiguous operand was refused as ambiguous: {output}")
+                self.assertNotIn(
+                    AMBIGUOUS_MARKER,
+                    output,
+                    f"an unambiguous operand was refused as ambiguous: {output}",
+                )
 
     # ── the reserved leaf ─────────────────────────────────────────────────────────────────────────
 
@@ -290,12 +370,17 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
                 out, prompt = self.reserved_leaf(harness, contents=STALE_TRANSCRIPT)
                 result, output = self.run_harness(harness, prompt, out)
                 self.assertNotEqual(0, result.returncode, output)
-                self.assertIn(LEAF_MARKER, output, f"refused, but not for the leaf: {output}")
+                self.assertIn(
+                    LEAF_MARKER, output, f"refused, but not for the leaf: {output}"
+                )
                 self.assertReviewerNeverRan(output)
                 # The bytes of the earlier round are still there: the refusal happened BEFORE the
                 # overwrite, which is the property that matters and not merely that it exited 1.
-                self.assertEqual(STALE_TRANSCRIPT, out.read_text(encoding="utf-8"),
-                                 "the earlier round's transcript was modified despite the refusal")
+                self.assertEqual(
+                    STALE_TRANSCRIPT,
+                    out.read_text(encoding="utf-8"),
+                    "the earlier round's transcript was modified despite the refusal",
+                )
 
     def test_an_EMPTY_reserved_leaf_is_not_refused_as_non_empty(self):
         """The discrimination control: the guard is about the leaf's CONTENT, so an empty leaf — the
@@ -305,8 +390,11 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
                 self.witness.unlink(missing_ok=True)
                 out, prompt = self.reserved_leaf(harness)
                 _, output = self.run_harness(harness, prompt, out)
-                self.assertNotIn(LEAF_MARKER, output,
-                                 f"an EMPTY reserved leaf was refused as non-empty: {output}")
+                self.assertNotIn(
+                    LEAF_MARKER,
+                    output,
+                    f"an EMPTY reserved leaf was refused as non-empty: {output}",
+                )
 
 
 if __name__ == "__main__":

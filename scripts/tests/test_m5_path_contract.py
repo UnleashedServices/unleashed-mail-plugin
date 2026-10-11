@@ -263,6 +263,9 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
                 "TMPDIR": str(self.tmpdir),
                 "CLAUDE_PLUGIN_ROOT": str(plugin_root),
                 "M5_WRITER_LOG": str(log),
+                # An explicit gemini-arm model (COREDEV-2875): this fixture tests path binding, not
+                # selection, and its stub does not answer `agy models`.
+                "MODEL": "gemini-fixture-flash-high",
                 "PATH": str(fake_bin) + os.pathsep + env.get("PATH", ""),
             }
         )

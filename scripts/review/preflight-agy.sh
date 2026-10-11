@@ -17,7 +17,10 @@
 # A non-zero exit is NOT a waiver: the gate is fail-closed and the operator chooses the recovery.
 set -uo pipefail
 
-die() { printf 'agy preflight: %s\n' "$1" >&2; exit 1; }
+die() {
+	printf 'agy preflight: %s\n' "$1" >&2
+	exit 1
+}
 
 command -v agy >/dev/null 2>&1 || die "agy is not on PATH — the gate is fail-closed, not waived"
 
@@ -52,13 +55,13 @@ trap cleanup_scratch EXIT
 BEFORE=""
 BEFORE_STATUS=""
 if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    BEFORE="$(tree_fingerprint "$REPO_ROOT")" || {
-        printf 'agy preflight: FAILED — could not fingerprint the checkout before the ping.\n' >&2
-        exit 1
-    }
-    # Same untracked mode as `tree_fingerprint`: comparing a collapsed baseline against an expanded
-    # "after" would print every file under an untracked directory as newly added.
-    BEFORE_STATUS="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
+	BEFORE="$(tree_fingerprint "$REPO_ROOT")" || {
+		printf 'agy preflight: FAILED — could not fingerprint the checkout before the ping.\n' >&2
+		exit 1
+	}
+	# Same untracked mode as `tree_fingerprint`: comparing a collapsed baseline against an expanded
+	# "after" would print every file under an untracked directory as newly added.
+	BEFORE_STATUS="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
 fi
 
 # THE STATUS IS RETAINED, NOT ACTED ON YET (PR #63 recheck, P2). This used to `exit 1` right here, so
@@ -68,8 +71,20 @@ fi
 # more serious finding of the two and must be reported whatever the exit status, so the comparison runs
 # unconditionally and the capture failure is returned after it.
 CAPTURE_RC=0
-( cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping" ) \
-    || CAPTURE_RC=$?
+# THE PING RUNS ON THE MODEL THE GATE WILL RUN (COREDEV-2875 §2.1). A bare `agy -p "ping"` used agy's
+# global setting — `~/.gemini/settings.json`, or agy's built-in default when that names none — which the
+# gate never runs, so a stale setting could pass or fail this preflight on the wrong model. This script
+# takes no caller input by design (above), so it checks the resolved DEFAULT; a round run with an explicit
+# model operand is not preflighted, and its failure shows as a tiny transcript, never a verdict.
+# A resolution failure IS a preflight failure, retained like the capture status so the fingerprint
+# comparison below still runs.
+if MODEL="$(bash "${SCRIPT_DIR}/agy-newest-model.sh")"; then
+	(cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy --model "${MODEL}" -p "ping") ||
+		CAPTURE_RC=$?
+else
+	printf 'agy preflight: no model resolved (agy-newest-model.sh, above) — the ping did not run\n' >&2
+	CAPTURE_RC=1
+fi
 
 # Case-INSENSITIVE, and the `!` is not required: across 3 measured runs agy answered `Pong! How can I
 # help you today?`, a bare lowercase `pong`, and `Pong! Let me know…`. A `Pong!`-exact check calls a
@@ -77,31 +92,31 @@ CAPTURE_RC=0
 # THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating agy cannot be reported
 # healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
 if [ -n "$BEFORE" ] || [ -n "${REPO_ROOT:-}" ]; then
-    AFTER="$(tree_fingerprint "${REPO_ROOT:-.}")" || {
-        printf 'agy preflight: FAILED — agy left the checkout unreadable (its Git metadata is gone or\n' >&2
-        printf 'corrupt). Do not run a review with this agy build.\n' >&2
-        exit 1
-    }
-    if [ "$BEFORE" != "$AFTER" ]; then
-        printf 'agy preflight: FAILED — agy MUTATED the working tree during a ping:\n' >&2
-        # Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or
-        # the whole diff) buries the one new line. A content-only edit to an already-dirty file shows no
-        # new status line, so say so rather than printing nothing.
-        tree_fingerprint_report "${REPO_ROOT:-.}" "$BEFORE_STATUS"
-        printf 'This is the COREDEV-2607 failure mode. Do not run a review with this agy build.\n' >&2
-        exit 1
-    fi
+	AFTER="$(tree_fingerprint "${REPO_ROOT:-.}")" || {
+		printf 'agy preflight: FAILED — agy left the checkout unreadable (its Git metadata is gone or\n' >&2
+		printf 'corrupt). Do not run a review with this agy build.\n' >&2
+		exit 1
+	}
+	if [ "$BEFORE" != "$AFTER" ]; then
+		printf 'agy preflight: FAILED — agy MUTATED the working tree during a ping:\n' >&2
+		# Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or
+		# the whole diff) buries the one new line. A content-only edit to an already-dirty file shows no
+		# new status line, so say so rather than printing nothing.
+		tree_fingerprint_report "${REPO_ROOT:-.}" "$BEFORE_STATUS"
+		printf 'This is the COREDEV-2607 failure mode. Do not run a review with this agy build.\n' >&2
+		exit 1
+	fi
 fi
 
 if [ "$CAPTURE_RC" -ne 0 ]; then
-    printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\n' >&2
-    printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "$PING" >&2
-    exit 1
+	printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\n' >&2
+	printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "$PING" >&2
+	exit 1
 fi
 
 if grep -qi pong "$PING"; then
-    printf 'agy preflight: healthy\n'
-    exit 0
+	printf 'agy preflight: healthy\n'
+	exit 0
 fi
 printf 'agy preflight: no pong in %s — agy is unavailable or unauthenticated. Run `agy` interactively\n' "$PING" >&2
 printf 'once to re-login. The gate is FAIL-CLOSED: do not count this as APPROVE, and do not self-waive.\n' >&2

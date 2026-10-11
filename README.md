@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.27
+# UnleashedMail — Claude Code Plugin v2.8.32
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,78 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.32
+
+**A retargeted PR can no longer pass the required gate on checks run against its old base.**
+
+- **`trunk-check` checks which base it ran against.** Before linting, it confirms that the commit
+  it compares against was a tip of the PR's current base branch. It checks two references: the
+  branch itself, and the PR's current merge commit. If either says otherwise, the check fails and
+  says why. This catches a merge commit GitHub had not yet updated after a retarget, and a re-run
+  of a check from before the retarget. A base that simply moved forward still passes.
+- **`plugin-ci` re-runs when a PR is edited,** retargets included, just as `trunk-check` does. All
+  six required checks then run together on the same commit. A title or body edit now restarts
+  `plugin-ci`.
+- Remaining gaps, each ticketed: manual re-runs of old runs (COREDEV-2881), and a manual
+  `workflow_dispatch` of `plugin-ci` on a PR's branch (COREDEV-2880).
+
+### v2.8.31
+
+**Every model caller the plugin ships now uses the newest model.**
+
+- **Gemini review arm:** picks the newest flash-high model `agy models` lists, at run time. It was
+  pinned to `gemini-3.6-flash-high` while 3.7 and 3.8 were available. Every agy launch the plugin
+  ships resolves its model first: the review wrapper, the preflight ping, the skill recipes and the
+  `pty-capture.py` example. An odd listing fails the round rather than picking an older model.
+- **The model a round ran is recorded** in `<transcript>.model`. The transcript stays the reviewer's
+  bytes alone.
+- **Codex:** the skill no longer pins a model. Leave `review_model` unset and keep `model` current in
+  `~/.codex/config.toml`.
+- **CI rejects a concrete model id** in agent or skill frontmatter. Use an alias (`opus`, `sonnet`,
+  `haiku`, `fable`, …) or `inherit`.
+- **App guidance:** `ai-engineer` defaults to `claude-opus-5-5`, with `claude-haiku-5-5` for cheap
+  routes and its request rules. `concurrency-reviewer` flags Haiku 5.5's three 400s.
+- CI validates with Claude Code 2.1.294.
+
+### v2.8.30
+
+**Cell 11's contract mutants are now generated from the registry, so the two cannot drift.** The
+registry said cell 11 generated one mutant per case, but 138 hand-written recipes built them instead.
+11 asserted diagnostics, 28 mutants and 19 operators no longer matched the case they claimed to run.
+A grammar-strict generator now builds all 222 structural mutants from each case's `op`, `target`
+and `payload`, and proves each one: the declared value is there, and nothing else changed, placement
+included. The 8 raw-text mutants are written verbatim over their pinned spans. actionlint accepts
+every mutant, raw text included. The resolver family runs as its 24 executions through the real
+boundary. Two `local-divergence` cases that had never run their declared op now run it.
+
+### v2.8.29
+
+**The agents' guidance is corrected against primary sources (COREDEV-2873).**
+
+- **Claude 5.5:** `ai-engineer` now recommends `claude-sonnet-5-5`, sets effort explicitly, and lists the five
+  request settings that Claude Opus 5.5 and Sonnet 5.5 reject with a 400, each with the replacement the
+  migration guides give. `concurrency-reviewer` flags those shapes at review time.
+- **Foundation Models:** `ai-engineer` documents the app's existing gating pattern (`@available(macOS 26.0, *)`,
+  `canImport`, the availability mapping) and requires an availability check before every call.
+- **Toolchain:** the build and CI agents now match the app's real CI: `macos-26` runners and the newest
+  installed Xcode, with a macOS 15.0 deployment target and Swift 6 language mode.
+- **Smaller fixes:**
+  - the Graph subscription example no longer hard-codes a past date;
+  - the hooks validator knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch`;
+  - CI validates with Claude Code 2.1.289.
+
+### v2.8.28
+
+**The review gate's CLI documentation matches what actually runs (COREDEV-2872).**
+
+- **Gemini:** the documented one-run fallback model, `gemini-2.5-pro`, is no longer offered by `agy`.
+  The skill now tells you how to pick a fallback from `agy models`, and warns off `gemini-3.1-pro-high`.
+- **Codex:** the skill pinned `gpt-6-astra` inline on `codex review` after the configured model had
+  moved to `gpt-6.1-sol`. That is now corrected. The skill also shows how to read the model and effort
+  a run actually used from its session record.
+- **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus, Sonnet and Haiku 5.5 default to `medium`
+  effort, so set a level explicitly for any review or gate session.
 
 ### v2.8.27
 

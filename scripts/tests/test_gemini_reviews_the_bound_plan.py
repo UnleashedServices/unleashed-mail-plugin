@@ -58,13 +58,17 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
 
         self.plan.write_text(f"# Plan\n{COMMITTED}\n", encoding="utf-8")
         prompt = self.root / ".agy-prompt-COREDEV-9999r1.md"
-        prompt.write_text(PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
-                          encoding="utf-8")
-        for command in (["git", "init", "-q", "."],
-                        ["git", "config", "user.email", "probe@test"],
-                        ["git", "config", "user.name", "probe"],
-                        ["git", "add", "-A"],
-                        ["git", "commit", "-qm", "init"]):
+        prompt.write_text(
+            PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
+            encoding="utf-8",
+        )
+        for command in (
+            ["git", "init", "-q", "."],
+            ["git", "config", "user.email", "probe@test"],
+            ["git", "config", "user.name", "probe"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-qm", "init"],
+        ):
             subprocess.run(command, cwd=self.root, check=True)
 
         # The uncommitted edit. This is the whole scenario.
@@ -81,12 +85,18 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         # capture status began propagating: before that the harness returned 0 regardless, so the
         # detector fired into a void. The fixture's own instrumentation must not look like the defect
         # the harness exists to catch.
-        self.probe = Path(tempfile.mkdtemp(prefix="agy-probe-")) / "PLAN_AS_REVIEWED.txt"
+        self.probe = (
+            Path(tempfile.mkdtemp(prefix="agy-probe-")) / "PLAN_AS_REVIEWED.txt"
+        )
         self.addCleanup(shutil.rmtree, self.probe.parent, ignore_errors=True)
         self.env = dict(os.environ)
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["UM_PROBE_OUT"] = str(self.probe)
+        # An explicit gemini-arm model (COREDEV-2875): this fixture tests binding, isolation and status
+        # propagation, not selection — selection is test_agy_model_resolution's. Without it the wrapper
+        # would resolve via `agy models`, which this stub does not answer, and fail closed first.
+        self.env["MODEL"] = "gemini-fixture-flash-high"
 
     def allocated_transcript(self, name: str, plan_bytes: bytes, recorded: bytes):
         """A reserved leaf with the sidecars `isolated-agy-review.sh` reads, built by hand.
@@ -111,39 +121,75 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         Path(str(out) + ".launch").write_text("a" * 32 + " gemini\n", encoding="utf-8")
         Path(str(out) + ".plan").write_text(
             f"{hashlib.sha256(recorded).hexdigest()}  docs/planning/FEATURE_PLAN.md\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         Path(str(out) + ".planbytes").write_bytes(plan_bytes)
         prompt = base / "prompt.md"
-        prompt.write_text(PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
-                          encoding="utf-8")
+        prompt.write_text(
+            PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
+            encoding="utf-8",
+        )
         # The prompt binding is MANDATORY for the same reason the plan snapshot is: staging an
         # unauthenticated snapshot when the sidecar was absent was "absent means unchecked", reachable
         # by one `rm` (PR #63 recheck, P1). A hand-built capture must carry what the binder writes.
         Path(str(out) + ".promptsha256").write_text(
-            hashlib.sha256(prompt.read_bytes()).hexdigest() + "  prompt.md\n", encoding="utf-8")
+            hashlib.sha256(prompt.read_bytes()).hexdigest() + "  prompt.md\n",
+            encoding="utf-8",
+        )
         return out, prompt
 
     def run_harness(self, out, prompt):
         return subprocess.run(
-            ["bash", str(HARNESS), str(prompt), str(out), "90", "docs/planning/FEATURE_PLAN.md"],
-            cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
+            [
+                "bash",
+                str(HARNESS),
+                str(prompt),
+                str(out),
+                "90",
+                "docs/planning/FEATURE_PLAN.md",
+            ],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
         )
 
-    def capture(self, round_value: str, script: Path = CAPTURE, env: dict | None = None):
+    def capture(
+        self, round_value: str, script: Path = CAPTURE, env: dict | None = None
+    ):
         """One capture round; `script`/`env` let a control run a MUTANT copy of the review scripts."""
         return subprocess.run(
-            ["bash", str(script), "COREDEV-9999", round_value,
-             ".agy-prompt-COREDEV-9999r1.md", "docs/planning/FEATURE_PLAN.md", "90"],
-            cwd=self.root, env=env if env is not None else self.env, capture_output=True, text=True, check=False, input="",
+            [
+                "bash",
+                str(script),
+                "COREDEV-9999",
+                round_value,
+                ".agy-prompt-COREDEV-9999r1.md",
+                "docs/planning/FEATURE_PLAN.md",
+                "90",
+            ],
+            cwd=self.root,
+            env=env if env is not None else self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
         )
 
     def test_the_reviewer_reads_the_uncommitted_bytes_the_binding_names(self):
         result = self.capture("1")
-        self.assertTrue(self.probe.is_file(),
-                        f"the stub never ran — the harness refused first: {result.stdout}{result.stderr}")
+        self.assertTrue(
+            self.probe.is_file(),
+            f"the stub never ran — the harness refused first: {result.stdout}{result.stderr}",
+        )
         seen = self.probe.read_text(encoding="utf-8").strip()
-        self.assertEqual(EDITED, seen,
-                         "the reviewer read the COMMITTED plan while the sidecar bound the edited one")
+        self.assertEqual(
+            EDITED,
+            seen,
+            "the reviewer read the COMMITTED plan while the sidecar bound the edited one",
+        )
 
     def test_the_sidecar_and_the_reviewed_bytes_agree(self):
         """Stated as the property, not as two separate facts.
@@ -154,8 +200,11 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         import hashlib
 
         result = self.capture("2")
-        marker = [line for line in (result.stdout + result.stderr).splitlines()
-                  if line.startswith("UNLEASHED_TRANSCRIPT=")]
+        marker = [
+            line
+            for line in (result.stdout + result.stderr).splitlines()
+            if line.startswith("UNLEASHED_TRANSCRIPT=")
+        ]
         self.assertEqual(1, len(marker), result.stderr)
         transcript = Path(marker[0].split("=", 1)[1])
 
@@ -174,16 +223,29 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         the same operand.
         """
         result = subprocess.run(
-            ["bash", str(CAPTURE), "COREDEV-9999", "3",
-             ".agy-prompt-COREDEV-9999r1.md", str(self.plan), "90"],
-            cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
+            [
+                "bash",
+                str(CAPTURE),
+                "COREDEV-9999",
+                "3",
+                ".agy-prompt-COREDEV-9999r1.md",
+                str(self.plan),
+                "90",
+            ],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
         )
         self.assertTrue(
             self.probe.is_file(),
             f"the stub never ran — the harness refused an absolute operand: {result.stdout}{result.stderr}",
         )
         self.assertEqual(
-            EDITED, self.probe.read_text(encoding="utf-8").strip(),
+            EDITED,
+            self.probe.read_text(encoding="utf-8").strip(),
             "an absolute plan operand still leaves the reviewer reading the COMMITTED plan",
         )
 
@@ -196,7 +258,9 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         depends on (PR #63 recheck, P2).
         """
         stub = self.root / ".stubs" / "agy"
-        stub.write_text('#!/usr/bin/env bash\nprintf "output\\n"\nexit 23\n', encoding="utf-8")
+        stub.write_text(
+            '#!/usr/bin/env bash\nprintf "output\\n"\nexit 23\n', encoding="utf-8"
+        )
         stub.chmod(0o755)
         result = self.capture("7")
         self.assertEqual(23, result.returncode, result.stdout + result.stderr)
@@ -245,7 +309,8 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         """
         honest = self.plan.read_bytes()
         out, prompt = self.allocated_transcript(
-            "COREDEV-9999-r14-gemini.txt", plan_bytes=honest, recorded=honest)
+            "COREDEV-9999-r14-gemini.txt", plan_bytes=honest, recorded=honest
+        )
         Path(str(out) + ".planbytes").unlink()
         # The live plan diverges to B — what the fallback would have staged.
         self.plan.write_text("# Plan\nVERSION B (LIVE, UNBOUND)\n", encoding="utf-8")
@@ -259,7 +324,9 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
             "the reviewer RAN on the live plan — deleting the snapshot still downgrades the arm",
         )
 
-    def test_the_snapshot_requirement_is_UNCONDITIONAL_not_scoped_to_a_launch_record(self):
+    def test_the_snapshot_requirement_is_UNCONDITIONAL_not_scoped_to_a_launch_record(
+        self,
+    ):
         """The first fix scoped the requirement to captures carrying a `.launch`, and that was dead.
 
         The theory was that a direct or legacy call had no binder run and so no snapshot to lose. But
@@ -270,7 +337,8 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         """
         honest = self.plan.read_bytes()
         out, prompt = self.allocated_transcript(
-            "COREDEV-9999-r15-gemini.txt", plan_bytes=honest, recorded=honest)
+            "COREDEV-9999-r15-gemini.txt", plan_bytes=honest, recorded=honest
+        )
         Path(str(out) + ".planbytes").unlink()
         Path(str(out) + ".launch").unlink()
         self.plan.write_text("# Plan\nVERSION B (LIVE, UNBOUND)\n", encoding="utf-8")
@@ -295,19 +363,26 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         """
         honest = self.plan.read_bytes()
         out, prompt = self.allocated_transcript(
-            "COREDEV-9999-r16-gemini.txt", plan_bytes=honest, recorded=honest)
+            "COREDEV-9999-r16-gemini.txt", plan_bytes=honest, recorded=honest
+        )
         import hashlib
+
         Path(str(out) + ".plan").write_text(
-            hashlib.sha256(honest).hexdigest() + "\n", encoding="utf-8")   # digest only, no identity
+            hashlib.sha256(honest).hexdigest() + "\n", encoding="utf-8"
+        )  # digest only, no identity
 
         result = self.run_harness(out, prompt)
 
         self.assertNotEqual(0, result.returncode, result.stdout)
         self.assertIn("plan binding record is malformed", result.stderr)
-        self.assertFalse(self.probe.is_file(),
-                         "the reviewer RAN on a record the verdict writer will reject")
+        self.assertFalse(
+            self.probe.is_file(),
+            "the reviewer RAN on a record the verdict writer will reject",
+        )
 
-    def test_a_TRUNCATED_prompt_binding_record_is_refused_BEFORE_the_reviewer_runs(self):
+    def test_a_TRUNCATED_prompt_binding_record_is_refused_BEFORE_the_reviewer_runs(
+        self,
+    ):
         """The SIBLING of the `.plan` case, which I fixed one commit earlier and did not sweep.
 
         `stage-prompt.py` took `fields[0]`, so a `.promptsha256` cut down to its digest passed staging
@@ -323,16 +398,20 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
 
         honest = self.plan.read_bytes()
         out, prompt = self.allocated_transcript(
-            "COREDEV-9999-r17-gemini.txt", plan_bytes=honest, recorded=honest)
+            "COREDEV-9999-r17-gemini.txt", plan_bytes=honest, recorded=honest
+        )
         Path(str(out) + ".promptsha256").write_text(
-            hashlib.sha256(prompt.read_bytes()).hexdigest() + "\n", encoding="utf-8")
+            hashlib.sha256(prompt.read_bytes()).hexdigest() + "\n", encoding="utf-8"
+        )
 
         result = self.run_harness(out, prompt)
 
         self.assertNotEqual(0, result.returncode, result.stdout)
         self.assertIn("prompt binding record is malformed", result.stderr)
-        self.assertFalse(self.probe.is_file(),
-                         "the reviewer RAN on a record the verdict writer will reject")
+        self.assertFalse(
+            self.probe.is_file(),
+            "the reviewer RAN on a record the verdict writer will reject",
+        )
 
     def test_an_honest_snapshot_still_stages(self):
         """Positive control for the digest check — it must refuse tampering, not refuse everything.
@@ -342,11 +421,15 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         """
         honest = self.plan.read_bytes()
         out, prompt = self.allocated_transcript(
-            "COREDEV-9999-r10-gemini.txt", plan_bytes=honest, recorded=honest)
+            "COREDEV-9999-r10-gemini.txt", plan_bytes=honest, recorded=honest
+        )
         result = self.run_harness(out, prompt)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertEqual(EDITED, self.probe.read_text(encoding="utf-8").strip(),
-                         "an authentic snapshot did not reach the reviewer")
+        self.assertEqual(
+            EDITED,
+            self.probe.read_text(encoding="utf-8").strip(),
+            "an authentic snapshot did not reach the reviewer",
+        )
 
     def test_a_plan_relative_to_the_CALLERS_directory_reaches_the_reviewer(self):
         """The harness `cd`'d to the repository root and re-read the operand there (PR #63 recheck, P2).
@@ -360,9 +443,21 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         sub = self.root / "sub"
         sub.mkdir()
         result = subprocess.run(
-            ["bash", str(CAPTURE), "COREDEV-9999", "4",
-             "../.agy-prompt-COREDEV-9999r1.md", "../docs/planning/FEATURE_PLAN.md", "90"],
-            cwd=sub, env=self.env, capture_output=True, text=True, check=False, input="",
+            [
+                "bash",
+                str(CAPTURE),
+                "COREDEV-9999",
+                "4",
+                "../.agy-prompt-COREDEV-9999r1.md",
+                "../docs/planning/FEATURE_PLAN.md",
+                "90",
+            ],
+            cwd=sub,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
         )
         self.assertTrue(
             self.probe.is_file(),
@@ -418,14 +513,19 @@ printf 'VERDICT: APPROVE\\n'
         self.plan.unlink()
         self.plan.symlink_to(victim)
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
-        subprocess.run(["git", "commit", "-qm", "plan-as-symlink"], cwd=self.root, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "plan-as-symlink"], cwd=self.root, check=True
+        )
         # Live worktree: a real, uncommitted plan at that path (what the reviewer should read).
         self.plan.unlink()
         self.plan.write_text(f"# Plan\n{EDITED}\n", encoding="utf-8")
 
         result = self.capture("9")
-        self.assertEqual("PRECIOUS OUTSIDE DATA\n", victim.read_text(encoding="utf-8"),
-                         "staging wrote through the materialized symlink leaf to the outside victim")
+        self.assertEqual(
+            "PRECIOUS OUTSIDE DATA\n",
+            victim.read_text(encoding="utf-8"),
+            "staging wrote through the materialized symlink leaf to the outside victim",
+        )
 
     def test_a_reviewer_that_rewrites_the_staged_plan_voids_the_round(self):
         """PR #63 recheck, P1 — reproduced: rc was 0 with NO note at all.
@@ -435,8 +535,10 @@ printf 'VERDICT: APPROVE\\n'
         approved, and the capture succeeded while synthesis validated only the untouched live plan.
         The basis is now verified by CONTENT against the digest the `.plan` record attests to.
         """
-        self.install_stub(self.MUTATING_STUB
-                     % 'printf "# Plan\\nSUBSTITUTED\\n" > "$tree/docs/planning/FEATURE_PLAN.md"')
+        self.install_stub(
+            self.MUTATING_STUB
+            % 'printf "# Plan\\nSUBSTITUTED\\n" > "$tree/docs/planning/FEATURE_PLAN.md"'
+        )
         result = self.capture("11")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         self.assertIn("STAGED PLAN was modified", result.stdout + result.stderr)
@@ -468,22 +570,33 @@ printf 'VERDICT: APPROVE\\n'
         tracked.write_text("committed\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
         subprocess.run(["git", "commit", "-qm", "notes"], cwd=self.root, check=True)
-        tracked.write_text("uncommitted edit\n", encoding="utf-8")   # ` M` before the run
+        tracked.write_text(
+            "uncommitted edit\n", encoding="utf-8"
+        )  # ` M` before the run
 
         def status_line_for(name: str) -> str:
-            lines = subprocess.run(["git", "status", "--porcelain"], cwd=self.root,
-                                   capture_output=True, text=True, check=True).stdout.splitlines()
+            lines = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
             return next(line for line in lines if line.endswith(name))
 
         before_line = status_line_for("NOTES.md")
-        self.install_stub(self.MUTATING_STUB
-                          % f'printf "REVIEWER WROTE HERE\\n" > {tracked}')
+        self.install_stub(
+            self.MUTATING_STUB % f'printf "REVIEWER WROTE HERE\\n" > {tracked}'
+        )
         result = self.capture("14")
 
         # The blind spot is real: the file was rewritten and its status line did not move.
         self.assertEqual("REVIEWER WROTE HERE\n", tracked.read_text(encoding="utf-8"))
-        self.assertEqual(before_line, status_line_for("NOTES.md"),
-                         "the fixture no longer reproduces the blind spot — the status line moved")
+        self.assertEqual(
+            before_line,
+            status_line_for("NOTES.md"),
+            "the fixture no longer reproduces the blind spot — the status line moved",
+        )
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         self.assertIn("MUTATED the working tree", result.stdout + result.stderr)
         # Emitted only when the new-status-lines diff is EMPTY, which is the harness's own evidence
@@ -503,12 +616,17 @@ printf 'VERDICT: APPROVE\\n'
         so the file is beneath a directory the baseline already collapses; a root-level write was
         already caught and would not exercise this.
         """
-        self.install_stub(self.MUTATING_STUB
-                          % 'mkdir -p "$tree/scratchdir/nested" && : > "$tree/scratchdir/nested/EVIL.txt"')
+        self.install_stub(
+            self.MUTATING_STUB
+            % 'mkdir -p "$tree/scratchdir/nested" && : > "$tree/scratchdir/nested/EVIL.txt"'
+        )
         first = self.capture("15")
         self.assertEqual(3, first.returncode, first.stdout + first.stderr)
-        self.assertIn("EVIL.txt", first.stdout + first.stderr,
-                      "the write was detected but the file beneath the collapsed entry was not named")
+        self.assertIn(
+            "EVIL.txt",
+            first.stdout + first.stderr,
+            "the write was detected but the file beneath the collapsed entry was not named",
+        )
 
     def test_a_reviewer_that_BREAKS_the_checkout_voids_the_round(self):
         """`|| true` turned a failed status into a clean tree (PR #63 recheck, P2).
@@ -527,8 +645,12 @@ printf 'VERDICT: APPROVE\\n'
         self.install_stub(self.MUTATING_STUB % 'rm -rf "$tree/.git"')
         result = self.capture("18")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
-        self.assertIn("left edits inside the disposable checkout", result.stdout + result.stderr)
-        self.assertIn(".git", result.stdout + result.stderr, "the deleted entry must be named")
+        self.assertIn(
+            "left edits inside the disposable checkout", result.stdout + result.stderr
+        )
+        self.assertIn(
+            ".git", result.stdout + result.stderr, "the deleted entry must be named"
+        )
 
     def test_a_reviewer_that_BREAKS_THE_LIVE_checkout_voids_the_round(self):
         """The LIVE-checkout half — `tree_fingerprint` suppressed both probes (PR #63 recheck, P1).
@@ -543,7 +665,9 @@ printf 'VERDICT: APPROVE\\n'
         self.install_stub(self.MUTATING_STUB % f'rm -rf "{self.root}/.git"')
         result = self.capture("19")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
-        self.assertIn("could not fingerprint the live checkout", result.stdout + result.stderr)
+        self.assertIn(
+            "could not fingerprint the live checkout", result.stdout + result.stderr
+        )
 
     def test_a_clean_commit_in_the_live_repo_during_the_review_voids_the_round(self):
         """A CLEAN commit in the LIVE checkout mid-round left the fingerprint byte-identical (PR #67 pass 8).
@@ -568,19 +692,34 @@ printf 'VERDICT: APPROVE\\n'
         subprocess.run(["git", "commit", "-qm", "clean"], cwd=self.root, check=True)
 
         def git(*args: str) -> str:
-            return subprocess.run(["git", *args], cwd=self.root, capture_output=True, text=True,
-                                  check=True).stdout
+            return subprocess.run(
+                ["git", *args],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
 
-        self.assertEqual("", git("status", "--porcelain"), "the fixture must start clean")
-        self.install_stub(self.MUTATING_STUB
-                          % f'git -C "{self.root}" -c user.email=r@r -c user.name=r '
-                            f'commit -q --allow-empty -m mid-round')
+        self.assertEqual(
+            "", git("status", "--porcelain"), "the fixture must start clean"
+        )
+        self.install_stub(
+            self.MUTATING_STUB
+            % f'git -C "{self.root}" -c user.email=r@r -c user.name=r '
+            f"commit -q --allow-empty -m mid-round"
+        )
         head_before = git("rev-parse", "HEAD")
         result = self.capture("21")
-        self.assertNotEqual(head_before, git("rev-parse", "HEAD"),
-                            "the stub did not commit — the fixture no longer reproduces the scenario")
-        self.assertEqual("", git("status", "--porcelain"),
-                         "the commit was not clean — a status line moved, so this is not the blind spot")
+        self.assertNotEqual(
+            head_before,
+            git("rev-parse", "HEAD"),
+            "the stub did not commit — the fixture no longer reproduces the scenario",
+        )
+        self.assertEqual(
+            "",
+            git("status", "--porcelain"),
+            "the commit was not clean — a status line moved, so this is not the blind spot",
+        )
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         self.assertIn("MUTATED the working tree", result.stdout + result.stderr)
 
@@ -589,30 +728,52 @@ printf 'VERDICT: APPROVE\\n'
         # `allocate-transcript.sh`'s `../lib` is redirected to the real one via UNLEASHED_LIB_DIR).
         mutant_root = Path(tempfile.mkdtemp(prefix="agy-mutant-scripts-"))
         self.addCleanup(shutil.rmtree, mutant_root, ignore_errors=True)
-        shutil.copytree(REPO / "scripts" / "review", mutant_root / "scripts" / "review",
-                        ignore=shutil.ignore_patterns("__pycache__"))
-        shutil.copy2(REPO / "scripts" / "pty-capture.py", mutant_root / "scripts" / "pty-capture.py")
+        shutil.copytree(
+            REPO / "scripts" / "review",
+            mutant_root / "scripts" / "review",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        shutil.copy2(
+            REPO / "scripts" / "pty-capture.py",
+            mutant_root / "scripts" / "pty-capture.py",
+        )
         fingerprint = mutant_root / "scripts" / "review" / "tree-fingerprint.sh"
-        head_probe = '    _u_git -C "$1" rev-parse HEAD 2>/dev/null || return 1\n'   # `_u_git`: PR #67 pass 14
+        head_probe = '    _u_git -C "$1" rev-parse HEAD 2>/dev/null || return 1\n'  # `_u_git`: PR #67 pass 14
         text = fingerprint.read_text(encoding="utf-8")
-        self.assertEqual(1, text.count(head_probe), "the HEAD probe is not where the control expects it")
+        self.assertEqual(
+            1,
+            text.count(head_probe),
+            "the HEAD probe is not where the control expects it",
+        )
         fingerprint.write_text(text.replace(head_probe, "", 1), encoding="utf-8")
         env = dict(self.env, UNLEASHED_LIB_DIR=str(REPO / "scripts" / "lib"))
         head_before = git("rev-parse", "HEAD")
-        control = self.capture("22", script=mutant_root / "scripts" / "review" / "capture-gemini-review.sh",
-                               env=env)
-        self.assertNotEqual(head_before, git("rev-parse", "HEAD"), "the control's stub did not commit")
-        self.assertEqual(0, control.returncode,
-                         "the CONTROL did not pass — something other than the HEAD probe caught the "
-                         "commit, so this test does not prove the probe is load-bearing: "
-                         + control.stdout + control.stderr)
+        control = self.capture(
+            "22",
+            script=mutant_root / "scripts" / "review" / "capture-gemini-review.sh",
+            env=env,
+        )
+        self.assertNotEqual(
+            head_before, git("rev-parse", "HEAD"), "the control's stub did not commit"
+        )
+        self.assertEqual(
+            0,
+            control.returncode,
+            "the CONTROL did not pass — something other than the HEAD probe caught the "
+            "commit, so this test does not prove the probe is load-bearing: "
+            + control.stdout
+            + control.stderr,
+        )
         self.assertNotIn("MUTATED", control.stdout + control.stderr)
         self.assertIn("TREE=clean", control.stdout, control.stdout + control.stderr)
 
     def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
         """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by
-        construction. The prompt is basis exactly like the plan; content-verified the same way."""
-        self.install_stub(self.MUTATING_STUB % 'printf "sneaky addendum\\n" >> "$prompt"')
+        construction. The prompt is basis exactly like the plan; content-verified the same way.
+        """
+        self.install_stub(
+            self.MUTATING_STUB % 'printf "sneaky addendum\\n" >> "$prompt"'
+        )
         result = self.capture("13")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         self.assertIn("PROMPT was modified", result.stdout + result.stderr)

@@ -13,6 +13,250 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.32] — 2026-10-10
+
+### Fixed
+
+- **A retargeted PR could satisfy ruleset `Control` with checks run against its OLD base
+  (COREDEV-2879).** On PR #110, retargeted from main to alpha, the new `trunk-check` run checked out
+  a merge commit that GitHub had not yet recomputed. It linted main's range (1 file; against alpha
+  the range would have been 46 files) and went green. plugin-ci, whose `pull_request` trigger lacked
+  `edited`, did not re-run at all, so its five required contexts stayed old-base results.
+  - **`scripts/ci/resolve-trunk-range.sh` certifies the merge commit's first parent** against two live
+    references before resolving. Both comparisons use first-parent membership: the commit must once
+    have been a tip of that branch.
+    1. The tip of the event's base branch. This catches a merge ref GitHub had not yet recomputed after
+       a retarget: `STALE MERGE REF`.
+    2. The first parent of the PR's current `refs/pull/<n>/merge`. This catches a re-run of a
+       pre-retarget event, whose payload still names the old base: `OBSOLETE EVENT`.
+
+    Plain ancestry is not enough, because alpha's catch-up merges bring old main tips in as SECOND
+    parents. A base that merely advanced still resolves. On success the output is unchanged
+    (`upstream=HEAD^1`), so guard/action parity holds. The check fails closed if the fetch fails, the
+    base ref is unset, or the PR number cannot be read. The resolver's pinned digest moved in both
+    `guard-resolver-digest` steps.
+
+  - **`plugin-ci.yml`'s `pull_request` takes `types: [opened, synchronize, reopened, edited]`,** equal
+    to trunk-check's. Every event therefore re-runs all six required contexts on the same merge commit.
+    A title or body edit now restarts plugin-ci, cancelling the in-flight run.
+  - **Tests:**
+    - `test_trunk_upstream_parity.py` covers the plan's topology (F8 rows R1-R6 and R8-R10) on depth-2
+      clones against a bare origin, each with its reason asserted. The existing merge-ref fixtures gain
+      an origin.
+    - `test_trunk_check_workflow.py` asserts the two trigger sets are equal.
+    - Five frozen digests are re-derived: two run bodies, two jobs, and plugin-ci's workflow level.
+  - **Plan gate:** six rounds of dual review. Rounds 5 and 6 were both double APPROVE on byte-identical
+    plan bytes (`6a08f76930ff`), with no findings. Rounds 1-4 found and fixed: a title edit after a
+    retarget releasing the gate; a check that read the event's base rather than the PR's current one;
+    ancestry versus first-parent membership; and pre-ship runs. Rounds 5 and 6 are recorded here, not
+    in the plan's review log, because editing the plan would void the verdict bound to those bytes.
+  - **Post-gate deviation (lint-driven, so not covered by the plan approval).** The repository's
+    `enable=all` shellcheck flagged two things the plan's §2.1 block carried:
+    - SC2312: the tip inside the `STALE MERGE REF` message masked a `git rev-parse` status. It is now
+      computed first, with its own fail-closed `die`.
+    - SC2310: `set -e` is off inside an `if` condition. This is intended, because the helper returns its
+      verdict, and a `shellcheck disable` comment with that reason records it.
+
+    Behaviour is unchanged, apart from one side effect: a mutant that ignores the fetch failure now
+    misreports it as "has no tip" rather than `STALE MERGE REF`. It is still caught only by R6's reason
+    assertion (§4 V5; battery 13/13).
+
+  - **Boundaries stated, not covered** (plan §6): manual re-runs of obsolete runs (**COREDEV-2881**); a
+    fresh `workflow_dispatch` of plugin-ci on a PR's branch, which is pre-existing (**COREDEV-2880**);
+    alpha until its catch-up; and runs created before this ships, mitigated by refreshing every PR open
+    at ship time.
+
+## [2.8.31] — 2026-10-08
+
+### Changed
+
+- **Every model caller the plugin ships uses the newest model (COREDEV-2875).**
+  - **The gemini arm resolves its model at run time.** `scripts/review/agy-newest-model.sh` prints
+    the newest recognized `gemini-<major>[.<minor>]-flash-high` that `agy models` lists. The pinned
+    `gemini-3.6-flash-high` had gone stale while 3.7 and 3.8 were listed. The resolver fails closed,
+    and never skips, on any of these:
+    - a timeout (60 s, lowerable only, and finite);
+    - a non-zero listing;
+    - a control or non-ASCII byte (a PTY-attached agy fuses `\r\x1b[K` to the newest entry);
+    - a line that is not `<id>TAB<label>`;
+    - an unrecognized flash-high version form;
+    - no candidate.
+
+    An explicit `MODEL`, or the capture wrapper's sixth operand, still wins.
+
+  - **Every agy launch resolves.** That covers the isolated wrapper, `preflight-agy.sh` (whose bare
+    ping used agy's global setting), the gemini-review recipes (`-p`, `-i` and `-c` alike),
+    `implement`'s health check, and the `pty-capture.py` example. Recipes use the checked form,
+    `MODEL="$(bash …/agy-newest-model.sh)" && agy --model "$MODEL" …`, because a failed `$(…)`
+    inside `--model` would still launch agy.
+  - **Every model id is one token** (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`) before it reaches an argv
+    or a record. The capture wrapper checks its sixth operand before allocating a leaf.
+  - **The model a round ran is recorded in `<transcript>.model`.** It is written with one
+    `O_CREAT|O_EXCL|O_NOFOLLOW` open, never `set -C`, which opens a FIFO. It is not written into the
+    transcript: a banner line there made a silent reviewer's transcript non-empty, and the verdict
+    writer would then have accepted it. `.model` joins `DERIVED_SIBLING_SUFFIXES`.
+  - **Codex:** `codex-review` pins no model. The skill says to leave `review_model` unset and keep
+    `~/.codex/config.toml`'s `model` current. The Kimi stand-in follows its own config, as stated.
+  - **Frontmatter:** `validate-plugin-assembly.py` accepts in `model:` only a runtime alias or
+    `inherit`, for agents and, newly, for skills. A concrete model id and `default` are rejected,
+    with a message naming the family's alias.
+  - **App guidance:** `ai-engineer` defaults to `claude-opus-5-5`. Cheap and bulk routes use
+    `claude-haiku-5-5`. The request rules gain a Haiku 5.5 column: it accepts `thinking: disabled`
+    at low–high effort and a forced `tool_choice`, and it has no server-side fallback. Opus 5.5
+    gets the refusal and `fallbacks` rules. `concurrency-reviewer` flags Haiku 5.5's three 400s, and
+    the AGENT_CONTRACTS §13 anchor moves to `:287`.
+  - **CI pins Claude Code 2.1.294** in the `validate` and `load-check` jobs, which clears Haiku
+    5.5's 2.1.293 floor. `MODEL_ALIASES`, `KNOWN_SKILL_KEYS` and `KNOWN_EVENTS` were re-verified
+    against that binary and are unchanged.
+  - **`skills/implement/SKILL.md` is exempt from prettier** (`.trunk/trunk.yaml`; the frozen
+    config digest and ignore-list literal are re-pinned with the reason). Its recipe bytes are
+    frozen by `test_callers_scan`'s M5.13–M5.15 contract, and prettier re-indents them. This
+    change is the first edit to that file under the blocking pre-commit gate, so it is the first
+    to meet the conflict. It is a deviation from the plan, recorded here because the gated plan
+    cannot be edited without voiding its verdict.
+  - **The touched shell and Python files are formatter-clean**, as the pre-commit gate requires.
+    shfmt re-tabs the agy harness scripts, so the diff for those files is larger than the change.
+
+### Added
+
+- `scripts/tests/test_agy_model_resolution.py`: the resolver, the production capture path, the
+  override, the one-token id, `.model` exclusivity (regular file, FIFO, symlinks), a silent reviewer
+  at both layers, and the shipped recipe text executed.
+- `scripts/tests/test_agy_recipe_gate.py`: every shipped unit naming agy must FULLY match an
+  approved template, or appear by exact text in a closed, reasoned exemption list. It is a
+  declaration, not a detector: five review rounds bypassed a shell matcher. The raw-checkout warning
+  gate reads the same units.
+
+### Deferred
+
+- COREDEV-2876: a `#`-led line inside a multi-line quoted string or heredoc is skipped as a comment
+  by the recipe gate, although a substitution on it runs (a declared boundary).
+
+## [2.8.30] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2780 cell 11: mutants are GENERATED from the registry (COREDEV-2869 part 1).** The
+  registry's header said cell 11 generated one mutant per case. In fact 130 hand-written recipes and
+  8 hand-written raw tuples built them, and none of them read the registry's `op`, `target` or
+  `payload`. Eleven asserted diagnostics (21 executions), 28 mutants and 19 operators had drifted
+  from their cases.
+  - `_classify` gives every one of the 149 cases exactly one executor.
+  - `_mutate` builds the 222 structural (case, entry) mutants. Its per-operator postconditions are
+    type-strict, and check both the declared VALUE and that nothing outside the edit changed,
+    including where a step is placed.
+  - `_raw_mutation` writes the raw cases verbatim and lints them as text: 304 texts, 0 findings.
+  - The target-set family runs as its 24 executions through the real resolve-once boundary.
+  - The C2 and C16 `local-divergence` cases now execute their declared local op. They had been
+    counted as injected, and only the comparator catches them.
+  - The registry's case fields now follow one grammar, documented in its header: 157 fields across
+    95 cases.
+  - Four payloads that contradicted cell 11's minimum list are corrected to it: `job-if`, the two
+    `defaults`, and C5's step-scope `env`.
+  - 63 red controls, each run against the shipped code: all 63 go red.
+  - **PR #108 review (codex):** a raw case whose obligation kind no raw class runs was counted as
+    executed and diagnosed by nothing. Obligation kinds are now a closed set, raw accounting is keyed
+    on the kinds the raw classes actually run, and `_raw_problems` fails closed.
+  - **PR #108 second review (codex).**
+    - A remote case is `injected` only in the shape cell 16 implements, an `add` of `{context: …}` to
+      the observation. Cell 16 reads its context from the case.
+    - Every obligation must declare at least one known entry.
+    - Raw execution is tracked per (case, entry), so a raw-only obligation with no entries can no
+      longer pass untested.
+  - **PR #108 third review (codex).** The raw census is pinned independently (`RAW_EXECUTIONS = 16`), so
+    deleting a raw case can no longer shrink every check with it. The target-set family's schema is
+    closed, so a misspelt `expect` fails rather than falling through to the refusal branch.
+  - **Local diff review (codex).** Duplicate family dimensions are rejected. Refusal forms now place the
+    forbidden pattern after a valid entry, so a resolver that validates only the first item of a side
+    fails. Duplicates are closed as a class: censuses count distinct (case, entry) pairs, an obligation
+    may not repeat an entry, obligation ids are unique, and the registry may not repeat a mapping key.
+
+## [2.8.29] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2873: agent and skill guidance corrected against primary sources.** This is item (c) of the
+  2026-10-03 external audit. The plan was reviewed by both arms and the double approval reproduced across
+  rounds 3–5 on byte-identical plan bytes. The audit was corrected where it was wrong: Apple's April 2026
+  Xcode 26 upload rule does not cover macOS, and `claude-sonnet-5` is legacy, not invalid.
+  - `ai-engineer`: recommends `claude-sonnet-5-5` and sets `output_config.effort` explicitly. A new "Claude
+    5.5 request rules" table lists the five request settings that Opus 5.5 and Sonnet 5.5 reject with a 400
+    (thinking budget, `thinking: disabled`, non-default sampling, assistant prefill, forced `tool_choice`).
+    Each is paired with the migration guides' own replacement, alongside Sonnet 5.5's `between_tools`
+    limits.
+  - `ai-engineer`: documents the app's existing Foundation Models gating (`@available(macOS 26.0, *)`,
+    `#if canImport(FoundationModels)`, the `SystemLanguageModel.default.availability` mapping) and requires
+    an availability check before every call. Fallback routing is labelled as a recommendation.
+  - `concurrency-reviewer`, the declared correctness owner, flags the five 5.5 shapes as `logic`/`blocker`.
+    `prompt-review` was considered and rejected, because it excludes correctness by contract.
+  - Toolchain text now matches the app's CI: `macos-26` runners, the newest installed Xcode, a macOS 15.0
+    deployment target and Swift 6 language mode. This replaces "Xcode 16.3+ / Swift 6.1 / macos-15"
+    everywhere a complete scan found it (`ci-engineer`, `xcode-build-fixer`, `docs-engineer`,
+    `release-manager`, `tester`, `spm-management`). Dated measurements are kept.
+  - The Graph subscription
+    example replaces its past date with a placeholder, and it now states the 1,440-minute limit for
+    subscriptions with resource data and the 45-minute floor.
+  - `validate-hooks.py` knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch` (33 events). Each was
+    rejected before the change and accepted after it (`--root`, `--require-manifest`).
+  - CI's Claude Code pin moves 2.1.220 → 2.1.289. From 2.1.289 a bare `claude plugin validate --strict .`
+    validates the PLUGIN root and fails on the contributor `CLAUDE.md` warning, so the strict step now
+    names `.claude-plugin/marketplace.json`. That is the same object at the same strictness, and a corrupted
+    manifest still fails. This command change follows the plan's "fix or hold the pin" rule and was made
+    after the gate, so it is ungated.
+  - **Deferred: the brainstorm skill's "macOS 25" wording (COREDEV-2874).** The file carries existing
+    prettier debt, and three suites pin its lines (the transcript-path inventory, the callers-scan frozen
+    regions and the COREDEV-2605 anchors). Formatting it broke 20 tests, so the fix needs its own
+    coordinated pass. It is unchanged here.
+  - `AGENT_CONTRACTS.md` §13's `concurrency-findings` anchor moved from `:269` to `:286`, following the
+    `## Output Format` heading that the new checklist item shifted. This is position only.
+  - **PR #107 review (codex), all four fixed.**
+    - `docs-engineer`'s README and CONTRIBUTING templates no longer close early. Each template's nested
+      fence closed the outer one: on `main` too, made explicit here by prettier. The rest of each template
+      had rendered as agent instructions, and the following section as a code block.
+    - `ai-engineer`'s example comment called effort the ONLY 5.5 thinking control. That is true of
+      Opus 5.5 only: Sonnet 5.5 also takes `between_tools`.
+    - This plan's acceptance count is corrected to 28/28.
+  - **PR #107 second review (codex, P2).** The example sent `output_config.effort` unconditionally.
+    Claude Haiku 4.5 does not support effort, so a request whose `model` override names it would
+    fail every call. The example now sends effort only where the Models API reports
+    `capabilities.effort.supported`. The 5.5 rules and `concurrency-reviewer`'s request-shape item
+    say so too.
+  - **PR #107 third review (gemini).** `validate-hooks.py` drops two ranges, `0x2060–0x2064` and
+    `0x2065–0x2069`, that `0x2060–0x206F` already covered. The predicate is identical on all 1,114,112
+    code points. The `MIN-20` comment moves above a loop that black had wrapped across five lines.
+
+## [2.8.28] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2872: the review gate's CLI docs had drifted from what actually runs.** Each fact below was
+  re-verified on 2026-10-03.
+  - **Gemini fallback.** `skills/gemini-review/SKILL.md` named `gemini-2.5-pro` as the one-run fallback,
+    and `agy models` (agy 1.2.16) no longer lists it. A dead name fails exactly when a fallback is
+    needed, so the skill now gives the rule instead of a literal: pick a currently listed
+    `gemini-*-flash-high` other than the primary, and never `gemini-3.1-pro-high`, which failed to emit
+    a parseable verdict in 5 of 6 rounds. `agy models` is now granted exactly (`Bash(agy models)`), so
+    the fallback works without a permission prompt; it runs no prompt (PR #106 review).
+  - **Codex model.** `skills/codex-review/SKILL.md` said the config sets `gpt-6-astra` and pinned it
+    inline (`-c review_model=gpt-6-astra`) on the built-in `codex review` commands. The configured
+    model is `gpt-6.1-sol`, and the round-66 session record shows `gpt-6.1-sol` at `ultra`. Following
+    the skill forced the old model, so the pins and the setup text now say `gpt-6.1-sol`. They also show
+    how to read a run's real model and effort from `~/.codex/sessions/…/rollout-*.jsonl`. The effort
+    ladder, re-read from the 0.160.0 binary, is unchanged.
+  - **Effort default.** `AGENT_CONTRACTS.md` §11 now records the documented defaults: Opus, Sonnet and
+    Haiku 5.5 run at `medium` and Opus 4.7 at `xhigh` when nothing sets a level (PR #106 review). Since
+    the plugin's assets inherit the session's level, review and gate sessions should set one explicitly.
+  - **A broken example in the Gemini skill.** Step 1 of "Slim-argv + workspace prompt file" had lost
+    its opening fence, so the example's `#` comment lines rendered as markdown headings. The fence now
+    opens before step 1, as intended. A formatter pass would otherwise have rewritten those "headings".
+    In `AGENT_CONTRACTS.md`, the plan-gate step list (`00.`, `0.`, `1.`…) carries a `prettier-ignore`
+    marker, because prettier renumbers it and other documents cite those step numbers. The Gemini skill's
+    numbered workflow list carries one too: prettier would dedent a continuation line inside a
+    multi-line code span, which the COREDEV-2619 transcript-path inventory pins byte for byte. That
+    inventory's three `destination.line` values for the Gemini skill moved with the edits above
+    (210→212, 272→277, 275→280), derived from where each frozen payload now occurs exactly once.
+    No payload or hash changed.
+
 ## [2.8.27] — 2026-10-02
 
 ### Fixed

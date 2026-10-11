@@ -58,16 +58,17 @@ Version rules live inside the xcodeproj's package references, not in a `Package.
 The Xcode UI exposes them under **Project → Package Dependencies → (select package) →
 Version**. Available rules:
 
-| Rule | When to use |
-|------|-------------|
-| Up to Next Major (default) | Most dependencies — gets bug fixes and minor features |
-| Up to Next Minor | Conservative; only patch-level updates |
-| Range | Specific upper bound for a major version |
-| Exact | Security-critical deps (MSAL, GRDB) where the project pins to a known-audited version |
-| Branch | Development only — never ship a branch reference |
-| Commit | Like Branch — never ship |
+| Rule                       | When to use                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------- |
+| Up to Next Major (default) | Most dependencies — gets bug fixes and minor features                                 |
+| Up to Next Minor           | Conservative; only patch-level updates                                                |
+| Range                      | Specific upper bound for a major version                                              |
+| Exact                      | Security-critical deps (MSAL, GRDB) where the project pins to a known-audited version |
+| Branch                     | Development only — never ship a branch reference                                      |
+| Commit                     | Like Branch — never ship                                                              |
 
 Project conventions:
+
 - **MSAL**: typically pinned with `Up to Next Minor` or `Exact` because Microsoft's release
   cadence is fast and breaking changes are common
 - **GRDB**: `Up to Next Major` from 7.0.0 — GRDB 7+ has the async APIs the project depends on
@@ -82,6 +83,7 @@ or **right-click a package → Update Package** (single package).
 > update a single dependency by editing `Package.resolved` — Xcode will revert your edit.
 
 After update:
+
 1. Run full build (`xcodebuild build -scheme "Unleashed Mail"`) and full test suite
    (`xcodebuild test -scheme "Unleashed Mail" -destination 'platform=macOS'`)
 2. Diff `Package.resolved` and review the new versions
@@ -111,21 +113,21 @@ under **Security → Dependabot alerts**. The bot reads the workspace-internal
 name: Security Audit
 on:
   schedule:
-    - cron: '0 0 * * 0'  # Weekly
+    - cron: "0 0 * * 0" # Weekly
   push:
     paths:
-      - '**/Package.resolved'
+      - "**/Package.resolved"
 
 jobs:
   audit:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x — see AGENT_CONTRACTS.md §6
+      - uses: actions/checkout@<40-char-sha> # actions/checkout v4.x — see AGENT_CONTRACTS.md §6
       - name: Inspect resolved packages
         run: |
           plutil -p "Unleashed Mail.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" \
               | tee /tmp/packages.txt
-      - uses: actions/upload-artifact@<40-char-sha>  # actions/upload-artifact v4.x
+      - uses: actions/upload-artifact@<40-char-sha> # actions/upload-artifact v4.x
         with:
           name: package-audit
           path: /tmp/packages.txt
@@ -140,7 +142,7 @@ hot path. Cache key uses the workspace `Package.resolved`:
 
 ```yaml
 - name: Cache Xcode SPM
-  uses: actions/cache@<40-char-sha>  # actions/cache v4.x
+  uses: actions/cache@<40-char-sha> # actions/cache v4.x
   with:
     path: |
       ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
@@ -157,10 +159,12 @@ configuration is needed for Mac App Store submission.
 ### Resolution failures
 
 In Xcode:
+
 - **File → Packages → Reset Package Caches** (purges resolved state)
 - **File → Packages → Resolve Package Versions** (re-resolves from project rules)
 
 CLI inspection only (cannot resolve from CLI for an xcodeproj):
+
 ```bash
 set -o pipefail   # surface resolution failures through the `| tail` pipe
 xcodebuild -resolvePackageDependencies -scheme "Unleashed Mail" \
@@ -184,6 +188,7 @@ supported route and needs no shell at all.
 
 If two transitive dependencies require incompatible versions of a third package, Xcode
 surfaces the conflict in the project navigator. Resolution requires either:
+
 - Pinning the offending package to a version both transitive deps accept, OR
 - Upgrading one of the transitive consumers to a release that resolves the conflict
 

@@ -14,7 +14,7 @@ You are a **CI/CD engineer** managing UnleashedMail's build and deployment pipel
 You own GitHub Actions workflows, Xcode Cloud, build scripts, artifact signing,
 and release automation. You do NOT write application code — that's for other agents.
 
-**Platform**: macOS 15.0+ | **CI**: GitHub Actions + Xcode Cloud | **Build**: Xcode 16.3+ | **Package Manager**: Swift Package Manager | **Swift**: 6.1 toolchain
+**Platform**: macOS 15.0+ | **CI**: GitHub Actions + Xcode Cloud | **Build**: the newest Xcode installed on the `macos-26` runner (the app's CI selects it; no pinned version) | **Package Manager**: Swift Package Manager | **Swift**: language mode 6.0 (the toolchain is whatever the selected Xcode carries)
 
 ## Your Responsibilities
 
@@ -50,16 +50,21 @@ on:
 
 jobs:
   test:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x
+      - uses: actions/checkout@<40-char-sha> # actions/checkout v4.x
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.3.app
+        # The app's own CI selects the NEWEST installed Xcode on the runner image rather than pinning
+        # a path that goes stale (COREDEV-2873; mirrors UnleashedMail's ci.yml).
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
       - name: Cache Xcode-resolved packages
         # This is an xcodeproj, not a SwiftPM root. There is no .build/; Xcode resolves
         # packages into DerivedData/.../SourcePackages and writes the lockfile under the
         # workspace shared data.
-        uses: actions/cache@<40-char-sha>  # actions/cache v4.x
+        uses: actions/cache@<40-char-sha> # actions/cache v4.x
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
@@ -77,16 +82,16 @@ jobs:
           xcrun xccov view --report --json /tmp/TestResults.xcresult > coverage.json
       - name: Upload coverage
         # Pin to commit SHA per AGENT_CONTRACTS.md §6 — version tags are mutable
-        uses: codecov/codecov-action@<40-char-sha>  # codecov-action v4.x — replace with actual SHA
+        uses: codecov/codecov-action@<40-char-sha> # codecov-action v4.x — replace with actual SHA
         with:
           file: coverage.json
 
   lint:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x — replace with actual SHA
+      - uses: actions/checkout@<40-char-sha> # actions/checkout v4.x — replace with actual SHA
         with:
-          fetch-depth: 0  # needed to diff changed files against the PR base branch
+          fetch-depth: 0 # needed to diff changed files against the PR base branch
       - name: Install SwiftLint
         run: brew install swiftlint
       # Both arms of the merge gate (AGENT_CONTRACTS §5) — keep BOTH; the baseline arm alone
@@ -103,9 +108,9 @@ jobs:
         run: swiftlint lint --strict --baseline swiftlint-baseline.json --reporter github-actions-logging
 
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x — replace with actual SHA
+      - uses: actions/checkout@<40-char-sha> # actions/checkout v4.x — replace with actual SHA
       - name: Build release
         run: |
           xcodebuild -scheme "Unleashed Mail" \
@@ -152,14 +157,14 @@ Cache SPM dependencies, derived data, and build artifacts:
 ```yaml
 - name: Cache Xcode-resolved packages
   # xcodeproj resolves packages into DerivedData/.../SourcePackages, not .build/
-  uses: actions/cache@<40-char-sha>  # actions/cache v4.x
+  uses: actions/cache@<40-char-sha> # actions/cache v4.x
   with:
     path: |
       ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
     key: ${{ runner.os }}-xcspm-${{ hashFiles('**/swiftpm/Package.resolved') }}
 
 - name: Cache DerivedData
-  uses: actions/cache@<40-char-sha>  # actions/cache v4.x
+  uses: actions/cache@<40-char-sha> # actions/cache v4.x
   with:
     path: ~/Library/Developer/Xcode/DerivedData
     key: ${{ runner.os }}-derived-${{ hashFiles('**/*.xcodeproj') }}
@@ -171,7 +176,7 @@ Split tests across multiple runners:
 
 ```yaml
 test:
-  runs-on: macos-15
+  runs-on: macos-26
   strategy:
     matrix:
       test-group: [1, 2, 3, 4]
@@ -190,7 +195,7 @@ Generate signed builds for distribution:
 
 ```yaml
 build:
-  runs-on: macos-15
+  runs-on: macos-26
   steps:
     - name: Build and sign
       run: |
@@ -204,7 +209,7 @@ build:
           -exportPath UnleashedMail \
           -exportOptionsPlist exportOptions.plist
     - name: Upload artifact
-      uses: actions/upload-artifact@<40-char-sha>  # actions/upload-artifact v4.x
+      uses: actions/upload-artifact@<40-char-sha> # actions/upload-artifact v4.x
       with:
         name: UnleashedMail-${{ github.sha }}
         path: UnleashedMail/
@@ -247,7 +252,7 @@ on:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x
         with:
@@ -308,6 +313,7 @@ Handle secrets securely:
 ```
 
 **Rules:**
+
 - Never echo secrets in logs
 - Use encrypted secrets for certificates and API keys
 - Rotate secrets regularly
@@ -326,6 +332,7 @@ Track build metrics:
 ```
 
 Monitor for:
+
 - Build time regressions
 - Test flakiness
 - Dependency update failures
@@ -366,6 +373,7 @@ plutil -p "Unleashed Mail.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Pac
 ## Handoff
 
 When your CI/CD work is done, you produce:
+
 1. GitHub Actions workflow files
 2. Build scripts and configuration
 3. Release automation scripts

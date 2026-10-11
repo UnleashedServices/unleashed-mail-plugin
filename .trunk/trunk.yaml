@@ -100,6 +100,16 @@ lint:
         - prettier
       paths:
         - docs/planning/*_PLAN.md
+    # COREDEV-2875 — THE SAME PRINCIPLE, A SECOND GATE. `skills/implement/SKILL.md` carries recipe
+    # destinations whose exact shape `test_callers_scan` freezes (the M5.13-M5.15 contract: each
+    # review recipe's indentation and `--ticket`/`--round` operands). prettier reflows that block —
+    # measured: it re-indents the frozen `/unleashed-mail:*-review` lines and moves the §13 anchors —
+    # so the first edit to this file under the blocking pre-commit gate could satisfy one gate only by
+    # breaking the other. Prettier only, one file; every other linter still checks it.
+    - linters:
+        - prettier
+      paths:
+        - skills/implement/SKILL.md
     # trufflehog on the test corpora: all 26 findings were synthetic secret-shaped strings that
     # tests need in order to assert redaction/parsing. Scoped by PATH and by LINTER, so every
     # detector -- Lob included -- stays live everywhere else in the repo.

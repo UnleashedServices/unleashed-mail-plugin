@@ -43,9 +43,7 @@ VERDICT = REPO / "scripts" / "review-verdict.py"
 # The prompt NAMES its plan: `bind-prompt.py` refuses a prompt that names a different `*_PLAN.md`, or
 # none at all, because a prompt saying `REVIEW TARGET: PLAN_B` bound cleanly to `--plan PLAN_A` and
 # produced an APPROVE artifact for the wrong plan (PR #63 recheck, P1).
-PROMPT_BODY = (
-    "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n"
-) + (
+PROMPT_BODY = ("REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n") + (
     "Review the attached plan for correctness, security and completeness.\n"
     "State your verdict on the FIRST line as "
     "`VERDICT: APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES`.\n"
@@ -56,8 +54,18 @@ PROMPT_BODY = (
 # is not a refusal (PR #63 recheck, P3: the never-reaches test asserted only the exit code).
 REVIEWER_STUB = (
     "#!/usr/bin/env bash\n"
-    "[ -n \"${UM_REVIEWER_RAN:-}\" ] && : > \"$UM_REVIEWER_RAN\"\n"
+    '[ -n "${UM_REVIEWER_RAN:-}" ] && : > "$UM_REVIEWER_RAN"\n'
     "printf 'VERDICT: APPROVE\\n%s reviewed the plan.\\n' \"$0\"\n"
+)
+# The gemini arm resolves its model with `agy models` when MODEL is unset (COREDEV-2875), and this
+# fixture keeps that PRODUCTION path: the agy stub answers the listing FIRST and without side effects,
+# so the listing can never trip the run-marker the never-reaches tests rely on.
+STUB_MODEL = "gemini-3.8-flash-high"
+AGY_STUB = REVIEWER_STUB.replace(
+    "#!/usr/bin/env bash\n",
+    "#!/usr/bin/env bash\n"
+    f"if [ \"${{1-}}\" = models ]; then printf '{STUB_MODEL}\\tGemini 3.8 Flash (High)\\n'; exit 0; fi\n",
+    1,
 )
 
 
@@ -84,18 +92,30 @@ class EndToEndGate(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "."], cwd=self.root, check=True)
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
         subprocess.run(
-            ["git", "-c", "user.email=e2e@test", "-c", "user.name=e2e", "commit", "-qm", "init"],
-            cwd=self.root, check=True,
+            [
+                "git",
+                "-c",
+                "user.email=e2e@test",
+                "-c",
+                "user.name=e2e",
+                "commit",
+                "-qm",
+                "init",
+            ],
+            cwd=self.root,
+            check=True,
         )
 
         stubs = self.root / ".stubs"
         stubs.mkdir()
-        for reviewer in ("codex", "agy"):
+        for reviewer, body in (("codex", REVIEWER_STUB), ("agy", AGY_STUB)):
             stub = stubs / reviewer
-            stub.write_text(REVIEWER_STUB, encoding="utf-8")
+            stub.write_text(body, encoding="utf-8")
             stub.chmod(0o755)
 
         self.env = dict(os.environ)
+        # REMOVED, not merely unset by omission: an inherited MODEL would hide the resolver path.
+        self.env.pop("MODEL", None)
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
 
@@ -103,8 +123,13 @@ class EndToEndGate(unittest.TestCase):
 
     def run_script(self, *argv, stdin: str | None = None):
         return subprocess.run(
-            [str(a) for a in argv], cwd=self.root, env=self.env, text=True,
-            capture_output=True, check=False, input=stdin if stdin is not None else "",
+            [str(a) for a in argv],
+            cwd=self.root,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+            input=stdin if stdin is not None else "",
         )
 
     def verdict(self, *argv):
@@ -117,14 +142,24 @@ class EndToEndGate(unittest.TestCase):
         prompt.write_text(PROMPT_BODY, encoding="utf-8")
         helper = REVIEW / f"capture-{reviewer}-review.sh"
         result = self.run_script(
-            "bash", helper, "COREDEV-9999", str(round_value), prompt.name,
-            "docs/planning/FEATURE_PLAN.md", "120",
+            "bash",
+            helper,
+            "COREDEV-9999",
+            str(round_value),
+            prompt.name,
+            "docs/planning/FEATURE_PLAN.md",
+            "120",
         )
         marker = [
-            line for line in (result.stdout + result.stderr).splitlines()
+            line
+            for line in (result.stdout + result.stderr).splitlines()
             if line.startswith("UNLEASHED_TRANSCRIPT=")
         ]
-        self.assertEqual(1, len(marker), f"{reviewer} arm emitted no transcript marker: {result.stderr}")
+        self.assertEqual(
+            1,
+            len(marker),
+            f"{reviewer} arm emitted no transcript marker: {result.stderr}",
+        )
         return marker[0].split("=", 1)[1]
 
     def passing_gate(self, round_value: int = 1):
@@ -133,12 +168,25 @@ class EndToEndGate(unittest.TestCase):
         codex = self.capture("codex", round_value)
         gemini = self.capture("gemini", round_value)
         written = self.verdict(
-            "write", "--plan", self.plan, "--verdict", "APPROVE", "--round", str(round_value),
-            "--reviewer", f"codex=APPROVE:{codex}", "--reviewer", f"gemini=APPROVE:{gemini}",
+            "write",
+            "--plan",
+            self.plan,
+            "--verdict",
+            "APPROVE",
+            "--round",
+            str(round_value),
+            "--reviewer",
+            f"codex=APPROVE:{codex}",
+            "--reviewer",
+            f"gemini=APPROVE:{gemini}",
         )
         self.assertEqual(0, written.returncode, written.stderr)
-        artifacts = sorted((self.root / "docs" / "planning" / ".verdicts").glob("*.json"))
-        self.assertEqual(1, len(artifacts), "one gate run must leave exactly one artifact")
+        artifacts = sorted(
+            (self.root / "docs" / "planning" / ".verdicts").glob("*.json")
+        )
+        self.assertEqual(
+            1, len(artifacts), "one gate run must leave exactly one artifact"
+        )
         return Path(codex), Path(gemini), artifacts[0]
 
     def edit_artifact(self, artifact: Path, mutate) -> None:
@@ -153,7 +201,16 @@ class EndToEndGate(unittest.TestCase):
 
         for transcript in (codex, gemini):
             self.assertTrue(transcript.is_file(), transcript)
-            self.assertEqual("VERDICT: APPROVE", transcript.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(
+                "VERDICT: APPROVE",
+                transcript.read_text(encoding="utf-8").splitlines()[0],
+            )
+        # The gemini arm recorded the model it RESOLVED beside its transcript, never in it (COREDEV-2875).
+        self.assertEqual(
+            f"{STUB_MODEL}\tnewest\n",
+            gemini.with_name(gemini.name + ".model").read_text(encoding="utf-8"),
+        )
+        for transcript in (codex, gemini):
             # The binding sidecars are what make the transcript evidence rather than just output.
             for suffix in (".plan", ".promptsha256"):
                 self.assertTrue(
@@ -162,8 +219,11 @@ class EndToEndGate(unittest.TestCase):
                 )
 
         self.assertEqual(0, self.verdict("verify", "--plan", self.plan).returncode)
-        gate = self.run_script("bash", REVIEW / "resolve-plan-gate.sh",
-                               stdin="docs/planning/FEATURE_PLAN.md\n")
+        gate = self.run_script(
+            "bash",
+            REVIEW / "resolve-plan-gate.sh",
+            stdin="docs/planning/FEATURE_PLAN.md\n",
+        )
         self.assertEqual(0, gate.returncode, gate.stderr)
         self.assertIn("GATE OK", gate.stdout + gate.stderr)
 
@@ -173,7 +233,9 @@ class EndToEndGate(unittest.TestCase):
         for transcript in (codex, gemini):
             self.assertEqual(
                 expected,
-                transcript.with_name(transcript.name + ".plan").read_text(encoding="utf-8"),
+                transcript.with_name(transcript.name + ".plan").read_text(
+                    encoding="utf-8"
+                ),
             )
 
     def test_two_runs_at_the_SAME_ticket_and_round_get_their_own_snapshot(self):
@@ -189,10 +251,14 @@ class EndToEndGate(unittest.TestCase):
         for _attempt in range(2):
             transcripts.append(Path(self.capture("codex", 5)))
 
-        self.assertNotEqual(transcripts[0], transcripts[1], "the allocator reused a leaf")
+        self.assertNotEqual(
+            transcripts[0], transcripts[1], "the allocator reused a leaf"
+        )
         for transcript in transcripts:
             snapshot = transcript.with_name(transcript.name + ".prompt")
-            self.assertTrue(snapshot.is_file(), f"{transcript.name} has no snapshot of its own")
+            self.assertTrue(
+                snapshot.is_file(), f"{transcript.name} has no snapshot of its own"
+            )
 
     # ---- refusals: the capture arms ------------------------------------------------------------
 
@@ -211,14 +277,21 @@ class EndToEndGate(unittest.TestCase):
             with self.subTest(operand=operand):
                 marker.unlink(missing_ok=True)
                 result = self.run_script(
-                    "bash", REVIEW / "capture-codex-review.sh", "COREDEV-9999", "7",
-                    operand, "docs/planning/FEATURE_PLAN.md", "60",
+                    "bash",
+                    REVIEW / "capture-codex-review.sh",
+                    "COREDEV-9999",
+                    "7",
+                    operand,
+                    "docs/planning/FEATURE_PLAN.md",
+                    "60",
                 )
                 self.assertNotEqual(0, result.returncode, result.stdout)
                 # The point of the finding: the reviewer must never have been reached. A non-zero exit
                 # that happened AFTER the secret was disclosed would still pass the exit-code check.
-                self.assertFalse(marker.exists(),
-                                 f"the reviewer RAN on operand {operand!r} before the refusal")
+                self.assertFalse(
+                    marker.exists(),
+                    f"the reviewer RAN on operand {operand!r} before the refusal",
+                )
 
     def test_a_transcript_bound_to_another_plan_cannot_back_this_one(self):
         codex, gemini, _artifact = self.passing_gate()
@@ -227,10 +300,23 @@ class EndToEndGate(unittest.TestCase):
         self.assertEqual(0, self.verdict("snapshot", "--plan", other).returncode)
 
         written = self.verdict(
-            "write", "--plan", other, "--verdict", "APPROVE", "--round", "1",
-            "--reviewer", f"codex=APPROVE:{codex}", "--reviewer", f"gemini=APPROVE:{gemini}",
+            "write",
+            "--plan",
+            other,
+            "--verdict",
+            "APPROVE",
+            "--round",
+            "1",
+            "--reviewer",
+            f"codex=APPROVE:{codex}",
+            "--reviewer",
+            f"gemini=APPROVE:{gemini}",
         )
-        self.assertNotEqual(0, written.returncode, "a transcript bound elsewhere must not gate this plan")
+        self.assertNotEqual(
+            0,
+            written.returncode,
+            "a transcript bound elsewhere must not gate this plan",
+        )
 
     # ---- refusals: writing the verdict ---------------------------------------------------------
 
@@ -238,12 +324,28 @@ class EndToEndGate(unittest.TestCase):
         codex, gemini, _artifact = self.passing_gate()
         for label, reviewers in (
             ("one reviewer", [f"codex=APPROVE:{codex}"]),
-            ("one arm rejects", [f"codex=REQUEST_CHANGES:{codex}", f"gemini=APPROVE:{gemini}"]),
-            ("missing transcript", ["codex=APPROVE:/nonexistent/transcript.txt",
-                                    f"gemini=APPROVE:{gemini}"]),
+            (
+                "one arm rejects",
+                [f"codex=REQUEST_CHANGES:{codex}", f"gemini=APPROVE:{gemini}"],
+            ),
+            (
+                "missing transcript",
+                [
+                    "codex=APPROVE:/nonexistent/transcript.txt",
+                    f"gemini=APPROVE:{gemini}",
+                ],
+            ),
         ):
             with self.subTest(case=label):
-                argv = ["write", "--plan", self.plan, "--verdict", "APPROVE", "--round", "2"]
+                argv = [
+                    "write",
+                    "--plan",
+                    self.plan,
+                    "--verdict",
+                    "APPROVE",
+                    "--round",
+                    "2",
+                ]
                 for reviewer in reviewers:
                     argv += ["--reviewer", reviewer]
                 self.assertNotEqual(0, self.verdict(*argv).returncode)
@@ -252,13 +354,20 @@ class EndToEndGate(unittest.TestCase):
 
     def test_editing_the_plan_after_approval_fails_the_gate(self):
         self.passing_gate()
-        self.plan.write_text(self.plan.read_text(encoding="utf-8") + "\nsnuck in later\n",
-                             encoding="utf-8")
+        self.plan.write_text(
+            self.plan.read_text(encoding="utf-8") + "\nsnuck in later\n",
+            encoding="utf-8",
+        )
 
         self.assertNotEqual(0, self.verdict("verify", "--plan", self.plan).returncode)
-        gate = self.run_script("bash", REVIEW / "resolve-plan-gate.sh",
-                               stdin="docs/planning/FEATURE_PLAN.md\n")
-        self.assertNotEqual(0, gate.returncode, "the gate skill must refuse what verify refuses")
+        gate = self.run_script(
+            "bash",
+            REVIEW / "resolve-plan-gate.sh",
+            stdin="docs/planning/FEATURE_PLAN.md\n",
+        )
+        self.assertNotEqual(
+            0, gate.returncode, "the gate skill must refuse what verify refuses"
+        )
 
     def test_the_gate_still_accepts_altered_evidence_COREDEV_2497(self):
         """PINS A KNOWN, OPEN DEFECT — this test passing is the bug, not the fix.
@@ -280,9 +389,14 @@ class EndToEndGate(unittest.TestCase):
         does. When COREDEV-2497 lands, this test fails — and that failure is the signal to delete it.
         """
         codex, _gemini, _artifact = self.passing_gate()
-        self.assertEqual(0, self.verdict("verify", "--plan", self.plan).returncode, "control")
+        self.assertEqual(
+            0, self.verdict("verify", "--plan", self.plan).returncode, "control"
+        )
 
-        codex.write_text("VERDICT: REQUEST_CHANGES\nthis is not what was approved\n", encoding="utf-8")
+        codex.write_text(
+            "VERDICT: REQUEST_CHANGES\nthis is not what was approved\n",
+            encoding="utf-8",
+        )
         self.assertEqual(
             0,
             self.verdict("verify", "--plan", self.plan).returncode,
@@ -291,7 +405,9 @@ class EndToEndGate(unittest.TestCase):
 
     def test_a_hand_edited_reviewer_status_fails_the_gate(self):
         _codex, _gemini, artifact = self.passing_gate()
-        self.edit_artifact(artifact, lambda d: d["reviewers"][0].update(status="REQUEST_CHANGES"))
+        self.edit_artifact(
+            artifact, lambda d: d["reviewers"][0].update(status="REQUEST_CHANGES")
+        )
         self.assertNotEqual(0, self.verdict("verify", "--plan", self.plan).returncode)
 
     def test_deleting_a_reviewer_from_the_artifact_fails_the_gate(self):
@@ -309,7 +425,9 @@ class EndToEndGate(unittest.TestCase):
 
         for operand in (str(outside), "docs/planning/../../etc/passwd"):
             with self.subTest(operand=operand):
-                gate = self.run_script("bash", REVIEW / "resolve-plan-gate.sh", stdin=operand + "\n")
+                gate = self.run_script(
+                    "bash", REVIEW / "resolve-plan-gate.sh", stdin=operand + "\n"
+                )
                 self.assertNotEqual(0, gate.returncode)
 
 
