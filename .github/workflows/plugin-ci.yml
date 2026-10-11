@@ -17,6 +17,12 @@ on:
     branches: [main, alpha]
   pull_request:
     branches: [main, alpha]
+    # THE SAME ACTIVITY SET AS trunk-check.yml (COREDEV-2879). The default omits `edited`, the event a
+    # RETARGET fires, so after a retarget these five REQUIRED contexts kept their OLD-base results while
+    # trunk-check re-ran — and a later title edit turned trunk-check green over them. With matching sets,
+    # every event re-runs all six on ONE merge commit, which trunk-check's resolver certifies is on the
+    # PR's current base. A title/body edit now re-runs this workflow too (and cancels the in-flight run).
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 permissions:
