@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.32
+# UnleashedMail — Claude Code Plugin v2.8.33
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,19 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.33
+
+**Agents now treat UnleashedMail's version branch, not `main`, as the place work lands.**
+
+- **The branch convention says where work integrates.** `AGENT_CONTRACTS.md` called `main` "the
+  integration trunk". In UnleashedMail, all work lands on the version branch (`1.0X.0000`, now
+  `1.02.0000`), and `main` receives only promotions and hotfixes. The base-branch detection that
+  `swift-reviewer` and `changeset.sh` use already worked this way; the contract line now agrees.
+- **`release-manager` builds the changelog from the version branch.** It listed PRs merged into
+  `main`, which holds only promotions, so it missed every feature PR.
+- **`codex-review` reviews against the PR's base.** Its full-diff example used `--base main`, which
+  would review a feature branch against `main` and pull in the version branch's unreleased work.
 
 ### v2.8.32
 

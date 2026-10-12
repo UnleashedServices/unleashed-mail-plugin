@@ -116,8 +116,10 @@ ls -la Config/.bump-build-number.pending 2>/dev/null && echo "⚠️  Pending bu
 Generate changelog from Jira tickets and commits:
 
 ```bash
-# Get merged PRs since last release
-gh pr list --state merged --base main --limit 50 --json title,number,mergedAt
+# Get merged PRs since last release. Feature PRs merge into the VERSION branch, not main (main
+# receives only promotions and hotfixes), so list that branch's merges. VERSION_BRANCH is the
+# current stage branch, e.g. 1.02.0000 (AGENT_CONTRACTS.md "Branch convention").
+gh pr list --state merged --base "$VERSION_BRANCH" --limit 50 --json title,number,mergedAt
 
 # Get commit messages
 git log --oneline --since="last release" --grep="feat:\|fix:\|BREAKING"
