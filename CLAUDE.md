@@ -70,7 +70,7 @@ python3 -m unittest discover -s scripts/tests                      # scripts sui
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
 python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
 python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md   # line-pinned citations rot when files shift
-git diff --check "$(git merge-base origin/alpha HEAD)" HEAD                                             # whitespace, as CI checks it (CI uses the PR's base: alpha for feature work)
+git diff --check "$(git merge-base origin/alpha HEAD)" HEAD                                             # whitespace vs the PR's base, as CI does: origin/alpha; origin/main for a promotion
 python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv
 ```
 
