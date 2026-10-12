@@ -384,6 +384,7 @@
       ]
     },
     "dualBaseSatisfied": [
+      "SUPERSEDED 2026-10-11 (the residual count below): cell 2's rule-satisfaction half is CLOSED (`cell2RetargetFixReObserved`). The CURRENT residuals are whatever `stillOpenForM3` lists; read that list rather than this M3-time paragraph, which deliberately restates no new count (codex local review: a second statement of a count goes stale).",
       "`basesRecorded` now equals `basesRequired`. Row 12 asks for DUAL-base provenance-bound check",
       "runs and both bases are recorded, each with a strict green and a deliberate red bound to a named",
       "lint diagnostic. Both bases' checked-in workflows are strict \u2014 see `bothBasesCheckedInStrict`,",
@@ -433,7 +434,7 @@
     },
     "m3EvidenceClosedOut": {
       "observedAt": "2026-09-07T17:10:00Z",
-      "what": "The three items this key listed were OBSERVED, but TWO residuals remain open above and neither is closable by further M3 observation: cell 2's rule-satisfaction half (M4), and cell 3's over-reach counterexample (COREDEV-2850).",
+      "what": "The three items this key listed were OBSERVED, but TWO residuals remain open above and neither is closable by further M3 observation: cell 2's rule-satisfaction half (M4), and cell 3's over-reach counterexample (COREDEV-2850). SUPERSEDED 2026-10-11: cell 2's half is closed (`cell2RetargetFixReObserved`); `stillOpenForM3` is the current list.",
       "where": {
         "retarget": "cell2RetargetObservation",
         "cell3a": "cell3DiffScopeControls.cell3a",
