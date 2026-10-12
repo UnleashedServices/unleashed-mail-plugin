@@ -78,6 +78,12 @@ python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code --
 because the plan-citation linter (added there in the same PR) was never part of the local gate, and
 the local suite kept passing while a shifted line pin failed the linter's own self-test.
 
+**Then review the diff locally, before `gh pr create` and before pushing fixes to an open PR:**
+`codex -c model_reasoning_effort=ultra review --base origin/alpha`. Use the PR's own base:
+`origin/alpha` for feature work, `origin/main` only for an `alpha` → `main` promotion. The plan gate
+reviews intent, not code, so skipping this makes the PR bots the first code reviewers, which is what
+happened on #106–#108.
+
 The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) also runs
 **`trunk check --index --no-fix --filter=-markdown-link-check`** — the staged diff only, never `--all`,
 bounded by a **180s** macOS-portable timeout (measured: 30.8s cold-bootstrap envelope x ~6 headroom,
