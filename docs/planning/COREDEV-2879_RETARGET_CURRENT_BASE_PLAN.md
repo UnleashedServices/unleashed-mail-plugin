@@ -115,10 +115,21 @@ boundary is stated in §6, with the others, including runs created before this s
   (`re-run-workflows-and-jobs.md`): "The workflow will also use the same `GITHUB_SHA` (commit SHA) and
   `GITHUB_REF` (git ref) of the original event." So a re-run of a pre-retarget event checks out the
   pre-retarget merge commit, and `GITHUB_BASE_REF` still names the OLD base.
-- **F3. The NEWEST run of a context decides it, by creation, not by completion.** On #110 (§0 row 1), the
-  earlier completed success did not satisfy the rule while a newer run was in progress. A re-run CREATES a
-  new run, so a re-run of an obsolete event becomes the deciding run. That is why every deciding run must
-  certify its own checkout (F2 + F3 = round 1's finding 2).
+- **F3. A newer run in a NEWER check suite decides a context, by creation, not by completion.** On #110
+  (§0 row 1), the earlier completed success did not satisfy the rule while a newer run, in a newer suite,
+  was in progress. **Corrected after implementation (2026-10-12, PR #119 review; ungated):**
+  - **The original claim.** This revision also inferred that "a re-run CREATES a new run, so a re-run of an
+    obsolete event becomes the deciding run".
+  - **What was observed** (rollout evidence `cell2RetargetFixReObserved.theObsoleteRerun`). A re-run of an
+    obsolete `trunk-check` run went red and was the newest RUN, yet it did NOT decide the context. With
+    every run settled, #117 read `CLEAN`, and its commit rollup was `SUCCESS`, on the newer reopen suite's
+    green.
+  - **What the data does and does not show.** It is consistent with "the newest SUITE decides, and a
+    re-run adds a run to an OLD suite". It does not rule out "GitHub disregards a suite whose event base
+    differs from the PR's current base". Under either reading, an obsolete re-run decides nothing while a
+    post-retarget suite exists.
+  - **What stands.** Every deciding run must still certify its own checkout (F2 + §2.1). That is now
+    defence in depth for the re-run path, and it is what makes such a re-run RED rather than green.
 - **F4. GitHub recomputes `refs/pull/<n>/merge` asynchronously after a base change.** Run `37993706657`,
   created 1 s after the retarget, checked out the old-base merge commit (its log:
   `Detected merge commit, using HEAD^1 (665796e…) as upstream`). M3's #99 retarget (2026-09-07) fired 4 s
@@ -365,16 +376,22 @@ rather than pinning one literal.
   resolver, which performs neither check (F2). On a PR that is open when this merges, a later retarget plus a
   manual re-run of one of its pre-ship `trunk-check` runs could therefore create the deciding run with an
   old-base range. **Mitigation in §5:** after the merge, refresh every open PR on `main` and `alpha` by
-  close/reopen or a push, so its newest runs come from the fixed workflow. **Residual:** a manual re-run of a
-  pre-ship run, from the Actions history, on a PR that was open at ship time. It is low-odds, so it is
-  **ticketed as COREDEV-2881**.
-- **A manual re-run of an obsolete PLUGIN-CI run.** plugin-ci jobs do not certify their own checkout. A
-  maintainer who opens the Actions history and re-runs a plugin-ci run from before a retarget creates the
-  deciding run (F3) on a pre-retarget merge commit. The PR's checks tab offers re-runs of the LATEST runs
-  only. Closing this would add the §2.1 check to every plugin-ci job, which needs `fetch-depth: 2` in five
-  checkouts and five digest re-pins. That is a low-odds path, so under the standing remediation rule it is
-  **ticketed as COREDEV-2881, not fixed here**. The same applies to a re-run of an obsolete `trunk-check`
-  inside the recomputation window (seconds), where both references can still be stale (COREDEV-2881).
+  close/reopen or a push, so its newest runs come from the fixed workflow. **Residual, reassessed
+  2026-10-12:** a manual re-run of a pre-ship run, from the Actions history, on a PR that was open at ship
+  time. It was ticketed as COREDEV-2881 on F3's original inference. Under the corrected F3, that re-run lands
+  in the pre-ship run's OLD suite, so it decides nothing once the retarget has created a newer one, which
+  every retarget does since this shipped. It is inert as observed. COREDEV-2881 stays open only for the
+  maintainer to close.
+- **A manual re-run of an obsolete PLUGIN-CI run.** plugin-ci jobs do not certify their own checkout. This
+  was ticketed as COREDEV-2881 on F3's original inference that a re-run from before a retarget becomes the
+  deciding run.
+  - **Reassessed 2026-10-12.** Under the corrected F3, the re-run lands in the obsolete run's OLD suite and
+    decides nothing while the retarget's newer suite exists. That was observed for `trunk-check`;
+    plugin-ci's suites follow the same per-run rule, but were not separately observed.
+  - **The recomputation window.** The same holds for a re-run of an obsolete `trunk-check` inside the
+    window (seconds), where both references can still be stale.
+  - **Disposition.** Both paths are inert as observed. COREDEV-2881 stays open only for the maintainer to
+    close.
 - **A fresh `workflow_dispatch` of plugin-ci on a PR's head branch** (round 4, PRE-EXISTING). It emits the five
   required context names from a run that checks out the branch tip, not the merge commit, and `validate`
   diffs against `origin/main`. As the newest run, it decides the contexts (F3), against the old base after a
