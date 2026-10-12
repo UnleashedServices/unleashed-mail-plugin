@@ -6,9 +6,9 @@ passed.** See the **r66** log entry. Every edit after revision 62 is ungated by 
 **Implementation status:** the ROLLOUT stands at **M4a (2026-10-09)**: `trunk-check` is a required context in
 ruleset `Control`, cell 17 was observed, and the §6.2a rollback was rehearsed as a substitution. See the
 rollout evidence keys `m4RequiredContextAdded`, `cell17EnforcementSmokeTest`, `m4aRollbackRehearsal`. Cell 2's
-M4 rule-satisfaction half is HALF observed: the rule is satisfied by the new run, but that run was computed
-against the OLD base's range (a stale merge-ref race), so it stays open as **COREDEV-2879**
-(`cell2RuleSatisfactionObservation`). Two later surfaces were built
+M4 rule-satisfaction half, first observed only in part (`cell2RuleSatisfactionObservation`), is now CLOSED:
+COREDEV-2879 shipped (2.8.32) and its live re-observation on PR #117 went red `STALE MERGE REF` on
+the stale merge ref, then resolved alpha's tip on the next event (`cell2RetargetFixReObserved`). Two later surfaces were built
 independently of that order and also exist: M5a's pre-commit trunk check and M6's drift detector, wired
 on both surfaces. Their milestone boxes stay open until their own cells pass (codex, r47). The plan was
 respecified AFTER M3 landed, and the suite has not caught up. **Not yet implemented** (codex, r42 and r43; tracked as COREDEV-2869):
