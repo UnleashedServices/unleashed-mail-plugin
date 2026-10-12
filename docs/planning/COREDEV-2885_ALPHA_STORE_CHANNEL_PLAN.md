@@ -1,10 +1,39 @@
 # COREDEV-2885 — An install channel for `alpha`: the marketplace's ref must decide the plugin's ref
 
-**Status:** Planning, revision 1. Not yet gated.
+**Status:** Planning, revision 2. Round 1: codex `REQUEST_CHANGES` (Q1: 1, Q2: 3), gemini did not run.
 **Ticket:** COREDEV-2885 (Epic COREDEV-2485). Follows COREDEV-2883, which set the branch flow to
 `main` > `alpha` > feature work.
 **Branch / worktree:** `feat/COREDEV-2885-alpha-store-channel`, `.claude/worktrees/2885-alpha-channel`, cut
 from `origin/alpha` at `91ee033`.
+**Prerequisite:** COREDEV-2883 (PR #121, into `alpha`). It introduces the `CLAUDE.md` "Branch flow"
+bullet and the five-sync-point Versioning text that §3.5 edits. Implementation rebases onto `alpha`
+after #121 merges (§5 step 2).
+
+## Review log
+
+- **Round 1 (revision 1), codex `REQUEST_CHANGES`, Q1: 1, Q2: 3.** All four findings were real.
+  1. **(Q1) §0 promised "every existing install" while §6 excluded the maintainer's own.** That install is
+     keyed `npranson-unleashed-mail-plugin`, but its clone's `marketplace.json` now says
+     `unleashedservices-unleashed-mail-plugin`. **Fix:** §0 now names that registration explicitly. F10
+     records that it resolves and updates today, contrary to `README.md`'s migration note. Witness W2 (§4)
+     reproduces its exact history (registered under the old name, the file renamed later) and then
+     applies the change.
+  2. **(Q2) V3 was not a migration witness.** Its "point the marketplace at another clone" step was
+     unspecified, and remove/add would uninstall (F8), so a fresh install could pass as a migration. Its
+     local-directory fixture may also load in place (the docs, "edit plugins in place on a shared
+     directory"), so the unbumped red control was not established. **Fix:** V3 is replaced by W1 and W2.
+     These are Git-backed, on a throwaway remote branch. They keep one registration, key and scope
+     throughout, record version, SHA and install path before and after, and carry bumped and unbumped
+     controls. F3 is relabelled as a local-directory approximation.
+  3. **(Q2) V2's existing sentinel mutant can no longer reach step 4.** It is a `source: github` mutant, so
+     the new pre-install source assertion intercepts it. **Fix:** that mutant is re-mapped to the source
+     assertion, and a new mutant V2c reaches the byte witness by passing the source assertion and then
+     installing a tree without the sentinel.
+  4. **(Q2) §3.5 targeted text that does not exist on `91ee033`.** The text arrives with COREDEV-2883
+     (#121). **Fix:** #121 is a stated prerequisite, above and in §5.
+- **Round 1, gemini: no review.** `agy` 1.3.3 failed its preflight three times: a 0-byte ping, with the
+  `streamGenerateContent` call for `gemini-3.8-flash-high` unanswered within 60 s. Auth and `agy models`
+  were healthy. No gemini round ran on revision 1.
 
 ## 0. The defect, and what "fixed" means
 
@@ -19,8 +48,11 @@ Adding the marketplace at `alpha` does not help. **Measured (F1):** a marketplac
 
 **Fixed means:**
 1. A machine that adds the marketplace at `#alpha` installs `alpha`'s plugin bytes, at `alpha`'s version.
-2. A machine that adds it with no ref (every existing install) keeps installing `main`'s bytes, with no
-   manual migration.
+2. A machine whose marketplace has no ref keeps installing `main`'s bytes, and updates in place with no
+   manual migration. This covers BOTH kinds of registration that exist:
+   - one keyed by the file's current name, `unleashedservices-unleashed-mail-plugin`;
+   - one keyed by the file's former name, `npranson-unleashed-mail-plugin`. That is the maintainer's own
+     install (F10).
 3. A promotion (`alpha` → `main`) never conflicts over, and never needs a per-branch edit to, the store
    manifest.
 4. CI proves the shipped manifest installs the checkout's own bytes, with no rewrite of the source field.
@@ -32,8 +64,9 @@ never touched. **F0:** that isolation holds. A fresh config dir lists only the b
 `anthropic-plugin-directory`, and the real `~/.claude/plugins/known_marketplaces.json` was unchanged.
 
 - **F1. The plugin entry pins `main` independently of the marketplace's ref.** `.claude-plugin/marketplace.json`'s
-  entry is `{"source":"github","repo":"UnleashedServices/unleashed-mail-plugin"}`, with no `ref`. Probe 1 ran
-  `claude plugin marketplace add 'UnleashedServices/unleashed-mail-plugin#alpha'` and then installed:
+  entry is `{"source":"github","repo":"UnleashedServices/unleashed-mail-plugin"}`, with no `ref`. Probe 1
+  (a Git-backed marketplace) ran `claude plugin marketplace add 'UnleashedServices/unleashed-mail-plugin#alpha'`
+  and then installed:
   - the marketplace was recorded as `{"source":"github",...,"ref":"alpha"}` and cloned at `alpha`;
   - the installed `gitCommitSha` was `a100645`, **`main`'s tip**, not `alpha`'s `91ee033`.
 
@@ -42,18 +75,19 @@ never touched. **F0:** that isolation holds. A fresh config dir lists only the b
 - **F2. A plugin entry that pins `ref: alpha` installs `alpha`.** Probe 2a used a separate marketplace
   named `unleashed-mail-alpha` whose entry is `{"source":"github",...,"ref":"alpha"}`. It installed
   `gitCommitSha` `91ee033`, which equals `origin/alpha`.
-- **F3. A relative source `"./"` is accepted and installs the marketplace's OWN tree.** Probe 3b used a clone
-  of `91ee033` with the entry's source set to `"./"` and both versions set to `2.8.32-probe`, committed as
-  `c1f2b80` on a branch `probe`. It installed version `2.8.32-probe` at `gitCommitSha` `c1f2b80`, which is
-  the clone's own commit, not either remote branch. `scripts/ci-load-check.sh` has relied on `"./"` since
-  COREDEV-2598, and records that absolute and `../` sources are rejected (`plugins.0.source: Invalid
-  input`, verified there on 2.1.220).
-- **F4. The marketplace's ref decides what a relative source resolves to.** The docs say a relative path
-  "is resolved relative to the marketplace root" and "only work[s] when the marketplace is added via Git".
-  F1 shows a `#alpha` marketplace is cloned at `alpha`. So under `"./"`, a `#alpha` marketplace installs
-  `alpha`'s tree. **This combination is INFERRED from F1 + F3, not yet observed end to end:** the CLI
-  rejects `file://` URLs (`Invalid marketplace source format`), so it could not be probed without pushing.
-  §4 cell C1 observes it live.
+- **F3. A relative source `"./"` is accepted.** This was observed only through a LOCAL-DIRECTORY
+  marketplace, which is an approximation. Probe 3b used a clone of `91ee033` with the entry's source set to
+  `"./"` and both versions set to `2.8.32-probe`, committed as `c1f2b80`. It installed version
+  `2.8.32-probe` at `gitCommitSha` `c1f2b80`, into the cache path `…/unleashed-mail/2.8.32-probe`.
+  - The docs say local-directory relative plugins can load in place without a version bump, so this probe
+    does NOT establish the Git-backed update path. W1 and W2 (§4) do.
+  - `scripts/ci-load-check.sh` has relied on `"./"` since COREDEV-2598, and records that absolute and `../`
+    sources are rejected (verified there on 2.1.220).
+- **F4. The marketplace's ref decides what a relative source resolves to: INFERRED from F1 + F3.** The docs
+  say a relative path "is resolved relative to the marketplace root" and "only work[s] when the marketplace
+  is added via Git". F1 shows a `#alpha` marketplace is cloned at `alpha`. The CLI rejects `file://` URLs
+  (`Invalid marketplace source format`), so a Git-backed probe needs a pushed ref. W1 and C1 (§4) observe
+  it end to end.
 - **F5. A marketplace declared only in settings is not materialized non-interactively.** Probe 2 declared
   `unleashed-mail-alpha` in `extraKnownMarketplaces`, with a `git` source plus `ref` and `path`.
   `claude plugin marketplace list` did not show it, `marketplace update` said "not found", and install
@@ -70,6 +104,15 @@ never touched. **F0:** that isolation holds. A fresh config dir lists only the b
 - **F8. Removing a marketplace uninstalls the plugins installed from it** (docs, "Manage marketplaces").
 - **F9. A local copy can be tested without the store** (docs): `claude --plugin-dir <dir>` takes precedence
   over an installed plugin of the same name for that session, and `/reload-plugins` picks up edits.
+- **F10. A registration keyed by the file's FORMER name resolves and updates today.** In the maintainer's
+  real registry (read-only), `known_marketplaces.json` has `npranson-unleashed-mail-plugin` with source
+  `{"source":"github","repo":"npranson/unleashed-mail-plugin"}`, last updated 2026-10-10T09:20:29Z.
+  - Its clone's `.claude-plugin/marketplace.json` declares `"name": "unleashedservices-unleashed-mail-plugin"`.
+  - `installed_plugins.json` shows `unleashed-mail@npranson-unleashed-mail-plugin` at user scope updated to
+    `2.8.31` (`gitCommitSha` `665796e`, `main`'s tip then) at 2026-10-10T09:21:26Z.
+  - `README.md`'s migration note says such an install "will stop resolving". The registry shows otherwise
+    for updates under the `github` source. W2 measures it under both sources before the README is
+    changed.
 
 ## 2. Design: a relative source, so the marketplace's ref decides the plugin's ref
 
@@ -83,9 +126,13 @@ changes. In particular, the name `unleashedservices-unleashed-mail-plugin` and t
 | alpha | `claude plugin marketplace add UnleashedServices/unleashed-mail-plugin#alpha` | `alpha`'s tree at `alpha`'s version |
 
 **Why this meets §0:**
-1. A `#alpha` marketplace is cloned at `alpha` (F1), and `"./"` installs that clone's tree (F3, F4).
+1. A `#alpha` marketplace is cloned at `alpha` (F1), and `"./"` installs that clone's tree (F3, F4;
+   observed Git-backed by W1 and C1).
 2. A no-ref marketplace is cloned at `main` and installs `main`'s tree: the same bytes it installs today, by
-   a different route. The entry version still moves with every bump, so the pull signal (F7) is unchanged.
+   a different route.
+   - The entry version still moves with every bump, so the pull signal (F7) is unchanged.
+   - The registration is not touched, so its key, whichever of the two it is, stays the same.
+   - W1 (current key) and W2 (former key) observe an in-place update across the source change.
 3. The file is identical on both branches except the version, which already differs per branch and is
    already validated per branch (F7). A promotion carries `alpha`'s copy to `main` with no edit.
 4. `scripts/ci-load-check.sh` stops rewriting the source, because the shipped value is already `"./"`.
@@ -106,7 +153,7 @@ wrong bytes.
   entry works, but the marketplace needs a `path` source, and F5 shows such a source materializes only
   through an interactive trust prompt, with no CLI form. Two plugins named `unleashed-mail` could also be
   enabled at once, duplicating every skill and agent. Its one advantage, per-project channel choice, is
-  not asked for. It stays a possible follow-up.
+  not asked for.
 - **A separate marketplace repo (the docs' stable/latest pattern).** Rejected. Its entry `version` would have
   to be hand-synced across repositories on every `alpha` bump, and F7 shows a stale or missing entry version
   is exactly the COREDEV-2801 failure.
@@ -120,54 +167,97 @@ wrong bytes.
 1. **`.claude-plugin/marketplace.json`:** the entry's `source` becomes `"./"`.
 2. **`scripts/ci-load-check.sh`:** stop rewriting `source`, but keep the marketplace-name rewrite, which
    avoids collision with a real install. Assert instead that the shipped source IS `"./"`, and fail
-   otherwise, so a regression to `github` reds CI at the load layer. The header's point 1 and the "FIDELITY
-   GAP" note are rewritten. The gap is closed, not annotated. The mutant table's `github` row stays as a
-   regression mutant.
+   otherwise, BEFORE any install. Rewrite the header's point 1 and the "FIDELITY GAP" note, because the gap
+   is closed rather than annotated. Update the mutant table to match §4 V2.
 3. **`scripts/validate-plugin-assembly.py`:** assert that the entry's source is exactly `"./"`, with the
    reason stated (§0's property 1).
-4. **`README.md`:** a "Release channels" subsection in the install section. It covers stable (default), how to
-   join alpha, how to switch and why a switch reinstalls, and `--plugin-dir`.
-5. **`CLAUDE.md` "Branch flow":** replace "COREDEV-2885 tracks an install channel for `alpha`; until then …"
-   with the channel's join command.
+4. **`README.md`:**
+   - Add a "Release channels" subsection to the install section. It covers stable (the default), how to
+     join alpha, how to switch and why a switch reinstalls, and `--plugin-dir`.
+   - Correct the "Migrating from the old `npranson-unleashed-mail-plugin` marketplace" note to whatever W2
+     observes, instead of the untested "will stop resolving".
+5. **`CLAUDE.md` "Branch flow" (from COREDEV-2883):** replace "COREDEV-2885 tracks an install channel for
+   `alpha`; until then …" with the channel's join command.
 6. **Version bump** to the next free patch at merge time: 2.8.34 if COREDEV-2884's 2.8.33 lands first. That
    means five sync points plus a CHANGELOG entry, and `marketplace.json` itself is the shipped change.
 
 ## 4. Verification cells (each must be seen red, for the stated reason)
 
-**Before merge (local):**
+**V1–V2, local.**
 - **V1:** `validate-plugin-assembly.py --strict` passes with `"./"`. Mutate the entry back to the `github`
   object, and it reds with the new reason.
-- **V2:** `ci-load-check.sh` passes on the branch. Mutate the shipped source back to `github`, and it reds
-  at the new source assertion (before any install). The existing sentinel mutant still reds at step 4.
-- **V3: the migration witness, isolated config.**
-  1. Install from a local-path marketplace built from `main` (`github` source), which records the current
-     stable install.
-  2. Point the marketplace at a local clone of this branch (`"./"`, bumped version) and run
-     `claude plugin marketplace update` and `claude plugin update`.
-  3. Assert that the installed version is the new one and that the sentinel planted in the clone is present
-     in `installPath`.
+- **V2:** `ci-load-check.sh` passes on the branch. Three mutants, each red at a different assertion:
+  - **V2a:** the shipped source is mutated back to `github`. It reds at the new source assertion, before any
+    install.
+  - **V2b:** the existing "equal versions" mutant, also `github`. It now reds at the SAME source assertion,
+    and is recorded so; it no longer reaches step 4.
+  - **V2c (new):** the source stays `"./"`, but the sentinel is planted AFTER `claude plugin install` rather
+    than before. It passes the source assertion and installs, then must red at step 4's byte witness:
+    "sentinel ABSENT from the installed tree". This is what keeps the byte witness discriminating once the
+    source assertion is in front of it.
+- **The existing `hooks` and `.mcp.json` mutants** must still red at their current steps.
 
-  Red control: with the version NOT bumped, the update is skipped (F6), so the assertion must fail.
+**W1–W2: Git-backed migration witnesses, before merge.**
+- **Where they run.** On a throwaway remote branch, `test/COREDEV-2885-channel-witness`. Its commits are
+  created through the GitHub contents API, because the intermediate states deliberately fail the
+  version-sync validator and hooks are never bypassed. It is never merged, and it is deleted afterwards.
+- **Config isolation.** Each witness runs in its own `CLAUDE_CONFIG_DIR`, kept under `~/.claude/handoffs/`
+  rather than the session scratchpad, which is reaped.
+- **The rule for every step.** The registration is never removed or re-added. Each step runs only
+  `claude plugin marketplace update <key>` and `claude plugin update unleashed-mail@<key>`. After each
+  step, record the marketplace key, scope, version, `gitCommitSha`, `installPath`, and the presence of a
+  per-witness sentinel.
+- **W1, current key.**
+  1. Commit A is the branch at `main`'s state (`github` source). `marketplace add`
+     `UnleashedServices/unleashed-mail-plugin#test/COREDEV-2885-channel-witness`, then install. Expect
+     `main`'s SHA (F1).
+  2. Commit B: the source becomes `"./"`, `plugin.json` and the entry version become `2.8.32-witness-b`, and
+     a sentinel is planted in `scripts/precompact-snapshot.sh`. Run update.
+  3. Expect: the same key and scope, version `2.8.32-witness-b`, `gitCommitSha` equal to B, and the sentinel
+     present.
+  4. **Red control W1′:** commit B′ is B with the version left at `main`'s. Its update must be SKIPPED
+     (F6), leaving `main`'s SHA and no sentinel. This shows the version, not the source change alone, is
+     what moves an install.
+- **W2, former key, reproducing F10's history.**
+  1. Commit A2 is A with the file's `name` set to `npranson-unleashed-mail-plugin`. Add the marketplace and
+     install. The key is now `npranson-unleashed-mail-plugin`.
+  2. Commit A3 restores `name` to `unleashedservices-unleashed-mail-plugin`, still on the `github` source.
+     Run update. **Observe today's behaviour:** does `marketplace update <former key>` succeed, and is the
+     plugin still listed and enabled under the former key (`claude plugin list --json`)? The version
+     cannot move here: under `github` the fetched plugin is always `main`'s, at `main`'s version. So this
+     step tests resolution, not update; F10's real update came from a `main` bump. It answers README's
+     "will stop resolving" either way.
+  3. Commit B, as in W1. Run update. Expect the same as W1 step 3, under the former key.
+  4. **Red control W2′:** as W1′, under the former key.
+- **Before / after recording.** All W rows are written to the ticket and to a handoff file, with the raw
+  `installed_plugins.json` entries.
 
-**After merge to `alpha` (live, isolated config, read-only against the repo):**
-- **C1:** `marketplace add UnleashedServices/unleashed-mail-plugin#alpha`, then install. Assert that
-  `gitCommitSha` equals `origin/alpha`'s tip and that the version equals `alpha`'s `plugin.json`. This
-  observes F4 end to end.
-- **C2:** `marketplace add UnleashedServices/unleashed-mail-plugin` (no ref), then install. Assert that
-  `gitCommitSha` equals `origin/main`'s tip. Until promotion, `main` still has the `github` source, so this
-  cell is re-run after the promotion that ships this change.
+**After merge.**
+- **C1, after merge to `alpha` (live, isolated config):** `marketplace add`
+  `UnleashedServices/unleashed-mail-plugin#alpha`, then install. Assert that `gitCommitSha` equals
+  `origin/alpha`'s tip and that the version equals `alpha`'s `plugin.json`.
+- **C2, after the promotion that ships this (fresh install):** `marketplace add`
+  `UnleashedServices/unleashed-mail-plugin` with no ref, then install. Assert that `gitCommitSha` equals
+  `origin/main`'s tip. Before promotion this passes trivially through the `github` source, so it is
+  recorded only after.
+- **C3, the live migration (in-place update):** an isolated config installed from no-ref `main` BEFORE the
+  promotion, and kept. After the promotion, run update. Assert the same key, the new version, and `main`'s
+  new SHA. C2 is a fresh install; C3 is the existing-install path that §0 property 2 promises.
 
 ## 5. Rollout
 
 1. Gate this plan with dual review, reproduced on byte-identical bytes, then synthesize and persist the
    verdict.
-2. Implement §3 and run §4 V1–V3.
-3. Run the full local gate, then `codex review --base origin/alpha`.
-4. Open a PR into `alpha`. **Merge needs the maintainer's word.** Then observe C1.
-5. At the next promotion (`alpha` → `main`, maintainer's word), observe C2. Until then, existing installs are
-   untouched, because `main` keeps the old entry.
-6. Record C1 and C2 on the ticket. Tell the maintainer how to put their machine on `alpha`, and note that
-   their project-scope install in the app repo follows the same marketplace.
+2. Rebase onto `alpha` after COREDEV-2883 (#121) merges. Run W1 and W2 against the witness branch. If W2
+   step 2 shows the former key already fails under `github`, stop and report before changing anything:
+   that is a pre-existing defect, outside this plan.
+3. Implement §3, and run V1–V2.
+4. Run the full local gate, then `codex review --base origin/alpha`.
+5. Open a PR into `alpha`. **Merge needs the maintainer's word.** Then observe C1, and create C3's
+   pre-promotion install.
+6. At the next promotion (`alpha` → `main`, maintainer's word), observe C2 and C3.
+7. Record every observation on the ticket. Tell the maintainer how to put their machine on `alpha`, and
+   that their project-scope install in the app repo follows the same marketplace.
 
 ## 6. Out of scope, and boundaries stated rather than covered
 
@@ -175,7 +265,6 @@ wrong bytes.
   two marketplace names (§2.1, first alternative). It is not requested.
 - **Security of the `alpha` channel.** `alpha` carries unreleased, reviewed-but-unpromoted work. Only
   machines that opt in with `#alpha` receive it, and nothing auto-enrolls a machine.
-- **A marketplace whose recorded name differs from the file's `name`.** The maintainer's own install is
-  keyed `npranson-unleashed-mail-plugin` (from the repo's former owner) while the file says
-  `unleashedservices-unleashed-mail-plugin`. That predates this plan and is unchanged by it. V3 runs on the
-  file's name, and §5 step 6 re-adds the marketplace, which normalizes the key.
+- **The maintainer's project-scope install** (`2.8.25`, in the app repo) is stale for reasons that predate
+  this plan (a pin, per COREDEV-2801's notes). It follows the same marketplace, and is reported, not
+  changed.
