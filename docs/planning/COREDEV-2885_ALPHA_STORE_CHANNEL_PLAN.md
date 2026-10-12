@@ -1,6 +1,9 @@
 # COREDEV-2885 — An install channel for `alpha`: the marketplace's ref must decide the plugin's ref
 
-**Status:** Planning, revision 3. Round 2: codex `REQUEST_CHANGES` (Q1: 0, Q2: 2); gemini has not run (agy unavailable).
+**Status:** Planning, revision 4. **The Q1/Q2 stopping rule fired after round 3**: rounds 2 and 3 both found Q1 = 0.
+Revision 4 applies round 3's three Q2 corrections WITHOUT a further round, so it is ungated. The gate is NOT passed:
+codex `REQUEST_CHANGES` (instrument findings only), and gemini never ran (agy unavailable). Passing it needs the
+maintainer's decision.
 **Ticket:** COREDEV-2885 (Epic COREDEV-2485). Follows COREDEV-2883, which set the branch flow to
 `main` > `alpha` > feature work.
 **Branch / worktree:** `feat/COREDEV-2885-alpha-store-channel`, `.claude/worktrees/2885-alpha-channel`, cut
@@ -11,6 +14,18 @@ after #121 merges (§5 step 2).
 
 ## Review log
 
+- **Round 3 (revision 3), codex `REQUEST_CHANGES`, Q1: 0, Q2: 3.** These were the second consecutive
+  zero-Q1 findings, so the stopping rule fired. Applied in revision 4, not re-reviewed:
+  1. **(Q2) The W negatives could pass without exercising B′.** If the marketplace clone stayed at A/A3,
+     whose `github` entry still selects `main`, they would report `main`'s SHA and no sentinel anyway.
+     A3's "still listed" check had the same gap. **Fix:** after every `marketplace update`, the clone's
+     HEAD and manifest are asserted to be the intended fixture BEFORE the plugin update is judged, and
+     every command must exit 0 (§4, "The rule for every step").
+  2. **(Q2) F4 said relative sources work "only" through Git, while F3 used a local directory.** **Fix:**
+     F4 distinguishes Git-backed cached installs, local-directory loading, and URL (bare-manifest)
+     marketplaces, which cannot use relative sources.
+  3. **(Q2) V2's lead sentence promised three different assertions, but V2a and V2b share one.** **Fix:**
+     reworded. The cells were already right.
 - **Round 2 (revision 2), codex `REQUEST_CHANGES`, Q1: 0, Q2: 2.** No shipping defect remained. Both
   findings were real instrument defects.
   1. **(Q2) W1′ and W2′ ran after B, so they had the wrong baseline.** B had already installed
@@ -97,8 +112,12 @@ never touched. **F0:** that isolation holds. A fresh config dir lists only the b
   - `scripts/ci-load-check.sh` has relied on `"./"` since COREDEV-2598, and records that absolute and `../`
     sources are rejected (verified there on 2.1.220).
 - **F4. The marketplace's ref decides what a relative source resolves to: INFERRED from F1 + F3.** The docs
-  say a relative path "is resolved relative to the marketplace root" and "only work[s] when the marketplace
-  is added via Git". F1 shows a `#alpha` marketplace is cloned at `alpha`. The CLI rejects `file://` URLs
+  say a relative path "is resolved relative to the marketplace root". It needs the marketplace's FILES:
+  - it works for a Git-backed marketplace, whose files are a clone, cached on install;
+  - it works for a local-directory marketplace (F3), whose files may be read in place;
+  - it does NOT work for a URL marketplace, which serves a bare manifest with no tree.
+
+  This plan's channels are Git-backed. F1 shows a `#alpha` marketplace is cloned at `alpha`. The CLI rejects `file://` URLs
   (`Invalid marketplace source format`), so a Git-backed probe needs a pushed ref. W1 and C1 (§4) observe
   it end to end.
 - **F5. A marketplace declared only in settings is not materialized non-interactively.** Probe 2 declared
@@ -199,7 +218,7 @@ wrong bytes.
 **V1–V2, local.**
 - **V1:** `validate-plugin-assembly.py --strict` passes with `"./"`. Mutate the entry back to the `github`
   object, and it reds with the new reason.
-- **V2:** `ci-load-check.sh` passes on the branch. Three mutants, each red at a different assertion:
+- **V2:** `ci-load-check.sh` passes on the branch. Three mutants, with this assertion mapping:
   - **V2a:** the shipped source is mutated back to `github`. It reds at the new source assertion, before any
     install.
   - **V2b:** the existing "equal versions" mutant, also `github`. It now reds at the SAME source assertion,
@@ -219,9 +238,15 @@ wrong bytes.
 - **Config isolation.** Each witness runs in its own `CLAUDE_CONFIG_DIR`, kept under `~/.claude/handoffs/`
   rather than the session scratchpad, which is reaped.
 - **The rule for every step.** The registration is never removed or re-added. Each step runs only
-  `claude plugin marketplace update <key>` and `claude plugin update unleashed-mail@<key>`. After each
-  step, record the marketplace key, scope, version, `gitCommitSha`, `installPath`, and the presence of a
-  per-witness sentinel.
+  `claude plugin marketplace update <key>` and then `claude plugin update unleashed-mail@<key>`, and every
+  command must exit 0.
+  1. **Precondition, between the two commands:** the marketplace clone (`installLocation` in that config's
+     `known_marketplaces.json`) has HEAD equal to the intended fixture commit. Its `marketplace.json` has
+     the intended `name`, `source` and `version`, and its sentinel file contains the sentinel if and only
+     if the fixture plants one. A step whose clone did not move is VOID, not a pass. This is what makes the
+     negative controls and A3 discriminating.
+  2. **Then** record the marketplace key, scope, version, `gitCommitSha`, `installPath`, and the presence of
+     the sentinel in `installPath`.
 - **Four independent witnesses.** Each has its own throwaway branch and its own config dir, and is
   initialized from `main`'s state. No control inherits another's install.
 
