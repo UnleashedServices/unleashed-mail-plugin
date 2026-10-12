@@ -9,7 +9,7 @@ name: plugin-ci
 
 on:
   push:
-    # `main` is the trunk releases are cut from; `alpha` is a gated pre-release branch. BOTH are
+    # Feature/fix PRs land on `alpha`; `main` takes only alpha -> main promotions (COREDEV-2883). BOTH are
     # gated, which is the point of this filter. Until COREDEV-2494
     # this triggered on `main` only, so 56 of alpha's 57 commits merged with ZERO checks: every audit
     # PR targeted alpha and reported "no checks". Worse, PR #36 ADDED `claude plugin validate` and #31
@@ -583,8 +583,8 @@ jobs:
     # recover part of what this one expression gave away.
     #
     # The matrix is still COMPUTED rather than filtered with a step-level `if:` — an `if:` still
-    # provisions the runner — and `alpha` is included because releases are cut from it and it has
-    # never run this leg at all.
+    # provisions the runner — and `alpha` is included because every change integrates there before
+    # `main` (COREDEV-2883), and it had never run this leg at all.
     #
     # `redactor-equivalence (macos-latest)` is deliberately still NOT a required check. Requiring it
     # is a separate, ordered step: this change must land and be observed green on real pull requests

@@ -296,25 +296,6 @@
     ],
     "stillOpenForM3": [
       {
-        "what": "Cell 2's RULE-SATISFACTION half: 'assert THE CONTEXT THAT SATISFIES THE RULE is a new run against the new base's range'. Observed at M4 only IN PART. whatISObserved and whatIsNOTObserved state it once (codex, PR #112): an `observedAtM4` block beside the old fields had given readers two contradictory answers.",
-        "why": [
-          "`trunk-check` is not one of ruleset Control's required contexts until M4, so pre-M4 NO rule is",
-          "satisfied by it and there is no 'context that satisfies the rule' to observe. The criterion as",
-          "written cannot be fully met at M3 \u2014 it is over-specified for the milestone it sits in.",
-          "REOPENED BY REVIEW (codex, PR #101). The previous revision emptied this list while",
-          "`cell2RetargetObservation.doesNotEstablish` simultaneously conceded that rule satisfaction was",
-          "NOT observed. Those two statements contradict each other, and the list is the one a later agent",
-          "reads for M4 readiness \u2014 so the contradiction resolved in favour of 'done' exactly where it is",
-          "most costly. Closing the observable half and calling the item closed is the defect."
-        ],
-        "whatISObserved": "M3 (cell2RetargetObservation): the `edited` clause fires and the range is re-resolved against the new base. M4, 2026-10-09 (cell2RuleSatisfactionObservation): the rule IS satisfied by the NEW run. After PR #110 was retargeted from main to alpha, it read BLOCKED while that run was IN_PROGRESS, so the earlier same-SHA success did not satisfy the rule. It read CLEAN once the run completed.",
-        "whatIsNOTObserved": "That the new run's range is against the NEW base. On PR #110 the run checked out a STALE refs/pull/110/merge. The action echoed HEAD^1 = 665796e (main's tip), not alpha's 10d57dd, so the context that satisfied alpha's rule was computed against main's range: 1 file, where main..alpha differs in 46. Remedy: COREDEV-2879 (PR #113). This item closes only on that fix's LIVE re-observation.",
-        "resolvesAt": "COREDEV-2879",
-        "discriminator": "CLOSES ONLY ON A POST-FIX LIVE RETARGET (codex, PR #112): after COREDEV-2879 ships, retarget a witness PR from one base to the other, and require the context that satisfies the rule to be a NEW run whose action-echoed upstream (`Detected merge commit, using HEAD^1 (<sha>)`) equals the NEW base's tip, or is on its first-parent chain. Read it from `gh run view <id> --log`, as cell2RetargetObservation does. A stale merge ref must instead give a RED run naming `STALE MERGE REF`.",
-        "m4PrerequisiteDiscriminator": "gh api repos/UnleashedServices/unleashed-mail-plugin/rulesets/16082567 --jq '[.rules[]|select(.type==\"required_status_checks\").parameters.required_status_checks[].context]' — this item can only be closed once that list contains `trunk-check`. SATISFIED 2026-10-09 (M4). This command shows only that trunk-check is required; it does NOT close this item.",
-        "resolvesAtMeans": "An M4 acceptance item, not an M3 gap that further M3 work can close. It must be observed as part of promoting the context \u2014 not assumed by it. REVISION NOTE: `resolvesAt` first held this whole sentence, which made the discriminator below print a paragraph instead of the token it claimed. The field is now the machine-readable value and the prose lives here."
-      },
-      {
         "what": "Cell 3(b) / cell 3 as a whole: the gate DOES over-reach. Formatters report pre-existing formatting debt as NEW, so any edit to an unformatted file fails the gate.",
         "why": [
           "REOPENED BY REVIEW (codex, PR #101, P1). The observations recorded in `cell3DiffScopeControls`",
@@ -409,18 +390,25 @@
       "which carries a command rather than a claim.",
       "THAT ALONE WAS NOT M3 COMPLETE, and this paragraph used to stop there \u2014 naming a",
       "PR-RETARGET observation and cells 3(a)/3(b) as what genuinely remained. ALL THREE ARE NOW",
-      "OBSERVED: see `cell2RetargetObservation` and `cell3DiffScopeControls`. What remains is the",
-      "TWO residuals remain in `stillOpenForM3` above, and NEITHER is closable by further M3",
-      "observation: cell 2's rule-satisfaction half (only M4 can discharge it) and cell 3's",
-      "over-reach counterexample (COREDEV-2850). This sentence said `the single residual` and named",
-      "only the first \u2014 written when there WAS one, and left standing when the second was added in",
-      "the very next revision. Third instance in this PR of a derived value going stale beside its",
-      "own update; the count is now stated once, here, and nowhere else.",
+      "OBSERVED: see `cell2RetargetObservation` and `cell3DiffScopeControls`.",
+      "At M3 close-out (2026-09-07) two residuals were left in `stillOpenForM3`, neither closable by",
+      "further M3 observation: cell 2's rule-satisfaction half and cell 3's over-reach counterexample",
+      "(COREDEV-2850). The first was later closed by COREDEV-2879 and its live re-observation",
+      "(`cell2RetargetFixReObserved`; listed under `closedSinceLastRevision`).",
+      "This paragraph states NO current count: `stillOpenForM3` is the only list of what remains, and",
+      "its discriminator is the way to read it. Earlier revisions stated the count here and went stale",
+      "twice \u2014 `the single residual` when there were two, then `TWO residuals remain` after one had",
+      "closed. A count restated beside the list it summarises goes stale at every closure.",
+      "REVISION NOTE (codex, PR #101): the superseded sentence was left standing next to the new",
       "closure key, so the artifact said both 'these remain outstanding' and 'these are closed'.",
       "The rule is rewritten here rather than annotated, because a correction note beside a stale",
       "normative sentence leaves the stale sentence normative."
     ],
     "closedSinceLastRevision": [
+      {
+        "what": "Cell 2's RULE-SATISFACTION half (the stillOpenForM3 item resolved at COREDEV-2879): the context that satisfies the rule after a retarget is a new run against the NEW base's range.",
+        "closedBy": "COREDEV-2879 (PR #113, merged to main as f3faa0c and to alpha by #118), then its LIVE re-observation on witness PR #117. See `cell2RetargetFixReObserved`."
+      },
       {
         "what": "The strict-green + deliberate-red pair on `alpha`.",
         "closedBy": "This artifact \u2014 see `alpha` above (PRs #96 and #97)."
@@ -448,13 +436,13 @@
     },
     "m3EvidenceClosedOut": {
       "observedAt": "2026-09-07T17:10:00Z",
-      "what": "The three items this key listed were OBSERVED, but TWO residuals remain open above and neither is closable by further M3 observation: cell 2's rule-satisfaction half (M4), and cell 3's over-reach counterexample (COREDEV-2850).",
+      "what": "The three items this key listed were OBSERVED. At this close-out two residuals were left open, neither closable by further M3 observation: cell 2's rule-satisfaction half, which COREDEV-2879 later closed (`cell2RetargetFixReObserved`), and cell 3's over-reach counterexample (COREDEV-2850). This key records the close-out; it states no current count, and `stillOpenForM3` is the list of what remains.",
       "where": {
         "retarget": "cell2RetargetObservation",
         "cell3a": "cell3DiffScopeControls.cell3a",
         "cell3b": "cell3DiffScopeControls.cell3b"
       },
-      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"2 ['COREDEV-2850', 'COREDEV-2879']\".",
+      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"1 ['COREDEV-2850']\".",
       "whatIsStillNotClaimed": [
         "SUPERSEDED 2026-10-09: M4 and M4a were applied and observed. See `m4RequiredContextAdded`, `cell17EnforcementSmokeTest`, `m4aRollbackRehearsal` and `cell2RuleSatisfactionObservation`. The lines below are the M3-time record.",
         "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in",
@@ -1155,5 +1143,79 @@
       "ticket": "COREDEV-2879"
     },
     "relatedPreExisting": "The other five required contexts (plugin-ci) do not re-run on a retarget at all, so their OLD-base results satisfy the new base's rule. Recorded on COREDEV-2879."
+  },
+  "cell2RetargetFixReObserved": {
+    "what": "COREDEV-2879 §5 step 6 (6.1-6.4). This is the LIVE re-observation that closes cell 2's rule-satisfaction half. A green witness opened against main was retargeted to alpha after the fix shipped (main f3faa0c, 2.8.32); then a pre-retarget trunk-check run was re-run (`theObsoleteRerun`).",
+    "pr": 117,
+    "headSha": "4edf3b2c326c97fa0087bf5b875d548143eccd91",
+    "retarget": "main -> alpha",
+    "retargetedAt": "2026-10-11T18:04:22Z",
+    "theRetargetRun": {
+      "workflowRunId": 38162268775,
+      "createdAt": "2026-10-11T18:04:22Z",
+      "conclusion": "failure",
+      "resolverMessage": "STALE MERGE REF: HEAD^1 f3faa0c350b1b0c6116d15ac4d986305bbb79448 is not on the event's base `alpha` (tip 10d57dd9323f63df66891514a6d07e0116a85493) — GitHub had not recomputed refs/pull/117/merge.",
+      "meaning": "This is the same race that let #110 go green against main's range. It now goes RED, and names the stale ref. That is the first acceptable outcome in the closing discriminator."
+    },
+    "theNextEventsRun": {
+      "workflowRunId": 38163526042,
+      "createdAt": "2026-10-11T18:22:19Z",
+      "conclusion": "success",
+      "actionResolvedUpstreamSha": "10d57dd9323f63df66891514a6d07e0116a85493",
+      "upstreamEqualsNewBaseTip": true,
+      "rangeFileCount": 54,
+      "trigger": "A later `edited` event on #117. Its source was not identified, because I did not edit the PR in that window. Any event after the merge ref settles has the same effect.",
+      "pluginCiSameEvent": {
+        "workflowRunId": 38163526065,
+        "conclusion": "success"
+      },
+      "meaning": "The deciding trunk-check run's range was resolved against alpha's tip, which is the second acceptable outcome. plugin-ci re-ran on the same event, so all six required contexts came from one post-retarget merge commit."
+    },
+    "finalState": {
+      "observedAt": "2026-10-11T18:50:51Z",
+      "mergeStateStatus": "CLEAN",
+      "base": "alpha",
+      "note": "The observe helper's `failingRequired` listed every required name, because it counts ALL check runs on the commit, including the superseded ones: the red retarget run and the cancelled plugin-ci jobs. GitHub's own CLEAN is authoritative. It does NOT simply take the newest run per context; see `theObsoleteRerun.finding`. The helper's list is an over-count and was not used as evidence."
+    },
+    "theObsoleteRerun": {
+      "planStep": "COREDEV-2879 §5 step 6.3. The first revision of this record closed the item WITHOUT it; codex's PR #119 review caught the omission (P2). This observation is what closes the item.",
+      "restoringTheMergeRef": "#117 had been closed and its head branch deleted, so refs/pull/117/merge no longer existed, and a re-run would have failed on that fetch instead of on the property. The branch was restored at the SAME head SHA (4edf3b2, no new commit) and the PR reopened at 2026-10-12T18:20:14Z (its `reopened` event). GitHub then recomputed refs/pull/117/merge as 38ed416, whose first parent is c189ea7, alpha's tip.",
+      "rerunOf": {
+        "workflowRunId": 38160411113,
+        "originalCreatedAt": "2026-10-11T17:37:16Z",
+        "originalConclusion": "success",
+        "originalMergeCommit": "4c6aa57: 4edf3b2 merged into f3faa0c, main's tip before the retarget"
+      },
+      "attempt": 2,
+      "rerunStartedAt": "2026-10-12T18:22:35Z",
+      "checkedOut": "4c6aa57. The re-run reused the original event's merge commit, as F2 says it does.",
+      "conclusion": "failure",
+      "resolverMessage": "OBSOLETE EVENT: HEAD^1 f3faa0c350b1b0c6116d15ac4d986305bbb79448 is not on the base of the PR's CURRENT merge ref (c189ea71f8e418c4c764264d0a5bd21f7d728304) — this run belongs to an event from before a retarget. Push a commit, or close and reopen the PR",
+      "whyTheFirstCheckPassed": "Predicted before the re-run, and observed: the re-run's event base is main, and f3faa0c is on main's first-parent chain (main had since advanced to a100645), so STALE MERGE REF cannot fire. Only the second reference catches an obsolete event. f3faa0c reached alpha solely as #118's SECOND parent, so it is not on alpha's first-parent chain.",
+      "decidesTheContext": false,
+      "theContextAfterEveryRunSettled": {
+        "observedAt": "2026-10-12T18:39:27Z",
+        "mergeStateStatus": "CLEAN",
+        "restMergeableState": "clean",
+        "statusCheckRollup": "SUCCESS",
+        "newestTrunkCheckRun": "check run 114949097381, started 2026-10-12T18:22:38Z, FAILURE: this re-run, in suite 103388684057, created 2026-10-11T17:37:16Z",
+        "newestTrunkCheckSuite": "suite 103743577407, created 2026-10-12T18:20:16Z (the reopen run 38290219720), SUCCESS",
+        "aReadThatLooksLikeTheOpposite": "At 18:23 the PR read BLOCKED with this re-run as its newest trunk-check run. plugin-ci was still pending then, and the BLOCKED was plugin-ci's. Read again once every run had settled, it is CLEAN. Read merge state only after every required context has settled."
+      },
+      "finding": "This CONTRADICTS the second half of COREDEV-2879's F3 ('a re-run CREATES a new run, so a re-run of an obsolete event becomes the deciding run'). That half was an inference; F3's observed half (#110: a newer run in progress kept an earlier success from satisfying the rule) involved a newer SUITE. Here the newest RUN is red, yet GitHub, both the merge state and the commit rollup, took the newest SUITE's green. Consistent with: GitHub decides a context from its newest check suite, and a re-run adds a run to an OLD suite. Not discriminated from: GitHub disregards a suite whose event base (main) differs from the PR's current base (alpha). Under either reading, while a post-retarget suite exists, an obsolete re-run decides nothing.",
+      "meaning": "Step 6.3 holds as the plan states it: the obsolete re-run is RED, OBSOLETE EVENT, so it can never be a green against the old base's range. Its effect on the rule is weaker than F3 predicted. GitHub did not let it decide the context at all, so on this path the OBSOLETE check is a second protection, not the only one, for the case observed (a newer suite exists). One observation; COREDEV-2881's residual is assessed in its ticket, not here."
+    },
+    "theReopenControl": {
+      "workflowRunId": 38290219720,
+      "createdAt": "2026-10-12T18:20:16Z",
+      "conclusion": "success",
+      "checkedOut": "54bc532: 4edf3b2 merged into 10d57dd",
+      "eventBaseSha": "10d57dd9323f63df66891514a6d07e0116a85493",
+      "alphaTipAtReopen": "c189ea71f8e418c4c764264d0a5bd21f7d728304",
+      "note": "The reopen event carried the merge commit GitHub held from when #117 was closed. Its base is alpha's tip at THAT time (10d57dd), not alpha's tip now (c189ea7), and GitHub recomputed the merge ref only after this run. The resolver accepted it, by design: 10d57dd is c189ea7's FIRST parent, so this is the base-advanced case (§6, bounded at 64 commits) on the right branch, not a wrong-branch range. It is a staleness every PR has under `strict_required_status_checks_policy: false`, not a retarget path. Recorded so that this green is not mistaken for a range resolved against the current tip."
+    },
+    "closedNeverMerged": true,
+    "reopenedOnceForStep63": "Reopened 2026-10-12T18:20:14Z for `theObsoleteRerun`, closed again 2026-10-12T18:41:19Z, and its head branch deleted again. Never merged.",
+    "liveObserverCrash": "The observer's own polling died on a network timeout immediately after the retarget, so it missed the 'BLOCKED while pending' read. Every value above was reconstructed afterwards from the runs' API records and logs, which are authoritative and timestamped."
   }
 }
