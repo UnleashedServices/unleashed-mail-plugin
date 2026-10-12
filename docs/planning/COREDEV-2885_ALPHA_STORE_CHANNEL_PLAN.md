@@ -1,6 +1,6 @@
 # COREDEV-2885 — An install channel for `alpha`: the marketplace's ref must decide the plugin's ref
 
-**Status:** Planning, revision 2. Round 1: codex `REQUEST_CHANGES` (Q1: 1, Q2: 3), gemini did not run.
+**Status:** Planning, revision 3. Round 2: codex `REQUEST_CHANGES` (Q1: 0, Q2: 2); gemini has not run (agy unavailable).
 **Ticket:** COREDEV-2885 (Epic COREDEV-2485). Follows COREDEV-2883, which set the branch flow to
 `main` > `alpha` > feature work.
 **Branch / worktree:** `feat/COREDEV-2885-alpha-store-channel`, `.claude/worktrees/2885-alpha-channel`, cut
@@ -11,6 +11,19 @@ after #121 merges (§5 step 2).
 
 ## Review log
 
+- **Round 2 (revision 2), codex `REQUEST_CHANGES`, Q1: 0, Q2: 2.** No shipping defect remained. Both
+  findings were real instrument defects.
+  1. **(Q2) W1′ and W2′ ran after B, so they had the wrong baseline.** B had already installed
+     `2.8.32-witness-b`. B′ then carried `main`'s version, which DIFFERS from the installed one, so F6's
+     equal-version skip could not apply. Even a skip would have kept B's bytes, not `main`'s. **Fix:** each
+     control is now its own witness branch and its own config, initialized at A (or A2 → A3). B′ is
+     applied directly to that `main`-version install.
+  2. **(Q2) V2c could go green.** `ci-load-check.sh` registers its scratch copy as a LOCAL-DIRECTORY
+     marketplace (it removes `.git`), and the docs say such plugins can be read in place. A sentinel planted
+     after install could then appear in the "installed" tree through the alias. **Fix:** V2c now installs
+     from a SECOND scratch tree. It has the same marketplace name, `"./"` source and version, but no
+     sentinel, while the sentinel stays planted in the original. Step 4 must then report it absent,
+     whatever the cache does.
 - **Round 1 (revision 1), codex `REQUEST_CHANGES`, Q1: 1, Q2: 3.** All four findings were real.
   1. **(Q1) §0 promised "every existing install" while §6 excluded the maintainer's own.** That install is
      keyed `npranson-unleashed-mail-plugin`, but its clone's `marketplace.json` now says
@@ -80,7 +93,7 @@ never touched. **F0:** that isolation holds. A fresh config dir lists only the b
   `"./"` and both versions set to `2.8.32-probe`, committed as `c1f2b80`. It installed version
   `2.8.32-probe` at `gitCommitSha` `c1f2b80`, into the cache path `…/unleashed-mail/2.8.32-probe`.
   - The docs say local-directory relative plugins can load in place without a version bump, so this probe
-    does NOT establish the Git-backed update path. W1 and W2 (§4) do.
+    does NOT establish the Git-backed update path. W1 and W2, with their controls W1′ and W2′ (§4), do.
   - `scripts/ci-load-check.sh` has relied on `"./"` since COREDEV-2598, and records that absolute and `../`
     sources are rejected (verified there on 2.1.220).
 - **F4. The marketplace's ref decides what a relative source resolves to: INFERRED from F1 + F3.** The docs
@@ -191,44 +204,54 @@ wrong bytes.
     install.
   - **V2b:** the existing "equal versions" mutant, also `github`. It now reds at the SAME source assertion,
     and is recorded so; it no longer reaches step 4.
-  - **V2c (new):** the source stays `"./"`, but the sentinel is planted AFTER `claude plugin install` rather
-    than before. It passes the source assertion and installs, then must red at step 4's byte witness:
-    "sentinel ABSENT from the installed tree". This is what keeps the byte witness discriminating once the
-    source assertion is in front of it.
+  - **V2c (new):** the sentinel is planted in the checkout's scratch copy as usual. The install, however,
+    comes from a SECOND scratch tree with the same marketplace name, `"./"` source and version, but no
+    sentinel. That models "the install did not come from this checkout". It passes the source assertion
+    and installs, then must red at step 4's byte witness: "sentinel ABSENT from the installed tree". It
+    cannot be fooled by in-place loading, because the installed tree never had the sentinel. This keeps
+    the byte witness discriminating once the source assertion is in front of it.
 - **The existing `hooks` and `.mcp.json` mutants** must still red at their current steps.
 
 **W1–W2: Git-backed migration witnesses, before merge.**
-- **Where they run.** On a throwaway remote branch, `test/COREDEV-2885-channel-witness`. Its commits are
+- **Where they run.** On four throwaway remote branches, one per witness (table below). Their commits are
   created through the GitHub contents API, because the intermediate states deliberately fail the
-  version-sync validator and hooks are never bypassed. It is never merged, and it is deleted afterwards.
+  version-sync validator and hooks are never bypassed. They are never merged, and are deleted afterwards.
 - **Config isolation.** Each witness runs in its own `CLAUDE_CONFIG_DIR`, kept under `~/.claude/handoffs/`
   rather than the session scratchpad, which is reaped.
 - **The rule for every step.** The registration is never removed or re-added. Each step runs only
   `claude plugin marketplace update <key>` and `claude plugin update unleashed-mail@<key>`. After each
   step, record the marketplace key, scope, version, `gitCommitSha`, `installPath`, and the presence of a
   per-witness sentinel.
-- **W1, current key.**
-  1. Commit A is the branch at `main`'s state (`github` source). `marketplace add`
-     `UnleashedServices/unleashed-mail-plugin#test/COREDEV-2885-channel-witness`, then install. Expect
-     `main`'s SHA (F1).
-  2. Commit B: the source becomes `"./"`, `plugin.json` and the entry version become `2.8.32-witness-b`, and
-     a sentinel is planted in `scripts/precompact-snapshot.sh`. Run update.
-  3. Expect: the same key and scope, version `2.8.32-witness-b`, `gitCommitSha` equal to B, and the sentinel
-     present.
-  4. **Red control W1′:** commit B′ is B with the version left at `main`'s. Its update must be SKIPPED
-     (F6), leaving `main`'s SHA and no sentinel. This shows the version, not the source change alone, is
-     what moves an install.
-- **W2, former key, reproducing F10's history.**
-  1. Commit A2 is A with the file's `name` set to `npranson-unleashed-mail-plugin`. Add the marketplace and
-     install. The key is now `npranson-unleashed-mail-plugin`.
-  2. Commit A3 restores `name` to `unleashedservices-unleashed-mail-plugin`, still on the `github` source.
-     Run update. **Observe today's behaviour:** does `marketplace update <former key>` succeed, and is the
-     plugin still listed and enabled under the former key (`claude plugin list --json`)? The version
-     cannot move here: under `github` the fetched plugin is always `main`'s, at `main`'s version. So this
-     step tests resolution, not update; F10's real update came from a `main` bump. It answers README's
-     "will stop resolving" either way.
-  3. Commit B, as in W1. Run update. Expect the same as W1 step 3, under the former key.
-  4. **Red control W2′:** as W1′, under the former key.
+- **Four independent witnesses.** Each has its own throwaway branch and its own config dir, and is
+  initialized from `main`'s state. No control inherits another's install.
+
+  | Witness | Branch | Key at install | History |
+  |---|---|---|---|
+  | W1 | `test/COREDEV-2885-w1` | current | A, then B |
+  | W1′ | `test/COREDEV-2885-w1n` | current | A, then B′ |
+  | W2 | `test/COREDEV-2885-w2` | former | A2, then A3, then B |
+  | W2′ | `test/COREDEV-2885-w2n` | former | A2, then A3, then B′ |
+
+  - **Commit A** is the branch at `main`'s state (`github` source).
+  - **A2** is A with the file's `name` set to `npranson-unleashed-mail-plugin`.
+  - **A3** restores the name to `unleashedservices-unleashed-mail-plugin`, still on `github`.
+  - **B:** source `"./"`; `plugin.json` and the entry version set to `2.8.32-witness-b`; a sentinel planted
+    in `scripts/precompact-snapshot.sh`.
+  - **B′:** B with the version left at `main`'s, and the SAME sentinel.
+- **Install step (every witness):** `marketplace add UnleashedServices/unleashed-mail-plugin#<branch>` at A
+  or A2, then install. Expect `main`'s SHA and version (F1), and no sentinel. The key is whatever the file
+  then declares: the current name for W1/W1′, the former one for W2/W2′.
+- **W2 and W2′, step A3. Observe today's behaviour.** Does `marketplace update <former key>` succeed, and
+  is the plugin still listed and enabled under the former key (`claude plugin list --json`)?
+  - The version cannot move here: under `github`, the fetched plugin is always `main`'s, at `main`'s
+    version. So this step tests resolution, not update; F10's real update came from a `main` bump.
+  - It answers README's "will stop resolving" either way.
+- **Positive (W1, W2), after B:** expect the same key and scope, version `2.8.32-witness-b`, `gitCommitSha`
+  equal to B, and the sentinel present.
+- **Negative (W1′, W2′), after B′:** B′'s version equals the installed `main` version. The update must be
+  SKIPPED (F6), leaving `main`'s SHA and NO sentinel, although B′ carries one. This shows that the version,
+  not the source change alone, is what moves an existing install. That is exactly the bump discipline
+  this design relies on.
 - **Before / after recording.** All W rows are written to the ticket and to a handoff file, with the raw
   `installed_plugins.json` entries.
 
@@ -248,9 +271,9 @@ wrong bytes.
 
 1. Gate this plan with dual review, reproduced on byte-identical bytes, then synthesize and persist the
    verdict.
-2. Rebase onto `alpha` after COREDEV-2883 (#121) merges. Run W1 and W2 against the witness branch. If W2
-   step 2 shows the former key already fails under `github`, stop and report before changing anything:
-   that is a pre-existing defect, outside this plan.
+2. Rebase onto `alpha` after COREDEV-2883 (#121) merges. Run W1, W1′, W2 and W2′, each on its own witness
+   branch. If the A3 step of W2 or W2′ shows the former key already fails under `github`, stop and report
+   before changing anything: that is a pre-existing defect, outside this plan.
 3. Implement §3, and run V1–V2.
 4. Run the full local gate, then `codex review --base origin/alpha`.
 5. Open a PR into `alpha`. **Merge needs the maintainer's word.** Then observe C1, and create C3's
