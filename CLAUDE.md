@@ -70,7 +70,7 @@ python3 -m unittest discover -s scripts/tests                      # scripts sui
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
 python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
 python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md   # line-pinned citations rot when files shift
-git diff --check "$(git merge-base origin/main HEAD)" HEAD                                              # whitespace, as CI checks it
+git diff --check "$(git merge-base origin/alpha HEAD)" HEAD                                             # whitespace, as CI checks it (CI uses the PR's base: alpha for feature work)
 python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv
 ```
 
@@ -130,28 +130,37 @@ Linux-friendly plugin repo — no Xcode).
   re-derive the extension-point enumeration that re-running mutants does not cover. **Deleting them is
   a change, not tidying.**
 - **Branches:** `feat/COREDEV-XXXX-short-description` (use the Epic key when spanning children). Work in a
-  dedicated `.claude/worktrees/<name>` worktree — never flip the main checkout's branch.
+  dedicated `.claude/worktrees/<name>` worktree branched off `origin/alpha` — never flip the main checkout's
+  branch. Feature and fix PRs target `alpha` (see **Branch flow** below).
 - **Commits:** `type(COREDEV-XXXX): description` — ticket is **mandatory**. Types: `feat`, `fix`, `chore`,
   `refactor`, `test`, `docs`.
-- **Versioning — BUMP ON EVERY CHANGE THAT SHIPS, not on release.** `.claude-plugin/marketplace.json`
-  carries **no version field**; it points at this repo, so `plugin.json` `version` is the _only_ signal
-  a consumer install has that anything changed. **An unbumped fix is a fix nobody receives** — it sits
-  on `main` and no installed plugin ever pulls it. This is why the rule differs from ordinary release
-  practice, and it has already bitten: a merged harness fix stayed undelivered because the version had
-  not moved.
+- **Versioning — BUMP ON EVERY CHANGE THAT SHIPS, not on release.** The version is the _only_ signal a
+  consumer install has that anything changed. **An unbumped fix is a fix nobody receives** — even after
+  it is promoted to `main`, no installed plugin pulls it. This is why the rule differs from ordinary
+  release practice, and it has already bitten: a merged harness fix stayed undelivered because the
+  version had not moved. Bump on the PR into `alpha`; installs receive it when `alpha` is promoted.
 
-  A bump touches **four** places, all asserted by `validate-version-sync.sh` (`strict` in CI, `warn` in
+  A bump touches **five** places, all asserted by `validate-version-sync.sh` (`strict` in CI, `warn` in
   pre-commit — so a partial bump passes locally and fails CI):
   1. `.claude-plugin/plugin.json` `version` — the anchor
   2. `README.md` H1 — `… Plugin vX.Y.Z`
   3. `README.md` newest `### vX.Y.Z` What's-New section
   4. `README.md` bold asset counts — `**N agents · N skills · N commands · N MCP server(s)**`
+  5. `.claude-plugin/marketplace.json` — the plugin entry's `version`. Without it, Claude Code picks the
+     installed version by raw cache-directory order and can reinstate an old one (COREDEV-2801).
 
   Plus a `CHANGELOG.md` `## [X.Y.Z] — YYYY-MM-DD` section. The plugin uses plain `MAJOR.MINOR.PATCH`
   — **not** the UnleashedMail _app's_ `MAJOR.MINOR|STATE.YYMMBB` scheme; the two repos differ.
 
 - **CI actions are SHA-pinned** (AGENT_CONTRACTS §6) — never `@vN` tags; Dependabot updates the pins.
-- **Trunk:** `main` is the integration trunk; the canonical remote is `UnleashedServices/unleashed-mail-plugin`.
+- **Branch flow: `main` > `alpha` > feature work** (maintainer decision, COREDEV-2883). Feature and fix
+  PRs target `alpha`; `main` receives work only through an `alpha` → `main` promotion PR. `main` is the
+  release channel that installed plugins update from (COREDEV-2885 tracks an install channel for `alpha`;
+  until then, test unreleased work with `claude --plugin-dir <worktree>`). A promotion, and a `main` →
+  `alpha` catch-up, each need the maintainer's word. Dependabot opens version updates against `alpha`
+  (`.github/dependabot.yml` `target-branch`); its SECURITY updates still open against `main`, which GitHub
+  does not let a config change, so each one needs a catch-up afterwards. The canonical remote is
+  `UnleashedServices/unleashed-mail-plugin`.
 
 ## The bundled MCP server
 
