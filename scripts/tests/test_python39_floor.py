@@ -405,8 +405,9 @@ _JOB_DIGESTS = {
     ("trunk-check.yml", "trunk-check"): (
         "cb4697a78fad94f1573f4f7509f207f4fdbf0b3026c640cb3798e0c8fb7d1070"
     ),
+    # COREDEV-2882: Dependabot bumped actions/upload-artifact 7.0.1 -> 7.0.2; the parity job is re-frozen.
     ("trunk-parity-harness.yml", "parity"): (
-        "147aa579e9517a3bb6996118c76f4af35b313a6f2437b6c13c326523476bbd8a"
+        "799fd1eb5cee7c00c31926aba688f765ac180a6a0170e2897dcac98f4adfe6e0"
     ),
 }
 
