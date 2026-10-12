@@ -1,9 +1,13 @@
 # COREDEV-2885 — An install channel for `alpha`: the marketplace's ref must decide the plugin's ref
 
-**Status:** Planning, revision 4. **The Q1/Q2 stopping rule fired after round 3**: rounds 2 and 3 both found Q1 = 0.
-Revision 4 applies round 3's three Q2 corrections WITHOUT a further round, so it is ungated. The gate is NOT passed:
-codex `REQUEST_CHANGES` (instrument findings only), and gemini never ran (agy unavailable). Passing it needs the
-maintainer's decision.
+**Status:** **Gate CLOSED BY MAINTAINER DECISION on revision 4** (2026-10-12), with the same disposition as
+COREDEV-2780. It was not passed by review.
+- The Q1/Q2 stopping rule fired after round 3: rounds 2 and 3 both found Q1 = 0.
+- Codex's last verdict was `REQUEST_CHANGES`, on instrument findings only. Revision 4 applied them without
+  a further round.
+- Gemini never ran: `agy` 1.3.3's model did not answer a ping across seven attempts.
+
+Every edit after revision 4 is ungated.
 **Ticket:** COREDEV-2885 (Epic COREDEV-2485). Follows COREDEV-2883, which set the branch flow to
 `main` > `alpha` > feature work.
 **Branch / worktree:** `feat/COREDEV-2885-alpha-store-channel`, `.claude/worktrees/2885-alpha-channel`, cut
@@ -14,6 +18,9 @@ after #121 merges (§5 step 2).
 
 ## Review log
 
+- **Gate disposition (after revision 4): closed by maintainer decision.** The maintainer chose "Close by your
+  decision" over waiting for gemini or pausing. Implementation proceeds per §5 from step 2, with the
+  witnesses W1–W2′ first.
 - **Round 3 (revision 3), codex `REQUEST_CHANGES`, Q1: 0, Q2: 3.** These were the second consecutive
   zero-Q1 findings, so the stopping rule fired. Applied in revision 4, not re-reviewed:
   1. **(Q2) The W negatives could pass without exercising B′.** If the marketplace clone stayed at A/A3,
