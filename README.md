@@ -17,9 +17,11 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
   `1.02.0000`), and `main` receives only promotions and hotfixes. The base-branch detection that
   `swift-reviewer` and `changeset.sh` use already worked this way; the contract line now agrees.
 - **`release-manager` builds the changelog from the version branch.** It listed PRs merged into
-  `main`, which holds only promotions, so it missed every feature PR.
-- **`codex-review` reviews against the PR's base.** Its full-diff example used `--base main`, which
-  would review a feature branch against `main` and pull in the version branch's unreleased work.
+  `main`, which holds only promotions, so it missed every feature PR. It now derives the branch from
+  `MARKETING_VERSION`, and stops rather than run the query with an empty base.
+- **`codex-review` reviews against the PR's own base.** Its full-diff example used `--base main`,
+  which would review a feature branch against `main` and pull in the version branch's unreleased
+  work. `main` remains the right base for a promotion or hotfix PR.
 
 ### v2.8.32
 

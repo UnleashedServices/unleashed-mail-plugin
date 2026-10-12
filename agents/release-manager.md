@@ -117,8 +117,11 @@ Generate changelog from Jira tickets and commits:
 
 ```bash
 # Get merged PRs since last release. Feature PRs merge into the VERSION branch, not main (main
-# receives only promotions and hotfixes), so list that branch's merges. VERSION_BRANCH is the
-# current stage branch, e.g. 1.02.0000 (AGENT_CONTRACTS.md "Branch convention").
+# receives only promotions and hotfixes), so list that branch's merges. Derive the branch from
+# MARKETING_VERSION (1.02 -> 1.02.0000), and refuse an empty one: `gh pr list --base ""` silently
+# drops the base filter and lists merges into EVERY branch.
+VERSION_BRANCH="$(sed -nE 's/^MARKETING_VERSION = ([0-9]+\.[0-9]{2})$/\1.0000/p' Config/Base.xcconfig)"
+: "${VERSION_BRANCH:?could not derive the version branch from Config/Base.xcconfig}"
 gh pr list --state merged --base "$VERSION_BRANCH" --limit 50 --json title,number,mergedAt
 
 # Get commit messages
