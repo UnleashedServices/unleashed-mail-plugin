@@ -1620,6 +1620,13 @@ class MarketplaceSourceIsRelative(unittest.TestCase):
             len(self._problems({"plugins": [{"name": "x", "source": "./plugins/x"}]})),
         )
 
+    def test_a_non_object_entry_is_refused_by_name(self):
+        # gemini, PR #123: report the malformed entry itself, not "plugin `None` source is None".
+        problems = self._problems({"plugins": [None]})
+        self.assertEqual(
+            [f"{self.REL}: plugin entry None is not a JSON object"], problems
+        )
+
     def test_no_entries_is_refused(self):
         cases: list[object] = [{}, {"plugins": []}, {"plugins": "x"}, []]
         for data in cases:

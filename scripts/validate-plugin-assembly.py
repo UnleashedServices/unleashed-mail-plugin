@@ -1500,8 +1500,11 @@ def check_marketplace_source(rel: str, data: object, problems: list[str]) -> Non
         problems.append(f"{rel}: no `plugins` entries")
         return
     for entry in plugins:
-        name = entry.get("name") if isinstance(entry, dict) else None
-        source = entry.get("source") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            problems.append(f"{rel}: plugin entry {entry!r} is not a JSON object")
+            continue
+        name = entry.get("name")
+        source = entry.get("source")
         if source != "./":
             problems.append(
                 f'{rel}: plugin `{name}` source is {source!r}; it must be "./" so the '

@@ -94,9 +94,14 @@ with open(path, encoding="utf-8") as fh:
     m = json.load(fh)
 # The SOURCE is asserted, never rewritten: it is what makes the marketplace's ref decide the plugin's
 # ref (COREDEV-2885), and a `github` source installs main's bytes whatever ref the marketplace is at.
-bad = [p.get("name") for p in m.get("plugins", []) if p.get("source") != "./"]
-if bad or not m.get("plugins"):
-    sys.exit(f"plugin source must be \"./\"; offending entries: {bad or 'none listed'}")
+# Shape first, so a malformed manifest fails with a reason instead of a traceback (gemini, PR #123).
+plugins = m.get("plugins") if isinstance(m, dict) else None
+if not isinstance(plugins, list) or not plugins:
+    sys.exit("marketplace.json must be a JSON object with a non-empty `plugins` list")
+bad = [p.get("name") if isinstance(p, dict) else repr(p) for p in plugins
+       if not isinstance(p, dict) or p.get("source") != "./"]
+if bad:
+    sys.exit(f"plugin source must be \"./\"; offending entries: {bad}")
 m["name"] = name          # scratch marketplace, so it cannot collide with a real installation
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(m, fh, indent=2)
