@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.32
+# UnleashedMail — Claude Code Plugin v2.8.34
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,21 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.34
+
+**You can install `alpha` from the store.** Add the marketplace as
+`UnleashedServices/unleashed-mail-plugin#alpha` (see "Release channels").
+
+- **The marketplace's ref now decides the plugin's ref.** The plugin's marketplace entry pointed at
+  GitHub with no branch, so it always installed `main`, even from a marketplace added at `#alpha`. It
+  now uses the relative source `"./"`, which installs the marketplace's own tree.
+- **Existing installs carry on.** Measured on throwaway branches: an install updates in place across
+  the change, under its own key, including one still keyed `npranson-unleashed-mail-plugin`. As
+  always, the version bump is what moves it.
+- **CI checks the shipped manifest.** The load check used to rewrite the source before installing,
+  so CI never tested the shipped value. It now asserts the source is `"./"` and fails otherwise, and
+  the assembly validator enforces the same rule.
 
 ### v2.8.32
 
@@ -708,10 +723,20 @@ claude plugin update unleashed-mail
 # Restart Claude Code
 ```
 
-> **Migrating from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was
-> renamed to `UnleashedServices/unleashed-mail-plugin`, and Claude Code's plugin-rename migration
-> does not cover marketplace-name changes — an install keyed as
-> `unleashed-mail@npranson-unleashed-mail-plugin` will stop resolving. Re-point it once:
+> **Installed from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was renamed
+> to `UnleashedServices/unleashed-mail-plugin`, but an install keyed as
+> `unleashed-mail@npranson-unleashed-mail-plugin` keeps resolving and updating. This was measured in
+> COREDEV-2885 (witness W2): after the rename the install stayed listed and enabled, and it then updated in
+> place, under the old key, across the plugin-source change. Update it under that key:
+>
+> ```bash
+> claude plugin marketplace update npranson-unleashed-mail-plugin
+> claude plugin update unleashed-mail@npranson-unleashed-mail-plugin
+> # Restart Claude Code
+> ```
+>
+> Re-pointing is optional, and only renames the key. Removing a marketplace uninstalls its plugins, so
+> reinstall afterwards:
 >
 > ```bash
 > claude plugin marketplace remove npranson-unleashed-mail-plugin
@@ -719,6 +744,33 @@ claude plugin update unleashed-mail
 > claude plugin install unleashed-mail   # reinstall under the new marketplace
 > # Restart Claude Code
 > ```
+
+### Release channels
+
+Work lands on `alpha` and reaches `main` by promotion. The ref you add the marketplace at decides which
+one you install, because the plugin's marketplace entry uses the relative source `"./"`: it installs the
+marketplace's own tree.
+
+| Channel          | Add the marketplace as                          | You get                               |
+| ---------------- | ----------------------------------------------- | ------------------------------------- |
+| stable (default) | `UnleashedServices/unleashed-mail-plugin`       | `main`: promoted, released work       |
+| alpha            | `UnleashedServices/unleashed-mail-plugin#alpha` | `alpha`: merged work not yet promoted |
+
+Both channels share one marketplace name, so a machine follows one channel at a time. To switch, remove
+the marketplace (which uninstalls the plugin), add it at the other ref, and reinstall. Remove it under
+the key it is REGISTERED as, which `claude plugin marketplace list` shows. That is
+`unleashedservices-unleashed-mail-plugin`, or `npranson-unleashed-mail-plugin` for an install added
+before the rename:
+
+```bash
+claude plugin marketplace remove unleashedservices-unleashed-mail-plugin   # or npranson-unleashed-mail-plugin
+claude plugin marketplace add UnleashedServices/unleashed-mail-plugin#alpha   # drop "#alpha" to go back
+claude plugin install unleashed-mail
+# Restart Claude Code
+```
+
+Updates on either channel arrive with each version bump, through the two update commands above. To try
+a single branch or checkout without changing channel, use `--plugin-dir`, below.
 
 For local development against an unpushed clone:
 
