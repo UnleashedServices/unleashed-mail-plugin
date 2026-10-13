@@ -1486,6 +1486,29 @@ def check_mcp_server_paths(root: Path, problems: list[str]) -> None:
                 )
 
 
+def check_marketplace_source(rel: str, data: object, problems: list[str]) -> None:
+    """Every marketplace plugin entry must use the relative source "./" (COREDEV-2885).
+
+    A relative source resolves to the marketplace's OWN tree, so the ref a machine adds the
+    marketplace at decides which plugin bytes it installs: `owner/repo` gives `main`, `owner/repo#alpha`
+    gives `alpha`. A `github` source with no `ref` installs the DEFAULT branch from any marketplace ref:
+    measured, `#alpha` silently installed main's commit (plan F1). And a per-branch `ref` would conflict
+    at every promotion (plan §2.1).
+    """
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, list) or not plugins:
+        problems.append(f"{rel}: no `plugins` entries")
+        return
+    for entry in plugins:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        source = entry.get("source") if isinstance(entry, dict) else None
+        if source != "./":
+            problems.append(
+                f'{rel}: plugin `{name}` source is {source!r}; it must be "./" so the '
+                "marketplace's ref decides the plugin's ref (COREDEV-2885)"
+            )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate unleashed-mail plugin assets.")
     ap.add_argument(
@@ -1626,6 +1649,8 @@ def main() -> int:
                         problems.append(
                             f"{m.relative_to(root)}: missing/empty required field `{field}`"
                         )
+        if m.name == "marketplace.json":
+            check_marketplace_source(str(m.relative_to(root)), data, problems)
     for m in optional_manifests:
         if not m.is_file():
             continue

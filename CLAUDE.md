@@ -161,8 +161,9 @@ Linux-friendly plugin repo — no Xcode).
 - **CI actions are SHA-pinned** (AGENT_CONTRACTS §6) — never `@vN` tags; Dependabot updates the pins.
 - **Branch flow: `main` > `alpha` > feature work** (maintainer decision, COREDEV-2883). Feature and fix
   PRs target `alpha`; `main` receives work only through an `alpha` → `main` promotion PR. `main` is the
-  release channel that installed plugins update from (COREDEV-2885 tracks an install channel for `alpha`;
-  until then, test unreleased work with `claude --plugin-dir <worktree>`). A promotion, and a `main` →
+  release channel that installed plugins update from by default. To install `alpha` instead, add the
+  marketplace as `UnleashedServices/unleashed-mail-plugin#alpha` (README "Release channels", COREDEV-2885);
+  to try one checkout, use `claude --plugin-dir <worktree>`. A promotion, and a `main` →
   `alpha` catch-up, each need the maintainer's word. Dependabot opens version updates against `alpha`
   (`.github/dependabot.yml` `target-branch`); its SECURITY updates still open against `main`, which GitHub
   does not let a config change, so each one needs a catch-up afterwards. The canonical remote is

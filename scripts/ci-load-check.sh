@@ -10,11 +10,13 @@
 # Upstream does `claude plugin marketplace add "$GITHUB_WORKSPACE"` and greps for `✔ enabled`. Both
 # steps are wrong HERE, and each was reproduced before this script was written:
 #
-#   1. Our marketplace entry is {"source":"github","repo":"UnleashedServices/…"}, not "./". Adding the
-#      workspace directly makes the CLI GIT-CLONE main into the cache and report `enabled: true` — it
-#      installed v2.5.3 over a branch at 2.6.1, and the branch's own plan files were absent from the
-#      installed tree. A green check over the wrong bytes is worse than no check. Upstream can use its
-#      recipe only because its source IS "./".
+#   1. The SOURCE decides whose bytes get installed. Until COREDEV-2885 our entry was
+#      {"source":"github","repo":"UnleashedServices/…"}, and adding the workspace made the CLI GIT-CLONE
+#      main into the cache and report `enabled: true` — it installed v2.5.3 over a branch at 2.6.1. This
+#      script therefore rewrote the copy's source to "./", so CI tested a manifest one field different
+#      from the shipped one. COREDEV-2885 ships "./" itself, so that the marketplace's ref decides the
+#      plugin's ref. The gap is CLOSED: step 1 now ASSERTS the shipped source is "./" and never rewrites
+#      it, so a regression to `github` reds here, before any install.
 #   2. `enabled` is REGISTRY state. Verified: with `.mcp.json` repointed at a nonexistent file the
 #      install still exits 0 and reports enabled, and the reported `mcpServers` still contains a
 #      literal unexpanded ${CLAUDE_PLUGIN_ROOT} — an echo of the manifest, not runtime state. And
@@ -30,21 +32,26 @@
 #
 #   mutant                                            fails at              status
 #   ------------------------------------------------  --------------------  -----------------------
-#   plugin.json gains a `hooks` key (#61's defect)    step 4, `errors`      PROVED
+#   plugin.json gains a `hooks` key (#61's defect)    step 6, hooks key     PROVED on 2.1.296 (step 4 on 2.1.220)
 #   .mcp.json repointed at a nonexistent file         step 5, handshake     PROVED
-#   marketplace source left as `github`               step 4, version       PROVED
-#   ...same, with versions made EQUAL                 step 4, SENTINEL      PROVED  <- the important one
+#   shipped source reverted to `github` (V2a)         step 1, source        PROVED (COREDEV-2885)
+#   ...same, with versions made EQUAL (V2b)           step 1, source        PROVED (COREDEV-2885)
+#   install from a 2nd tree with no sentinel (V2c)    step 4, SENTINEL      PROVED  <- the important one
 #
-# THE SENTINEL RUN IS THE ONE THAT MATTERS. With the versions deliberately equal — which is the normal
-# case, since main and a branch share a version for any change that does not bump one — the version
-# smoke check PASSES and the sentinel is the only assertion that detects remote bytes. Executed: it
-# installed 2.5.3 from main, the version check was satisfied, and the sentinel caught it. A version
-# check alone would have shipped this.
+# THE SENTINEL RUN IS THE ONE THAT MATTERS. Version equality is the normal case — main and a branch
+# share a version for any change that does not bump one — so the version smoke check cannot tell this
+# checkout's bytes from anyone else's; the sentinel can. Before COREDEV-2885 the `github` mutants reached
+# it (it caught 2.5.3 installed from main with versions equal). The source assertion now stops those at
+# step 1, so V2c keeps the sentinel honest: it installs, at the same name, source and version, from a
+# SECOND scratch tree that never had the sentinel. In-place loading of a local-directory marketplace
+# cannot fake a pass, because the installed tree never contained it.
 #
-# ONE ASSERTION IS NOT PROVED, AND IS LABELLED RATHER THAN CLAIMED: step 6's `plugin.json has no
-# hooks key`. On 2.1.220 the CLI already reports that defect in `list --json`'s `errors` array, so
-# step 4 fires first and step 6 is unreachable by any mutant. It stays as defence-in-depth — if a
-# future CLI stops surfacing it, step 6 still catches it — but do NOT record it as mutation-proved.
+# STEP 4's `errors` ASSERTION IS NOW REACHED BY NO MUTANT, AND IS LABELLED RATHER THAN CLAIMED. On
+# 2.1.220 the CLI reported #61's defect in `list --json`'s `errors` array, so step 4 fired first and
+# step 6 (`plugin.json has no hooks key`) was unreachable. Re-executed on 2.1.296 (COREDEV-2885), the
+# CLI no longer reports it there: step 4 passes, and step 6 catches the mutant. That is exactly the
+# future step 6 was kept for. Keep both: step 4 still guards a CLI that does report `errors`, and step 6
+# is now the mutation-proved check for this defect.
 #
 # Usage: ci-load-check.sh [--keep]      (--keep leaves the scratch dirs for inspection)
 set -uo pipefail
@@ -61,7 +68,10 @@ mkdir -p "$CLAUDE_CONFIG_DIR"
 cleanup() { [ "$KEEP" = "1" ] || rm -rf "$WORK"; }
 trap cleanup EXIT
 
-fail() { printf 'LOAD CHECK FAILED — %s\n' "$*" >&2; exit 1; }
+fail() {
+	printf 'LOAD CHECK FAILED — %s\n' "$*" >&2
+	exit 1
+}
 step() { printf '\n== %s\n' "$*"; }
 
 MARKET_NAME="ci-load-check-$$"
@@ -69,37 +79,35 @@ MARKET_NAME="ci-load-check-$$"
 SENTINEL="ci-load-sentinel:${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-$$}-$(date +%s 2>/dev/null || echo 0)"
 
 # ---------------------------------------------------------------------------------------------
-step "1. copy the checkout and rewrite the copy's marketplace source to \"./\""
+step "1. copy the checkout, rename the copy's marketplace, and assert the SHIPPED source is \"./\""
 # NEVER mutate $REPO itself. rsync if present (CI), else cp -R.
 if command -v rsync >/dev/null 2>&1; then
-    rsync -a --exclude '.git' "$REPO/" "$SRC/" || fail "rsync of the checkout failed"
+	rsync -a --exclude '.git' "$REPO/" "$SRC/" || fail "rsync of the checkout failed"
 else
-    mkdir -p "$SRC" && (cd "$REPO" && tar cf - --exclude='./.git' .) | (cd "$SRC" && tar xf -) \
-        || fail "copy of the checkout failed"
+	mkdir -p "$SRC" && (cd "$REPO" && tar cf - --exclude='./.git' .) | (cd "$SRC" && tar xf -) ||
+		fail "copy of the checkout failed"
 fi
-python3 - "$SRC/.claude-plugin/marketplace.json" "$MARKET_NAME" <<'PY' || fail "marketplace rewrite failed"
+python3 - "$SRC/.claude-plugin/marketplace.json" "$MARKET_NAME" <<'PY' || fail 'shipped marketplace source is not "./" (COREDEV-2885)'
 import json, sys
 path, name = sys.argv[1], sys.argv[2]
 with open(path, encoding="utf-8") as fh:
     m = json.load(fh)
+# The SOURCE is asserted, never rewritten: it is what makes the marketplace's ref decide the plugin's
+# ref (COREDEV-2885), and a `github` source installs main's bytes whatever ref the marketplace is at.
+bad = [p.get("name") for p in m.get("plugins", []) if p.get("source") != "./"]
+if bad or not m.get("plugins"):
+    sys.exit(f"plugin source must be \"./\"; offending entries: {bad or 'none listed'}")
 m["name"] = name          # scratch marketplace, so it cannot collide with a real installation
-for p in m.get("plugins", []):
-    # "./" is the ONLY expressible local form: absolute paths and ../-relative sources are both
-    # rejected by the loader (`plugins.0.source: Invalid input`), verified on 2.1.220.
-    p["source"] = "./"
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(m, fh, indent=2)
-print(f"  marketplace -> {name}, source -> ./")
+print(f"  marketplace -> {name}; shipped source is ./")
 PY
-
-# FIDELITY GAP, stated so nobody "fixes" it back: CI now tests a manifest differing from the shipped
-# one by one field, so the `source: github` path is never exercised here. That path is GitHub's job.
 step "2. plant the per-run sentinel in a provably-shipped file"
 # hooks/hooks.json:101 invokes precompact-snapshot.sh from ${CLAUDE_PLUGIN_ROOT}, so if it is missing
 # from the install the plugin is broken anyway. A trailing shell comment cannot affect behaviour.
 CARRIER="$SRC/scripts/precompact-snapshot.sh"
 [ -f "$CARRIER" ] || fail "sentinel carrier missing from the copy: scripts/precompact-snapshot.sh"
-printf '\n# %s\n' "$SENTINEL" >> "$CARRIER"
+printf '\n# %s\n' "$SENTINEL" >>"$CARRIER"
 bash -n "$CARRIER" || fail "sentinel broke the carrier's syntax"
 echo "  planted: $SENTINEL"
 
@@ -107,17 +115,17 @@ step "3. install from the scratch marketplace into a scratch CLAUDE_CONFIG_DIR"
 # Gate on `install` + `list --json`, never on `add`: `marketplace add` exits 0 and prints
 # "✔ Successfully added" even for manifests `claude plugin validate` rejects (verified on 2.1.220).
 claude plugin marketplace add "$SRC" >/dev/null 2>&1 || fail "marketplace add failed"
-claude plugin install "unleashed-mail@$MARKET_NAME" >/dev/null 2>&1 \
-    || fail "plugin install failed (this is the load layer schema validation cannot reach)"
+claude plugin install "unleashed-mail@$MARKET_NAME" >/dev/null 2>&1 ||
+	fail "plugin install failed (this is the load layer schema validation cannot reach)"
 
 step "4. assert on PARSED JSON — id, enabled, errors, version, and the sentinel"
 LIST="$WORK/list.json"
-claude plugin list --json 2>/dev/null > "$LIST" || fail "plugin list --json failed"
+claude plugin list --json 2>/dev/null >"$LIST" || fail "plugin list --json failed"
 # Run the assertions as their OWN command and check the status in THIS shell. `X="$(… || fail …)"`
 # does not work: `fail` runs in the command-substitution SUBSHELL, so it prints and exits the
 # subshell while the parent carries on with an empty X — the script then reported a SECOND, bogus
 # failure from a later assertion. Found by a mutant, which is the point of running them.
-python3 - "$LIST" "$MARKET_NAME" "$SRC" > "$WORK/installpath" <<'PY'
+python3 - "$LIST" "$MARKET_NAME" "$SRC" >"$WORK/installpath" <<'PY'
 import json, sys
 list_path, market, src = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(list_path, encoding="utf-8") as fh:
@@ -152,8 +160,8 @@ echo "  installPath: $INSTALL_PATH"
 # THE BYTE-IDENTITY ASSERTION. Version equality is only a smoke check: main and the branch share a
 # version for every change that does not bump one, so a source:github regression would install remote
 # bytes and still pass a version check.
-grep -qF "$SENTINEL" "$INSTALL_PATH/scripts/precompact-snapshot.sh" 2>/dev/null \
-    || fail "sentinel ABSENT from the installed tree — the install did not come from this checkout"
+grep -qF "$SENTINEL" "$INSTALL_PATH/scripts/precompact-snapshot.sh" 2>/dev/null ||
+	fail "sentinel ABSENT from the installed tree — the install did not come from this checkout"
 echo "  sentinel present in the installed tree"
 
 step "5. drive the MCP server FROM ITS OWN INSTALLED DECLARATION"
@@ -213,7 +221,7 @@ if "hooks" in manifest:
              "silently drops the entire hook set (upstream issue #61)")
 print("  plugin.json has no `hooks` key")
 PY
-python3 "$INSTALL_PATH/scripts/validate-hooks.py" --root "$INSTALL_PATH" --strict --require-manifest \
-    || fail "validate-hooks.py failed against the INSTALLED tree"
+python3 "$INSTALL_PATH/scripts/validate-hooks.py" --root "$INSTALL_PATH" --strict --require-manifest ||
+	fail "validate-hooks.py failed against the INSTALLED tree"
 
 printf '\nLOAD CHECK PASSED — installed from this checkout, MCP handshake OK, hook manifest OK\n'
