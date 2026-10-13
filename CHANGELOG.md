@@ -29,7 +29,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     filter and lists every branch's merges).
   - `skills/codex-review/SKILL.md`: the full-diff example's `--base main` is now the PR's own base
     branch: the version branch for an app feature, `alpha` for a plugin feature, `main` only for a
-    promotion or hotfix.
+    promotion. A hotfix merges to both, as two PRs, and each is reviewed against its own base.
 
 ## [2.8.32] — 2026-10-10
 

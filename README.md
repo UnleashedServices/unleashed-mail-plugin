@@ -21,7 +21,8 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
   `MARKETING_VERSION`, and stops rather than run the query with an empty base.
 - **`codex-review` reviews against the PR's own base.** Its full-diff example used `--base main`,
   which would review a feature branch against `main` and pull in the version branch's unreleased
-  work. `main` remains the right base for a promotion or hotfix PR.
+  work. `main` remains the right base for a promotion, and for a hotfix's PR into `main` (its PR into
+  the version branch uses the version branch).
 
 ### v2.8.32
 
