@@ -727,9 +727,16 @@ claude plugin update unleashed-mail
 > to `UnleashedServices/unleashed-mail-plugin`, but an install keyed as
 > `unleashed-mail@npranson-unleashed-mail-plugin` keeps resolving and updating. This was measured in
 > COREDEV-2885 (witness W2): after the rename the install stayed listed and enabled, and it then updated in
-> place, under the old key, across the plugin-source change. Update it with
-> `claude plugin marketplace update npranson-unleashed-mail-plugin`. Re-pointing is optional, and only
-> renames the key. Removing a marketplace uninstalls its plugins, so reinstall afterwards:
+> place, under the old key, across the plugin-source change. Update it under that key:
+>
+> ```bash
+> claude plugin marketplace update npranson-unleashed-mail-plugin
+> claude plugin update unleashed-mail@npranson-unleashed-mail-plugin
+> # Restart Claude Code
+> ```
+>
+> Re-pointing is optional, and only renames the key. Removing a marketplace uninstalls its plugins, so
+> reinstall afterwards:
 >
 > ```bash
 > claude plugin marketplace remove npranson-unleashed-mail-plugin
@@ -750,10 +757,13 @@ marketplace's own tree.
 | alpha            | `UnleashedServices/unleashed-mail-plugin#alpha` | `alpha`: merged work not yet promoted |
 
 Both channels share one marketplace name, so a machine follows one channel at a time. To switch, remove
-the marketplace (which uninstalls the plugin), add it at the other ref, and reinstall:
+the marketplace (which uninstalls the plugin), add it at the other ref, and reinstall. Remove it under
+the key it is REGISTERED as, which `claude plugin marketplace list` shows. That is
+`unleashedservices-unleashed-mail-plugin`, or `npranson-unleashed-mail-plugin` for an install added
+before the rename:
 
 ```bash
-claude plugin marketplace remove unleashedservices-unleashed-mail-plugin
+claude plugin marketplace remove unleashedservices-unleashed-mail-plugin   # or npranson-unleashed-mail-plugin
 claude plugin marketplace add UnleashedServices/unleashed-mail-plugin#alpha   # drop "#alpha" to go back
 claude plugin install unleashed-mail
 # Restart Claude Code
