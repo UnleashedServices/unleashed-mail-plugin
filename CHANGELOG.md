@@ -13,7 +13,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
-## [2.8.33] — 2026-10-12
+## [2.8.35] — 2026-10-13
 
 ### Fixed
 
@@ -30,6 +30,39 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `skills/codex-review/SKILL.md`: the full-diff example's `--base main` is now the PR's own base
     branch: the version branch for an app feature, `alpha` for a plugin feature, `main` only for a
     promotion. A hotfix merges to both, as two PRs, and each is reviewed against its own base.
+
+## [2.8.34] — 2026-10-12
+
+### Changed
+
+- **The plugin's marketplace source is `"./"` (COREDEV-2885),** so the ref a machine adds the
+  marketplace at decides which plugin bytes it installs: no ref gives `main`, `#alpha` gives `alpha`.
+  - **Why.** The entry was `{"source":"github","repo":"UnleashedServices/unleashed-mail-plugin"}` with no
+    `ref`, which installs the default branch from ANY marketplace ref. Measured on Claude Code 2.1.296
+    in an isolated config: a marketplace added at `#alpha` installed main's commit (`a100645`, not
+    alpha's `91ee033`).
+  - **Migration, measured** (witnesses W1/W1′/W2/W2′, on throwaway branches with isolated configs). An
+    install made from the `github` source updated IN PLACE, under the same key and scope, to the `"./"`
+    fixture's version, commit and sentinel. That includes a registration keyed by the marketplace's
+    former name, `npranson-unleashed-mail-plugin`. With the version unchanged, the update was skipped:
+    the version bump, not the source change, is what moves an install.
+  - `README.md`: a "Release channels" section. The former-key note no longer claims such installs
+    "stop resolving"; W2 showed they keep resolving and updating.
+  - `CLAUDE.md` "Branch flow": the alpha channel's join command.
+
+### Fixed
+
+- **CI's load check tested a manifest one field different from the shipped one.**
+  `scripts/ci-load-check.sh` rewrote the copy's source to `"./"` before installing. It now ASSERTS the
+  shipped source is `"./"` and fails before any install otherwise. Its mutant table is re-executed:
+  - the `github` mutants now red at step 1;
+  - a new mutant, installing from a second tree without the sentinel, reds at the sentinel check.
+- `scripts/validate-plugin-assembly.py` enforces the same rule (`check_marketplace_source`, with tests in
+  `MarketplaceSourceIsRelative`).
+- **The load check's mutant table had drifted with the CLI.** Re-executed on Claude Code 2.1.296, the #61
+  `hooks`-key mutant is no longer reported in `list --json`'s `errors`, so step 4 passes and step 6 (the
+  hooks-key check, previously labelled unreachable) catches it. The table and its note now record that.
+  The mutant is still caught; only the step that catches it moved.
 
 ## [2.8.32] — 2026-10-10
 

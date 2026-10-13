@@ -1567,5 +1567,74 @@ class GrepPipelinesAreNotNativeGrep(unittest.TestCase):
         self.assertEqual([], problems)
 
 
+class MarketplaceSourceIsRelative(unittest.TestCase):
+    """COREDEV-2885 V1: every marketplace plugin entry must use the relative source "./".
+
+    A `github` source with no `ref` installs the DEFAULT branch from any marketplace ref, so adding the
+    marketplace at `#alpha` silently installed main's commit (plan F1). "./" makes the marketplace's ref
+    decide the plugin's ref. Each case asserts the REASON, not just that something was reported.
+    """
+
+    REL = ".claude-plugin/marketplace.json"
+
+    def _problems(self, data):
+        problems: list[str] = []
+        vpa.check_marketplace_source(self.REL, data, problems)
+        return problems
+
+    def test_the_shipped_manifest_passes(self):
+        import json
+
+        with (Path(_ROOT) / self.REL).open(encoding="utf-8") as fh:
+            self.assertEqual([], self._problems(json.load(fh)))
+
+    def test_a_github_source_is_refused_with_the_reason(self):
+        github = {"source": "github", "repo": "UnleashedServices/unleashed-mail-plugin"}
+        problems = self._problems(
+            {"plugins": [{"name": "unleashed-mail", "source": github}]}
+        )
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn('must be "./"', problems[0])
+        self.assertIn("COREDEV-2885", problems[0])
+
+    def test_a_github_source_pinned_to_a_ref_is_still_refused(self):
+        # A per-branch `ref` would have to differ between alpha and main and conflict at every
+        # promotion (plan §2.1), so pinning is not an acceptable alternative either.
+        pinned = {
+            "source": "github",
+            "repo": "UnleashedServices/unleashed-mail-plugin",
+            "ref": "alpha",
+        }
+        self.assertEqual(
+            1,
+            len(
+                self._problems(
+                    {"plugins": [{"name": "unleashed-mail", "source": pinned}]}
+                )
+            ),
+        )
+
+    def test_a_different_relative_path_is_refused(self):
+        self.assertEqual(
+            1,
+            len(self._problems({"plugins": [{"name": "x", "source": "./plugins/x"}]})),
+        )
+
+    def test_a_non_object_entry_is_refused_by_name(self):
+        # gemini, PR #123: report the malformed entry itself, not "plugin `None` source is None".
+        problems = self._problems({"plugins": [None]})
+        self.assertEqual(
+            [f"{self.REL}: plugin entry None is not a JSON object"], problems
+        )
+
+    def test_no_entries_is_refused(self):
+        cases: list[object] = [{}, {"plugins": []}, {"plugins": "x"}, []]
+        for data in cases:
+            with self.subTest(data=data):
+                self.assertEqual(
+                    [f"{self.REL}: no `plugins` entries"], self._problems(data)
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
