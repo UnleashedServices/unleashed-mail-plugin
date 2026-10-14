@@ -391,13 +391,28 @@ fi
 	"Read and follow ${TREE}/${PROMPT_REL}") >/dev/null
 RC=$?
 
+# A VOID MUST REACH PERSISTENCE (codex, plan round 4, Q1). By the time any check below runs, the capture has
+# already written the reviewer's text into the reserved leaf, and `persist-verdict.sh` and `review-verdict.py
+# write` refuse only an EMPTY transcript — they never see this script's exit status. So exiting 3 alone left
+# an approving leaf a careless synthesis could still record (codex reproduced a rewritten staged plan plus
+# `VERDICT: APPROVE` being accepted). Every void after the capture therefore EMPTIES the leaf first — MISSING
+# at both layers — keeping the reviewer's text in `<leaf>.void` for the operator (void-transcript.py).
+invalidate_transcript() {
+	python3 "${SCRIPT_DIR}/void-transcript.py" "${OUT}" ||
+		echo "GATE FAILED — could not EMPTY ${OUT}; it is NOT a review and must not be persisted" >&2
+}
+void_round() {
+	invalidate_transcript
+	exit 3
+}
+
 # --- after: the assertion that would have caught COREDEV-2607 --------------------------------
 if ! AFTER="$(tree_fingerprint "${REPO}")"; then
 	{
 		echo "GATE FAILED — could not fingerprint the live checkout after the review (round"
 		echo "void). A reviewer that breaks the checkout must not pass as a clean tree."
 	} >&2
-	exit 3
+	void_round
 fi
 if [[ ${BEFORE} != "${AFTER}" ]]; then
 	echo "GATE FAILED — the reviewer MUTATED the working tree during the review:" >&2
@@ -405,7 +420,7 @@ if [[ ${BEFORE} != "${AFTER}" ]]; then
 	# is a literal `n` (measured: it stripped at the first `n` of the status text).
 	tree_fingerprint_report "${REPO}" "${BEFORE_STATUS}" "${BEFORE%%$'\n'*}"
 	echo "(round is void — see COREDEV-2607)" >&2
-	exit 3
+	void_round
 fi
 
 # THE ROUND'S BASIS MUST SURVIVE THE ROUND (PR #63 recheck, P1). A reviewer that rewrote the staged
@@ -424,13 +439,13 @@ if [[ -n ${PLAN_REL} ]]; then
 			echo "(staged ${EXPECTED_PLAN_SHA}, post-run ${ACTUAL_PLAN_SHA} — the transcript reviewed"
 			echo "bytes the binding does not attest to; see COREDEV-2607 for why this voids the round)"
 		} >&2
-		exit 3
+		void_round
 	fi
 fi
 ACTUAL_PROMPT_SHA="$(_sha256 "${TREE}/${PROMPT_REL}" 2>/dev/null)" || ACTUAL_PROMPT_SHA="unreadable"
 if [[ ${ACTUAL_PROMPT_SHA} != "${PROMPT_TREE_SHA}" ]]; then
 	echo "GATE FAILED — the assembled PROMPT was modified during the review (round void)" >&2
-	exit 3
+	void_round
 fi
 # ANY other write inside the disposable copy voids the round too — no longer a note. Writing files is
 # the COREDEV-2607 signature (a reviewer in agent mode, implementing instead of reviewing), and a
@@ -451,7 +466,7 @@ if ! TREE_AFTER="$(disposable_fingerprint "${TREE}")"; then
 		echo "GATE FAILED — could not re-read the disposable checkout after the review (round"
 		echo "void). A reviewer that breaks the checkout must not pass as a clean tree."
 	} >&2
-	exit 3
+	void_round
 fi
 if [[ ${TREE_BASELINE} != "${TREE_AFTER}" ]]; then
 	{
@@ -459,13 +474,18 @@ if [[ ${TREE_BASELINE} != "${TREE_AFTER}" ]]; then
 		echo "behaviour, the COREDEV-2607 signature):"
 		printf '%s\n' "${TREE_BASELINE}" | diff - <(printf '%s\n' "${TREE_AFTER}") | sed 's/^/  /' || :
 	} >&2
-	exit 3
+	void_round
 fi
 
 # A REFUSED RUN IS EXPLAINED HERE, outside the PTY. The adapter writes its refusal only to `${OUT}.diag`,
 # leaving the transcript EMPTY (MISSING downstream, codex plan round 3), so the operator reads the reason from
 # this script's stderr instead.
 if [[ ${RC} -ne 0 ]]; then
+	# A failed run is never a review: if anything reached the leaf anyway (a capture killed mid-write), it is
+	# invalidated like a void, and the status below is still returned.
+	if [[ -s ${OUT} ]]; then
+		invalidate_transcript
+	fi
 	REFUSAL="$(grep -a '^GEMINI ARM FAILED' "${OUT}.diag" 2>/dev/null | tail -1)"
 	printf 'gemini arm (%s): %s\n' "${MODEL}" "${REFUSAL:-the review ended (exit ${RC}) without an adapter refusal — timed out or killed; see ${OUT}.diag}" >&2
 fi

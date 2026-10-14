@@ -16,15 +16,18 @@
 # gate is fail-closed and the operator chooses the recovery.
 set -uo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
+# THE GATE'S MODEL, from the harness that runs the review — one literal, never a second copy here. Read FIRST,
+# so that EVERY failure line below names it (codex, plan rounds 2 to 4; §0.4).
+MODEL="$(sed -nE 's/^DEFAULT_MODEL="([A-Za-z0-9][A-Za-z0-9._-]*)"$/\1/p' "${SCRIPT_DIR}/isolated-gemini-review.sh")"
+
 die() {
-	printf 'gemini preflight: %s\n' "$1" >&2
+	printf 'gemini preflight (%s): %s\n' "${MODEL:-<no model>}" "$1" >&2
 	exit 1
 }
 
 command -v gemini >/dev/null 2>&1 || die "the gemini CLI is not on PATH — the gate is fail-closed, not waived"
-
-SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 
 # PER-RUN ping path. A shared one lets a preflight that died before writing leave the PREVIOUS run's
 # `pong` in place, so a dead CLI reads as healthy — and the preflight is what decides whether the
@@ -56,7 +59,7 @@ BEFORE=""
 BEFORE_STATUS=""
 if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
 	BEFORE="$(tree_fingerprint "${REPO_ROOT}")" || {
-		printf 'gemini preflight: FAILED — could not fingerprint the checkout before the ping.\n' >&2
+		printf 'gemini preflight (%s): FAILED — could not fingerprint the checkout before the ping.\n' "${MODEL:-<no model>}" >&2
 		exit 1
 	}
 	# Same untracked mode as `tree_fingerprint`: comparing a collapsed baseline against an expanded
@@ -78,8 +81,6 @@ CAPTURE_RC=0
 # model operand is not preflighted, and its failure shows as a tiny transcript, never a verdict.
 # A resolution failure IS a preflight failure, retained like the capture status so the fingerprint
 # comparison below still runs.
-# THE GATE'S MODEL, from the harness that runs the review — one literal, never a second copy here.
-MODEL="$(sed -nE 's/^DEFAULT_MODEL="([A-Za-z0-9][A-Za-z0-9._-]*)"$/\1/p' "${SCRIPT_DIR}/isolated-gemini-review.sh")"
 if [[ -n ${MODEL} ]]; then
 	(cd "${SCRATCH}" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 120 "${PING}" -- \
 		python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" \
@@ -87,7 +88,7 @@ if [[ -n ${MODEL} ]]; then
 		"Reply with exactly the single word: pong") ||
 		CAPTURE_RC=$?
 else
-	printf 'gemini preflight: could not read DEFAULT_MODEL from isolated-gemini-review.sh — the ping did not run\n' >&2
+	printf 'gemini preflight (<no model>): could not read DEFAULT_MODEL from isolated-gemini-review.sh — the ping did not run\n' >&2
 	CAPTURE_RC=1
 fi
 
@@ -95,12 +96,12 @@ fi
 # healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
 if [[ -n ${BEFORE} ]] || [[ -n ${REPO_ROOT:-} ]]; then
 	AFTER="$(tree_fingerprint "${REPO_ROOT:-.}")" || {
-		printf 'gemini preflight: FAILED — the gemini CLI left the checkout unreadable (its Git metadata is gone or\n' >&2
+		printf 'gemini preflight (%s): FAILED — the gemini CLI left the checkout unreadable (its Git metadata is gone or\n' "${MODEL:-<no model>}" >&2
 		printf 'corrupt). Do not run a review with this gemini CLI build.\n' >&2
 		exit 1
 	}
 	if [[ ${BEFORE} != "${AFTER}" ]]; then
-		printf 'gemini preflight: FAILED — the gemini CLI MUTATED the working tree during a ping:\n' >&2
+		printf 'gemini preflight (%s): FAILED — the gemini CLI MUTATED the working tree during a ping:\n' "${MODEL:-<no model>}" >&2
 		# Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or
 		# the whole diff) buries the one new line. A content-only edit to an already-dirty file shows no
 		# new status line, so say so rather than printing nothing.

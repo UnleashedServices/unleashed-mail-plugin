@@ -100,9 +100,15 @@ PROMPT_BODY = (
 
 
 def _option(argv: list[str], flag: str) -> str:
-    """The single value after `flag`; fails unless `flag` occurs exactly once."""
-    if argv.count(flag) != 1:
-        raise AssertionError(f"{flag} occurs {argv.count(flag)} times in {argv!r}")
+    """The single value after `flag`; fails unless `flag` occurs exactly once, in ANY form.
+
+    The CLI's parser also takes `--flag=value` and COMBINES repeated array options, so a second occurrence in the
+    equals form would add a value (codex, plan round 4: `--allowed-mcp-server-names=attacker` passed a count of
+    the bare token alone).
+    """
+    occurrences = [arg for arg in argv if arg == flag or arg.startswith(flag + "=")]
+    if occurrences != [flag]:
+        raise AssertionError(f"{flag} occurs as {occurrences!r} in {argv!r}")
     index = argv.index(flag)
     if index + 1 >= len(argv):
         raise AssertionError(f"{flag} has no value in {argv!r}")
@@ -556,6 +562,68 @@ class _ReviewRepo(_StubGemini):
         )
         return leaf
 
+    def snapshot(self) -> None:
+        subprocess.run(
+            [sys.executable, str(VERDICT), "snapshot", "--plan", self.plan_rel],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    def assert_missing_at_both_layers(self, transcript: Path) -> None:
+        self.assertEqual(
+            0, transcript.stat().st_size, "the refused run's transcript is not empty"
+        )
+        codex = self.tmp / "codex-transcript.txt"
+        codex.write_text("VERDICT: APPROVE\nfine.\n", encoding="utf-8")
+        specs = [
+            "--reviewer",
+            f"gemini=APPROVE:{transcript}",
+            "--reviewer",
+            f"codex=APPROVE:{codex}",
+        ]
+        persisted = subprocess.run(
+            [
+                "bash",
+                str(REVIEW / "persist-verdict.sh"),
+                "--plan",
+                self.plan_rel,
+                "--verdict",
+                "APPROVE",
+                *specs,
+            ],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
+        )
+        self.assertNotEqual(0, persisted.returncode)
+        self.assertIn("a missing transcript cannot produce approval", persisted.stderr)
+        written = subprocess.run(
+            [
+                sys.executable,
+                str(VERDICT),
+                "write",
+                "--plan",
+                self.plan_rel,
+                "--verdict",
+                "APPROVE",
+                *specs,
+            ],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
+        )
+        self.assertNotEqual(0, written.returncode)
+        self.assertIn("transcript is EMPTY and therefore MISSING", written.stderr)
+
     def run_isolated(self, leaf: Path):
         return subprocess.run(
             ["bash", str(ISOLATED), f"{leaf}.prompt", str(leaf), "60", self.plan_rel],
@@ -578,21 +646,64 @@ class G1IsolationCatchesAWriter(_ReviewRepo, unittest.TestCase):
         self.assertIn("TREE=clean", result.stdout)
         self.assertEqual(REVIEW_TEXT, transcript.read_text(encoding="utf-8"))
 
-    def test_a_write_inside_the_disposable_checkout_voids_the_round(self):
-        self.env["GEMINI_STUB_WRITE"] = (
-            "STUB_WROTE_HERE.txt"  # relative: the reviewer's cwd, the disposable tree
-        )
-        result, _ = self.capture()
+    def assert_void(self, write: str, reason: str) -> None:
+        """An APPROVING review whose round is void: exit 3, the leaf EMPTY and rejected downstream, the text kept."""
+        self.snapshot()
+        approving = "VERDICT: APPROVE\nlooks fine.\n"
+        self.env["GEMINI_STUB_RESPONSE"] = approving
+        self.env["GEMINI_STUB_WRITE"] = write
+        result, transcript = self.capture()
         self.assertEqual(3, result.returncode, result.stderr)
-        self.assertIn("left edits inside the disposable checkout", result.stderr)
+        self.assertIn(reason, result.stderr)
         self.assertNotIn("TREE=clean", result.stdout)
+        # The PROPERTY (codex, plan round 4, Q1): a void reaches persistence, not only the exit status.
+        self.assert_missing_at_both_layers(transcript)
+        self.assertEqual(
+            approving, Path(f"{transcript}.void").read_text(encoding="utf-8")
+        )
+
+    def test_a_write_inside_the_disposable_checkout_voids_the_round(self):
+        # Relative: the reviewer's cwd, the disposable tree.
+        self.assert_void(
+            "STUB_WROTE_HERE.txt", "left edits inside the disposable checkout"
+        )
 
     def test_a_write_into_the_live_checkout_voids_the_round(self):
-        self.env["GEMINI_STUB_WRITE"] = str(self.root / "SNEAKED_IN.txt")
-        result, _ = self.capture()
-        self.assertEqual(3, result.returncode, result.stderr)
-        self.assertIn("MUTATED the working tree", result.stderr)
-        self.assertIn("SNEAKED_IN.txt", result.stderr)
+        self.assert_void(str(self.root / "SNEAKED_IN.txt"), "MUTATED the working tree")
+
+    def test_a_rewritten_staged_plan_voids_the_round(self):
+        # The reviewer approves bytes the binding never attested to (codex's reproduction).
+        self.assert_void(
+            self.plan_rel, "the STAGED PLAN was modified during the review"
+        )
+
+
+class G3bTheHarnessReportsTheResponsesVerdict(_ReviewRepo, unittest.TestCase):
+    """G3b: the harness's summary line reports the RESPONSE's last anchored verdict, never a constant or stderr's."""
+
+    def test_each_verdict_is_reported_as_the_response_states_it(self):
+        for response, reported in (
+            (
+                "notes.\nVERDICT: APPROVE_WITH_NOTES\n",
+                "VERDICT=VERDICT: APPROVE_WITH_NOTES",
+            ),
+            ("VERDICT: REQUEST_CHANGES\nfix it.\n", "VERDICT=VERDICT: REQUEST_CHANGES"),
+            (
+                "a review that never states a verdict\n",
+                "VERDICT=<none — FAILED REVIEW>",
+            ),
+        ):
+            with self.subTest(reported=reported):
+                self.env["GEMINI_STUB_RESPONSE"] = response
+                result, _ = self.capture()
+                self.assertEqual(0, result.returncode, result.stderr)
+                summary = [
+                    line
+                    for line in result.stdout.splitlines()
+                    if line.startswith("EXIT=")
+                ]
+                self.assertEqual(1, len(summary), result.stdout)
+                self.assertTrue(summary[0].endswith(reported), summary[0])
 
 
 class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
@@ -714,6 +825,18 @@ class G6ModelIdIsOneToken(_ReviewRepo, unittest.TestCase):
             Path(f"{transcript}.model").read_text(encoding="utf-8"),
         )
 
+    def test_an_environment_model_wins_and_is_recorded(self):
+        self.env["MODEL"] = "gemini-3.2-pro-preview"
+        result, transcript = self.capture()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "gemini-3.2-pro-preview", _option(self.calls()[0]["argv"], "-m")
+        )
+        self.assertEqual(
+            "gemini-3.2-pro-preview\toverride\n",
+            Path(f"{transcript}.model").read_text(encoding="utf-8"),
+        )
+
     def test_the_sixth_operand_wins(self):
         result, transcript = self.capture("gemini-3.2-pro-preview")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -772,58 +895,6 @@ class G6ModelRecordIsExclusive(_ReviewRepo, unittest.TestCase):
 
 class G6RefusedReviewerStaysMissing(_ReviewRepo, unittest.TestCase):
     """G6 (from M9): a refused run leaves an EMPTY transcript, so neither layer can record it as an approval."""
-
-    def assert_missing_at_both_layers(self, transcript: Path) -> None:
-        self.assertEqual(
-            0, transcript.stat().st_size, "the refused run's transcript is not empty"
-        )
-        codex = self.tmp / "codex-transcript.txt"
-        codex.write_text("VERDICT: APPROVE\nfine.\n", encoding="utf-8")
-        specs = [
-            "--reviewer",
-            f"gemini=APPROVE:{transcript}",
-            "--reviewer",
-            f"codex=APPROVE:{codex}",
-        ]
-        persisted = subprocess.run(
-            [
-                "bash",
-                str(REVIEW / "persist-verdict.sh"),
-                "--plan",
-                self.plan_rel,
-                "--verdict",
-                "APPROVE",
-                *specs,
-            ],
-            cwd=self.root,
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=False,
-            input="",
-        )
-        self.assertNotEqual(0, persisted.returncode)
-        self.assertIn("a missing transcript cannot produce approval", persisted.stderr)
-        written = subprocess.run(
-            [
-                sys.executable,
-                str(VERDICT),
-                "write",
-                "--plan",
-                self.plan_rel,
-                "--verdict",
-                "APPROVE",
-                *specs,
-            ],
-            cwd=self.root,
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=False,
-            input="",
-        )
-        self.assertNotEqual(0, written.returncode)
-        self.assertIn("transcript is EMPTY and therefore MISSING", written.stderr)
 
     def setUp(self) -> None:
         super().setUp()
@@ -1012,6 +1083,38 @@ class G5Preflight(_StubGemini, unittest.TestCase):
         self.assertIn(f"gemini preflight ({DEFAULT_MODEL})", result.stderr)
         self.assertIn("no adapter refusal was recorded", result.stderr)
 
+    def test_a_missing_cli_names_the_model(self):
+        tools = self.tmp / "no-gemini"
+        tools.mkdir()
+        for name in ("python3", "git"):
+            found = shutil.which(name, path=os.environ["PATH"])
+            if found is None:
+                self.fail(f"{name} is not on the suite's PATH")
+            (tools / name).symlink_to(found)
+        self.env["PATH"] = f"{tools}{os.pathsep}/usr/bin{os.pathsep}/bin"
+        self.assertIsNone(
+            shutil.which("gemini", path=self.env["PATH"]),
+            "a gemini is still on the PATH",
+        )
+        result = self.run_preflight()
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn(
+            f"gemini preflight ({DEFAULT_MODEL}): the gemini CLI is not on PATH",
+            result.stderr,
+        )
+
+    def test_a_checkout_left_unreadable_names_the_model(self):
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        self.env["GEMINI_STUB_WRITE"] = str(
+            self.root / ".git" / "HEAD"
+        )  # garbage HEAD: git cannot read the repo
+        result = self.run_preflight()
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn(
+            f"gemini preflight ({DEFAULT_MODEL}): FAILED — the gemini CLI left the checkout unreadable",
+            result.stderr,
+        )
+
     def test_the_ping_runs_on_the_gates_model_with_the_policy(self):
         self.env["GEMINI_STUB_RESPONSE"] = "pong"
         result = self.run_preflight()
@@ -1048,7 +1151,10 @@ class G5Preflight(_StubGemini, unittest.TestCase):
         self.env["GEMINI_STUB_WRITE"] = str(self.root / "SNEAKED_IN.txt")
         result = self.run_preflight()
         self.assertNotEqual(0, result.returncode, result.stdout)
-        self.assertIn("MUTATED", result.stderr)
+        self.assertIn(
+            f"gemini preflight ({DEFAULT_MODEL}): FAILED — the gemini CLI MUTATED",
+            result.stderr,
+        )
         self.assertIn("COREDEV-2607", result.stderr)
         reported = [
             line for line in result.stderr.splitlines() if line.startswith("??")
