@@ -1,10 +1,12 @@
 # COREDEV-2887 — The plan gate's Gemini arm moves from `agy` (Flash) to the `gemini` CLI (3.1 Pro Preview)
 
-**Status:** Planning, revision 5. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
+**Status:** Planning, revision 6. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
 the prototype `REQUEST_CHANGES` (Q1: 2 claimed, both disproven; Q2: 1). Round 2: codex `REQUEST_CHANGES` (Q1: 1, Q2: 5);
 gemini `REQUEST_CHANGES` (Q1: 1 claimed, disproven by a discriminating live probe; Q2: 1, the same as codex's fourth).
 Round 3: codex `REQUEST_CHANGES` (Q1: 3, Q2: 4); gemini `APPROVE_WITH_NOTES` (Q1: 0; Q2: 1, declined).
 Round 4: codex `REQUEST_CHANGES` (Q1: 1, Q2: 3); gemini `APPROVE` (Q1: 0, Q2: 0).
+Round 5: codex `REQUEST_CHANGES` (Q1: 3, Q2: 1); gemini `REQUEST_CHANGES` (Q1: 1, Q2: 0). Every Q1 was in revision 5's
+void machinery, which revision 6 REMOVES; the inherited property it chased moves, for all three arms, to COREDEV-2888.
 **Ticket:** COREDEV-2887 (Epic COREDEV-2485).
 **Branch / worktree:** `feat/COREDEV-2887-gemini-cli-arm`, `.claude/worktrees/2887-gemini-cli`, cut from `origin/alpha` at
 `5c04728`.
@@ -110,9 +112,9 @@ full gate, and open a PR into `alpha`.
   1. **(Q1) A VOIDED round left an approval-eligible transcript.** The capture writes the reviewer's text into the leaf
      before the post-run checks, and a void only exits 3; `persist-verdict.sh` and `review-verdict.py write` never see
      the exit status. Codex's reproduction: rewrite the staged plan, emit `VERDICT: APPROVE`, and the production writer
-     accepts the leaf. Inherited from the `agy` harness, and present in the codex and kimi harnesses too. **Fix
-     (§2.1):** every void after the capture empties the leaf through `void-transcript.py`, keeping the text in
-     `<leaf>.void`. The other two harnesses are COREDEV-2888 (§6). **Cell:** G1.
+     accepts the leaf. Inherited from the `agy` harness, and present in the codex and kimi harnesses too. Revision 5
+     emptied the leaf on every void (`void-transcript.py`); **round 5 showed that revocation is the wrong shape, and
+     revision 6 removed it** (see round 5). The property now belongs to COREDEV-2888, for all three arms (§6).
   2. **(Q2) G4a's "exactly one" allowlist value did not see the `--flag=value` form,** which the CLI's parser accepts
      and combines. **Fix:** every occurrence of every asserted option is counted, in both forms. **Cell:** G4a, with an
      injected `--allowed-mcp-server-names=attacker` as its mutant.
@@ -122,6 +124,25 @@ full gate, and open a PR into `alpha`.
      lines did not. **Fix (§2.4):** the model is read first and every failure line names it. **Cell:** G5.
 - **Round 4, gemini (`gemini-3.1-pro-preview`, through the prototype): `APPROVE`, Q1: 0, Q2: 0.** Clean round. It did not
   find codex's Q1. A comparison run of `gemini-3.8-flash` on the same bytes is recorded in §6.
+- **Round 5 (revision 5), codex `REQUEST_CHANGES`, Q1: 3, Q2: 1; gemini (`gemini-3.1-pro-preview`) `REQUEST_CHANGES`,
+  Q1: 1, Q2: 0.** All four Q1s are in revision 5's void machinery:
+  1. **(codex Q1)** `void_round` loaded `void-transcript.py` from the live checkout AFTER the review, so a reviewer
+     that wrote there could replace it with a no-op.
+  2. **(codex Q1)** A truncation that failed only warned; persistence never reads the harness's status.
+  3. **(codex Q1)** The failure path's `O_TRUNC` open could empty a hard link substituted at the leaf.
+  4. **(gemini Q1)** A lingering reviewer process could `chmod 400` the leaf after the capture, so the truncation's
+     write-open failed and the approval survived. (A symlinked leaf, its other variant, was already refused by
+     `review-verdict.py`'s per-run check.)
+
+  **Disposition: the machinery is REMOVED, not hardened again.** Each hardening of a revoke-after-capture design opened
+  a new surface; the author's own draft of a fifth version (lstat, `fchmod`, unlink fallback) would still have kept
+  findings 1 and 2. The gap it chased is INHERITED and identical in all three harnesses, and its structural fix is
+  positive evidence, not revocation: persistence accepts an approval only with a clean-round receipt the harness
+  writes after every post-run check passes. That changes shared persistence code for every arm, so it is COREDEV-2888
+  (High), with its own plan and gate. This arm's void behaviour returns to exactly the inherited `exit 3` (§0.3). The
+  adapter's EMPTY transcript on a refused run (round 3) is a different property, new to this arm, and stays.
+  5. **(codex Q2, adopted)** G4a's "exactly once" did not cover `--skip-trust=false` or `--diagnostics=…`. **Fix:**
+     boolean options are counted in both forms, and `--diagnostics` is refused in both forms, each with a mutant.
 - **Comparison replay of round 3, `gemini-3.8-flash` (the same bytes, digest `da901792`, the same harness and prompt):
   `APPROVE_WITH_NOTES`, Q1: 0, Q2: 3.** All three were verified against the files and adopted in revision 5; none had
   been raised by either arm.
@@ -150,7 +171,14 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
    other model answered (fallback or routing).
 2. The reviewer cannot change the tree under review. As today, that is guaranteed by isolation (a disposable private
    checkout plus before-and-after fingerprints, exit 3 on any change), with the CLI's own read-only mode and a deny
-   policy as additional layers. A VOIDED round leaves nothing approval-eligible: its transcript is emptied.
+   policy as additional layers.
+
+   **What isolation defends against.** A reviewer that WRITES (agent-mode implementing, COREDEV-2607) or otherwise
+   misbehaves is detected, and its round voids with exit 3. The deny policy and the CLI's workspace boundary keep it
+   from obtaining a shell or a write tool at all. A deliberately MALICIOUS same-account process that targets the
+   harness, its helpers, the transcript store or the persistence code is NOT in scope: it could forge any artifact
+   directly. A void's transcript is still on disk after exit 3, as with every arm today; making persistence REQUIRE
+   proof of a clean round is COREDEV-2888.
 3. Everything downstream of the transcript is unchanged: the arm name `gemini`, allocation, prompt and plan binding,
    anchored `VERDICT:` extraction, `review-verdict.py`, `persist-verdict.sh` and synthesis.
 4. A retired or unreachable model fails the preflight and the round CLOSED, with a message naming the model.
@@ -234,7 +262,7 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
 **The isolation harness is unchanged. Only the command inside it changes, and two layers are added.**
 
 1. **`scripts/review/isolated-gemini-review.sh`**, derived from `isolated-agy-review.sh` with the same staging, the same
-   fingerprints, the same exit-3 rules and the same anchored verdict. It differs in eight places:
+   fingerprints, the same exit-3 rules and the same anchored verdict. It differs in seven places:
    - **Model:** the default is the literal `gemini-3.1-pro-preview`, with no resolver, because the `gemini` CLI has no
      model-listing command. An explicit `MODEL` (the capture wrapper's sixth operand) still wins, with the same
      one-token check.
@@ -253,12 +281,6 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
    - **A refused run is explained outside the PTY:** on a non-zero adapter exit, the harness prints the adapter's
      `GEMINI ARM FAILED` line from `<leaf>.diag` on its own stderr, with the model, or says that none was recorded
      (a timeout or kill).
-   - **A void empties the transcript:** every exit-3 path after the capture runs `void_round`, which calls
-     `scripts/review/void-transcript.py <leaf>`: it copies the leaf to `<leaf>.void` (best-effort, O_EXCL|O_NOFOLLOW),
-     then truncates the leaf to empty (mandatory; opened without O_CREAT, so the reservation is neither recreated nor
-     replaced, and O_NOFOLLOW). An empty leaf is MISSING at both persistence layers. If the truncation fails, the
-     harness says loudly that the leaf must not be persisted. A failed run (non-zero status) that left text anyway, such
-     as a capture killed mid-write, is invalidated the same way and keeps its status.
 2. **`scripts/review/gemini-review-run.py`, the adapter and the reviewer command.**
    - It runs `gemini --skip-trust -m MODEL --approval-mode plan --policy <shipped policy> --allowed-mcp-server-names
      unleashed-mail-no-mcp-<32 random hex> -o json -p "Read and follow <prompt>"`, with
@@ -308,11 +330,10 @@ re-pointed at the new harness, not deleted.
 
 ## 3. Changes
 
-1. New: `scripts/review/isolated-gemini-review.sh`, `gemini-review-run.py`, `gemini-review-policy.toml`,
-   `void-transcript.py` and `preflight-gemini.sh`. Both Python scripts are added to BOTH `py_compile` invocations in
-   `plugin-ci.yml`, one of which runs Python 3.9 (`test_doc_gates` requires every shipped script in both); the prototype
-   compiles both under 3.9.6 and runs the adapter's environment walk there. The callers-scan exemptions are
-   regenerated last.
+1. New: `scripts/review/isolated-gemini-review.sh`, `gemini-review-run.py`, `gemini-review-policy.toml` and
+   `preflight-gemini.sh`. `gemini-review-run.py` is added to BOTH `py_compile` invocations in `plugin-ci.yml`, one of
+   which runs Python 3.9 (`test_doc_gates` requires every shipped script in both); the prototype compiles it under
+   3.9.6 and runs its environment walk there. The callers-scan exemptions are regenerated last.
 2. `scripts/review/capture-gemini-review.sh`: `exec` the new harness, and update the comments describing the model and
    timeout. The comments the new scripts inherited from the `agy` versions are rewritten so that none names a removed
    file; the history they record (why each check exists) stays.
@@ -362,12 +383,12 @@ re-pointed at the new harness, not deleted.
 
 **Stub-driven (deterministic, in the suite).** A stub `gemini` on `PATH` prints `VERDICT: APPROVE` on its STDERR in every
 case.
-- **G1, isolation still catches a writer, and the void reaches persistence.** Each case's response is APPROVING. The
-  stub writes into its working directory (the disposable tree); into the live checkout by absolute path; and over the
-  staged plan. The harness must exit 3 with "left edits inside the disposable checkout", "MUTATED the working tree" and
-  "the STAGED PLAN was modified" respectively, the leaf must be EMPTY and rejected by both `persist-verdict.sh` and
-  `review-verdict.py write`, and `<leaf>.void` must hold the approving text. A clean stub is the positive control.
-  Mutants: delete either post-run comparison; skip the truncation; a `void_round` that does not invalidate. Each reds.
+- **G1, isolation still catches a writer.** Each case's response is APPROVING. The stub writes into its working
+  directory (the disposable tree); into the live checkout by absolute path; and over the staged plan. The harness must
+  exit 3 with "left edits inside the disposable checkout", "MUTATED the working tree" and "the STAGED PLAN was
+  modified" respectively, and must not report `TREE=clean`. A clean stub is the positive control. Mutants: delete
+  either post-run comparison, or the staged-plan check; its case reds. (That the void's transcript stays on disk is the
+  inherited gap COREDEV-2888 closes for every arm, §0.2.)
 - **G2, nothing unvalidated reaches the transcript.** Each case is captured as the harness captures it, through
   `pty-capture.py`, so stdout and stderr are combined. Every case's response is APPROVING. The leaf must contain NO
   anchored `VERDICT:` and be EMPTY, the adapter must exit 4, and the diagnostics file must name the requested model:
@@ -396,10 +417,11 @@ case.
   `.gemini/settings.json`. Assert `--policy <the shipped toml>`, `--approval-mode plan`, `--skip-trust`, `-o json`,
   `-m <model>`, and `--allowed-mcp-server-names` followed by exactly one value matching
   `unleashed-mail-no-mcp-[0-9a-f]{32}`; that two runs use two different values; that `GEMINI_CLI_TRUST_WORKSPACE` is
-  `true`; and that `modelRouting` is false. Each asserted option must occur exactly once counting BOTH forms,
-  `--flag value` and `--flag=value`, because the CLI's parser accepts and combines both. Mutants: drop each, fix the
-  sentinel, or inject a second `--allowed-mcp-server-names=attacker`; G4a reds naming it.
-  (`--diagnostics` is the adapter's own option and never reaches the CLI.)
+  `true`; and that `modelRouting` is false. Each asserted option, the boolean `--skip-trust` included, must occur
+  exactly once counting BOTH forms, `--flag value` and `--flag=value`, because the CLI's parser accepts and combines
+  both. `--diagnostics` is the adapter's own option and must reach the CLI in NEITHER form. Mutants: drop each; fix the
+  sentinel; inject a second `--allowed-mcp-server-names=attacker`; append `--skip-trust=false`; forward
+  `--diagnostics=<path>`. G4a reds naming each.
 - **G4b, the diagnostics file.** Observed by its effect: after a harness round, the stub's stderr is in `<leaf>.diag`
   and not in the leaf, which shows the harness passed exactly that path. A pre-existing `<leaf>.diag` (a file, a symlink
   to a writable file, a dangling symlink) refuses the harness round before launch, naming it: the stub records no
@@ -470,7 +492,7 @@ case.
    evidence, not as a gate pass, until the plan is synthesized.
 3. Implement the rest of §3, then run G1–G7 with every mutant §4 names, as an executed table in which each mutant
    must go red and each anchor must match exactly once, so that a no-op mutation cannot pass as a kill. Then run the
-   full local gate and `codex review --base origin/alpha`. (On revision 5's prototype: 24 mutants, all red, over a
+   full local gate and `codex review --base origin/alpha`. (On revision 6's prototype: 25 mutants, all red, over a
    39-test suite.)
 4. Open a PR into `alpha`, trigger the bot reviews, and triage them. **Merge needs the maintainer's word.**
 5. After merge, run one real gate round with the shipped skill (any open plan) as the end-to-end check.
@@ -482,10 +504,14 @@ case.
   reviewed change. There is no listing command to resolve from automatically.
 - **Quota.** 3.1 Pro has lower quotas than Flash. A quota failure is a failed round (adapter or CLI non-zero), never an
   approval. If quota limits gate cadence, that is a follow-up.
-- **The Kimi stand-in and the Codex arm** are untouched. Their harnesses share round 4's Q1 (a void leaves an
-  approval-eligible transcript), inherited like this arm's. It is COREDEV-2888 (High): the same `void-transcript.py`
-  and `void_round` change, with the same cells. It is kept out of this urgent PR because the plan does not change those
-  arms.
+- **The Kimi stand-in and the Codex arm** are untouched.
+- **A VOID's transcript stays on disk after exit 3, in every arm, as today** (round 4's Q1, inherited). Persistence
+  refuses only an empty or absent transcript, so an operator or synthesis that ignores a void could still record its
+  approval. Revoking the transcript after the fact was tried in revision 5 and abandoned (round 5). COREDEV-2888 (High)
+  fixes it for all three arms with positive evidence: each harness writes a `<leaf>.clean` receipt (the certified
+  transcript's digest) only after every post-run check passes, and `review-verdict.py write` requires a matching
+  receipt for any approving reviewer. Until then, a void is enforced by the harness's exit 3 and by synthesis, which
+  treats a failed round as MISSING.
 - **A reviewed repository that commits a `.gemini` or `.env` entry** cannot be reviewed by this arm: the harness
   refuses right after creating the checkout. Committed settings (MCP servers, tools, approval) or a committed `.env` (endpoint,
   credentials, flags) would otherwise configure the reviewer. Neither this repository nor UnleashedMail commits either
@@ -499,15 +525,18 @@ case.
   the environment every live run so far was measured in. Any OTHER environment file the loader would reach refuses the
   run, including an ignored one, such as the main plugin checkout's, if `TMPDIR` or a test's working directory sits
   beneath it.
-- **The default model, 3.1 Pro Preview or 3.8 Flash, is the maintainer's decision; this plan ships 3.1 Pro.** Two
+- **The default model, 3.1 Pro Preview or 3.8 Flash, is the maintainer's decision; this plan ships 3.1 Pro.** Three
   comparison runs of `gemini-3.8-flash` (the CLI runs Gemini 3 models at `ThinkingLevel.HIGH`, the tier `agy` called
   `-high`), each on byte-identical plans through the same harness and prompt as the 3.1 Pro round:
   - round 3 (digest `da901792`): 3.1 Pro `APPROVE_WITH_NOTES`, with one Q2 that was wrong; 3.8 `APPROVE_WITH_NOTES`, with
     three Q2s, all real, which neither arm had raised;
-  - round 4 (digest `5a3accee`): both `APPROVE`, Q1 0 and Q2 0, 3.8 with about four times the cited detail.
+  - round 4 (digest `5a3accee`): both `APPROVE`, Q1 0 and Q2 0, 3.8 with about four times the cited detail;
+  - round 5 (digest `df84bffe`): 3.1 Pro `REQUEST_CHANGES` with one real Q1 (the `chmod` defeat of revision 5's void
+    truncation); 3.8 `APPROVE`, Q1 0 and Q2 0, missing all four real Q1s on those bytes.
 
-  Neither model found any of the four real Q1s codex raised in those rounds, and in four rounds of this plan 3.1 Pro
-  found none of codex's seven. Two samples on one plan are suggestive, not conclusive. Switching is a one-line change
-  of `DEFAULT_MODEL` (the preflight reads it); the sixth operand keeps either model available for a single round. 3.1
-  Pro is a preview, and it returned capacity errors on 2026-10-14 (F10).
+  The evidence is MIXED. On the blocking class that matters most to a gate, only 3.1 Pro has scored (one real Q1 in
+  round 5, out of the eight codex and it raised across these three rounds); 3.8 was broader on secondary findings
+  (round 3). Three samples on one plan are suggestive, not conclusive, so the default stays 3.1 Pro. Switching is a
+  one-line change of `DEFAULT_MODEL` (the preflight reads it); the sixth operand keeps either model available for a
+  single round. 3.1 Pro is a preview, and it returned capacity errors on 2026-10-14 (F10).
 - **`README` history** that names `agy` or 3.1 Pro on `agy` describes past releases and stays.

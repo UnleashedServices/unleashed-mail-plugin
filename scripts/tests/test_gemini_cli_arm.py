@@ -115,6 +115,20 @@ def _option(argv: list[str], flag: str) -> str:
     return argv[index + 1]
 
 
+def _flag(argv: list[str], flag: str) -> None:
+    """Fail unless the boolean `flag` occurs exactly once, bare: `--flag=false` would also reach the CLI's parser."""
+    occurrences = [arg for arg in argv if arg == flag or arg.startswith(flag + "=")]
+    if occurrences != [flag]:
+        raise AssertionError(f"{flag} occurs as {occurrences!r} in {argv!r}")
+
+
+def _absent(argv: list[str], flag: str) -> None:
+    """Fail if `flag` reaches the argv in EITHER form."""
+    occurrences = [arg for arg in argv if arg == flag or arg.startswith(flag + "=")]
+    if occurrences:
+        raise AssertionError(f"{flag} reached the CLI as {occurrences!r}")
+
+
 class _StubGemini:
     """A temporary directory with the recording `gemini` stub first on PATH."""
 
@@ -647,20 +661,17 @@ class G1IsolationCatchesAWriter(_ReviewRepo, unittest.TestCase):
         self.assertEqual(REVIEW_TEXT, transcript.read_text(encoding="utf-8"))
 
     def assert_void(self, write: str, reason: str) -> None:
-        """An APPROVING review whose round is void: exit 3, the leaf EMPTY and rejected downstream, the text kept."""
-        self.snapshot()
-        approving = "VERDICT: APPROVE\nlooks fine.\n"
-        self.env["GEMINI_STUB_RESPONSE"] = approving
+        """An APPROVING review whose round is void: exit 3, for the stated reason, and never `TREE=clean`.
+
+        The void's transcript stays on disk, as in every arm today; persistence requiring proof of a clean round is
+        COREDEV-2888 (plan §6).
+        """
+        self.env["GEMINI_STUB_RESPONSE"] = "VERDICT: APPROVE\nlooks fine.\n"
         self.env["GEMINI_STUB_WRITE"] = write
-        result, transcript = self.capture()
+        result, _ = self.capture()
         self.assertEqual(3, result.returncode, result.stderr)
         self.assertIn(reason, result.stderr)
         self.assertNotIn("TREE=clean", result.stdout)
-        # The PROPERTY (codex, plan round 4, Q1): a void reaches persistence, not only the exit status.
-        self.assert_missing_at_both_layers(transcript)
-        self.assertEqual(
-            approving, Path(f"{transcript}.void").read_text(encoding="utf-8")
-        )
 
     def test_a_write_inside_the_disposable_checkout_voids_the_round(self):
         # Relative: the reviewer's cwd, the disposable tree.
@@ -715,7 +726,7 @@ class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
         calls = self.calls()
         self.assertEqual(1, len(calls), calls)
         argv = calls[0]["argv"]
-        self.assertIn("--skip-trust", argv)
+        _flag(argv, "--skip-trust")
         self.assertEqual(DEFAULT_MODEL, _option(argv, "-m"))
         self.assertEqual("plan", _option(argv, "--approval-mode"))
         self.assertEqual(
@@ -723,9 +734,7 @@ class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
         )
         self.assertEqual("json", _option(argv, "-o"))
         self.assertRegex(_option(argv, "--allowed-mcp-server-names"), NO_MCP)
-        self.assertNotIn(
-            "--diagnostics", argv, "the adapter's own option reached the CLI"
-        )
+        _absent(argv, "--diagnostics")  # the adapter's own option
         self.assertEqual("true", calls[0]["trust"])
         self.assertEqual(
             {"general": {"plan": {"modelRouting": False}}},
