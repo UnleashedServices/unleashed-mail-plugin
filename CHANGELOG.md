@@ -30,6 +30,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `skills/codex-review/SKILL.md`: the full-diff example's `--base main` is now the PR's own base
     branch: the version branch for an app feature, `alpha` for a plugin feature, `main` only for a
     promotion. A hotfix merges to both, as two PRs, and each is reviewed against its own base.
+  - `agents/ci-engineer.md` "Main CI Workflow" template: its `push`/`pull_request` filters were
+    `[main]` only, so a workflow built from it ran no checks on the feature PRs that target the
+    version branch. Both now also match `[0-9]+.[0-9]+.0000`.
 
 ## [2.8.34] — 2026-10-12
 
