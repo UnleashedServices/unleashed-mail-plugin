@@ -83,7 +83,8 @@ MODEL="$(sed -nE 's/^DEFAULT_MODEL="([A-Za-z0-9][A-Za-z0-9._-]*)"$/\1/p' "${SCRI
 if [[ -n ${MODEL} ]]; then
 	(cd "${SCRATCH}" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 120 "${PING}" -- \
 		python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" \
-		--policy "${SCRIPT_DIR}/gemini-review-policy.toml" -- "Reply with exactly the single word: pong") ||
+		--policy "${SCRIPT_DIR}/gemini-review-policy.toml" --diagnostics "${SCRATCH}/gemini.diag" -- \
+		"Reply with exactly the single word: pong") ||
 		CAPTURE_RC=$?
 else
 	printf 'gemini preflight: could not read DEFAULT_MODEL from isolated-gemini-review.sh — the ping did not run\n' >&2
@@ -106,7 +107,7 @@ if [[ -n ${BEFORE} ]] || [[ -n ${REPO_ROOT:-} ]]; then
 		# Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or
 		# the whole diff) buries the one new line. A content-only edit to an already-dirty file shows no
 		# new status line, so say so rather than printing nothing.
-		tree_fingerprint_report "${REPO_ROOT:-.}" "${BEFORE_STATUS}"
+		tree_fingerprint_report "${REPO_ROOT:-.}" "${BEFORE_STATUS}" "${BEFORE%%$'\n'*}"
 		printf 'This is the COREDEV-2607 failure mode. Do not run a review with this gemini CLI build.\n' >&2
 		exit 1
 	fi
@@ -118,7 +119,10 @@ if [[ ${CAPTURE_RC} -ne 0 ]]; then
 	exit 1
 fi
 
-if grep -qi pong "${PING}"; then
+# THE WHOLE ANSWER, not a substring (codex, plan round 1, Q2): `grep -qi pong` passed `not pong` and
+# `pong unavailable`. The answer must be `pong`, case-insensitive, optionally ending in one `.` or `!`, with
+# surrounding whitespace ignored. The adapter has already asserted the model and refused a JSON error.
+if python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"(?i)pong[.!]?", open(sys.argv[1], errors="replace").read().strip()) else 1)' "${PING}"; then
 	printf 'gemini preflight: healthy\n'
 	exit 0
 fi

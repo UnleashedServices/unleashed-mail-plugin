@@ -364,9 +364,13 @@ fi
 # behind, and `scripts/__pycache__/` is exactly where it would hide.
 # THE REVIEWER IS THE ADAPTER, not the CLI directly: it asserts the answering model and writes only the
 # response text, which is the transcript (gemini-review-run.py). The policy is read from THIS checkout's
-# scripts, never from the disposable tree the reviewer can see.
+# scripts, never from the disposable tree the reviewer can see. The CLI's stderr goes to `${OUT}.diag` and
+# NEVER to the transcript: pty-capture records stdout and stderr together, so stderr text could otherwise
+# supply an anchored `VERDICT:` (codex, plan round 1). `.diag` is created exclusively by the adapter, so a
+# pre-existing entry there refuses the round rather than being written through.
 (cd "${TREE}" && export PYTHONDONTWRITEBYTECODE=1 && python3 "${PLUGIN_WRITER}" --timeout "${TIMEOUT}" --allocated "${OUT}" -- \
-	python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" --policy "${SCRIPT_DIR}/gemini-review-policy.toml" -- \
+	python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" --policy "${SCRIPT_DIR}/gemini-review-policy.toml" \
+	--diagnostics "${OUT}.diag" -- \
 	"Read and follow ${TREE}/${PROMPT_REL}") >/dev/null
 RC=$?
 

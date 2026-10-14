@@ -1,12 +1,42 @@
 # COREDEV-2887 — The plan gate's Gemini arm moves from `agy` (Flash) to the `gemini` CLI (3.1 Pro Preview)
 
-**Status:** Planning, revision 1. Urgent (High).
+**Status:** Planning, revision 2. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
+the prototype `REQUEST_CHANGES` (Q1: 2 claimed, both disproven; Q2: 1).
 **Ticket:** COREDEV-2887 (Epic COREDEV-2485).
 **Branch / worktree:** `feat/COREDEV-2887-gemini-cli-arm`, `.claude/worktrees/2887-gemini-cli`, cut from `origin/alpha` at
 `5c04728`.
 **Process (maintainer):** Codex reviews this plan through the existing arm. The new Gemini arm reviews it through a
 PROTOTYPE of the harness this plan specifies, because the `agy` arm it replaces is down. Then implement, test, run the
 full gate, and open a PR into `alpha`.
+
+## Review log
+
+- **Round 1 (revision 1), codex `REQUEST_CHANGES`, Q1: 2, Q2: 4.** All six were real, reproduced in memory by codex,
+  and fixed in revision 2 and its prototype.
+  1. **(Q1) CLI stderr could forge a verdict.** `pty-capture.py` records stdout AND stderr; the adapter forwarded the
+     CLI's stderr, so stderr text could put an anchored `VERDICT: APPROVE` in the transcript even when the adapter then
+     refused the run. The noise lines that reached round 1's real transcript were a symptom. **Fix (§2.2):** the CLI's
+     stderr goes only to a `--diagnostics` sidecar, and the adapter's own failure lines are single-line fixed text.
+  2. **(Q1) A JSON-reported error could approve.** gemini 0.64.0 can return normally with response text, stats AND an
+     `error` (`INVALID_STREAM`; upstream `nonInteractiveCli.ts:565-582`). **Fix:** any non-empty `error` refuses the run
+     before a byte of the response is printed.
+  3. **(Q2) Deleting `test_agy_model_resolution.py` and `test_preflight_agy_isolation.py` would drop shared coverage.**
+     **Fix (§3.3):** the shared cases are ported first; only resolver- and `agy`-CLI-specific cases retire.
+  4. **(Q2) L1 could pass vacuously.** **Fix (§4 L1):** an effective unsafe positive control, every deny rule in BOTH plan
+     and YOLO modes, schema-exclusion accepted as evidence, and a run that never reached the model is VOID.
+  5. **(Q2) G3's "exact response bytes" was false.** **Fix:** the normalization is stated (§2.2) and tested.
+  6. **(Q2) The preflight's `grep -qi pong` passed `not pong`.** **Fix (§2.4):** a whole-answer match.
+- **Round 1, gemini (`gemini-3.1-pro-preview`, through the prototype): `REQUEST_CHANGES`, Q1: 2, Q2: 1.** This round was
+  also L2: exit 0, `TREE=clean`, `.model` = `gemini-3.1-pro-preview`, and a parsed verdict.
+  1. **(Q1, declined) "An absolute snapshot path voids every round."** Disproven by the round itself, which completed
+     with `TREE=clean` through that path. `stage-prompt.py` drops empty path components, so an absolute `--rel` is
+     staged as a nested path inside the disposable tree, and the basis check and the reviewer's path resolve to the
+     same file. The path is also unchanged from the `agy` harness.
+  2. **(Q1, declined) "UnleashedMail commits a `.gemini` directory, so every app round fails."** False: neither the
+     app's `1.02.0000` nor its `main`, nor this repo, contains `.gemini`. Refusing a committed `.gemini` is deliberate,
+     since a reviewed repo's settings must not configure its reviewer. It is now a stated boundary (§6).
+  3. **(Q2, adopted)** The preflight now passes the pre-run HEAD to `tree_fingerprint_report`. The argument is
+     optional, so the earlier call was valid, but the report can now name a moved HEAD.
 
 ## 0. The defect, and what "fixed" means
 
@@ -65,6 +95,15 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
   TREE/PROMPT"` inside the disposable checkout. Binding, staging, fingerprints, basis checks and verdict extraction
   surround it and are reviewer-agnostic. `capture-gemini-review.sh` already allocates under the literal arm name
   `gemini`.
+- **F9. A JSON-reported error can accompany response text** (codex, upstream `nonInteractiveCli.ts:565-582`): gemini
+  0.64.0 may exit normally with `response`, `stats` and an `error` such as `INVALID_STREAM`.
+- **F10. The preview model has capacity failures.** On 2026-10-14, after about a dozen pings and tests plus one full
+  review, requests failed with `429 "No capacity available for model gemini-3.1-pro-preview on the server"`
+  (`TerminalQuotaError`), with the CLI exiting 173. This is server capacity, not the operator's quota.
+- **F11. YOLO really does write without the policy (observed).** In a scratch directory, with `--approval-mode yolo` and
+  no policy, the model created `pwned.txt` and ran `touch shell.txt` before the F10 capacity error ended the run.
+  **YOLO WITH the policy is not yet observed.** Two attempts were VOID: one passed `--policy <path>` as a single zsh
+  word, and the CLI rejected it as "Unknown arguments"; the other hit F10. Neither counts. L1 (§4) is still owed.
 
 ## 2. Design
 
@@ -85,18 +124,24 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
 2. **`scripts/review/gemini-review-run.py`, the adapter and the reviewer command.**
    - It runs `gemini --skip-trust -m MODEL --approval-mode plan --policy <shipped policy> -o json -p "Read and follow
      <prompt>"`.
-   - It parses the JSON. Unless `stats.models` names exactly `{MODEL}`, it prints `GEMINI ARM FAILED — answered by
-     <models>, not <MODEL>` and exits 4.
-   - Otherwise it prints `response` verbatim to stdout, which is the transcript, and exits with the CLI's status.
-   - Malformed or missing JSON exits 4 with a reason, never a traceback.
-   - The transcript therefore stays the reviewer's text, so the anchored `^VERDICT:` extraction works unchanged.
+   - **The CLI's stderr never reaches the transcript.** It is written only to `--diagnostics` (the harness passes
+     `<transcript>.diag`; it is created O_EXCL|O_NOFOLLOW, so a pre-existing entry refuses the round). This is because
+     `pty-capture.py` records stdout and stderr together.
+   - **A JSON `error` refuses the run** (F9), before any response text is printed.
+   - **Unless `stats.models` names exactly `{MODEL}`**, it refuses the run with exit 4.
+   - **Every refusal is ONE line of fixed text**, `GEMINI ARM FAILED — <reason>`. Its only embedded values are
+     `repr()`-escaped, so no `^VERDICT:` line can come from it.
+   - **Otherwise it prints `response`** and exits 0. Malformed or missing JSON exits 4 with a reason, never a traceback.
+   - **Normalization, stated:** the transcript is `response` with a trailing newline ensured. `pty-capture.py` then
+     strips ANSI escape sequences and turns CRLF into LF. Nothing else changes.
 3. **`scripts/review/gemini-review-policy.toml`, the deny policy.** Priority-999 `deny` rules, for all modes, on
    `exit_plan_mode`, `write_file`, `replace` and `run_shell_command`. Each carries a `denyMessage` explaining that this
    is a read-only review. This closes F4's YOLO path at the policy layer. Isolation still guarantees the outcome if the
    policy ever fails to load or match.
 4. **`scripts/review/preflight-gemini.sh`**, replacing `preflight-agy.sh` in the skill. It pings through the same
    adapter, so the model assertion applies, from a scratch directory with the same before-and-after checkout
-   fingerprint. It is healthy only on rc 0, `pong` (case-insensitive) and the asserted model.
+   fingerprint. It is healthy only on rc 0, the asserted model, and a WHOLE answer matching `(?i)pong[.!]?` after
+   trimming, so `not pong` and `pong unavailable` are unavailable. A detected mutation reports the pre-run HEAD.
 5. **`scripts/review/capture-gemini-review.sh`** `exec`s `isolated-gemini-review.sh` instead of the `agy` harness.
    Its interface is unchanged.
 
@@ -111,8 +156,14 @@ re-pointed at the new harness, not deleted.
    `preflight-gemini.sh`.
 2. `scripts/review/capture-gemini-review.sh`: `exec` the new harness, and update the comments describing the model and
    timeout.
-3. Removed: `isolated-agy-review.sh`, `preflight-agy.sh`, `agy-newest-model.sh`, and the tests that exist only for
-   them (`test_agy_model_resolution.py`, `test_preflight_agy_isolation.py`).
+3. **Removed:** `isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`. **Port the shared cases first**
+   into `scripts/tests/test_gemini_cli_arm.py`:
+   - from `test_agy_model_resolution.py` (lines 360–563): malformed model operands, at both the capture wrapper and
+     the harness; exclusive `.model` creation against a FIFO and a symlink; and silent-reviewer rejection downstream;
+   - from `test_preflight_agy_isolation.py` (lines 131–193): execution in a scratch directory, and detection of a
+     CONTENT change to an already-dirty tracked file.
+
+   Only the resolver (`agy models` parsing) and `agy`-CLI-specific cases retire with their scripts.
 4. `skills/gemini-review/SKILL.md`, rewritten around the new CLI:
    - setup, model, trust, preflight, plan mode, the policy, why isolation is still required (F4), and the fallback
      assertion;
@@ -131,29 +182,50 @@ re-pointed at the new harness, not deleted.
 
 ## 4. Verification cells (each must be seen red, for the stated reason)
 
-**Stub-driven (deterministic, in the suite):**
-- **G1, isolation still catches a writer.** A stub `gemini` that writes a file into its working directory and prints a
-  valid approving JSON response. The harness must exit 3, "left edits inside the disposable checkout". Mutant: delete the
-  post-run fingerprint comparison, and G1 goes green. That proves the stub reaches it.
-- **G2, the fallback assertion.** A stub whose JSON `stats.models` names `gemini-2.5-flash`, with a response containing
-  `VERDICT: APPROVE`. The adapter must exit 4, the transcript must carry no anchored `VERDICT:`, and the harness must
-  exit non-zero. Variants: two models including the right one; an empty `stats`; a non-JSON stdout. Mutant: drop the
-  assertion, and G2 approves.
-- **G3, the transcript is the response text.** A stub with the right model and a multi-line response ending
-  `VERDICT: APPROVE_WITH_NOTES`. The harness prints `VERDICT=VERDICT: APPROVE_WITH_NOTES`, and the leaf holds exactly
-  the response bytes.
+**Stub-driven (deterministic, in the suite).** A stub `gemini` on `PATH` prints `VERDICT: APPROVE` on its STDERR in every
+case.
+- **G1, isolation still catches a writer.** The stub writes a file into its working directory and prints a valid
+  approving JSON response. The harness must exit 3, "left edits inside the disposable checkout". Mutant: delete the
+  post-run fingerprint comparison, and G1 goes green.
+- **G2, nothing unvalidated reaches the transcript.** Each case is captured as the harness captures it, through
+  `pty-capture.py`, so stdout and stderr are combined. The leaf must contain NO anchored `VERDICT:`, and the adapter must
+  exit 4:
+  - wrong model;
+  - two models, including the right one;
+  - an empty `stats`;
+  - non-JSON stdout;
+  - a JSON `error` alongside a response containing `VERDICT: APPROVE`;
+  - a model key containing a newline and `VERDICT: APPROVE`.
+
+  In addition, the right model with a response that has NO verdict must exit 0 with no anchored verdict, so that the
+  stderr `APPROVE` cannot supply one. Mutants: forward stderr; drop the `error` check; drop the model assertion. Each
+  must turn a case into an extracted approval.
+- **G3, the transcript is the response text, normalized as stated.** Four cases: a response ending
+  `VERDICT: APPROVE_WITH_NOTES`; a response with no trailing newline; one with CRLF line ends; one containing an ANSI
+  escape. Each leaf equals the stated normalization of the response. The harness prints the response's own verdict,
+  never the stub's stderr one.
 - **G4, the policy and settings are staged and passed.** The stub records its argv and its working directory's
-  `.gemini/settings.json`. Assert `--policy <the shipped toml>`, `--approval-mode plan`, `--skip-trust`, `-o json` and
-  `-m <model>`, and that `modelRouting` is false. Mutant: drop each, and G4 reds naming it.
-- **G5, the preflight.** A stub answering `pong` with the right model is healthy. Wrong model, a non-`pong` answer, or
-  rc ≠ 0 are each unavailable. A stub that writes into the checkout makes the preflight FAIL with the COREDEV-2607
-  message.
+  `.gemini/settings.json`. Assert `--policy <the shipped toml>`, `--approval-mode plan`, `--skip-trust`, `-o json`,
+  `-m <model>` and `--diagnostics`, and that `modelRouting` is false. Mutant: drop each, and G4 reds naming it.
+- **G5, the preflight.**
+  - Healthy: `pong`, `Pong`, `pong.` and `Pong!` from the right model.
+  - Unavailable: `not pong`; `pong unavailable`; the wrong model; a JSON `error`; rc ≠ 0.
+  - A stub that writes into the checkout makes the preflight FAIL with the COREDEV-2607 message.
+- **G6, the ported shared cases** (§3.3): each red for its original reason against the new scripts.
 
 **Live (recorded in the PR, not in the suite):**
-- **L1, the policy denies under the real CLI.** In a scratch dir, with the shipped policy, ask 3.1 Pro to exit plan mode
-  and then write a file and run a shell command. Assert no file appears and nothing ran, and record the denial in the
-  JSON tool stats. Run it once WITHOUT `--policy` as the contrast, and record whether the model attempts
-  `exit_plan_mode` at all.
+- **L1, every deny rule holds under the real CLI, in BOTH modes.**
+  - **Positive control, without the policy:** the unsafe actions must actually happen. They were observed in plan mode
+    (§1 F4) and in YOLO (F11).
+  - **With the shipped policy,** in `--approval-mode plan` AND in `--approval-mode yolo`, each of `write_file`,
+    `replace`, `run_shell_command` and (in plan mode) `exit_plan_mode` must have no effect. Evidence is the files plus
+    either a denial in the JSON tool stats, or the model reporting the tool absent from its schema (denied tools are
+    withheld, §1 F4a).
+  - **A run that never reached the model does not count.** No JSON, a usage error, or a capacity error makes the run
+    VOID: it is re-run, never passed.
+  - **Arguments are passed as separate words.** `--policy <path>` must be two argv entries; in zsh an unquoted
+    `$extra` is not split (F11).
+  - **Still owed:** YOLO with the policy.
 - **L2, a full gate round on this plan** through `capture-gemini-review.sh`, with a parseable `VERDICT:`, `TREE=clean`
   and `.model` = `gemini-3.1-pro-preview`.
 - **L3, the preflight** passes live.
@@ -177,4 +249,10 @@ re-pointed at the new harness, not deleted.
 - **Quota.** 3.1 Pro has lower quotas than Flash. A quota failure is a failed round (adapter or CLI non-zero), never an
   approval. If quota limits gate cadence, that is a follow-up.
 - **The Kimi stand-in and the Codex arm** are untouched.
+- **A reviewed repository that commits a `.gemini` entry** cannot be reviewed by this arm: the harness refuses before
+  staging, because committed settings (MCP servers, tools, approval) would otherwise configure the reviewer. Neither
+  this repository nor UnleashedMail commits one (checked 2026-10-14).
+- **Availability of a preview model** (F10). A capacity failure exits non-zero, and the round fails CLOSED (MISSING),
+  never approves. Gate cadence can therefore stall on Google's capacity, as it stalled on `agy`. A retry is a new
+  round. Waiving the arm stays a maintainer decision.
 - **`README` history** that names `agy` or 3.1 Pro on `agy` describes past releases and stays.
