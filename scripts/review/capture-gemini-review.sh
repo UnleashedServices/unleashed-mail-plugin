@@ -34,7 +34,7 @@ TICKET="${1-}"
 ROUND="${2-}"
 PROMPT="${3-}"
 PLAN="${4-}"
-TIMEOUT="${5-1800}" # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run
+TIMEOUT="${5-1800}" # the whole review's wall clock (the gemini CLI has no print-timeout of its own)
 # MODEL AS AN OPERAND, not an assignment prefix. The documented one-run fallback read
 # `MODEL=gemini-2.5-pro bash …/capture-gemini-review.sh …`, and an assignment-prefixed command does not
 # match a `Bash(bash …/capture-gemini-review.sh *)` grant — so on this model-invocable skill the
@@ -54,9 +54,9 @@ die() {
 [ -n "$PLAN" ] || die "name the plan this round reviews — the transcript is bound to it"
 [ -r "$PROMPT" ] || die "prompt file is not readable: $PROMPT"
 [ -s "$PROMPT" ] || die "prompt file is EMPTY: $PROMPT"
-# The model operand is ONE TOKEN (COREDEV-2875 §2.1): it reaches agy's argv and the round's `.model` record,
+# The model operand is ONE TOKEN (COREDEV-2875 §2.1): it reaches the reviewer's argv and the round's `.model` record,
 # so a newline, a space, a control byte or a leading `-` is refused here, before a leaf is consumed.
-# isolated-agy-review.sh checks the final value again, which also covers an environment MODEL.
+# isolated-gemini-review.sh checks the final value again, which also covers an environment MODEL.
 if [[ -n ${MODEL_OVERRIDE} ]]; then
 	case "${MODEL_OVERRIDE}" in
 	[!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
@@ -105,10 +105,10 @@ python3 "${SCRIPT_DIR}/bind-prompt.py" \
 # described the old bytes; and because the prompt filename is only per-ROUND, two runs sharing a ticket
 # and round shared that file outright. The snapshot carries the transcript's unique run identity, so
 # neither is reachable (PR #63 recheck, P1).
-# The PLAN travels too: the harness reviews a detached checkout of HEAD, so without this `agy`
+# The PLAN travels too: the harness reviews a detached checkout of HEAD, so without this the reviewer
 # reads the committed plan while the `.plan` sidecar describes the working-tree one.
 if [ -n "$MODEL_OVERRIDE" ]; then
-	MODEL="$MODEL_OVERRIDE" exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" \
+	MODEL="$MODEL_OVERRIDE" exec bash "${SCRIPT_DIR}/isolated-gemini-review.sh" \
 		"${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"
 fi
-exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"
+exec bash "${SCRIPT_DIR}/isolated-gemini-review.sh" "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"

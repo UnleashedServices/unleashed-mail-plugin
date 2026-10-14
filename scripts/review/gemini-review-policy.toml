@@ -1,0 +1,28 @@
+# Deny policy for the plan gate's Gemini arm (COREDEV-2887), loaded per run with `--policy`.
+#
+# A REVIEW WRITES NOTHING. Headless plan mode auto-approves `exit_plan_mode` and then switches to YOLO,
+# which auto-approves every tool (plan §1 F4) — so `--approval-mode plan` alone would let a reviewer that
+# decides to implement the plan do exactly that (the COREDEV-2607 failure). These rules close that path at
+# the policy layer. They are a SECOND layer: the guarantee remains the calling harness's isolation (a
+# disposable checkout, fingerprinted before and after, the round voided on any change).
+#
+# Priority 999 is the schema's maximum, so no default or user rule outranks these. `modes` is omitted so
+# the rules apply in EVERY approval mode, including the YOLO a successful `exit_plan_mode` would reach.
+
+[[rule]]
+toolName = "exit_plan_mode"
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Do not leave plan mode; review the plan and end with the VERDICT line."
+
+[[rule]]
+toolName = ["write_file", "replace"]
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Do not create or modify files; report findings in your answer."
+
+[[rule]]
+toolName = "run_shell_command"
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Shell commands are not available; read the files instead."
