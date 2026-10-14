@@ -147,6 +147,21 @@ disposable_checkout "${REPO}" "${SHA}" "${SCR}/tree" ||
 	}
 TREE="${SCR}/tree"
 
+# A REVIEWED TREE CANNOT CONFIGURE ITS REVIEWER, checked FIRST — before the plan or the prompt is staged
+# (codex, plan round 3). The CLI reads a workspace `.gemini/` (settings: MCP servers, tools, approval) and a
+# workspace `.env` (endpoint, credentials, flags), so a committed entry of either would configure the reviewer,
+# and a symlink there could redirect the settings write below. Neither this repository nor UnleashedMail
+# commits one (checked 2026-10-14). A committed `.mcp.json` is NOT refused: the CLI does not read it (plan §1
+# F13 B). Env files ABOVE the tree are the adapter's check, in the reviewer's own working directory.
+if [[ -e "${TREE}/.env" ]] || [[ -L "${TREE}/.env" ]]; then
+	echo "GATE FAILED — the reviewed tree commits a .env entry; refusing to let it configure the reviewer" >&2
+	exit 1
+fi
+if [[ -e "${TREE}/.gemini" ]] || [[ -L "${TREE}/.gemini" ]]; then
+	echo "GATE FAILED — the reviewed tree already has a .gemini entry; refusing to configure the reviewer through it" >&2
+	exit 1
+fi
+
 # COPY THE BOUND PLAN INTO THE CHECKOUT. The tree above is detached at HEAD, so `agy` reads the
 # COMMITTED plan — while `bind-prompt.py` hashed the WORKING-TREE plan into `<transcript>.plan`. With
 # uncommitted edits, which is the normal state during the documented review iteration, the transcript
@@ -271,19 +286,7 @@ fi
 # adapter would then refuse the round, so routing is switched off where it applies — the disposable
 # checkout's own `.gemini/settings.json` — and never in the operator's global settings. Staged BEFORE the
 # baseline below, so it is part of what the harness placed and a reviewer edit to it still voids the round.
-# A reviewed tree that already carries a `.gemini` entry is refused rather than merged into: whatever is
-# committed there would otherwise configure the reviewer, and a symlink there could redirect the write.
-# A COMMITTED `.env` IS REFUSED TOO (codex, plan round 2): the CLI loads a workspace `.env`, so a reviewed
-# repository could set the reviewer's environment (endpoint, credentials, flags). Neither this repository nor
-# UnleashedMail commits one (checked 2026-10-14).
-if [[ -e "${TREE}/.env" ]] || [[ -L "${TREE}/.env" ]]; then
-	echo "GATE FAILED — the reviewed tree commits a .env entry; refusing to let it configure the reviewer" >&2
-	exit 1
-fi
-if [[ -e "${TREE}/.gemini" ]] || [[ -L "${TREE}/.gemini" ]]; then
-	echo "GATE FAILED — the reviewed tree already has a .gemini entry; refusing to configure the reviewer through it" >&2
-	exit 1
-fi
+# A committed `.gemini` entry was refused right after the checkout was created, above.
 if ! python3 - "${TREE}" <<'PY'; then
 import os
 import sys
@@ -369,6 +372,13 @@ fi
 # keeps its teeth; what was wrong is letting the artefact exist. Suppress it at the source rather
 # than excluding a path from the manifest — an exclusion is a blacklist a real mutation could hide
 # behind, and `scripts/__pycache__/` is exactly where it would hide.
+# THE DIAGNOSTICS FILE MUST NOT EXIST YET. The adapter creates it exclusively and refuses silently when it
+# cannot — silently because any text it printed would reach the transcript — so the entry is named HERE, and
+# no review (and no quota) is spent on a round that could not record its diagnostics.
+if [[ -e "${OUT}.diag" ]] || [[ -L "${OUT}.diag" ]]; then
+	echo "GATE FAILED — an entry already exists at ${OUT}.diag; refusing to launch a review that cannot record its diagnostics" >&2
+	exit 1
+fi
 # THE REVIEWER IS THE ADAPTER, not the CLI directly: it asserts the answering model and writes only the
 # response text, which is the transcript (gemini-review-run.py). The policy is read from THIS checkout's
 # scripts, never from the disposable tree the reviewer can see. The CLI's stderr goes to `${OUT}.diag` and
@@ -452,6 +462,13 @@ if [[ ${TREE_BASELINE} != "${TREE_AFTER}" ]]; then
 	exit 3
 fi
 
+# A REFUSED RUN IS EXPLAINED HERE, outside the PTY. The adapter writes its refusal only to `${OUT}.diag`,
+# leaving the transcript EMPTY (MISSING downstream, codex plan round 3), so the operator reads the reason from
+# this script's stderr instead.
+if [[ ${RC} -ne 0 ]]; then
+	REFUSAL="$(grep -a '^GEMINI ARM FAILED' "${OUT}.diag" 2>/dev/null | tail -1)"
+	printf 'gemini arm (%s): %s\n' "${MODEL}" "${REFUSAL:-the review ended (exit ${RC}) without an adapter refusal — timed out or killed; see ${OUT}.diag}" >&2
+fi
 BYTES_OUT="$(wc -c 2>/dev/null <"${OUT}" | tr -d ' ')"
 # Anchored, never a loose `grep VERDICT:` — that matches the prompt's own echoed template in a
 # timed-out transcript and reads as a real verdict.

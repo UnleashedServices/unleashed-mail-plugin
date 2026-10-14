@@ -1,8 +1,9 @@
 # COREDEV-2887 — The plan gate's Gemini arm moves from `agy` (Flash) to the `gemini` CLI (3.1 Pro Preview)
 
-**Status:** Planning, revision 3. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
+**Status:** Planning, revision 4. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
 the prototype `REQUEST_CHANGES` (Q1: 2 claimed, both disproven; Q2: 1). Round 2: codex `REQUEST_CHANGES` (Q1: 1, Q2: 5);
 gemini `REQUEST_CHANGES` (Q1: 1 claimed, disproven by a discriminating live probe; Q2: 1, the same as codex's fourth).
+Round 3: codex `REQUEST_CHANGES` (Q1: 3, Q2: 4); gemini `APPROVE_WITH_NOTES` (Q1: 0; Q2: 1, declined).
 **Ticket:** COREDEV-2887 (Epic COREDEV-2485).
 **Branch / worktree:** `feat/COREDEV-2887-gemini-cli-arm`, `.claude/worktrees/2887-gemini-cli`, cut from `origin/alpha` at
 `5c04728`.
@@ -72,6 +73,37 @@ full gate, and open a PR into `alpha`.
      allowlist that admits nothing, so no configured server, from any source, is started (F13 C against Cp). A
      committed `.gemini` was already refused.
   2. **(Q2, adopted)** Identical to codex's fourth: G4 is split.
+- **Round 3 (revision 3), codex `REQUEST_CHANGES`, Q1: 3, Q2: 4.** All seven adopted, and fixed in revision 4 and its
+  prototype. The first had also been found independently while drafting the §3.3 test port (the
+  "silent reviewer stays MISSING" case could not pass as specified).
+  1. **(Q1) A refused run left a NON-EMPTY transcript, so it was approval-eligible.** The adapter printed its refusal
+     line to stderr, which the PTY records, and `persist-verdict.sh` and `review-verdict.py write` refuse only an EMPTY
+     transcript; neither checks an extracted verdict. Codex accepted a 203-byte wrong-model leaf as `gemini=APPROVE`
+     with the production checks. **Fix (§2.2):** the adapter opens the diagnostics file FIRST and makes it its own
+     stderr, so a refused run leaves the transcript EMPTY, which is MISSING at both layers; the harness repeats the
+     refusal on its own stderr, outside the PTY. **Cells:** G2, G6.
+  2. **(Q1) The MCP allowlist admitted its own sentinel.** The allowlist matches names exactly, so a server configured
+     under `unleashed-mail-gate-review-no-mcp` would start. **Confirmed live (F13 E).** An empty allowlist means
+     unrestricted. **Fix (§2.2):** the name is generated per run from 128 random bits. **Cell:** G4a.
+  3. **(Q1) Ancestor environment files bypassed the boundary.** The CLI loads the first `.gemini/.env` or `.env` found
+     walking UP from its working directory (F14), so a disposable checkout under a repository-local `TMPDIR` could be
+     configured by a committed or ignored file above it. **Fix (§2.2):** the adapter performs the same walk from its own
+     working directory, which is the CLI's, and refuses any file the walk reaches that is not in `$HOME`. Running the
+     new tests from this worktree found one: the main checkout's ignored `.env` (F14). **Cell:** G7b.
+  4. **(Q2) The truncation probe was not discriminating as specified.** A truncating comparison forged an approval
+     only for a request of EXACTLY 80 characters. **Fix:** G2 uses exactly 80, every refused case carries an APPROVING
+     response, and the truncation mutant is shown to produce an extracted `APPROVE`.
+  5. **(Q2) A timed-out preflight did not name the model.** **Fix (§2.4):** every preflight failure line names it, and
+     repeats the adapter's refusal when there is one. **Cell:** G5, with the adapter killed before it can refuse.
+  6. **(Q2) The `.gemini`/`.env` refusal ran after staging, though the plan said before.** **Fix:** the checks moved to
+     immediately after the checkout is created.
+  7. **(Q2) Rollout named mutants only for G1–G5.** **Fix (§5.3):** G1–G7, with the executed mutant table.
+- **Round 3, gemini (through the prototype): `APPROVE_WITH_NOTES`, Q1: 0, Q2: 1.** The round was clean (`TREE=clean`, the
+  model asserted).
+  1. **(Q2, declined)** "`capture-gemini-review.sh` says `bind TICKET to the --ticket operand`, but takes positional
+     operands." `--ticket` is the skill's own invocation argument (`/unleashed-mail:gemini-review --ticket <T> --round
+     <N> <plan>`), from which the skill binds `TICKET`; the codex wrapper uses the same wording. Not changed by this
+     plan.
 
 ## 0. The defect, and what "fixed" means
 
@@ -161,13 +193,20 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
   - **D.** As A, with `--skip-trust` but WITHOUT the environment variable: NOT started. The workspace's settings were
     not applied, which confirms the settings-before-trust order (codex, round 2). The staged `modelRouting: false`
     applies only with the variable.
+  - **E, the sentinel collision (round 3).** As Cp, with the server configured under the name the allowlist admitted,
+    `unleashed-mail-gate-review-no-mcp`: STARTED. A fixed allowlist name is a name a server can be configured under.
+- **F14. Environment files (read from the installed 0.64.0 bundle, `findEnvFile`).** From the working directory up to
+  `/`, the first `<dir>/.gemini/.env` (trusted sessions only) or `<dir>/.env` is loaded; if none is found, the loader
+  falls back to `~/.gemini/.env`, then `~/.env`. The operator's `~/.env` exists and sets `GOOGLE_CLOUD_PROJECT` and
+  `GOOGLE_CLOUD_LOCATION`, so every live run so far loaded it; it stays the operator's (§6). The main plugin checkout
+  carries an IGNORED `.env`, found by the new guard when the tests ran from a worktree beneath it.
 
 ## 2. Design
 
 **The isolation harness is unchanged. Only the command inside it changes, and two layers are added.**
 
 1. **`scripts/review/isolated-gemini-review.sh`**, derived from `isolated-agy-review.sh` with the same staging, the same
-   fingerprints, the same exit-3 rules and the same anchored verdict. It differs in five places:
+   fingerprints, the same exit-3 rules and the same anchored verdict. It differs in seven places:
    - **Model:** the default is the literal `gemini-3.1-pro-preview`, with no resolver, because the `gemini` CLI has no
      model-listing command. An explicit `MODEL` (the capture wrapper's sixth operand) still wins, with the same
      one-token check.
@@ -178,26 +217,37 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
      baseline, so a reviewer edit to it still voids the round.
    - **Timeout:** the default stays 1800 s. There is no `--print-timeout` coupling, because the `gemini` CLI has no
      such flag.
-   - **Refusals before staging:** a committed `.gemini` or `.env` entry (file, directory or symlink) refuses the round
-     with exit 1 before anything is staged or run. The CLI reads both, and a reviewed repository must not configure
-     its reviewer (§6).
+   - **Refusals first:** a committed `.gemini` or `.env` entry (file, directory or symlink) refuses the round with exit
+     1 immediately after the checkout is created, before the plan or prompt is staged or anything runs. The CLI reads
+     both, and a reviewed repository must not configure its reviewer (§6).
+   - **The diagnostics file must not exist yet:** a pre-existing `<leaf>.diag` (any kind) refuses the round with exit 1
+     before launch, naming it. The adapter refuses it too, silently (item 2).
+   - **A refused run is explained outside the PTY:** on a non-zero adapter exit, the harness prints the adapter's
+     `GEMINI ARM FAILED` line from `<leaf>.diag` on its own stderr, with the model, or says that none was recorded
+     (a timeout or kill).
 2. **`scripts/review/gemini-review-run.py`, the adapter and the reviewer command.**
    - It runs `gemini --skip-trust -m MODEL --approval-mode plan --policy <shipped policy> --allowed-mcp-server-names
-     unleashed-mail-gate-review-no-mcp -o json -p "Read and follow <prompt>"`, with `GEMINI_CLI_TRUST_WORKSPACE=true`
-     added to its environment so the staged workspace settings apply (F13 D).
-   - **No MCP server is started.** The allowlist names a server that cannot exist, so none configured anywhere (user,
-     workspace or extension) is launched (F13 C, Cp). The policy cannot do this, because it governs tool calls, not
-     processes.
-   - **The CLI's stderr never reaches the transcript.** It is written only to `--diagnostics` (the harness passes
-     `<transcript>.diag`; it is created O_EXCL|O_NOFOLLOW, so a pre-existing entry refuses the round). This is because
-     `pty-capture.py` records stdout and stderr together.
+     unleashed-mail-no-mcp-<32 random hex> -o json -p "Read and follow <prompt>"`, with
+     `GEMINI_CLI_TRUST_WORKSPACE=true` added to its environment so the staged workspace settings apply (F13 D).
+   - **The transcript is EXACTLY the validated response, or EMPTY.** `pty-capture.py` records stdout and stderr together,
+     so the FIRST thing the adapter does, before the CLI runs, is create `--diagnostics` (the harness passes
+     `<transcript>.diag`) through one O_EXCL|O_NOFOLLOW descriptor and make it the adapter's own stderr. The CLI
+     inherits it. Every refusal, the CLI's diagnostics and even a traceback land there, never in the transcript. A
+     refused run therefore leaves an EMPTY transcript, which `persist-verdict.sh` and `review-verdict.py write` already
+     treat as MISSING. A pre-existing diagnostics entry refuses before the CLI runs, writing nothing anywhere.
+   - **No MCP server is started.** The allowlist name is generated per run from 128 random bits, so no server configured
+     anywhere (user, workspace or extension) can carry it (F13 C, Cp, E). An empty allowlist would mean unrestricted. The
+     policy cannot do this, because it governs tool calls, not processes.
+   - **No environment file but the operator's is loaded.** Before the CLI runs, the adapter walks from its working
+     directory (the CLI's) up to `/` exactly as the loader does (F14), and refuses the run if the walk reaches a
+     `.gemini/.env` or `.env` that is not in `$HOME`. Symlinks count as present.
    - **A JSON `error` refuses the run** (F9), before any response text is printed.
    - **Unless `stats.models` names exactly `{MODEL}`**, compared as complete strings, it refuses the run with exit 4.
      Only the diagnostic shortens a model name.
-   - **Every refusal is ONE line of fixed text**, `GEMINI ARM FAILED [<requested model>] — <reason>`. Its embedded values
-     are `repr()`-escaped, and newlines are replaced, so no `^VERDICT:` line can come from it. Naming the model meets
-     §0.4.
-   - **Otherwise it prints `response`** and exits 0. Malformed or missing JSON exits 4 with a reason, never a traceback.
+   - **Every refusal is ONE line of fixed text in the diagnostics file**, `GEMINI ARM FAILED [<requested model>] —
+     <reason>`, with `repr()`-escaped values and no embedded newline, so the harness and the preflight can find it and
+     repeat it. Naming the model meets §0.4.
+   - **Otherwise it prints `response`** and exits 0. Malformed or missing JSON exits 4 with a reason.
    - **Normalization, stated:** the adapter turns CRLF and lone CR into LF and ensures a trailing newline.
      `pty-capture.py` then strips ANSI escape sequences and removes the CR the PTY adds before each LF. Nothing else
      changes, and the leaf contains no CR.
@@ -210,7 +260,9 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
    adapter, so the model assertion applies, from a scratch directory with the same before-and-after checkout
    fingerprint. It is healthy only on rc 0, the asserted model, and a WHOLE answer matching `(?i)pong[.!]?` after
    trimming, so `not pong` and `pong unavailable` are unavailable. A detected mutation reports the pre-run HEAD. The
-   CLI's diagnostics are kept at `<ping>.diag`, beside the ping transcript, so they survive the scratch cleanup.
+   CLI's diagnostics are kept at `<ping>.diag`, beside the ping transcript, so they survive the scratch cleanup, and
+   they stream there, so an interrupted ping keeps what the CLI printed. Every failure line names the model and repeats
+   the adapter's refusal, or says none was recorded (a timeout or kill).
 5. **`scripts/review/capture-gemini-review.sh`** `exec`s `isolated-gemini-review.sh` instead of the `agy` harness.
    Its interface is unchanged.
 
@@ -222,7 +274,9 @@ re-pointed at the new harness, not deleted.
 ## 3. Changes
 
 1. New: `scripts/review/isolated-gemini-review.sh`, `gemini-review-run.py`, `gemini-review-policy.toml` and
-   `preflight-gemini.sh`.
+   `preflight-gemini.sh`. `gemini-review-run.py` is added to BOTH `py_compile` invocations in `plugin-ci.yml`, one of
+   which runs Python 3.9 (`test_doc_gates` requires every shipped script in both); the prototype compiles and runs its
+   environment walk under 3.9.6. The callers-scan exemptions are regenerated last.
 2. `scripts/review/capture-gemini-review.sh`: `exec` the new harness, and update the comments describing the model and
    timeout. The comments the new scripts inherited from the `agy` versions are rewritten so that none names a removed
    file; the history they record (why each check exists) stays.
@@ -233,6 +287,10 @@ re-pointed at the new harness, not deleted.
    - from `test_preflight_agy_isolation.py` (lines 131–193): execution in a scratch directory, and detection of a
      CONTENT change to an already-dirty tracked file.
 
+   The silent-reviewer case keeps its downstream assertions unweakened: a refused run's transcript must be EMPTY and
+   rejected by both `persist-verdict.sh` and `review-verdict.py write`. The port is drafted and passing in the prototype
+   (`scripts/tests/test_gemini_cli_arm.py`, 34 tests).
+
    Only the resolver (`agy models` parsing) and `agy`-CLI-specific cases retire with their scripts.
 4. `skills/gemini-review/SKILL.md`, rewritten around the new CLI:
    - setup, model, trust, preflight, plan mode, the policy, why isolation is still required (F4), and the fallback
@@ -241,9 +299,15 @@ re-pointed at the new harness, not deleted.
      `agy models`;
    - the one-shot preamble is kept;
    - the arm is still invoked as `/unleashed-mail:gemini-review`.
-5. Re-point or update the tests that read the recipe, the harness or the skill (`test_agy_recipe_gate.py`,
-   `test_doc_gates.py`, `test_gemini_reviews_the_bound_plan.py`, `test_transcript_path_*`, `test_end_to_end_gate.py`
-   and others). Each keeps its property and changes only the binary or script it names. The full list is in the PR.
+5. Re-point or update the tests that drive the Gemini capture path or read the recipe, the harness or the skill. Each
+   keeps its property and changes only the binary or script it names (a stub `gemini` emitting the CLI's JSON, in place
+   of a stub `agy`). MEASURED on revision 4's prototype, 37 cases of the 1622-test suite fail (35 failures, 2 errors,
+   subtests counted), in exactly these modules: `test_gemini_reviews_the_bound_plan` (14), `test_m5_path_contract` (11),
+   `test_agy_model_resolution`
+   (5, retired or ported per item 3), `test_callers_scan` (2, the regenerated exemptions), `test_capture_prompt_binding`,
+   `test_transcript_path_threading`, `test_end_to_end_gate`, `test_agy_recipe_gate` (an exemption naming the old
+   `agy --print-timeout` comment) and `test_doc_gates` (the `py_compile` lists, item 1). The PR's suite must be green
+   with no test deleted except those item 3 retires.
 6. `AGENT_CONTRACTS.md` §2 and the other skills that name `agy` as the Gemini arm (`codex-review`, `implement`,
    `review-synthesis`): wording only.
 7. New tests, the cells in §4, using a stub `gemini` on `PATH` where the behaviour is the harness's own.
@@ -254,14 +318,15 @@ re-pointed at the new harness, not deleted.
 
 **Stub-driven (deterministic, in the suite).** A stub `gemini` on `PATH` prints `VERDICT: APPROVE` on its STDERR in every
 case.
-- **G1, isolation still catches a writer.** The stub writes a file into its working directory and prints a valid
-  approving JSON response. The harness must exit 3, "left edits inside the disposable checkout". Mutant: delete the
-  post-run fingerprint comparison, and G1 goes green.
+- **G1, isolation still catches a writer.** The stub writes a file into its working directory (the disposable tree)
+  and, separately, into the live checkout by absolute path. The harness must exit 3, "left edits inside the disposable
+  checkout" and "MUTATED the working tree" respectively; a clean stub is the positive control. Mutants: delete either
+  post-run comparison, and its case reds.
 - **G2, nothing unvalidated reaches the transcript.** Each case is captured as the harness captures it, through
-  `pty-capture.py`, so stdout and stderr are combined. The leaf must contain NO anchored `VERDICT:`, and the adapter must
-  exit 4:
+  `pty-capture.py`, so stdout and stderr are combined. Every case's response is APPROVING. The leaf must contain NO
+  anchored `VERDICT:` and be EMPTY, the adapter must exit 4, and the diagnostics file must name the requested model:
   - wrong model;
-  - a long requested model (80 characters or more) answered by `<model>-fallback`;
+  - a requested model of EXACTLY 80 characters answered by `<model>-fallback`;
   - two models, including the right one;
   - an empty `stats`;
   - non-JSON stdout;
@@ -269,9 +334,9 @@ case.
   - a model key containing a newline and `VERDICT: APPROVE`.
 
   In addition, the right model with a response that has NO verdict must exit 0 with no anchored verdict, so that the
-  stderr `APPROVE` cannot supply one, and an exact match on an 81-character model must exit 0. Every refusal line on
-  stderr names the requested model. Mutants: forward stderr; drop the `error` check; drop the model assertion; truncate
-  the model keys before comparing. Each must turn a case into an extracted approval.
+  stderr `APPROVE` cannot supply one, and an exact match on an 81-character model must exit 0. A CLI exiting non-zero
+  leaves an empty leaf and its own status. Mutants: let stderr reach the PTY; drop the `error` check; drop the model
+  assertion; truncate the model keys before comparing. Each must turn a case into an extracted approval.
 - **G3, the transcript is the response text, normalized as stated.** Five cases, each through the full path (adapter,
   then `pty-capture.py` over a real PTY): a response ending `VERDICT: APPROVE_WITH_NOTES`; a response with no trailing
   newline; one with CRLF line ends; one with a lone CR; one containing an ANSI escape. Each leaf equals the stated
@@ -279,22 +344,34 @@ case.
   stderr one. Mutant: remove the adapter's CR normalization, and the CRLF case reds on a CR in the leaf.
 - **G4a, what the CLI receives.** The stub records its argv, its environment and its working directory's
   `.gemini/settings.json`. Assert `--policy <the shipped toml>`, `--approval-mode plan`, `--skip-trust`, `-o json`,
-  `-m <model>`, and `--allowed-mcp-server-names` followed by exactly `unleashed-mail-gate-review-no-mcp`; that
-  `GEMINI_CLI_TRUST_WORKSPACE` is `true`; and that `modelRouting` is false. Mutant: drop each, and G4a reds naming it.
+  `-m <model>`, and `--allowed-mcp-server-names` followed by exactly one value matching
+  `unleashed-mail-no-mcp-[0-9a-f]{32}`; that two runs use two different values; that `GEMINI_CLI_TRUST_WORKSPACE` is
+  `true`; and that `modelRouting` is false. Mutants: drop each, or fix the sentinel, and G4a reds naming it.
   (`--diagnostics` is the adapter's own option and never reaches the CLI.)
-- **G4b, what the harness asks of the adapter.** Observed separately, with the adapter's invocation recorded. The
-  harness passes `--diagnostics <leaf>.diag`. A pre-existing `.diag` (a file or a symlink) refuses the round, with no
-  verdict in the leaf and the symlink's target untouched. The stub's stderr is in the `.diag` and not in the leaf.
-  Mutants: open the diagnostics without `O_EXCL`; forward stderr. Each reds.
+- **G4b, the diagnostics file.** Observed by its effect: after a harness round, the stub's stderr is in `<leaf>.diag`
+  and not in the leaf, which shows the harness passed exactly that path. A pre-existing `<leaf>.diag` (a file, a symlink
+  to a writable file, a dangling symlink) refuses the harness round before launch, naming it: the stub records no
+  call, the leaf stays empty, the target is untouched. At the adapter alone, the same entries and a FIFO make it exit 4
+  before the CLI runs. Mutants: open the diagnostics without `O_EXCL`; drop the harness pre-check. Each reds.
 - **G5, the preflight.**
   - Healthy: `pong`, `Pong`, `pong.` and `Pong!` from the right model.
   - Unavailable: `not pong`; `pong unavailable`; the wrong model; a JSON `error`; rc ≠ 0.
   - A stub that writes into the checkout makes the preflight FAIL with the COREDEV-2607 message.
-- **G6, the ported shared cases** (§3.3): each red for its original reason against the new scripts.
-- **G7, a reviewed tree cannot configure its reviewer.** A fixture repository that commits a `.gemini` directory, a
+  - A stub that kills the adapter before it can refuse (the stand-in for a timeout) fails with the model named.
+  - The ping runs on the harness's `DEFAULT_MODEL`, with the policy and a fresh sentinel, and `<ping>.diag` survives.
+  - Mutants: drop the model from the failure line; match `pong` as a substring. Each reds.
+- **G6, the ported shared cases** (§3.3): each red for its original reason against the new scripts. A refused run (a
+  silent failing CLI; a fallback model that approved) leaves an EMPTY transcript that both downstream layers reject as
+  MISSING, and the harness's stderr names the model and the refusal. Mutants: let stderr reach the PTY; drop the
+  harness's refusal line.
+- **G7a, a reviewed tree cannot configure its reviewer.** A fixture repository that commits a `.gemini` directory, a
   `.gemini` file, a `.gemini` symlink, a `.env` file or a `.env` symlink: each refuses with exit 1 and the matching
-  message, and the stub records no invocation. A committed `.mcp.json` does NOT refuse (F13 B). Mutant: delete the
-  `.env` check, and its two cases red.
+  message, and the stub records no invocation. A committed `.mcp.json` does NOT refuse (F13 B). Mutants: delete the
+  `.env` check, or the `.gemini` check, and its cases red.
+- **G7b, no foreign environment file above the reviewer.** Run from a directory nested under one carrying `.env`, and
+  under one carrying `.gemini/.env`: the adapter exits 4 before the CLI runs, the leaf is empty, and the diagnostics
+  name the file. Positive control: with `HOME` set to the directory carrying `.env`, the CLI runs. Mutant: drop the
+  walk, and both cases red.
 
 **Live (recorded in the PR, not in the suite):**
 - **L1, every deny rule holds under the real CLI, in BOTH modes.**
@@ -319,8 +396,14 @@ case.
     succeeded before the rule existed.
   - **L1b, the allowlist and the trust order.** Recorded as F13: a configured server is started only without the
     allowlist (C against Cp), and workspace settings apply only with `GEMINI_CLI_TRUST_WORKSPACE=true` (A against D).
-  - **Observed on revisions 2 and 3:** plan mode (F3, F4a); YOLO (F11, F12); reading under the policy (F12); the
-    allowlist and trust order (F13). Still to run: the MCP fixture, and `invoke_agent` under the final policy.
+  - **L1c, an ancestor environment file reaches the real CLI (observed on revision 4).** Positive control: an `.env`
+    two levels above a scratch working directory, setting `CODE_ASSIST_ENDPOINT=http://127.0.0.1:9`, made the CLI fail
+    authenticating against that endpoint (`ECONNREFUSED 127.0.0.1:9`). With the file moved aside, the same run answered
+    `pong`. Through the adapter, the same layout exited 4 before the CLI started, with an empty transcript and the file
+    named in the diagnostics.
+  - **Observed on revisions 2 to 4:** plan mode (F3, F4a); YOLO (F11, F12); reading under the policy (F12); the
+    allowlist, trust order and sentinel collision (F13); the ancestor environment file (L1c). Still to run: the MCP
+    fixture, and `invoke_agent` under the final policy.
 - **L2, a full gate round on this plan** through `capture-gemini-review.sh`, with a parseable `VERDICT:`, `TREE=clean`
   and `.model` = `gemini-3.1-pro-preview`.
 - **L3, the preflight** passes live.
@@ -331,8 +414,9 @@ case.
    is the new arm's review. Run the Codex arm on the same plan bytes in parallel.
 2. Iterate on the findings. Codex's findings follow the Q1/Q2 stopping rule. The new arm's findings count as review
    evidence, not as a gate pass, until the plan is synthesized.
-3. Implement the rest of §3, then run G1–G5 with their mutants, the full local gate, and `codex review --base
-   origin/alpha`.
+3. Implement the rest of §3, then run G1–G7 with every mutant §4 names, as an executed table in which each mutant
+   must go red and each anchor must match exactly once, so that a no-op mutation cannot pass as a kill. Then run the
+   full local gate and `codex review --base origin/alpha`. (On revision 4's prototype: 19 mutants, all red.)
 4. Open a PR into `alpha`, trigger the bot reviews, and triage them. **Merge needs the maintainer's word.**
 5. After merge, run one real gate round with the shipped skill (any open plan) as the end-to-end check.
 
@@ -345,11 +429,16 @@ case.
   approval. If quota limits gate cadence, that is a follow-up.
 - **The Kimi stand-in and the Codex arm** are untouched.
 - **A reviewed repository that commits a `.gemini` or `.env` entry** cannot be reviewed by this arm: the harness
-  refuses before staging. Committed settings (MCP servers, tools, approval) or a committed `.env` (endpoint,
+  refuses right after creating the checkout. Committed settings (MCP servers, tools, approval) or a committed `.env` (endpoint,
   credentials, flags) would otherwise configure the reviewer. Neither this repository nor UnleashedMail commits either
   (checked 2026-10-14). A committed `.mcp.json` is NOT refused: the CLI does not read it (F13 B), and both repositories
   commit one.
 - **Availability of a preview model** (F10). A capacity failure exits non-zero, and the round fails CLOSED (MISSING),
   never approves. Gate cadence can therefore stall on Google's capacity, as it stalled on `agy`. A retry is a new
   round. Waiving the arm stays a maintainer decision.
+- **The operator's home environment file still loads** (F14): `~/.gemini/.env` or `~/.env`, which carries the
+  operator's Google Cloud project here. It is the operator's, not the reviewed repository's, and removing it would change
+  the environment every live run so far was measured in. Any OTHER environment file the loader would reach refuses the
+  run, including an ignored one, such as the main plugin checkout's, if `TMPDIR` or a test's working directory sits
+  beneath it.
 - **`README` history** that names `agy` or 3.1 Pro on `agy` describes past releases and stays.

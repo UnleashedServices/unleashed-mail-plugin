@@ -91,7 +91,7 @@ else
 	CAPTURE_RC=1
 fi
 
-# THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating agy cannot be reported
+# THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating reviewer CLI cannot be reported
 # healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
 if [[ -n ${BEFORE} ]] || [[ -n ${REPO_ROOT:-} ]]; then
 	AFTER="$(tree_fingerprint "${REPO_ROOT:-.}")" || {
@@ -110,9 +110,14 @@ if [[ -n ${BEFORE} ]] || [[ -n ${REPO_ROOT:-} ]]; then
 	fi
 fi
 
+# EVERY FAILURE NAMES THE MODEL (codex, plan rounds 2 and 3) — including a ping that timed out or was killed
+# before the adapter could write its own refusal. The adapter's refusal, when there is one, is in `<ping>.diag`
+# (never in the ping transcript, which a refused run leaves empty), and is repeated here.
 if [[ ${CAPTURE_RC} -ne 0 ]]; then
-	printf 'gemini preflight: the capture exited non-zero — treating the Gemini arm as UNAVAILABLE regardless of\n' >&2
-	printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "${PING}" >&2
+	REFUSAL="$(grep -a '^GEMINI ARM FAILED' "${PING}.diag" 2>/dev/null | tail -1)"
+	printf 'gemini preflight (%s): the capture exited %s — %s\n' "${MODEL:-<no model>}" "${CAPTURE_RC}" \
+		"${REFUSAL:-no adapter refusal was recorded (timed out or killed); see ${PING}.diag}" >&2
+	printf 'Treating the Gemini arm as UNAVAILABLE regardless of what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "${PING}" >&2
 	exit 1
 fi
 
@@ -124,6 +129,6 @@ if python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"(?i)pong[.!]?", open
 	exit 0
 fi
 # shellcheck disable=SC2016 # the backticks are literal text in the message, not an expansion
-printf 'gemini preflight: no pong in %s — the Gemini arm is unavailable or unauthenticated. Run `gemini`\n' "${PING}" >&2
+printf 'gemini preflight (%s): no pong in %s — the Gemini arm is unavailable or unauthenticated. Run `gemini`\n' "${MODEL}" "${PING}" >&2
 printf 'interactively once to re-login. The gate is FAIL-CLOSED: do not count this as APPROVE, and do not self-waive.\n' >&2
 exit 1
