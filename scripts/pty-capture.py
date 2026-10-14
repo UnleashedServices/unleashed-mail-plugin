@@ -27,9 +27,9 @@ Examples
     python3 pty-capture.py --allocated "$CODEX_TRANSCRIPT" -- \
         codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt-$TICKET-r$ROUND.md)"
 
-    # Gemini review: never a raw `gemini` here. `review/isolated-gemini-review.sh` runs this wrapper around
-    # the adapter (`review/gemini-review-run.py`), which asserts the answering model and applies the deny
-    # policy, inside a disposable checkout (COREDEV-2887). Reach it through `review/capture-gemini-review.sh`.
+    # Gemini review, as the isolation harness runs it inside its disposable checkout ($TREE), with ADAPTER and
+    # POLICY the arm's adapter and deny policy (both in review/). Never a raw `gemini`: it is not read-only headless.
+    python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- python3 "$ADAPTER" --model "$MODEL" --policy "$POLICY" --diagnostics "$GEMINI_TRANSCRIPT.diag" -- "Read and follow $TREE/$PROMPT_REL"
 
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 = failure). Captured output is written to <out-path>, which is REQUIRED — there

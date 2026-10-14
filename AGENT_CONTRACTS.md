@@ -578,7 +578,7 @@ unchanged and still mandatory.
 | ------------------------ | ----------------------- | ------- | ------------------------------------- |
 | `verdict-report`         | `swift-reviewer`        | `in`    | `agents/swift-reviewer.md:613`        |
 | `brainstorm-summary`     | `brainstorm`            | `in`    | `skills/brainstorm/SKILL.md:150`      |
-| `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:237`       |
+| `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:236`       |
 | `pr-review-report`       | `pr-review`             | `in`    | `skills/pr-review/SKILL.md:68`        |
 | `security-findings`      | `security-reviewer`     | `out`   | `agents/security-reviewer.md:208`     |
 | `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:287`  |

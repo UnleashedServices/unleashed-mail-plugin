@@ -7,7 +7,7 @@ after binding cannot reach the reviewer through the live, mutable file. The gemi
 staging first; the codex arm ran in the LIVE tree and never inherited it, so an A->B->A swap let codex
 review substituted bytes while the artifact attested the original (PR #63 recheck, P1). That is the
 exact "a rule that lives in one script is a rule the next entrypoint will not have" failure this repo
-keeps hitting — so the staging lives HERE, called identically by `isolated-gemini-review.sh` and
+keeps hitting — so the staging lives HERE, called identically by `isolated-agy-review.sh` and
 `isolated-codex-review.sh`. A cross-arm test drives the same attack through both.
 
 WHAT IT GUARANTEES
@@ -72,24 +72,15 @@ def _stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
                 os.mkdir(comp, 0o755, dir_fd=dir_fd)
             except FileExistsError:
                 pass
-            next_fd = os.open(
-                comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd
-            )
+            next_fd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
             os.close(dir_fd)
             dir_fd = next_fd
         leaf = components[-1]
         try:
-            os.unlink(
-                leaf, dir_fd=dir_fd
-            )  # never follows; removes a materialized symlink as a link
+            os.unlink(leaf, dir_fd=dir_fd)   # never follows; removes a materialized symlink as a link
         except FileNotFoundError:
             pass
-        fd = os.open(
-            leaf,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o600,
-            dir_fd=dir_fd,
-        )
+        fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
         try:
             written = 0
             while written < len(payload):
@@ -102,25 +93,15 @@ def _stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--tree", required=True, help="the disposable detached checkout root"
-    )
-    parser.add_argument(
-        "--rel", required=True, help="repo-relative plan path to stage into the tree"
-    )
+    parser.add_argument("--tree", required=True, help="the disposable detached checkout root")
+    parser.add_argument("--rel", required=True, help="repo-relative plan path to stage into the tree")
     # BOTH REQUIRED. They were optional so a `--live` fallback could stand in; with that mode gone,
     # optional would mean an omitted `--record` staged unauthenticated bytes — the same fail-open,
     # re-created by an argument default rather than a branch.
-    parser.add_argument(
-        "--snapshot",
-        required=True,
-        help="the bound <transcript>.planbytes to authenticate and stage",
-    )
-    parser.add_argument(
-        "--record",
-        required=True,
-        help="the <transcript>.plan digest record to authenticate against",
-    )
+    parser.add_argument("--snapshot", required=True,
+                        help="the bound <transcript>.planbytes to authenticate and stage")
+    parser.add_argument("--record", required=True,
+                        help="the <transcript>.plan digest record to authenticate against")
     arguments = parser.parse_args(argv)
 
     payload = _read_nofollow(arguments.snapshot, "bound plan snapshot")

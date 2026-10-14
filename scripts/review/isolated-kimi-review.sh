@@ -6,7 +6,7 @@
 # An earlier copy of this harness ran for a whole campaign out of a session scratchpad under /tmp and
 # was destroyed when the scratchpad was cleared, along with the plan validator. This repo already
 # carries that lesson for review transcripts; a harness that gates a plan is at least as load-bearing,
-# so it lives beside `isolated-gemini-review.sh` and `isolated-codex-review.sh`.
+# so it lives beside `isolated-agy-review.sh` and `isolated-codex-review.sh`.
 #
 # WHY ISOLATION
 # `kimi` is an agent and can write. The defect this guards is COREDEV-2607: on 2026-07-29 a plan review
@@ -55,14 +55,9 @@ set -uo pipefail
 # synthetic `.pyc` was planted. This is hygiene and defence-in-depth, not a fix for an observed void.
 export PYTHONDONTWRITEBYTECODE=1
 
-[ "$#" -ge 3 ] || {
-	echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2
-	exit 1
-}
-PROMPT_REL="$1"
-OUT="$2"
-COMMIT="$3"
-TIMEOUT="${4:-3300}"
+
+[ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2; exit 1; }
+PROMPT_REL="$1"; OUT="$2"; COMMIT="$3"; TIMEOUT="${4:-3300}"
 # `${5-...}`, NOT `${5:-...}`: the colon form substitutes the default for an EXPLICITLY EMPTY
 # operand too, so the `""` arm below was DEAD and an empty model-supplied operand silently
 # certified the default plan — the exact mismatch this guard exists to prevent (codex, PR #69).
@@ -75,26 +70,14 @@ PLAN_REL="${5-docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md}"
 # exist yet); the OBJECT is re-checked against $TREE/tree below, because a spelling that cannot
 # escape is not the same claim as a file that is not a symlink.
 case "$PLAN_REL" in
-/*)
-	echo "plan operand must be repository-relative, not absolute: $PLAN_REL" >&2
-	exit 1
-	;;
-.. | ../* | */.. | */../*)
-	echo "plan operand must not traverse upward: $PLAN_REL" >&2
-	exit 1
-	;;
-"")
-	echo "plan operand must not be empty" >&2
-	exit 1
-	;;
+    /*)        echo "plan operand must be repository-relative, not absolute: $PLAN_REL" >&2; exit 1 ;;
+    ..|../*|*/..|*/../*) echo "plan operand must not traverse upward: $PLAN_REL" >&2; exit 1 ;;
+    "")        echo "plan operand must not be empty" >&2; exit 1 ;;
 esac
 # A NEWLINE in the operand forged a multiline "BASIS plan = ..." diagnostic, so the printed basis
 # could claim one plan while the digest covered another (codex, PR #69). Refuse any control byte.
 case "$PLAN_REL" in
-*[[:cntrl:]]*)
-	echo "plan operand must not contain control characters" >&2
-	exit 1
-	;;
+    *[[:cntrl:]]*) echo "plan operand must not contain control characters" >&2; exit 1 ;;
 esac
 # Name the basis-checked plan LOUDLY so a stand-in round (e.g. kimi covering a codex quota outage)
 # cannot silently basis-check the default while the prompt reviews something else.
@@ -124,28 +107,19 @@ printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=scripts/review/tree-fingerprint.sh
 . "${SCRIPT_DIR}/tree-fingerprint.sh"
-REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-	echo "not a git repo" >&2
-	exit 1
-}
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 # ...and the gitdir must belong to the checkout we just resolved, so a future edit that reintroduces
 # an inherited selection variable fails loudly instead of silently reading elsewhere.
 _REPO_GITDIR="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null)" || {
-	echo "could not resolve the gitdir for $REPO" >&2
-	exit 1
-}
+    echo "could not resolve the gitdir for $REPO" >&2; exit 1; }
 case "$_REPO_GITDIR" in
-"$REPO"/.git | "$REPO"/.git/*) : ;;
-*) # a linked worktree's gitdir lives under the MAIN repo, which is legitimate; prove the link
-	_MAIN_TOP="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-	case "$_REPO_GITDIR" in
-	"${_MAIN_TOP%/.git}"/.git/worktrees/* | "$_MAIN_TOP"/worktrees/*) : ;;
-	*)
-		echo "gitdir $_REPO_GITDIR does not belong to $REPO — refusing" >&2
-		exit 1
-		;;
-	esac
-	;;
+    "$REPO"/.git|"$REPO"/.git/*) : ;;
+    *) # a linked worktree's gitdir lives under the MAIN repo, which is legitimate; prove the link
+       _MAIN_TOP="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+       case "$_REPO_GITDIR" in
+           "${_MAIN_TOP%/.git}"/.git/worktrees/*|"$_MAIN_TOP"/worktrees/*) : ;;
+           *) echo "gitdir $_REPO_GITDIR does not belong to $REPO — refusing" >&2; exit 1 ;;
+       esac ;;
 esac
 cd "$REPO" || exit 1
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
@@ -159,7 +133,7 @@ PROMPT_ABS="$(python3 "${SCRIPT_DIR}/containment.py" --tool isolated-kimi-review
 # AFTER that BEFORE never saw — the agy and codex harnesses create theirs first for the same reason).
 TREE="$(mktemp -d "${TMPDIR:-/tmp}/kimi-review.XXXXXX")" || exit 1
 cleanup() {
-	rm -rf "$TREE" 2>/dev/null || :
+    rm -rf "$TREE" 2>/dev/null || :
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -175,10 +149,7 @@ trap cleanup EXIT INT TERM HUP
 # the source file is compared byte-for-byte with the snapshot — a prompt that changed underneath the
 # round voids it, as the staged plan does, because the round's basis must survive the round.
 PROMPT_SNAP="$TREE/prompt.snapshot"
-cp -- "$PROMPT_ABS" "$PROMPT_SNAP" || {
-	echo "prompt unreadable: $PROMPT_ABS" >&2
-	exit 1
-}
+cp -- "$PROMPT_ABS" "$PROMPT_SNAP" || { echo "prompt unreadable: $PROMPT_ABS" >&2; exit 1; }
 # A NUL IN THE PROMPT IS REFUSED AT THE SOURCE, exactly as `bind-prompt.py` already does for the
 # plan skills. Command substitution SILENTLY DELETES NULs, so the reviewer receives different bytes
 # than PROMPT_SHA digests — the binding says one thing and the transport delivers another
@@ -189,15 +160,12 @@ cp -- "$PROMPT_ABS" "$PROMPT_SNAP" || {
 # obvious `grep -q $'\000'` compiles to an EMPTY pattern that matches every file — a guard that
 # refuses everything and detects nothing. (Written that way first here; the control caught it.)
 if python3 -c 'import sys; sys.exit(0 if b"\x00" in open(sys.argv[1],"rb").read() else 1)' "$PROMPT_SNAP"; then
-	echo "prompt contains a NUL byte, which shell command substitution deletes — the reviewer would" >&2
-	echo "receive different bytes than are being bound: $PROMPT_REL" >&2
-	exit 1
+    echo "prompt contains a NUL byte, which shell command substitution deletes — the reviewer would" >&2
+    echo "receive different bytes than are being bound: $PROMPT_REL" >&2
+    exit 1
 fi
 PROMPT_TEXT="$(cat "$PROMPT_SNAP")"
-[ -n "$PROMPT_TEXT" ] || {
-	echo "prompt is empty: $REPO/$PROMPT_REL" >&2
-	exit 1
-}
+[ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
 PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
 
 # NOTHING IS CREATED BEFORE THE OPERAND IS CONTAINED. The parent used to be `mkdir -p`'d first, so a
@@ -206,26 +174,19 @@ PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print
 # 13). The physical path is computed WITHOUT creating anything — the nearest EXISTING ancestor is resolved
 # with `cd -P`, the missing tail is re-appended — the refusals are applied to that, and only then is the
 # parent created.
-_out_dir="$(dirname -- "$OUT")"
-_out_missing=""
+_out_dir="$(dirname -- "$OUT")"; _out_missing=""
 while [ ! -d "$_out_dir" ]; do
-	_out_missing="$(basename -- "$_out_dir")/$_out_missing"
-	_out_parent="$(dirname -- "$_out_dir")"
-	[ "$_out_parent" != "$_out_dir" ] || {
-		echo "cannot resolve the transcript's parent: $OUT" >&2
-		exit 1
-	}
-	_out_dir="$_out_parent"
+    _out_missing="$(basename -- "$_out_dir")/$_out_missing"
+    _out_parent="$(dirname -- "$_out_dir")"
+    [ "$_out_parent" != "$_out_dir" ] || { echo "cannot resolve the transcript's parent: $OUT" >&2; exit 1; }
+    _out_dir="$_out_parent"
 done
 # The `|| exit 1` used to sit on THIS assignment and was inert: for an assignment the status is that of
 # the LAST command substitution, which was `basename` — it succeeds even when the `cd -P` before it
 # failed, so an unenterable parent silently re-rooted OUT at `/` and the reviewer was launched anyway
 # (codex sweep, PR #67 pass 14 — reproduced). The physical prefix is captured and tested on its own.
 _out_base="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)" || _out_base=""
-[ -n "$_out_base" ] || {
-	echo "cannot enter the transcript's physical parent: $_out_dir" >&2
-	exit 1
-}
+[ -n "$_out_base" ] || { echo "cannot enter the transcript's physical parent: $_out_dir" >&2; exit 1; }
 OUT="$_out_base/${_out_missing}$(basename -- "$OUT")"
 # ...AND THE RESULT IS NORMALISED LEXICALLY. The re-appended missing tail was kept verbatim, so
 # `/x/missing/../repo/f` stopped at `/x`, retained `missing/..`, passed the repository-prefix check
@@ -241,11 +202,7 @@ OUT="$_out_base/${_out_missing}$(basename -- "$OUT")"
 OUT="$(python3 -c 'import os, re, sys; print(re.sub(r"^//+", "/", os.path.normpath(sys.argv[1])))' "$OUT")" || exit 1
 # The reconstruction is only meaningful if it produced an absolute path; anything else means a step
 # above failed and the refusals below would be testing a relative string.
-case "$OUT" in /*) : ;; *)
-	echo "cannot resolve the transcript's physical path: $OUT" >&2
-	exit 1
-	;;
-esac
+case "$OUT" in /*) : ;; *) echo "cannot resolve the transcript's physical path: $OUT" >&2; exit 1 ;; esac
 # OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
 # checkout, so a relative path such as `.verdicts/kimi.txt` would land the transcript under the
 # temporary worktree — where the later grep/wc could not find it, the run would end EFFORT=UNKNOWN
@@ -260,10 +217,9 @@ esac
 # after it, defeating the guard exactly where it matters (codex, PR #67). `pwd -P` also resolves
 # `/tmp` -> `/private/tmp` on Darwin, so both spellings are covered.
 case "$OUT" in
-/tmp/* | /private/tmp/*)
-	echo "refusing to write the transcript under /tmp — macOS has destroyed campaign transcripts there" >&2
-	exit 1
-	;;
+    /tmp/*|/private/tmp/*)
+        echo "refusing to write the transcript under /tmp — macOS has destroyed campaign transcripts there" >&2
+        exit 1 ;;
 esac
 # ...AND NEVER INSIDE THE LIVE CHECKOUT: the live fingerprint is taken before pty-capture creates or
 # overwrites the transcript, so a capture written into the compared tree voids an otherwise clean round
@@ -271,10 +227,9 @@ esac
 # overwritten before the void was reported (codex, PR #67 pass 12). Physical prefix, physical repo.
 REPO_P="$(CDPATH='' cd -P -- "$REPO" && pwd -P)" || exit 1
 case "$OUT" in
-"$REPO_P"/*)
-	echo "refusing to write the transcript inside the live checkout ($REPO_P) — it is the tree the round is compared against" >&2
-	exit 1
-	;;
+    "$REPO_P"/*)
+        echo "refusing to write the transcript inside the live checkout ($REPO_P) — it is the tree the round is compared against" >&2
+        exit 1 ;;
 esac
 # Only NOW — every refusal has been applied to the physical operand — is the parent created.
 mkdir -p "$(dirname -- "$OUT")" || exit 1
@@ -289,21 +244,16 @@ _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1
 # when the harness started: BEFORE and AFTER stay identical and the round reads as clean. The
 # helper includes `git diff HEAD` precisely for that case (PR #63 recheck, P1; codex, PR #67).
 if ! BEFORE="$(tree_fingerprint "$REPO")"; then
-	echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2
-	exit 1
+    echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2; exit 1
 fi
 
 # A PRIVATE clone of the reviewed commit — never a linked worktree, whose `.git` file points into the
 # maintainer's real repository so every git operation the reviewer runs lands there (see
 # disposable_checkout in tree-fingerprint.sh; adversarial verification, PR #67 pass 6).
 SHA="$(git rev-parse --verify "${COMMIT}^{commit}" 2>/dev/null)" || {
-	echo "not a commit: $COMMIT" >&2
-	exit 1
-}
+    echo "not a commit: $COMMIT" >&2; exit 1; }
 disposable_checkout "$REPO" "$SHA" "$TREE/tree" || {
-	echo "could not build the private review checkout for $COMMIT" >&2
-	exit 1
-}
+    echo "could not build the private review checkout for $COMMIT" >&2; exit 1; }
 # THE BASIS IS DIGESTED FROM THE GIT OBJECT, NOT FROM A PATH IN THE CHECKOUT (codex, PR #69).
 # Filesystem tests on `$TREE/tree/$PLAN_REL` cannot establish what this digest has to mean, which
 # is "these bytes are in the reviewed commit". Three ways they failed, each reproduced:
@@ -316,19 +266,10 @@ disposable_checkout "$REPO" "$SHA" "$TREE/tree" || {
 # 120000, whose blob content is its target path) from being digested as though it were the plan.
 PLAN_MODE="$(git -C "$REPO" ls-tree --format='%(objectmode)' "$SHA" -- "$PLAN_REL" 2>/dev/null)"
 case "$PLAN_MODE" in
-100644 | 100755) : ;;
-"")
-	echo "plan is not tracked in the reviewed commit $SHA: $PLAN_REL" >&2
-	exit 1
-	;;
-120000)
-	echo "plan is a symlink in the reviewed commit: $PLAN_REL" >&2
-	exit 1
-	;;
-*)
-	echo "plan is not a regular file in the reviewed commit (mode $PLAN_MODE): $PLAN_REL" >&2
-	exit 1
-	;;
+    100644|100755) : ;;
+    "")  echo "plan is not tracked in the reviewed commit $SHA: $PLAN_REL" >&2; exit 1 ;;
+    120000) echo "plan is a symlink in the reviewed commit: $PLAN_REL" >&2; exit 1 ;;
+    *)   echo "plan is not a regular file in the reviewed commit (mode $PLAN_MODE): $PLAN_REL" >&2; exit 1 ;;
 esac
 # THE PROMPT MUST DECLARE THE DOCUMENT THE BASIS CERTIFIES, ANCHORED.
 # A substring test was not enough and was bypassed four ways (codex, PR #69 round 3): a `.bak`
@@ -387,11 +328,9 @@ if declared != want_bytes:
     raise SystemExit(1)
 PYBIND
 [ "$_BIND_RC" = 0 ] || exit 1
-BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" |
-	python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" || {
-	echo "could not digest the plan blob from $SHA" >&2
-	exit 1
-}
+BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" \
+    | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" || {
+    echo "could not digest the plan blob from $SHA" >&2; exit 1; }
 # The disposable checkout's CONTENT fingerprint — every path, hashed — so that a reviewer which
 # IMPLEMENTS the plan and leaves any file created or edited other than the plan itself voids the
 # round. Checking only the plan's digest recreates the COREDEV-2607 failure the isolation exists to
@@ -399,8 +338,7 @@ BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" |
 # NOT `git status`: that is metadata the reviewer controls (commit, assume-unchanged, a nested
 # `.gitignore`, a repointed `.git`) — see disposable_fingerprint. FAIL CLOSED if the probe fails.
 if ! TREE_BASELINE="$(disposable_fingerprint "$TREE/tree")"; then
-	echo "GATE FAILED — could not fingerprint the disposable checkout before the review" >&2
-	exit 1
+    echo "GATE FAILED — could not fingerprint the disposable checkout before the review" >&2; exit 1
 fi
 
 # Through the repository's pty-capture.py --timeout, as the agy and codex harnesses are: `timeout`
@@ -428,20 +366,19 @@ SESSIONS_BEFORE="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | L
 # keeps its teeth; what was wrong is letting the artefact exist. Suppress it at the source rather
 # than excluding a path from the manifest — an exclusion is a blacklist a real mutation could hide
 # behind, and `scripts/__pycache__/` is exactly where it would hide.
-(cd "$TREE/tree" && export PYTHONDONTWRITEBYTECODE=1 && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
-	kimi -p "$PROMPT_TEXT" --output-format text) >/dev/null
+( cd "$TREE/tree" && export PYTHONDONTWRITEBYTECODE=1 && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
+    kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null
 STATUS=$?
 
 # The prompt file must still be the bytes this round was launched with — compared byte-for-byte with
 # the snapshot the reviewer's argument was derived from (PROMPT= on the summary line is that argument's digest).
 if cmp -s -- "$PROMPT_ABS" "$PROMPT_SNAP" 2>/dev/null; then PROMPT_INTACT=1; else PROMPT_INTACT=0; fi
 
-AFTER_BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" 2>/dev/null |
-	python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); print(hashlib.sha256(d).hexdigest() if d else "MISSING")' ||
-	echo MISSING)"
+AFTER_BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" 2>/dev/null \
+    | python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); print(hashlib.sha256(d).hexdigest() if d else "MISSING")' \
+    || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
-	echo "GATE FAILED — could not fingerprint the live checkout after the review (round void)" >&2
-	exit 3
+    echo "GATE FAILED — could not fingerprint the live checkout after the review (round void)" >&2; exit 3
 fi
 # FAIL CLOSED if the post-review probe itself fails. `|| true` turned a failed `git status` — a
 # reviewer that deleted or corrupted the disposable checkout's `.git` file and then wrote whatever it
@@ -449,27 +386,27 @@ fi
 # and the round certified arbitrary writes: precisely what this gate exists to reject (codex, PR #67).
 # The probe no longer consults git at all, but a tree that cannot be READ is still not evidence.
 if ! TREE_AFTER="$(disposable_fingerprint "$TREE/tree")"; then
-	echo "ROUND VOID: the disposable checkout could not be re-read after the review — it is not evidence" >&2
-	exit 3
+    echo "ROUND VOID: the disposable checkout could not be re-read after the review — it is not evidence" >&2
+    exit 3
 fi
 
 if [ "$BEFORE" != "$AFTER" ]; then
-	echo "ROUND VOID: the real worktree was mutated during the review" >&2
-	echo "  (if that was your own commit, the round is still void — hold edits until every arm lands)" >&2
-	exit 3
+    echo "ROUND VOID: the real worktree was mutated during the review" >&2
+    echo "  (if that was your own commit, the round is still void — hold edits until every arm lands)" >&2
+    exit 3
 fi
 if [ "$BASIS" != "$AFTER_BASIS" ]; then
-	echo "ROUND VOID: the reviewer modified the staged plan — COREDEV-2607 signature" >&2
-	exit 3
+    echo "ROUND VOID: the reviewer modified the staged plan — COREDEV-2607 signature" >&2
+    exit 3
 fi
 if [ "$PROMPT_INTACT" != 1 ]; then
-	echo "ROUND VOID: the prompt file changed during the review — the round's basis did not survive it" >&2
-	exit 3
+    echo "ROUND VOID: the prompt file changed during the review — the round's basis did not survive it" >&2
+    exit 3
 fi
 if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
-	echo "ROUND VOID: the reviewer left edits inside the disposable checkout — COREDEV-2607 signature" >&2
-	printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' >&2 || :
-	exit 3
+    echo "ROUND VOID: the reviewer left edits inside the disposable checkout — COREDEV-2607 signature" >&2
+    printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' >&2 || :
+    exit 3
 fi
 
 # Effort assertion, from the wire log of THE SESSION THIS RUN CREATED — resolved from the session id
@@ -503,28 +440,28 @@ _KIMI_CWD="$(cd -P -- "$TREE/tree" 2>/dev/null && pwd -P)"
 _OURS=""
 _OURS_N=0
 for _cand in $NEW_SESSIONS; do
-	[ -n "$_cand" ] || continue
-	_state="$_cand/state.json"
-	[ -r "$_state" ] || continue
-	# WHICH KEY RECORDS THE CWD IS VERSION-DEPENDENT - measured, not assumed. Across 63 real sessions
-	# on the development machine, 38 record `workDir` (the 0.32.0-era schema that this repo's own
-	# KIMI_REVIEW_ARM_PLAN pins as the baseline) and 25 record `cwd` (the newer `version=2` schema);
-	# none carried both. Reading only `cwd`/`workingDirectory` therefore rejected the MAJORITY of real
-	# sessions, producing `_OURS_N=0` and a spurious `EFFORT=UNKNOWN` exit 4 - a fail-CLOSED break of
-	# the whole arm (codex, PR #69 round 17). Every cell that existed synthesized `cwd`, because the
-	# fixtures were written from the same assumption as the code, so no test could fail on it.
-	#
-	# All three spellings are accepted, and ANY malformed record fails closed - printing nothing, so
-	# the caller's emptiness check skips the session. Three ways to be malformed, one rule:
-	#   - aliases that DISAGREE          -> ambiguous origin, not resolvable by alias precedence
-	#   - an alias that is not a string  -> `{"cwd": <ours>, "workDir": 12345}` must not be waved
-	#                                       through by IGNORING the bad alias; a record that cannot
-	#                                       be read as written is unknowable, and unknowable is not
-	#                                       ours. (The first draft of this fix ignored non-strings,
-	#                                       which is the permissive direction AND was undetectable:
-	#                                       deleting the check changed no test. Mutation gate C.)
-	#   - no alias present at all        -> nothing recorded (see the no-state cell)
-	_their_cwd="$(python3 -c 'import json,sys
+    [ -n "$_cand" ] || continue
+    _state="$_cand/state.json"
+    [ -r "$_state" ] || continue
+    # WHICH KEY RECORDS THE CWD IS VERSION-DEPENDENT - measured, not assumed. Across 63 real sessions
+    # on the development machine, 38 record `workDir` (the 0.32.0-era schema that this repo's own
+    # KIMI_REVIEW_ARM_PLAN pins as the baseline) and 25 record `cwd` (the newer `version=2` schema);
+    # none carried both. Reading only `cwd`/`workingDirectory` therefore rejected the MAJORITY of real
+    # sessions, producing `_OURS_N=0` and a spurious `EFFORT=UNKNOWN` exit 4 - a fail-CLOSED break of
+    # the whole arm (codex, PR #69 round 17). Every cell that existed synthesized `cwd`, because the
+    # fixtures were written from the same assumption as the code, so no test could fail on it.
+    #
+    # All three spellings are accepted, and ANY malformed record fails closed - printing nothing, so
+    # the caller's emptiness check skips the session. Three ways to be malformed, one rule:
+    #   - aliases that DISAGREE          -> ambiguous origin, not resolvable by alias precedence
+    #   - an alias that is not a string  -> `{"cwd": <ours>, "workDir": 12345}` must not be waved
+    #                                       through by IGNORING the bad alias; a record that cannot
+    #                                       be read as written is unknowable, and unknowable is not
+    #                                       ours. (The first draft of this fix ignored non-strings,
+    #                                       which is the permissive direction AND was undetectable:
+    #                                       deleting the check changed no test. Mutation gate C.)
+    #   - no alias present at all        -> nothing recorded (see the no-state cell)
+    _their_cwd="$(python3 -c 'import json,sys
 def _p(pairs):
     seen={}
     for k,v in pairs:
@@ -546,13 +483,13 @@ for k in ("cwd","workingDirectory","workDir"):
     vals.add(v)
 if len(vals)==1:
     print(vals.pop())' "$_state" 2>/dev/null)"
-	[ -n "$_their_cwd" ] || continue
-	_their_real="$(cd -P -- "$_their_cwd" 2>/dev/null && pwd -P)"
-	[ -n "$_their_real" ] || _their_real="$_their_cwd"
-	if [ "$_their_real" = "$_KIMI_CWD" ] || [ "$_their_cwd" = "$TREE/tree" ]; then
-		_OURS="$_cand"
-		_OURS_N=$((_OURS_N + 1))
-	fi
+    [ -n "$_their_cwd" ] || continue
+    _their_real="$(cd -P -- "$_their_cwd" 2>/dev/null && pwd -P)"
+    [ -n "$_their_real" ] || _their_real="$_their_cwd"
+    if [ "$_their_real" = "$_KIMI_CWD" ] || [ "$_their_cwd" = "$TREE/tree" ]; then
+        _OURS="$_cand"
+        _OURS_N=$((_OURS_N + 1))
+    fi
 done
 # PROVENANCE FILTERS; THE COUNT STILL DECIDES. Matching the cwd excludes a stranger's session, but
 # it does not make TWO sessions in our own namespace unambiguous — and real kimi files exactly one
@@ -564,8 +501,8 @@ done
 # needed a cell of its own. Both conditions are required: the session must be ours, and this
 # invocation must have produced something.
 if [ "$_OURS_N" = 1 ] && [ -s "$OUT" ]; then
-	_w="$_OURS/agents/main/wire.jsonl"
-	[ -r "$_w" ] && WIRE="$_w"
+    _w="$_OURS/agents/main/wire.jsonl"
+    [ -r "$_w" ] && WIRE="$_w"
 fi
 unset _cand _state _their_cwd _their_real _OURS _OURS_N
 EFFORTS=""
@@ -663,10 +600,10 @@ WIRE_SHA=""
 [ -n "$WIRE" ] && WIRE_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WIRE" 2>/dev/null)"
 
 printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s(self-reported) WIRE=%s\n' \
-	"$STATUS" "$(wc -c <"$OUT" | tr -d ' ')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" "${EFFORTS:-UNKNOWN}" "${WIRE_SHA:0:12}"
+    "$STATUS" "$(wc -c < "$OUT" | tr -d ' ')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" "${EFFORTS:-UNKNOWN}" "${WIRE_SHA:0:12}"
 
 if [ "$EFFORTS" != "max," ]; then
-	echo "EFFORT NOT ASSERTED AS max (saw: ${EFFORTS:-none}) — this run is not evidence about max" >&2
-	exit 4
+    echo "EFFORT NOT ASSERTED AS max (saw: ${EFFORTS:-none}) — this run is not evidence about max" >&2
+    exit 4
 fi
 exit "$STATUS"

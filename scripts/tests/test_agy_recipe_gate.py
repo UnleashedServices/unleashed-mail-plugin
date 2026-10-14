@@ -68,6 +68,11 @@ EXEMPTIONS: tuple[tuple[str, str, str], ...] = (
         "message or comment text",
     ),
     (
+        "scripts/review-verdict.py",
+        '"review — `agy` writes exactly 0 bytes from a non-TTY on failure)")',
+        "message or comment text",
+    ),
+    (
         "scripts/validate-plugin-assembly.py",
         '"agy": "any agy invocation outside the isolation harness — agy has NO read-only mode",',
         "a refusal of the retired CLI",

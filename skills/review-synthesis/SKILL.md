@@ -52,14 +52,14 @@ path: do not split it again, trim it, resolve it independently, or reconstruct i
 
 Map each reviewer's raw verdict to one canonical token:
 
-| Raw (any reviewer / CLI)                                                         | Canonical            |
-| -------------------------------------------------------------------------------- | -------------------- |
-| `APPROVE`, "looks good", "ship it"                                               | `APPROVE`            |
+| Raw (any reviewer / CLI) | Canonical |
+|---|---|
+| `APPROVE`, "looks good", "ship it" | `APPROVE` |
 | `APPROVE_WITH_NOTES`, `APPROVE_WITH_NITS`, "approve with a couple of nits/notes" | `APPROVE_WITH_NOTES` |
-| `REQUEST_CHANGES`, `REQUEST CHANGES`, "needs changes", "blocking"                | `REQUEST_CHANGES`    |
-| missing / empty / unparseable transcript                                         | `MISSING`            |
+| `REQUEST_CHANGES`, `REQUEST CHANGES`, "needs changes", "blocking" | `REQUEST_CHANGES` |
+| missing / empty / unparseable transcript | `MISSING` |
 
-> A reviewer may emit `APPROVE_WITH_NITS` (the retired `agy` CLI did routinely); the project's canonical gate term (CLAUDE.md,
+> The `agy`/gemini CLI emits `APPROVE_WITH_NITS`; the project's canonical gate term (CLAUDE.md,
 > `AGENT_CONTRACTS.md`) is `APPROVE_WITH_NOTES`. **Normalize `NITS → NOTES`.**
 
 ## Combined-verdict rule (apply in priority order — first match wins)
@@ -68,7 +68,7 @@ Map each reviewer's raw verdict to one canonical token:
    - **Both** missing → `REQUEST_CHANGES` (the gate did not run at all).
    - One missing, the other `REQUEST_CHANGES` → `REQUEST_CHANGES`.
    - One missing, the other approves (`APPROVE`/`APPROVE_WITH_NOTES`) → `DISAGREEMENT` (a lone approval can't carry the gate).
-     Always **low** confidence, with an explicit note naming the reviewer(s) that did not return.
+   Always **low** confidence, with an explicit note naming the reviewer(s) that did not return.
 2. **One side approves (`APPROVE`/`APPROVE_WITH_NOTES`) and the other is `REQUEST_CHANGES`** →
    `DISAGREEMENT`. Surface both positions; **do not average** to a middle verdict.
 3. **Both `REQUEST_CHANGES`** → `REQUEST_CHANGES`.
@@ -83,29 +83,24 @@ Map each reviewer's raw verdict to one canonical token:
 **Combined verdict:** APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT
 
 ### Agreement
-
 - [points BOTH reviewers raised or endorsed]
 
 ### Disagreement
-
 - [points where the reviewers diverge — name which reviewer took which side; leave empty only if they fully agree]
 
 ### Minority report
-
 - [a concern raised by ONLY one reviewer that you are NOT folding into the combined verdict but the human should see]
 
 ### Risk register
 
-| Risk | Raised by             | Likelihood   | Mitigation |
-| ---- | --------------------- | ------------ | ---------- |
-| …    | gemini / codex / both | low/med/high | …          |
+| Risk | Raised by | Likelihood | Mitigation |
+|---|---|---|---|
+| … | gemini / codex / both | low/med/high | … |
 
 ### Conditions that would change the recommendation
-
 - [what evidence or change would flip the verdict — e.g. "codex blocker X addressed", "missing transcript recaptured"]
 
 ### Confidence
-
 - **[high | medium | low]** — [one line; low whenever a transcript was MISSING or a verdict was inferred from ambiguous prose]
 ```
 
@@ -122,7 +117,7 @@ After emitting the block, **persist the Combined verdict as a plan-digest-bound 
 `implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit).
 
 **Prerequisite — the reviewed digest was snapshotted at gate LAUNCH.** `create-feature-plan` runs
-`snapshot-plan.sh <PLAN>` (the contained entrypoint) _before_ dispatching
+`snapshot-plan.sh <PLAN>` (the contained entrypoint) *before* dispatching
 `/unleashed-mail:gemini-review` + `/unleashed-mail:codex-review`, writing
 a git-ignored `.reviewed-sha256` sidecar beside the plan. That snapshot binds the approval to the bytes
 the reviewers actually saw. It CANNOT be a shell variable — each skill step is a separate tool
@@ -139,14 +134,14 @@ carry the CANONICAL status and the exact transcript-path remainder supplied to t
 rebuild it as `<name>=<canonical status>:<the original path, unchanged>`.
 
 > **`APPROVE_WITH_NITS` must be canonicalized in the spec too, not only in the synthesis** (PR #63
-> recheck). The retired `agy` CLI emitted `NITS` (a reviewer still may), the normalization table above converts it for the combined verdict, and
+> recheck). `agy` emits `NITS`, the normalization table above converts it for the combined verdict, and
 > passing the reviewer argument through byte-for-byte then handed `persist-verdict.sh` a token it does
 > not accept — `invalid reviewer status`, aborting an otherwise valid dual approval at the last step.
 > The path remainder is still passed unchanged, because it is the thing the gate binds to. `scripts/review/persist-verdict.sh` parses only the
-> first delimiters, classifies an absent or empty allocated leaf as `MISSING`, and otherwise passes the
-> spec through unchanged — it accepts `APPROVE`, `APPROVE_WITH_NOTES`, `REQUEST_CHANGES` and `MISSING`
-> only, which is why the canonicalization above has to happen before it is called. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so
-> no `--reviewed-sha256` argument is needed in the normal flow.
+first delimiters, classifies an absent or empty allocated leaf as `MISSING`, and otherwise passes the
+spec through unchanged — it accepts `APPROVE`, `APPROVE_WITH_NOTES`, `REQUEST_CHANGES` and `MISSING`
+only, which is why the canonicalization above has to happen before it is called. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so
+no `--reviewed-sha256` argument is needed in the normal flow.
 
 This used to be the same logic pasted inline here, in `brainstorm`, and (in capture form) in the two
 review skills. Each copy defined functions and branched, so it matched none of those skills'

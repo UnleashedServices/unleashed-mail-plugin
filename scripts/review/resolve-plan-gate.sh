@@ -48,28 +48,28 @@ SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 # The recipe therefore no longer substitutes the argument at all: the caller resolves the plan itself
 # and passes the concrete path here, where the containment below governs it exactly as before.
 if [ "$#" -gt 1 ]; then
-	echo "REFUSED: takes at most one operand — the plan name or path." >&2
-	exit 1
+    echo "REFUSED: takes at most one operand — the plan name or path." >&2
+    exit 1
 elif [ "$#" -eq 1 ]; then
-	ARG="$1"
+    ARG="$1"
 else
-	# An interactive terminal would sit at a silent `cat` waiting for EOF a human does not know to
-	# send — refuse with usage instead (2026-08-17 audit, AF-13). Claude Code's Bash tool and the
-	# test harness both provide non-TTY stdin, so the piped path below is unchanged for them.
-	if [ -t 0 ]; then
-		echo "REFUSED: no operand and stdin is a terminal — pass the plan name/path as the single operand." >&2
-		exit 1
-	fi
-	# `$(cat)` strips trailing newlines exactly as the heredoc command substitution it replaced did, so a
-	# well-formed single-line argument is unchanged and a crafted multi-line one still shows its newline.
-	ARG="$(cat)"
+    # An interactive terminal would sit at a silent `cat` waiting for EOF a human does not know to
+    # send — refuse with usage instead (2026-08-17 audit, AF-13). Claude Code's Bash tool and the
+    # test harness both provide non-TTY stdin, so the piped path below is unchanged for them.
+    if [ -t 0 ]; then
+        echo "REFUSED: no operand and stdin is a terminal — pass the plan name/path as the single operand." >&2
+        exit 1
+    fi
+    # `$(cat)` strips trailing newlines exactly as the heredoc command substitution it replaced did, so a
+    # well-formed single-line argument is unchanged and a crafted multi-line one still shows its newline.
+    ARG="$(cat)"
 fi
 
 # A slash argument is single-line; reject a multi-line value (only a crafted paste produces one, and it is
 # never a valid feature name or plan path) so a newline cannot smuggle a second line past the heredoc.
 if [ "$ARG" != "${ARG%%$'\n'*}" ]; then
-	echo "REFUSED: multi-line argument is not a valid plan name/path." >&2
-	exit 1
+    echo "REFUSED: multi-line argument is not a valid plan name/path." >&2
+    exit 1
 fi
 
 # ANCHOR AT THE WORKTREE ROOT, REMEMBERING WHERE THE CALLER STOOD (PR #63 recheck, P2).
@@ -84,26 +84,26 @@ fi
 CALLER_PWD="$PWD"
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
 if [ -z "$TOP" ]; then
-	echo "REFUSED: not inside a Git worktree — the Plan Review Gate anchors at the repository root." >&2
-	exit 1
+    echo "REFUSED: not inside a Git worktree — the Plan Review Gate anchors at the repository root." >&2
+    exit 1
 fi
 TOP="$(CDPATH='' cd -- "$TOP" && pwd -P)" || exit 1
 cd "$TOP" || exit 1
 
 # Repo-relative identity of $1 interpreted against base $2, or non-zero. Only the PARENT is resolved
 # physically — a symlinked LEAF must still reach `_contained` below, which refuses it with the specific
-# uncontained diagnostic rather than a generic miss. Same helper shape as `isolated-gemini-review.sh`,
+# uncontained diagnostic rather than a generic miss. Same helper shape as `isolated-agy-review.sh`,
 # for the same reason: an operand's meaning must not depend on where the caller happened to stand.
 resolve_in_repo() {
-	local candidate="$1" base="$2" parent leaf
-	case "$candidate" in /*) ;; *) candidate="$base/$candidate" ;; esac
-	[ -f "$candidate" ] || return 1
-	parent="$(CDPATH='' cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)" || return 1
-	leaf="$parent/$(basename -- "$candidate")"
-	case "$leaf" in
-	"$TOP"/*) printf '%s\n' "${leaf#"$TOP"/}" ;;
-	*) return 1 ;;
-	esac
+    local candidate="$1" base="$2" parent leaf
+    case "$candidate" in /*) ;; *) candidate="$base/$candidate" ;; esac
+    [ -f "$candidate" ] || return 1
+    parent="$(CDPATH='' cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)" || return 1
+    leaf="$parent/$(basename -- "$candidate")"
+    case "$leaf" in
+        "$TOP"/*) printf '%s\n' "${leaf#"$TOP"/}" ;;
+        *) return 1 ;;
+    esac
 }
 
 # PHYSICAL CONTAINMENT — the one guard, used by BOTH resolution branches.
@@ -119,7 +119,7 @@ resolve_in_repo() {
 # Resolve the plan, but anchor the base to the PHYSICAL repo root and do NOT resolve the base itself —
 # then a symlinked docs/planning cannot launder its own target. (codex, #41 review; all reproduced.)
 _contained() {
-	python3 - "$1" <<'PYEOF'
+    python3 - "$1" <<'PYEOF'
 import os, sys
 root = os.path.realpath(".")
 base = os.path.join(root, "docs", "planning")   # deliberately NOT realpath'd
@@ -128,12 +128,10 @@ sys.exit(0 if real == base or real.startswith(base + os.sep) else 1)
 PYEOF
 }
 _refuse_uncontained() {
-	{
-		echo "REFUSED: '$1' does not live under <repo-root>/docs/planning."
-		echo "A tracked plan's BYTES must be in the repo — a symlink, a ../ escape, or a symlinked"
-		echo "docs/planning is not a tracked plan (CLAUDE.md's Plan Review Gate)."
-	} >&2
-	exit 1
+    { echo "REFUSED: '$1' does not live under <repo-root>/docs/planning."
+      echo "A tracked plan's BYTES must be in the repo — a symlink, a ../ escape, or a symlinked"
+      echo "docs/planning is not a tracked plan (CLAUDE.md's Plan Review Gate)."; } >&2
+    exit 1
 }
 
 PLAN=""
@@ -145,120 +143,100 @@ PLAN=""
 FROM_CALLER="$(resolve_in_repo "$ARG" "$CALLER_PWD")" || FROM_CALLER=""
 FROM_ROOT="$(resolve_in_repo "$ARG" "$TOP")" || FROM_ROOT=""
 if [ -n "$FROM_CALLER" ] && [ -n "$FROM_ROOT" ] && [ "$FROM_CALLER" != "$FROM_ROOT" ]; then
-	{
-		echo "AMBIGUOUS: '$ARG' names $FROM_CALLER from the invoking directory and $FROM_ROOT from the"
-		echo "repository root — name one of them unambiguously."
-	} >&2
-	exit 2
+    { echo "AMBIGUOUS: '$ARG' names $FROM_CALLER from the invoking directory and $FROM_ROOT from the"
+      echo "repository root — name one of them unambiguously."; } >&2
+    exit 2
 fi
 REL="${FROM_CALLER:-$FROM_ROOT}"
 if [ -n "$REL" ]; then
-	case "$REL" in
-	docs/planning/*PLAN*.md) ;;
-	*)
-		{
-			echo "REFUSED: '$ARG' is not a tracked plan."
-			echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."
-		} >&2
-		exit 1
-		;;
-	esac
-	_contained "$REL" || _refuse_uncontained "$ARG"
-	PLAN="$REL"
+    case "$REL" in
+        docs/planning/*PLAN*.md) ;;
+        *) { echo "REFUSED: '$ARG' is not a tracked plan."
+             echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
+           exit 1 ;;
+    esac
+    _contained "$REL" || _refuse_uncontained "$ARG"
+    PLAN="$REL"
 elif [ -f "$ARG" ]; then
-	# It EXISTS by the root/absolute interpretation but does not resolve into this repository — a
-	# /tmp plan, or a `..` spelling that escapes. Keep the explicit refusals these spellings have
-	# always produced, rather than letting an out-of-tree file fall through to fuzzy name matching.
-	_p="${ARG#./}"
-	case "$_p" in
-	docs/planning/*PLAN*.md) _refuse_uncontained "$ARG" ;;
-	*)
-		{
-			echo "REFUSED: '$ARG' is not a tracked plan."
-			echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."
-		} >&2
-		exit 1
-		;;
-	esac
+    # It EXISTS by the root/absolute interpretation but does not resolve into this repository — a
+    # /tmp plan, or a `..` spelling that escapes. Keep the explicit refusals these spellings have
+    # always produced, rather than letting an out-of-tree file fall through to fuzzy name matching.
+    _p="${ARG#./}"
+    case "$_p" in
+        docs/planning/*PLAN*.md) _refuse_uncontained "$ARG" ;;
+        *) { echo "REFUSED: '$ARG' is not a tracked plan."
+             echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
+           exit 1 ;;
+    esac
 else
-	# One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
-	# THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant
-	# space(32)..dot(46) — 15 characters — and `/implement "c+dark"` then matched C-DARK_PLAN.md, i.e.
-	# the gate verified a plan nobody named (gemini, #41 review). Trailing `-` is a literal.
-	KEY=$(printf '%s' "$ARG" | tr '[:upper:] .-' '[:lower:]___')
-	# THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`.
-	# `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY resolves to the first plan on disk: a
-	# fail-OPEN. `-n` alone is not enough either — `tr` maps ' ', '-' and '.' to '_' BEFORE this runs, so
-	# ARGUMENTS=" " yields KEY="_", which is non-empty and `*_*` matches most plan filenames. `*[!_]*`
-	# states the real property ("not composed solely of what tr just mapped to _") and is
-	# locale-independent, where the earlier `*[a-z0-9]*` was an ASCII proxy that refused `日本語`.
-	# EXACT STEM matches are collected separately from mere SUBSTRING matches. A unique substring used
-	# to resolve silently as identity — `/implement mode` picked DARK_MODE_PLAN.md — so a coincidental
-	# fragment could satisfy the gate against a plan the user did not name (full review, #41). Now a
-	# full/exact feature name always wins, and a pure substring must be named explicitly.
-	#
-	# For each plan, three stems the arg may exactly equal:
-	#   full   — the basename minus the `_PLAN.md` suffix            (coredev_2328_reviewer_status_capture)
-	#   desc   — full minus a leading `coredev_<digits>_` ticket     (reviewer_status_capture)
-	#   ticket — the `coredev_<digits>` prefix alone                 (coredev_2328)
-	EXACT=()
-	SUBSTR=()
-	if [[ $KEY == *[!_]* ]]; then
-		for p in docs/planning/*PLAN*.md; do
-			[ -e "$p" ] || continue # unmatched glob stays literal -> skip
-			# THE SAME CONTAINMENT GUARD AS THE DIRECT BRANCH. Without it `/implement evil` selected
-			# `docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md` and returned GATE OK — the direct
-			# branch refused that exact symlink while the glob branch happily took it (codex, #41
-			# review; reproduced). Filtering here so an out-of-tree symlink cannot even reach a match.
-			_contained "$p" || continue
-			# `b` is the NORMALIZED basename: tr already mapped ` `/`.`/`-` -> `_`, so `.md` is `_md`
-			# here and the suffix to strip is `_plan_md`, not `_plan.md`.
-			b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
-			full="${b%_plan_md}"
-			desc="$full"
-			ticket=""
-			case "$full" in
-			coredev_[0-9]*)
-				rest="${full#coredev_}"      # 2328_reviewer_status_capture
-				ticket="coredev_${rest%%_*}" # coredev_2328
-				desc="${rest#*_}"            # reviewer_status_capture
-				;;
-			esac
-			if [ "$KEY" = "$full" ] || [ "$KEY" = "$desc" ] || [ "$KEY" = "$ticket" ]; then
-				EXACT+=("$p")
-			elif [[ $b == *"$KEY"* ]]; then
-				SUBSTR+=("$p")
-			fi
-		done
-	fi
-	# Prefer EXACT: a full name wins over any coincidental substring.
-	if [ "${#EXACT[@]}" -gt 1 ]; then
-		{
-			echo "AMBIGUOUS: '$ARG' exactly names ${#EXACT[@]} plans — name a path:"
-			printf '%s\n' "${EXACT[@]}"
-		} >&2
-		exit 2
-	elif [ "${#EXACT[@]}" -eq 1 ]; then
-		PLAN="${EXACT[0]}"
-	elif [ "${#SUBSTR[@]}" -ge 1 ]; then
-		# A PURE SUBSTRING is NOT identity. Do not auto-resolve it — the gate would then verify a plan
-		# the user only partially named. Require an exact name (full review, #41).
-		{
-			echo "No plan is named exactly '$ARG'. Did you mean one of these? Name it exactly:"
-			printf '%s\n' "${SUBSTR[@]}"
-		} >&2
-		exit 2
-	fi
-	# No EXACT and no SUBSTR -> empty PLAN -> the fail-closed branch below.
+    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
+    # THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant
+    # space(32)..dot(46) — 15 characters — and `/implement "c+dark"` then matched C-DARK_PLAN.md, i.e.
+    # the gate verified a plan nobody named (gemini, #41 review). Trailing `-` is a literal.
+    KEY=$(printf '%s' "$ARG" | tr '[:upper:] .-' '[:lower:]___')
+    # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`.
+    # `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY resolves to the first plan on disk: a
+    # fail-OPEN. `-n` alone is not enough either — `tr` maps ' ', '-' and '.' to '_' BEFORE this runs, so
+    # ARGUMENTS=" " yields KEY="_", which is non-empty and `*_*` matches most plan filenames. `*[!_]*`
+    # states the real property ("not composed solely of what tr just mapped to _") and is
+    # locale-independent, where the earlier `*[a-z0-9]*` was an ASCII proxy that refused `日本語`.
+    # EXACT STEM matches are collected separately from mere SUBSTRING matches. A unique substring used
+    # to resolve silently as identity — `/implement mode` picked DARK_MODE_PLAN.md — so a coincidental
+    # fragment could satisfy the gate against a plan the user did not name (full review, #41). Now a
+    # full/exact feature name always wins, and a pure substring must be named explicitly.
+    #
+    # For each plan, three stems the arg may exactly equal:
+    #   full   — the basename minus the `_PLAN.md` suffix            (coredev_2328_reviewer_status_capture)
+    #   desc   — full minus a leading `coredev_<digits>_` ticket     (reviewer_status_capture)
+    #   ticket — the `coredev_<digits>` prefix alone                 (coredev_2328)
+    EXACT=(); SUBSTR=()
+    if [[ "$KEY" == *[!_]* ]]; then
+        for p in docs/planning/*PLAN*.md; do
+            [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
+            # THE SAME CONTAINMENT GUARD AS THE DIRECT BRANCH. Without it `/implement evil` selected
+            # `docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md` and returned GATE OK — the direct
+            # branch refused that exact symlink while the glob branch happily took it (codex, #41
+            # review; reproduced). Filtering here so an out-of-tree symlink cannot even reach a match.
+            _contained "$p" || continue
+            # `b` is the NORMALIZED basename: tr already mapped ` `/`.`/`-` -> `_`, so `.md` is `_md`
+            # here and the suffix to strip is `_plan_md`, not `_plan.md`.
+            b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
+            full="${b%_plan_md}"
+            desc="$full"; ticket=""
+            case "$full" in
+                coredev_[0-9]*)
+                    rest="${full#coredev_}"      # 2328_reviewer_status_capture
+                    ticket="coredev_${rest%%_*}" # coredev_2328
+                    desc="${rest#*_}"            # reviewer_status_capture
+                    ;;
+            esac
+            if [ "$KEY" = "$full" ] || [ "$KEY" = "$desc" ] || [ "$KEY" = "$ticket" ]; then
+                EXACT+=("$p")
+            elif [[ "$b" == *"$KEY"* ]]; then
+                SUBSTR+=("$p")
+            fi
+        done
+    fi
+    # Prefer EXACT: a full name wins over any coincidental substring.
+    if [ "${#EXACT[@]}" -gt 1 ]; then
+        { echo "AMBIGUOUS: '$ARG' exactly names ${#EXACT[@]} plans — name a path:"; printf '%s\n' "${EXACT[@]}"; } >&2
+        exit 2
+    elif [ "${#EXACT[@]}" -eq 1 ]; then
+        PLAN="${EXACT[0]}"
+    elif [ "${#SUBSTR[@]}" -ge 1 ]; then
+        # A PURE SUBSTRING is NOT identity. Do not auto-resolve it — the gate would then verify a plan
+        # the user only partially named. Require an exact name (full review, #41).
+        { echo "No plan is named exactly '$ARG'. Did you mean one of these? Name it exactly:"
+          printf '%s\n' "${SUBSTR[@]}"; } >&2
+        exit 2
+    fi
+    # No EXACT and no SUBSTR -> empty PLAN -> the fail-closed branch below.
 fi
 if [ -z "$PLAN" ]; then
-	# exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
-	# plan exists — so a FAILED resolution reported success.
-	{
-		echo "No plan matches '$ARG'. Available:"
-		ls docs/planning/*PLAN*.md 2>/dev/null
-	} >&2
-	exit 1
+    # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
+    # plan exists — so a FAILED resolution reported success.
+    { echo "No plan matches '$ARG'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null; } >&2
+    exit 1
 fi
 
 echo "Plan: $PLAN"
