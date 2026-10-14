@@ -125,7 +125,7 @@ fi
 # THE WHOLE ANSWER, not a substring (codex, plan round 1, Q2): `grep -qi pong` passed `not pong` and
 # `pong unavailable`. The answer must be `pong`, case-insensitive, optionally ending in one `.` or `!`, with
 # surrounding whitespace ignored. The adapter has already asserted the model and refused a JSON error.
-if python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"(?i)pong[.!]?", open(sys.argv[1], errors="replace").read().strip()) else 1)' "${PING}"; then
+if python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"(?i)pong[.!]?", open(sys.argv[1], encoding="utf-8", errors="replace").read().strip()) else 1)' "${PING}"; then
 	printf 'gemini preflight: healthy\n'
 	exit 0
 fi

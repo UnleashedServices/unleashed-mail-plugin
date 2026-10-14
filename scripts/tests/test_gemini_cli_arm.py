@@ -53,6 +53,13 @@ _CAP = re.search(
 )
 assert _CAP, "gemini-review-run.py no longer declares _STDOUT_CAP"
 STDOUT_CAP = int(_CAP.group(1)) * 1024 * 1024
+_ERRCAP = re.search(
+    r"^_STDERR_CAP = (\d+) \* 1024 \* 1024$",
+    ADAPTER.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+assert _ERRCAP, "gemini-review-run.py no longer declares _STDERR_CAP"
+STDERR_CAP = int(_ERRCAP.group(1)) * 1024 * 1024
 NO_MCP = re.compile(
     r"\Aunleashed-mail-no-mcp-[0-9a-f]{32}\Z"
 )  # a fresh random name per run
@@ -70,13 +77,22 @@ log = os.environ.get("GEMINI_STUB_LOG")
 if log:
     with open(log, "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"argv": argv, "trust": os.environ.get("GEMINI_CLI_TRUST_WORKSPACE"),
-                                 "cwd": os.getcwd(), "settings": settings}) + "\n")
+                                 "cwd": os.getcwd(), "settings": settings,
+                                 "system_md": os.environ.get("GEMINI_SYSTEM_MD"),
+                                 "ide": sorted(k for k in os.environ if k.startswith("GEMINI_CLI_IDE_"))}) + "\n")
 sys.stderr.write("VERDICT: APPROVE\n")
 sys.stderr.flush()
 if os.environ.get("GEMINI_STUB_KILL_PARENT"):
     import signal
     os.kill(os.getppid(), signal.SIGKILL)
     sys.exit(0)
+flood_err = os.environ.get("GEMINI_STUB_FLOOD_STDERR")
+if flood_err:
+    left = int(flood_err)
+    while left > 0:
+        sys.stderr.write("e" * min(left, 65536))
+        left -= 65536
+    sys.stderr.flush()
 flood = os.environ.get("GEMINI_STUB_FLOOD")
 if flood:
     chunk = "x" * 65536
@@ -314,8 +330,105 @@ class G2NothingUnvalidatedReachesTheTranscript(_StubGemini, unittest.TestCase):
         result, raw, diag = self.adapter()
         self.assertEqual(4, result.returncode, diag)
         self.assertEqual(b"", raw)
-        self.assertIn("could not run the `gemini` CLI", diag)
+        self.assertIn("no executable `gemini` CLI on PATH", diag)
         self.assertNotIn("Traceback", diag)
+
+    def test_diagnostics_past_the_cap_are_stopped_and_refused(self):
+        """A runaway stderr cannot fill the disk through the diagnostics file (PR #124 review, P2)."""
+        self.env["GEMINI_STUB_FLOOD_STDERR"] = str(STDERR_CAP + 1)
+        result, raw, _ = self.adapter()
+        diag = self.tmp / "leaf.txt.diag"
+        self.assertEqual(4, result.returncode)
+        self.assertEqual(b"", raw)
+        self.assertLessEqual(diag.stat().st_size, STDERR_CAP + 4096)
+        self.assertIn(
+            f"diagnostics exceeded {STDERR_CAP} bytes",
+            diag.read_text(encoding="utf-8", errors="replace")[-400:],
+        )
+
+    def test_a_gemini_reachable_only_through_the_checkout_is_never_run(self):
+        """A relative PATH entry, or one inside the checkout, would run a branch-committed `gemini` (PR #124, P1)."""
+        marker = self.tmp / "FORGED_RAN"
+        # Each guard is exercised ALONE: `.` resolves INTO the checkout, so it would be skipped by the in-checkout
+        # guard anyway; `../outside-bin` is relative but resolves OUTSIDE it, so only the relative-entry guard can
+        # stop it (a mutation table survivor showed the first case alone could not tell the guards apart).
+        for label, entry, forged_dir in (
+            ("relative", ".", self.workdir),
+            (
+                "relative, resolving outside the checkout",
+                "../outside-bin",
+                self.tmp / "outside-bin",
+            ),
+            ("inside the checkout", str(self.workdir / "bin"), self.workdir / "bin"),
+        ):
+            with self.subTest(entry=label):
+                if self.log.exists():
+                    self.log.unlink()
+                path_before = self.env["PATH"]
+                self.addCleanup(self.env.__setitem__, "PATH", path_before)
+                forged_dir.mkdir(parents=True, exist_ok=True)
+                forged = forged_dir / "gemini"
+                forged.write_text(
+                    f'#!/bin/sh\n: > "{marker}"\nexit 0\n', encoding="utf-8"
+                )
+                forged.chmod(0o755)
+                self.env["PATH"] = f"{entry}{os.pathsep}{self.env['PATH']}"
+                result, _, diag = self.adapter(
+                    name=label.replace(" ", "-").replace(",", "")
+                )
+                self.env["PATH"] = path_before
+                self.assertEqual(0, result.returncode, diag)
+                self.assertFalse(
+                    marker.exists(),
+                    f"the {label} PATH entry ran a checkout-committed gemini",
+                )
+                self.assertEqual(1, len(self.calls()), "the installed stub did not run")
+
+    def test_the_cli_does_not_inherit_a_system_prompt_or_ide_roots(self):
+        """`GEMINI_SYSTEM_MD` (relative = from the checkout) and IDE workspace folders are not inherited (PR #124)."""
+        self.env["GEMINI_SYSTEM_MD"] = "steer.md"
+        self.env["GEMINI_CLI_IDE_WORKSPACE_PATH"] = str(self.tmp)
+        result, _, diag = self.adapter()
+        self.assertEqual(0, result.returncode, diag)
+        call = self.calls()[0]
+        self.assertIsNone(call["system_md"])
+        self.assertEqual([], call["ide"])
+
+    def test_only_a_leading_separator_is_dropped_from_the_prompt(self):
+        leaf = self.tmp / "sep.txt"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PTY_CAPTURE),
+                "--timeout",
+                "60",
+                str(leaf),
+                "--",
+                sys.executable,
+                str(ADAPTER),
+                "--model",
+                DEFAULT_MODEL,
+                "--policy",
+                str(POLICY),
+                "--diagnostics",
+                f"{leaf}.diag",
+                "--",
+                "explain",
+                "--",
+                "the separator",
+            ],
+            cwd=self.workdir,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            input="",
+            timeout=120,
+        )
+        self.assertEqual(0, result.returncode)
+        self.assertEqual(
+            "explain -- the separator", _option(self.calls()[0]["argv"], "-p")
+        )
 
     def test_output_past_the_cap_is_stopped_and_refused(self):
         """A runaway CLI cannot grow the adapter without bound (PR #124 review, P2)."""
@@ -808,6 +921,7 @@ class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
                         "respectGeminiIgnore": False,
                     }
                 },
+                "hooksConfig": {"enabled": False},
             },
             json.loads(calls[0]["settings"]),
         )
@@ -1044,6 +1158,8 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
                 "commits a Gemini context file (docs/GEMINI.md)",
             ),
             ("gemini.md", "file", "commits a Gemini context file (gemini.md)"),
+            # Workspace Agent Skills (PR #124 review, P1).
+            (".agents", "directory", "commits a .agents entry"),
         ):
             with self.subTest(entry=name, kind=kind):
                 head = subprocess.run(
@@ -1115,6 +1231,28 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
         result, _ = self.capture()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, len(self.calls()))
+
+    def test_a_name_from_a_relocated_cli_home_is_refused(self):
+        """With `GEMINI_CLI_HOME` set, the CLI's user settings live there, not under `$HOME` (PR #124 review, P1)."""
+        cli_home = self.tmp / "cli-home"
+        (cli_home / ".gemini").mkdir(parents=True)
+        (cli_home / ".gemini" / "settings.json").write_text(
+            '{"context": {"fileName": "AGENTS.md"}}\n', encoding="utf-8"
+        )
+        self.env["GEMINI_CLI_HOME"] = str(cli_home)
+        self.commit_file("AGENTS.md")
+        result, _ = self.capture()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("commits a Gemini context file (AGENTS.md)", result.stderr)
+        self.assertEqual([], self.calls())
+
+    def test_operator_settings_that_add_workspace_roots_refuse(self):
+        """`includeDirectories` concatenates across scopes, so it cannot be emptied — it refuses (PR #124, P1)."""
+        self.operator_home('{"context": {"includeDirectories": ["/elsewhere"]}}\n')
+        result, _ = self.capture()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("context.includeDirectories", result.stderr)
+        self.assertEqual([], self.calls())
 
     def test_unreadable_operator_settings_refuse(self):
         self.operator_home("{ not json\n")

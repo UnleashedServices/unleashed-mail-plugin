@@ -40,7 +40,14 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     system settings configure (`context.fileName` only adds names); unparseable settings refuse.
   - **No extensions, bounded output:** the adapter passes `--extensions none` (an installed extension's
     context and hooks would otherwise run outside the deny policy), and reads the CLI's output under a
-    16 MiB cap, stopping a runaway CLI rather than buffering it.
+    16 MiB cap, stopping a runaway CLI rather than buffering it. Its stderr is drained into the
+    diagnostics file under its own 16 MiB cap.
+  - **What else cannot reach the reviewer:** a committed `.agents` entry (workspace Agent Skills) is
+    refused; settings-level hooks are switched off in the staged settings; operator settings that add
+    `context.includeDirectories` refuse (that list concatenates across scopes, so it cannot be emptied);
+    `GEMINI_SYSTEM_MD` and the IDE's workspace variables are not passed to the CLI; the settings scan
+    follows `GEMINI_CLI_HOME`; and the adapter runs the `gemini` found on `PATH` outside the reviewed
+    checkout, skipping relative entries, so a branch-committed `gemini` can never be the reviewer.
   - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
     before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
     routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt

@@ -51,15 +51,18 @@ import os
 import secrets
 import subprocess  # nosec B404 — the reviewer CLI is run with a fixed argv list, never a shell
 import sys
+import threading
 from pathlib import Path
 
 _REQUESTED = ""
 # The largest JSON envelope accepted from the CLI. A plan review's response is tens of kilobytes; 16 MiB is far
 # above any real one and far below what would strain the host.
 _STDOUT_CAP = 16 * 1024 * 1024
+# The most the CLI may write to the diagnostics file. Its stderr is a few lines; this only stops a runaway.
+_STDERR_CAP = 16 * 1024 * 1024
 
 
-def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure reason
+def main() -> int:  # noqa: PLR0911, PLR0912 — one per named refusal
     """Run the review, assert the answering model, and print only the response text."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", required=True)
@@ -77,7 +80,9 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
     if not _redirect_stderr(args.diagnostics):
         return 4  # SILENT ON PURPOSE: any text here would reach the transcript (item 4 above)
 
-    prompt = " ".join(a for a in args.prompt if a != "--").strip()
+    # Only a LEADING `--` is the separator; a later `--` belongs to the prompt (PR #124 review).
+    prompt_args = args.prompt[1:] if args.prompt[:1] == ["--"] else args.prompt
+    prompt = " ".join(prompt_args).strip()
     if not prompt:
         return _fail("no prompt was given")
     foreign = _foreign_env_file(Path.cwd())
@@ -87,8 +92,13 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
             "configure the reviewer"
         )
 
+    cli = _resolve_cli(Path.cwd())
+    if cli is None:
+        return _fail(
+            "no executable `gemini` CLI on PATH outside the reviewed checkout (relative PATH entries are skipped)"
+        )
     argv = [
-        "gemini",
+        cli,
         "--skip-trust",  # the disposable checkout is untrusted; without this the CLI refuses (rc 55)
         "-m",
         args.model,
@@ -113,9 +123,10 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         prompt,
     ]
     try:
-        # stderr is NOT captured: the CLI inherits this process's stderr, which is the diagnostics file.
+        # stderr is DRAINED into this process's stderr — the diagnostics file — under its own cap, so a runaway
+        # CLI cannot fill the disk through it either (PR #124 review, P2).
         proc = subprocess.Popen(  # nosec B603 — fixed argv, no shell
-            argv, stdout=subprocess.PIPE, env=_cli_env()
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_cli_env()
         )
     except FileNotFoundError:
         return _fail("the `gemini` CLI is not on PATH")
@@ -123,7 +134,17 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         OSError
     ) as launch_error:  # e.g. a `gemini` on PATH that is not executable (PR #124 review)
         return _fail(f"could not run the `gemini` CLI: {launch_error}")
+    stderr_capped = threading.Event()
+    drain = threading.Thread(
+        target=_drain_stderr, args=(proc, stderr_capped), daemon=True
+    )
+    drain.start()
     output, overflowed = _read_bounded(proc)
+    drain.join()
+    if stderr_capped.is_set():
+        return _fail(
+            f"the gemini CLI's diagnostics exceeded {_STDERR_CAP} bytes; it was stopped and nothing is a review"
+        )
     if overflowed:
         return _fail(
             f"the gemini CLI's output exceeded {_STDOUT_CAP} bytes; it was stopped and nothing is a review"
@@ -163,6 +184,44 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
     response = response.replace("\r\n", "\n").replace("\r", "\n")
     sys.stdout.write(response if response.endswith("\n") else response + "\n")
     return 0
+
+
+def _resolve_cli(cwd: Path) -> str | None:
+    """The `gemini` the review runs: an ABSOLUTE executable on PATH, outside the reviewed checkout.
+
+    A bare name resolves through PATH, so a `.` (or any relative) entry, or an absolute entry inside the
+    checkout, would run a branch-committed `gemini` that prints a valid envelope naming the requested model
+    (PR #124 review, P1). Such entries are skipped, and the first executable found elsewhere is run by path.
+    """
+    here = cwd.resolve()
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry or not Path(entry).is_absolute():
+            continue
+        directory = Path(entry).resolve()
+        if directory == here or here in directory.parents:
+            continue
+        candidate = directory / "gemini"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _drain_stderr(proc: subprocess.Popen[bytes], capped: threading.Event) -> None:
+    """Copy the CLI's stderr into the diagnostics file (fd 2), stopping and killing the CLI past `_STDERR_CAP`."""
+    if proc.stderr is None:  # stderr=PIPE always provides one
+        return
+    written = 0
+    while True:
+        chunk = os.read(proc.stderr.fileno(), 1 << 16)
+        if not chunk:
+            break
+        if written + len(chunk) > _STDERR_CAP:
+            capped.set()
+            proc.kill()
+            break
+        os.write(2, chunk)
+        written += len(chunk)
+    proc.stderr.close()
 
 
 def _read_bounded(proc: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
@@ -231,6 +290,12 @@ def _redirect_stderr(path: str) -> bool:
     return True
 
 
+# NOT INHERITED (PR #124 review, P1). `GEMINI_SYSTEM_MD` replaces the CLI's whole system prompt, and a RELATIVE
+# value resolves from the reviewer's working directory — the reviewed checkout — so a branch could supply it; the
+# gate always runs the built-in prompt. `GEMINI_CLI_IDE_*` would add an IDE's workspace folders as readable roots.
+_DROPPED_ENV = frozenset({"GEMINI_SYSTEM_MD", "GEMINI_WRITE_SYSTEM_MD"})
+
+
 def _cli_env() -> dict[str, str]:
     """The CLI's environment, with the session TRUSTED BEFORE settings load.
 
@@ -239,7 +304,11 @@ def _cli_env() -> dict[str, str]:
     §1 F13 D). `GEMINI_CLI_TRUST_WORKSPACE=true` is read before settings, so the disposable checkout's
     `.gemini/settings.json` applies (F13 A). The model assertion above remains the guarantee if it ever does not.
     """
-    env = dict(os.environ)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _DROPPED_ENV and not key.startswith("GEMINI_CLI_IDE_")
+    }
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
     return env
 
