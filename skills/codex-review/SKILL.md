@@ -141,7 +141,7 @@ codex exec -c model_reasoning_effort=ultra -s read-only "/security-reviewer [FIL
 
 # Full diff review — built-in `codex review` (outputs to STDOUT; no -o — capture via the PTY wrapper)
 codex -c model_reasoning_effort=ultra review --uncommitted
-codex -c model_reasoning_effort=ultra review --base <PR-base-branch>  # each PR's own base: version branch (app feature, hotfix PR into it), alpha (plugin feature), main (promotion, hotfix PR into main)
+codex -c model_reasoning_effort=ultra review --base "<PR-base-branch>"  # each PR's own base: version branch (app feature, hotfix PR into it), alpha (plugin feature), main (promotion, hotfix PR into main)
 codex -c model_reasoning_effort=ultra review --commit <SHA>
 
 # Save agent output to file
