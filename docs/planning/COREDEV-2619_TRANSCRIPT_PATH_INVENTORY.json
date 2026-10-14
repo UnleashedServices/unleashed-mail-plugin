@@ -486,7 +486,7 @@
       "reason": "The live capture instruction must identify the allocated target, not a shared path.",
       "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 222,
+        "line": 223,
         "payloads": [
           "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -507,7 +507,7 @@
       "reason": "Synthesis must receive both reviewers' allocated paths as opaque arguments.",
       "contracts": ["S-THREAD"],
       "destination": {
-        "line": 226,
+        "line": 227,
         "payloads": [
           "8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

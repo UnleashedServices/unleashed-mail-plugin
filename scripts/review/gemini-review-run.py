@@ -54,6 +54,9 @@ import sys
 from pathlib import Path
 
 _REQUESTED = ""
+# The largest JSON envelope accepted from the CLI. A plan review's response is tens of kilobytes; 16 MiB is far
+# above any real one and far below what would strain the host.
+_STDOUT_CAP = 16 * 1024 * 1024
 
 
 def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure reason
@@ -99,6 +102,11 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         # a server can be configured under (F13 E).
         "--allowed-mcp-server-names",
         "unleashed-mail-no-mcp-" + secrets.token_hex(16),
+        # NO EXTENSIONS (PR #124 review, P1). Without this option the CLI activates every installed extension, and
+        # an extension's context and hooks run outside the deny policy's decision path. `none` is the CLI's own
+        # spelling for "disable all"; verified on 0.64.0 (the ping still answers).
+        "--extensions",
+        "none",
         "-o",
         "json",
         "-p",
@@ -106,15 +114,20 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
     ]
     try:
         # stderr is NOT captured: the CLI inherits this process's stderr, which is the diagnostics file.
-        proc = subprocess.run(
-            argv, stdout=subprocess.PIPE, text=True, check=False, env=_cli_env()
-        )  # nosec B603 — fixed argv, no shell
+        proc = subprocess.Popen(  # nosec B603 — fixed argv, no shell
+            argv, stdout=subprocess.PIPE, env=_cli_env()
+        )
     except FileNotFoundError:
         return _fail("the `gemini` CLI is not on PATH")
     except (
         OSError
     ) as launch_error:  # e.g. a `gemini` on PATH that is not executable (PR #124 review)
         return _fail(f"could not run the `gemini` CLI: {launch_error}")
+    output, overflowed = _read_bounded(proc)
+    if overflowed:
+        return _fail(
+            f"the gemini CLI's output exceeded {_STDOUT_CAP} bytes; it was stopped and nothing is a review"
+        )
     if proc.returncode != 0:
         return _fail(
             f"the gemini CLI exited {proc.returncode} (its stderr is above, in this file)",
@@ -122,7 +135,7 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         )
 
     try:
-        data = json.loads(proc.stdout)
+        data = json.loads(output.decode("utf-8", "replace"))
     except ValueError:
         return _fail("the CLI's output was not JSON; nothing is recorded as a review")
     if not isinstance(data, dict):
@@ -150,6 +163,34 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
     response = response.replace("\r\n", "\n").replace("\r", "\n")
     sys.stdout.write(response if response.endswith("\n") else response + "\n")
     return 0
+
+
+def _read_bounded(proc: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
+    """Read the CLI's stdout to EOF, keeping at most `_STDOUT_CAP` bytes; past it, kill the CLI.
+
+    A runaway CLI or endpoint must not grow this process without bound (PR #124 review, P2): the outer
+    `pty-capture.py` sees nothing until the adapter prints, so its own capture limit could never fire.
+    """
+    if (
+        proc.stdout is None
+    ):  # stdout=PIPE always provides one; checked, not asserted (asserts vanish under -O)
+        raise RuntimeError  # unreachable with stdout=PIPE; refusing beats reading nothing
+    chunks: list[bytes] = []
+    total = 0
+    overflowed = False
+    while True:
+        chunk = os.read(proc.stdout.fileno(), 1 << 16)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _STDOUT_CAP:
+            overflowed = True
+            proc.kill()
+            break
+        chunks.append(chunk)
+    proc.stdout.close()
+    proc.wait()
+    return b"".join(chunks), overflowed
 
 
 def _foreign_env_file(start: Path) -> Path | None:

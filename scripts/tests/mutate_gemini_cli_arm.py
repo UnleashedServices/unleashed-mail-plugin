@@ -233,6 +233,27 @@ MUTANTS = [
         'if False:\n    sys.exit(\n        "GATE FAILED — the reviewed tree commits a Gemini context file ("',
         [T + "G7AReviewedTreeCannotConfigureItsReviewer"],
     ),
+    (
+        "extensions left enabled",
+        A,
+        '        "--extensions",\n        "none",\n',
+        "",
+        [T + "G4aWhatTheCliReceives"],
+    ),
+    (
+        "stdout left unbounded",
+        A,
+        "        if total > _STDOUT_CAP:",
+        "        if False:",
+        [T + "G2NothingUnvalidatedReachesTheTranscript"],
+    ),
+    (
+        "configured context names ignored",
+        H,
+        '            names.add(cleaned.removeprefix("./"))',
+        "            pass",
+        [T + "G7AReviewedTreeCannotConfigureItsReviewer"],
+    ),
 ]
 
 

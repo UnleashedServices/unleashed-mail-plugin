@@ -168,10 +168,72 @@ fi
 # list (`setGeminiMdFilename`). So a committed context file, at any depth, refuses the round. Matched
 # case-insensitively: on a case-insensitive filesystem the CLI's existence check finds `gemini.md` too. A
 # listing that fails refuses as well. Neither this repository nor UnleashedMail commits one (checked 2026-10-14).
+# EVERY CONFIGURED NAME, NOT ONLY THE DEFAULT (PR #124 review, P1): the operator's user, system or system-default
+# settings can ADD context names (`context.fileName`, e.g. `AGENTS.md`), and a committed file under any of them
+# is loaded the same way, so the scan matches each configured name too. Settings that cannot be read or parsed
+# refuse, rather than shrinking the scan to the default. (Extension-supplied names are moot: the adapter runs
+# with `--extensions none`.)
 if ! python3 - "${TREE}" <<'PY'; then
+import json
 import os
+import re
 import subprocess
 import sys
+
+
+def strip_comments(text):
+    """Drop // and /* */ comments outside JSON strings — the CLI's settings files are JSON with comments."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            match = re.compile(r'"(?:\\.|[^"\\])*"').match(text, i)
+            if not match:
+                return text
+            out.append(match.group(0))
+            i = match.end()
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def settings_paths():
+    """The settings files the CLI reads besides the staged workspace one: system defaults, user, system."""
+    system = os.environ.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH") or (
+        "/Library/Application Support/GeminiCli/settings.json"
+        if sys.platform == "darwin"
+        else "/etc/gemini-cli/settings.json"
+    )
+    defaults = os.environ.get("GEMINI_CLI_SYSTEM_DEFAULTS_PATH") or os.path.join(
+        os.path.dirname(system), "system-defaults.json"
+    )
+    home = os.environ.get("HOME", "")
+    user = os.path.join(home, ".gemini", "settings.json") if home else ""
+    return [path for path in (defaults, user, system) if path]
+
+
+names = {"gemini.md"}
+for path in settings_paths():
+    if not os.path.exists(path):
+        continue
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.loads(strip_comments(handle.read()))
+    except (OSError, ValueError) as error:
+        sys.exit(f"GATE FAILED — could not read {path} to learn its context file names: {error}")
+    context = data.get("context") if isinstance(data, dict) else None
+    configured = context.get("fileName") if isinstance(context, dict) else None
+    for name in [configured] if isinstance(configured, str) else configured if isinstance(configured, list) else []:
+        cleaned = os.path.normpath(str(name).strip()).lower() if str(name).strip() else ""
+        if cleaned and cleaned != ".":
+            names.add(cleaned.removeprefix("./"))
 
 env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 try:
@@ -180,11 +242,15 @@ try:
     ).stdout
 except (OSError, subprocess.CalledProcessError) as error:
     sys.exit(f"GATE FAILED — could not list the reviewed tree for context files: {error}")
-hits = [path for path in listed.split(b"\0") if path and path.rsplit(b"/", 1)[-1].lower() == b"gemini.md"]
+hits = []
+for raw in listed.split(b"\0"):
+    path = raw.decode("utf-8", "surrogateescape").lower()
+    if path and any(path == name or path.endswith("/" + name) for name in names):
+        hits.append(raw.decode("utf-8", "replace"))
 if hits:
     sys.exit(
         "GATE FAILED — the reviewed tree commits a Gemini context file ("
-        + hits[0].decode("utf-8", "replace")
+        + hits[0]
         + "); its instructions would reach the reviewer with every prompt"
     )
 PY

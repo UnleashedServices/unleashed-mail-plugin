@@ -46,6 +46,13 @@ _DEFAULT = re.search(
 )
 assert _DEFAULT, "isolated-gemini-review.sh no longer declares DEFAULT_MODEL"
 DEFAULT_MODEL = _DEFAULT.group(1)
+_CAP = re.search(
+    r"^_STDOUT_CAP = (\d+) \* 1024 \* 1024$",
+    ADAPTER.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+assert _CAP, "gemini-review-run.py no longer declares _STDOUT_CAP"
+STDOUT_CAP = int(_CAP.group(1)) * 1024 * 1024
 NO_MCP = re.compile(
     r"\Aunleashed-mail-no-mcp-[0-9a-f]{32}\Z"
 )  # a fresh random name per run
@@ -69,6 +76,14 @@ sys.stderr.flush()
 if os.environ.get("GEMINI_STUB_KILL_PARENT"):
     import signal
     os.kill(os.getppid(), signal.SIGKILL)
+    sys.exit(0)
+flood = os.environ.get("GEMINI_STUB_FLOOD")
+if flood:
+    chunk = "x" * 65536
+    left = int(flood)
+    while left > 0:
+        sys.stdout.write(chunk[: min(left, len(chunk))])
+        left -= len(chunk)
     sys.exit(0)
 write = os.environ.get("GEMINI_STUB_WRITE")
 if write:
@@ -154,6 +169,13 @@ class _StubGemini:
         self.env["GEMINI_STUB_LOG"] = str(self.log)
         self.env["PYTHONDONTWRITEBYTECODE"] = "1"
         self.env["TMPDIR"] = str(self.tmp)
+        # The CLI's system settings files are machine state; point them at absent files so no cell depends on them.
+        self.env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(
+            self.tmp / "absent-system-settings.json"
+        )
+        self.env["GEMINI_CLI_SYSTEM_DEFAULTS_PATH"] = str(
+            self.tmp / "absent-system-defaults.json"
+        )
         self.workdir = self.tmp / "cwd"
         self.workdir.mkdir()
 
@@ -294,6 +316,14 @@ class G2NothingUnvalidatedReachesTheTranscript(_StubGemini, unittest.TestCase):
         self.assertEqual(b"", raw)
         self.assertIn("could not run the `gemini` CLI", diag)
         self.assertNotIn("Traceback", diag)
+
+    def test_output_past_the_cap_is_stopped_and_refused(self):
+        """A runaway CLI cannot grow the adapter without bound (PR #124 review, P2)."""
+        self.env["GEMINI_STUB_FLOOD"] = str(STDOUT_CAP + 1)
+        result, raw, diag = self.adapter()
+        self.assertEqual(4, result.returncode, diag[-300:])
+        self.assertEqual(b"", raw)
+        self.assertIn(f"output exceeded {STDOUT_CAP} bytes", diag)
 
     def test_a_failing_cli_leaves_an_empty_transcript_with_its_status(self):
         self.env["GEMINI_STUB_RC"] = "173"
@@ -764,6 +794,8 @@ class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
             os.path.realpath(POLICY), os.path.realpath(_option(argv, "--policy"))
         )
         self.assertEqual("json", _option(argv, "-o"))
+        self.assertEqual("none", _option(argv, "--extensions"))  # PR #124 review, P1
+        _absent(argv, "-e")
         self.assertRegex(_option(argv, "--allowed-mcp-server-names"), NO_MCP)
         _absent(argv, "--diagnostics")  # the adapter's own option
         self.assertEqual("true", calls[0]["trust"])
@@ -1035,6 +1067,61 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
                     )
                 finally:
                     self.git("reset", "-q", "--hard", head)
+
+    def commit_file(self, relative: str, text: str = "be careful\n") -> None:
+        target = self.root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        self.git("add", "--", relative)
+        self.git(
+            "-c",
+            "user.email=t@test",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            f"commit {relative}",
+        )
+
+    def operator_home(self, settings: str) -> None:
+        home = self.tmp / "operator-home"
+        (home / ".gemini").mkdir(parents=True, exist_ok=True)
+        (home / ".gemini" / "settings.json").write_text(settings, encoding="utf-8")
+        self.env["HOME"] = str(home)
+
+    def test_a_name_the_operators_settings_add_is_refused_too(self):
+        """`context.fileName` only ADDS names, so a committed file under any configured name is refused (PR #124)."""
+        self.operator_home('{"context": {"fileName": ["AGENTS.md"]}}\n')
+        self.commit_file("AGENTS.md")
+        result, _ = self.capture()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("commits a Gemini context file (AGENTS.md)", result.stderr)
+        self.assertEqual([], self.calls())
+
+    def test_a_name_from_system_settings_with_comments_is_refused(self):
+        system = self.tmp / "system-settings.json"
+        system.write_text(
+            '// operator policy\n{"context": {"fileName": "CONTEXT.md" /* house rule */}}\n',
+            encoding="utf-8",
+        )
+        self.env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(system)
+        self.commit_file("docs/CONTEXT.md")
+        result, _ = self.capture()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("commits a Gemini context file (docs/CONTEXT.md)", result.stderr)
+
+    def test_a_configured_name_with_no_such_file_reviews_positive_control(self):
+        self.operator_home('{"context": {"fileName": ["AGENTS.md"]}}\n')
+        result, _ = self.capture()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, len(self.calls()))
+
+    def test_unreadable_operator_settings_refuse(self):
+        self.operator_home("{ not json\n")
+        result, _ = self.capture()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("to learn its context file names", result.stderr)
+        self.assertEqual([], self.calls())
 
     def test_a_committed_mcp_json_does_not_refuse(self):
         (self.root / ".mcp.json").write_text('{"mcpServers": {}}\n', encoding="utf-8")
