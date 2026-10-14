@@ -85,8 +85,15 @@ MUTANTS = [
     (
         "routing-off not staged",
         H,
-        'payload = b\'{"general": {"plan": {"modelRouting": false}}}\\n\'',
-        "payload = b'{}\\n'",
+        """b'{"general": {"plan": {"modelRouting": false}}, '""",
+        """b'{"general": {"plan": {}}, '""",
+        [T + "G4aWhatTheCliReceives"],
+    ),
+    (
+        "file filtering left on",
+        H,
+        '"respectGitIgnore": false, "respectGeminiIgnore": false',
+        '"respectGitIgnore": true, "respectGeminiIgnore": true',
         [T + "G4aWhatTheCliReceives"],
     ),
     (

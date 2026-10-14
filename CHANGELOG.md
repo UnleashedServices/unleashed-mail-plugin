@@ -37,7 +37,8 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     reviewed tree is refused before anything is staged.
   - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
     before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
-    routing off.
+    routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt
+    under an ignored path (a custom `XDG_STATE_HOME` such as `~/logs`) stays readable.
   - **`scripts/review/preflight-gemini.sh`** pings through the same adapter, is healthy only on a
     whole-answer `pong` from the gate's model, keeps the CLI's diagnostics at `<ping>.diag`, and names
     the model on every failure.

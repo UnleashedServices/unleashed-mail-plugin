@@ -737,7 +737,15 @@ class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
         _absent(argv, "--diagnostics")  # the adapter's own option
         self.assertEqual("true", calls[0]["trust"])
         self.assertEqual(
-            {"general": {"plan": {"modelRouting": False}}},
+            {
+                "general": {"plan": {"modelRouting": False}},
+                "context": {
+                    "fileFiltering": {
+                        "respectGitIgnore": False,
+                        "respectGeminiIgnore": False,
+                    }
+                },
+            },
             json.loads(calls[0]["settings"]),
         )
 

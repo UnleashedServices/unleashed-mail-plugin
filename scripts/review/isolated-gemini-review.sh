@@ -287,6 +287,12 @@ fi
 # checkout's own `.gemini/settings.json` — and never in the operator's global settings. Staged BEFORE the
 # baseline below, so it is part of what the harness placed and a reviewer edit to it still voids the round.
 # A committed `.gemini` entry was refused right after the checkout was created, above.
+# FILE FILTERING OFF TOO (local codex diff review, P2). The CLI's file tools honour `.gitignore` and
+# `.geminiignore` by default, and the staged prompt sits at its state-directory path mirrored under the tree:
+# with `XDG_STATE_HOME=$HOME/logs` a reviewed repo's `logs/` rule hid it, and the reviewer could not read its
+# own task (reproduced: `UNREADABLE` by default, the file's word with filtering off). This checkout holds only
+# committed files plus what the harness staged, so nothing in it is legitimately ignored — and a committed
+# `.geminiignore` must not be able to hide the plan from the reviewer either.
 if ! python3 - "${TREE}" <<'PY'; then
 import os
 import sys
@@ -294,7 +300,10 @@ import sys
 tree = sys.argv[1]
 os.mkdir(os.path.join(tree, ".gemini"), 0o700)
 path = os.path.join(tree, ".gemini", "settings.json")
-payload = b'{"general": {"plan": {"modelRouting": false}}}\n'
+payload = (
+    b'{"general": {"plan": {"modelRouting": false}}, '
+    b'"context": {"fileFiltering": {"respectGitIgnore": false, "respectGeminiIgnore": false}}}\n'
+)
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
 try:
     os.write(fd, payload)
