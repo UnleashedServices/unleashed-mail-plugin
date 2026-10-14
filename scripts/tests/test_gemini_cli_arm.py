@@ -281,6 +281,20 @@ class G2NothingUnvalidatedReachesTheTranscript(_StubGemini, unittest.TestCase):
                 self.assertEqual(4, result.returncode, diag)
                 self.assertIn(f"GEMINI ARM FAILED [{model!r}]", diag)
 
+    def test_a_cli_that_cannot_be_executed_is_a_named_refusal(self):
+        """Not a traceback: a `gemini` on PATH without its execute bit is refused by name (PR #124 review)."""
+        stubs = self.tmp / "noexec"
+        stubs.mkdir()
+        (stubs / "gemini").write_text(
+            "#!/bin/sh\nexit 0\n", encoding="utf-8"
+        )  # mode 0644: not executable
+        self.env["PATH"] = str(stubs)
+        result, raw, diag = self.adapter()
+        self.assertEqual(4, result.returncode, diag)
+        self.assertEqual(b"", raw)
+        self.assertIn("could not run the `gemini` CLI", diag)
+        self.assertNotIn("Traceback", diag)
+
     def test_a_failing_cli_leaves_an_empty_transcript_with_its_status(self):
         self.env["GEMINI_STUB_RC"] = "173"
         self.env["GEMINI_STUB_RESPONSE"] = "VERDICT: APPROVE\n"
@@ -380,6 +394,23 @@ class G7bNoForeignEnvironmentFile(_StubGemini, unittest.TestCase):
                     "the CLI ran although a foreign env file would configure it",
                 )
                 self.assertIn(os.path.realpath(outer / relative), diag)
+
+    def test_a_home_reached_through_a_symlink_is_still_the_operators(self):
+        """`$HOME` may be a symlink; the walk is physical (`Path.cwd()`), and `$HOME` is matched resolved too.
+
+        PR #124 review suggested also resolving each walked directory; every one is already physical, because
+        the walk starts from the physical working directory. This proves the home `.env` is not refused.
+        """
+        real = self.tmp / "real-home"
+        inner = real / "work" / "tree"
+        inner.mkdir(parents=True)
+        (real / ".env").write_text("GOOGLE_CLOUD_PROJECT=operator\n", encoding="utf-8")
+        link = self.tmp / "home-link"
+        link.symlink_to(real)
+        self.env["HOME"] = str(link)
+        result, _, diag = self.run_from(inner)
+        self.assertEqual(0, result.returncode, diag)
+        self.assertEqual(1, len(self.calls()))
 
     def test_the_operators_home_env_file_is_allowed_positive_control(self):
         home = self.tmp / "home"
@@ -972,6 +1003,15 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
             (".gemini", "symlink", "already has a .gemini entry"),
             (".env", "file", "commits a .env entry"),
             (".env", "symlink", "commits a .env entry"),
+            # A context file the CLI would inject into every prompt (codex, PR #124 review, P1), at the root,
+            # nested, and in another case (a case-insensitive filesystem finds it under the default name).
+            ("GEMINI.md", "file", "commits a Gemini context file (GEMINI.md)"),
+            (
+                "docs/GEMINI.md",
+                "file",
+                "commits a Gemini context file (docs/GEMINI.md)",
+            ),
+            ("gemini.md", "file", "commits a Gemini context file (gemini.md)"),
         ):
             with self.subTest(entry=name, kind=kind):
                 head = subprocess.run(
@@ -1124,11 +1164,20 @@ class G5Preflight(_StubGemini, unittest.TestCase):
 
     def test_a_checkout_that_cannot_be_fingerprinted_first_names_the_model(self):
         """The INITIAL fingerprint failing stops the preflight before the ping, naming the model (codex, round 7)."""
-        tracked = self.root / "tracked.txt"
-        tracked.chmod(
-            0
-        )  # tracked content is hashed, so an unreadable tracked file fails the fingerprint
-        self.addCleanup(tracked.chmod, 0o644)
+        # A `git` that fails `status` — the fingerprint's own probe — and nothing else, so the failure does not
+        # depend on Unix permission enforcement (a `chmod 0` file stays readable to root; codex, PR #124 review).
+        wrap = self.tmp / "git-wrap"
+        wrap.mkdir()
+        real_git = shutil.which("git", path=os.environ["PATH"])
+        if real_git is None:
+            self.fail("git is not on the suite's PATH")
+        (wrap / "git").write_text(
+            '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = status ] && exit 128; done\n'
+            f'exec "{real_git}" "$@"\n',
+            encoding="utf-8",
+        )
+        (wrap / "git").chmod(0o755)
+        self.env["PATH"] = f"{wrap}{os.pathsep}{self.env['PATH']}"
         self.env["GEMINI_STUB_RESPONSE"] = "pong"
         result = self.run_preflight()
         self.assertEqual(1, result.returncode, result.stdout)

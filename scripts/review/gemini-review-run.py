@@ -111,6 +111,10 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         )  # nosec B603 — fixed argv, no shell
     except FileNotFoundError:
         return _fail("the `gemini` CLI is not on PATH")
+    except (
+        OSError
+    ) as launch_error:  # e.g. a `gemini` on PATH that is not executable (PR #124 review)
+        return _fail(f"could not run the `gemini` CLI: {launch_error}")
     if proc.returncode != 0:
         return _fail(
             f"the gemini CLI exited {proc.returncode} (its stderr is above, in this file)",

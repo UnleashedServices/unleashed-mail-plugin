@@ -34,7 +34,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     matched by a server configured under it).
   - **No foreign environment file:** the CLI loads the first `.gemini/.env` or `.env` above its working
     directory; the adapter refuses any that is not in `$HOME`. A committed `.gemini` or `.env` in the
-    reviewed tree is refused before anything is staged.
+    reviewed tree is refused before anything is staged, and so is a committed `GEMINI.md` context file at
+    any depth: the CLI injects those into every prompt (measured steering the reviewer), and in 0.64.0 no
+    setting removes the default name.
   - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
     before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
     routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt

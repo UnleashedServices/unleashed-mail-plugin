@@ -226,6 +226,13 @@ MUTANTS = [
         "printf 'gemini preflight %.0s: FAILED — could not fingerprint the checkout before the ping",
         [T + "G5Preflight"],
     ),
+    (
+        "context-file refusal dropped",
+        H,
+        'if hits:\n    sys.exit(\n        "GATE FAILED — the reviewed tree commits a Gemini context file ("',
+        'if False:\n    sys.exit(\n        "GATE FAILED — the reviewed tree commits a Gemini context file ("',
+        [T + "G7AReviewedTreeCannotConfigureItsReviewer"],
+    ),
 ]
 
 

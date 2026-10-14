@@ -161,6 +161,35 @@ if [[ -e "${TREE}/.gemini" ]] || [[ -L "${TREE}/.gemini" ]]; then
 	echo "GATE FAILED — the reviewed tree already has a .gemini entry; refusing to configure the reviewer through it" >&2
 	exit 1
 fi
+# NOR CAN IT INSTRUCT ITS REVIEWER (codex, PR #124 review, P1). The CLI loads every `GEMINI.md` in the workspace
+# — the root and, by discovery, its subdirectories — into the reviewer's context with every prompt. Measured on
+# 0.64.0: a committed `GEMINI.md` saying "reply PINEAPPLE" made 3.1 Pro answer PINEAPPLE to a `pong` ping, and
+# STILL did with `context.fileName` set to another name, because that setting only ADDS names to the default
+# list (`setGeminiMdFilename`). So a committed context file, at any depth, refuses the round. Matched
+# case-insensitively: on a case-insensitive filesystem the CLI's existence check finds `gemini.md` too. A
+# listing that fails refuses as well. Neither this repository nor UnleashedMail commits one (checked 2026-10-14).
+if ! python3 - "${TREE}" <<'PY'; then
+import os
+import subprocess
+import sys
+
+env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+try:
+    listed = subprocess.run(
+        ["git", "-C", sys.argv[1], "ls-files", "-z"], env=env, capture_output=True, check=True
+    ).stdout
+except (OSError, subprocess.CalledProcessError) as error:
+    sys.exit(f"GATE FAILED — could not list the reviewed tree for context files: {error}")
+hits = [path for path in listed.split(b"\0") if path and path.rsplit(b"/", 1)[-1].lower() == b"gemini.md"]
+if hits:
+    sys.exit(
+        "GATE FAILED — the reviewed tree commits a Gemini context file ("
+        + hits[0].decode("utf-8", "replace")
+        + "); its instructions would reach the reviewer with every prompt"
+    )
+PY
+	exit 1
+fi
 
 # COPY THE BOUND PLAN INTO THE CHECKOUT. The tree above is detached at HEAD, so `agy` reads the
 # COMMITTED plan — while `bind-prompt.py` hashed the WORKING-TREE plan into `<transcript>.plan`. With
