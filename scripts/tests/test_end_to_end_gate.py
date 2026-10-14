@@ -16,8 +16,10 @@ individually correct. It is pinned by
 WHAT IS REAL AND WHAT IS STUBBED
 Real: the git repository, `allocate-transcript.sh` (and through it `pty-capture.py --allocate`),
 `bind-prompt.py`, `pty-capture.py`, `review-verdict.py` in all three modes, `resolve-plan-gate.sh`.
-Stubbed: `codex` and `agy` ONLY — the two things that leave the machine. They are stubbed by putting a
-shell script earlier on `PATH`, not by patching the helpers, so the helpers run their real argv.
+Stubbed: `codex` and `gemini` ONLY — the two things that leave the machine. They are stubbed by putting a
+script earlier on `PATH`, not by patching the helpers, so the helpers run their real argv. The `gemini`
+stub is the shared shim (`fixtures/gemini-cli-shim.py`), which runs the same reviewer body as `codex` and
+wraps its stdout in the CLI's JSON envelope, so the real adapter (`gemini-review-run.py`) runs too.
 
 The state root is redirected with `XDG_STATE_HOME` into the test's own temporary directory, so a run
 never reads or writes the developer's real transcripts.
@@ -28,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -57,16 +60,17 @@ REVIEWER_STUB = (
     '[ -n "${UM_REVIEWER_RAN:-}" ] && : > "$UM_REVIEWER_RAN"\n'
     "printf 'VERDICT: APPROVE\\n%s reviewed the plan.\\n' \"$0\"\n"
 )
-# The gemini arm resolves its model with `agy models` when MODEL is unset (COREDEV-2875), and this
-# fixture keeps that PRODUCTION path: the agy stub answers the listing FIRST and without side effects,
-# so the listing can never trip the run-marker the never-reaches tests rely on.
-STUB_MODEL = "gemini-3.8-flash-high"
-AGY_STUB = REVIEWER_STUB.replace(
-    "#!/usr/bin/env bash\n",
-    "#!/usr/bin/env bash\n"
-    f"if [ \"${{1-}}\" = models ]; then printf '{STUB_MODEL}\\tGemini 3.8 Flash (High)\\n'; exit 0; fi\n",
-    1,
+# With MODEL unset, the gemini arm runs its DEFAULT model (COREDEV-2887), and this fixture keeps that
+# PRODUCTION path: the shim answers as whatever `-m` the adapter passes, so the adapter's model assertion runs.
+GEMINI_SHIM = REPO / "scripts" / "tests" / "fixtures" / "gemini-cli-shim.py"
+# The harness's own literal, never a second copy: the `.model` record must name exactly what it runs.
+_DEFAULT_MODEL = re.search(
+    r'^DEFAULT_MODEL="([^"]+)"$',
+    (REVIEW / "isolated-gemini-review.sh").read_text(encoding="utf-8"),
+    re.MULTILINE,
 )
+assert _DEFAULT_MODEL, "isolated-gemini-review.sh no longer declares DEFAULT_MODEL"
+DEFAULT_MODEL = _DEFAULT_MODEL.group(1)
 
 
 def _sha256(path: Path) -> str:
@@ -108,14 +112,19 @@ class EndToEndGate(unittest.TestCase):
 
         stubs = self.root / ".stubs"
         stubs.mkdir()
-        for reviewer, body in (("codex", REVIEWER_STUB), ("agy", AGY_STUB)):
-            stub = stubs / reviewer
-            stub.write_text(body, encoding="utf-8")
-            stub.chmod(0o755)
+        codex = stubs / "codex"
+        codex.write_text(REVIEWER_STUB, encoding="utf-8")
+        codex.chmod(0o755)
+        gemini = stubs / "gemini"
+        shutil.copyfile(GEMINI_SHIM, gemini)
+        gemini.chmod(0o755)
+        gemini_body = stubs / "gemini-body.sh"
+        gemini_body.write_text(REVIEWER_STUB, encoding="utf-8")
 
         self.env = dict(os.environ)
-        # REMOVED, not merely unset by omission: an inherited MODEL would hide the resolver path.
+        # REMOVED, not merely unset by omission: an inherited MODEL would hide the default-model path.
         self.env.pop("MODEL", None)
+        self.env["GEMINI_SHIM_BODY"] = str(gemini_body)
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
 
@@ -205,9 +214,9 @@ class EndToEndGate(unittest.TestCase):
                 "VERDICT: APPROVE",
                 transcript.read_text(encoding="utf-8").splitlines()[0],
             )
-        # The gemini arm recorded the model it RESOLVED beside its transcript, never in it (COREDEV-2875).
+        # The gemini arm recorded the model it RAN beside its transcript, never in it (COREDEV-2875, -2887).
         self.assertEqual(
-            f"{STUB_MODEL}\tnewest\n",
+            f"{DEFAULT_MODEL}\tdefault\n",
             gemini.with_name(gemini.name + ".model").read_text(encoding="utf-8"),
         )
         for transcript in (codex, gemini):

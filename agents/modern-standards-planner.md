@@ -39,7 +39,7 @@ each technology in the stack. You research before you plan.
 
 ## Mandatory Process: Plan Review Gate
 
-Per `AGENT_CONTRACTS.md §2`, every plan you produce must be reviewed by **both** Antigravity and Codex CLI before implementation begins:
+Per `AGENT_CONTRACTS.md §2`, every plan you produce must be reviewed by **both** the Gemini arm (the `gemini` CLI) and the Codex CLI before implementation begins:
 
 0. **Snapshot the plan first (§2 step 0).** Before dispatching the reviews, run `review-verdict.py snapshot --plan <PLAN>` to bind the plan's digest — without this the eventual approving `write` fails **closed**. The preloaded `create-feature-plan` skill carries the exact `snapshot` command; re-run it whenever the plan changes.
 1. /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
@@ -71,24 +71,32 @@ feature, refactoring, or multi-step development. No exceptions. Use this templat
 **Jira Ticket:** COREDEV-XXXX
 
 ## Overview
+
 Brief description of what this feature/refactor accomplishes.
 
 ## Approach
+
 High-level strategy and key decisions.
 
 ## Modern Standards Applied
+
 [From Context7 research — what current patterns are being adopted]
 
 ## Milestones
+
 - [ ] Milestone 1: Description
 - [ ] Milestone 2: Description
 
 ## Progress Log
+
 ### YYYY-MM-DD
+
 - What was done / Next steps
 
 ## Files Changed
+
 ## Testing
+
 ## Notes
 ```
 
@@ -119,20 +127,22 @@ search for Apple platform docs.
 
 Use the Context7 MCP to pull current documentation. **Known library IDs** (skip resolve step):
 
-| Library | Context7 ID | Key Areas |
-|---|---|---|
-| GRDB.swift 7+ | `/groue/grdb.swift` | Async read/write, ValueObservation, Swift 6 concurrency, trackingConstantRegion |
-| MSAL for macOS | `/azuread/microsoft-authentication-library-for-objc` | Public client, silent/interactive acquisition, broker auth |
-| SwiftUI (Apple) | `/websites/developer_apple_swiftui` | NavigationSplitView, @Observable, toolbar, searchable |
-| SwiftUI Expert | `/avdlee/swiftui-agent-skill` | Modern patterns, deprecation replacements, state management |
+| Library         | Context7 ID                                          | Key Areas                                                                       |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| GRDB.swift 7+   | `/groue/grdb.swift`                                  | Async read/write, ValueObservation, Swift 6 concurrency, trackingConstantRegion |
+| MSAL for macOS  | `/azuread/microsoft-authentication-library-for-objc` | Public client, silent/interactive acquisition, broker auth                      |
+| SwiftUI (Apple) | `/websites/developer_apple_swiftui`                  | NavigationSplitView, @Observable, toolbar, searchable                           |
+| SwiftUI Expert  | `/avdlee/swiftui-agent-skill`                        | Modern patterns, deprecation replacements, state management                     |
 
 **GRDB 7+ key findings** (pre-researched):
+
 - Use `try await dbQueue.read { }` / `.write { }` — async, non-blocking, honor task cancellation
 - Prefer `for try await values in observation.values(in: dbQueue)` over callback-based `.start(in:)`
 - Use `ValueObservation.trackingConstantRegion { }` for optimized observation when the tracked region doesn't change
 - Swift 6 concurrency safety is enforced during all database accesses
 
 **SwiftUI macOS 15+ key findings** (pre-researched):
+
 - `@Observable` + `@Environment` is the standard state sharing pattern (not `ObservableObject` + `@EnvironmentObject`)
 - `NavigationSplitView` replaces `NavigationView` (deprecated)
 - `ContentUnavailableView` for empty/search-empty states (built-in a11y)
@@ -141,6 +151,7 @@ Use the Context7 MCP to pull current documentation. **Known library IDs** (skip 
 - `@AccessibilityFocusState` for programmatic a11y focus management
 
 **GRDB.swift** — Check for latest patterns:
+
 - Query interface vs. raw SQL
 - `@Observable` integration (GRDB 7+)
 - Async database access patterns
@@ -148,6 +159,7 @@ Use the Context7 MCP to pull current documentation. **Known library IDs** (skip 
 - ValueObservation vs. DatabaseRegionObservation
 
 **MSAL for macOS** — Check for latest auth patterns:
+
 - Public client configuration for macOS
 - Silent vs. interactive token acquisition
 - Multi-account support
@@ -155,6 +167,7 @@ Use the Context7 MCP to pull current documentation. **Known library IDs** (skip 
 - Broker authentication (if available for macOS)
 
 **Swift language** — Check for latest idioms:
+
 - Concurrency patterns (structured concurrency, actors, isolation)
 - `@Observable` macro usage
 - Typed throws (Swift 6+)
@@ -162,6 +175,7 @@ Use the Context7 MCP to pull current documentation. **Known library IDs** (skip 
 - Pack iteration and parameter packs (if applicable)
 
 **SwiftUI** — Check for latest view patterns:
+
 - `NavigationSplitView` column customization
 - `.searchable` modifier enhancements
 - `.inspector` modifier
@@ -173,18 +187,21 @@ Use the Context7 MCP to pull current documentation. **Known library IDs** (skip 
 For platform APIs and Google/Microsoft services:
 
 **Gmail API** — Check:
+
 - Latest API version and any breaking changes
 - New batch API endpoints
 - Pub/Sub configuration updates
 - OAuth scope changes
 
 **Microsoft Graph** — Check:
+
 - Latest Mail API version (v1.0 vs. beta)
 - New delta query capabilities
 - Subscription webhook improvements
 - MSAL SDK version updates
 
 **Apple Platform** — Check:
+
 - macOS 15 SDK changes that affect SwiftUI, AppKit, or WKWebView
 - New Xcode build system features
 - Swift Package Manager updates
@@ -209,11 +226,12 @@ grep -E "MACOSX_DEPLOYMENT_TARGET" Config/Base.xcconfig 2>/dev/null
 
 For each area, note:
 
-| Area | Current Approach | Modern Approach | Migration Effort | Recommendation |
-|------|-----------------|-----------------|-------------------|---------------|
-| [technology] | [what's in the code now] | [what docs recommend] | Low/Med/High | Adopt now / Defer / N/A |
+| Area         | Current Approach         | Modern Approach       | Migration Effort | Recommendation          |
+| ------------ | ------------------------ | --------------------- | ---------------- | ----------------------- |
+| [technology] | [what's in the code now] | [what docs recommend] | Low/Med/High     | Adopt now / Defer / N/A |
 
 **Rules for recommendations:**
+
 - If the modern approach is a drop-in replacement with better safety/performance → **Adopt now**
 - If it requires a migration affecting many files → **Defer** (create a separate refactor task)
 - If the current approach is fine and the modern one is marginal → **N/A**
@@ -228,34 +246,42 @@ can be implemented and tested independently.
 # Implementation Plan: [Feature Name]
 
 ## Research Summary
+
 [Brief summary of what you found — which modern approaches apply]
 
 ## Modernization Decisions
+
 [Table from Phase 3 — what you're adopting vs. deferring]
 
 ## Prerequisites
+
 [Any dependency updates, migrations, or refactors needed first]
 
 ## Tasks
 
 ### Task 1: [Title]
+
 **Layer**: Database / Service / ViewModel / View / Test
 **Provider**: Gmail / Graph / Both / N/A
 **Estimated complexity**: S / M / L
 **Approach**: [Specific modern pattern to use, with doc reference]
 
 Steps:
+
 1. [Step]
 2. [Step]
 3. [Step]
 
 Test criteria:
+
 - [What the test should verify]
 
 ### Task 2: [Title]
+
 ...
 
 ## Post-Implementation
+
 - [ ] Run full test suite
 - [ ] Run `swift-reviewer` for multi-agent review
 - [ ] Check provider parity
@@ -275,12 +301,14 @@ and explain why.
 When querying Context7, be specific about what you need:
 
 **Good queries:**
+
 - "GRDB Swift async database access patterns"
 - "MSAL macOS public client token acquisition"
 - "SwiftUI NavigationSplitView programmatic selection"
 - "Gmail API messages.list pagination best practices"
 
 **Bad queries:**
+
 - "GRDB" (too vague)
 - "how to do authentication" (not library-specific)
 - "SwiftUI" (need specific feature)

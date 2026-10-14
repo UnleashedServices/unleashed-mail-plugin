@@ -1082,6 +1082,8 @@ class G5Preflight(_StubGemini, unittest.TestCase):
                 self.assertNotEqual(0, result.returncode, result.stdout)
                 self.assertNotIn("healthy", result.stdout)
                 self.assertIn(reason, result.stderr)
+                # EVERY unavailable result names the model, the no-pong ones included (codex, plan round 7).
+                self.assertIn(f"gemini preflight ({DEFAULT_MODEL})", result.stderr)
 
     def test_a_ping_killed_before_the_adapter_refused_still_names_the_model(self):
         # The stand-in for a timeout: the CLI kills its parent, the adapter, so no refusal is ever written.
@@ -1110,6 +1112,26 @@ class G5Preflight(_StubGemini, unittest.TestCase):
         self.assertIn(
             f"gemini preflight ({DEFAULT_MODEL}): the gemini CLI is not on PATH",
             result.stderr,
+        )
+
+    def test_a_checkout_that_cannot_be_fingerprinted_first_names_the_model(self):
+        """The INITIAL fingerprint failing stops the preflight before the ping, naming the model (codex, round 7)."""
+        tracked = self.root / "tracked.txt"
+        tracked.chmod(
+            0
+        )  # tracked content is hashed, so an unreadable tracked file fails the fingerprint
+        self.addCleanup(tracked.chmod, 0o644)
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        result = self.run_preflight()
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn(
+            f"gemini preflight ({DEFAULT_MODEL}): FAILED — could not fingerprint the checkout before the ping",
+            result.stderr,
+        )
+        self.assertEqual(
+            [],
+            self.calls(),
+            "the ping ran although the checkout could not be fingerprinted",
         )
 
     def test_a_checkout_left_unreadable_names_the_model(self):

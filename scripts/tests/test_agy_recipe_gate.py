@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Every agy launch the plugin ships resolves the newest model first (COREDEV-2875 §2.1, cell M7).
+"""`agy` is RETIRED: the plugin ships no `agy` launch at all (COREDEV-2887; formerly COREDEV-2875 §2.1, M7).
 
-A DECLARATION, NOT A DETECTOR. Five review rounds (r6-r10) each found a new way past a home-built shell
-matcher -- suffix filtering, quoted prompts, flag prefixes, a whole-line `--help` exemption, quoted command
-substitutions, comment-joined continuations. A detector decides "is this a launch?", so it fails OPEN on
-every form it does not model. This gate parses no shell. Every UNIT of shipped text that names agy must
-FULLY match an approved template, or be listed by exact text in the closed `EXEMPTIONS` with a reason.
-Anything else fails, whatever quoting or syntax it is written in.
+Until COREDEV-2887 the Gemini arm ran the Antigravity CLI, and this gate required every shipped `agy` launch to
+resolve the newest model first. The arm now runs the `gemini` CLI through an adapter and an isolation harness, and
+the `agy` scripts are gone — so a surviving `agy` recipe would launch an unisolated reviewer that has no read-only
+mode, against a resolver that no longer exists. NOTHING is approved any more: every unit of shipped text that names
+`agy` must be listed by exact text in the closed `EXEMPTIONS`, with a reason, or the gate fails.
+
+A DECLARATION, NOT A DETECTOR. Five review rounds (r6-r10) each found a new way past a home-built shell matcher, so
+this gate parses no shell: it finds UNITS and requires each to be declared, whatever quoting or syntax it is in.
 
 UNITS -- the word `agy` (not part of a longer name or path component, except a final `/agy`) in:
   * a markdown inline code span that is launch-shaped by plain whitespace tokens: a prompt mode flag
@@ -19,7 +21,8 @@ Skipping a whole-line comment is safe only at top level: a `#` that begins a lin
 quoted string or heredoc is data, and a command substitution on it runs. The gate does not track quote
 state, so that form is a declared boundary (plan §6, COREDEV-2876).
 
-`test_doc_gates`' raw-checkout warning gate reads the SAME units (`import test_agy_recipe_gate`).
+`test_doc_gates`' raw-launch gate for the gemini-review skill reads the SAME units (`import test_agy_recipe_gate`)
+and requires the skill to have none.
 """
 
 from __future__ import annotations
@@ -46,206 +49,28 @@ CONTINUATION = ("-c", "--continue", "--conversation")
 # A fence opener/closer: up to three spaces, then three or more backticks or tildes (CommonMark).
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
-# THE APPROVED TEMPLATES. Each must match a unit FULLY (`re.fullmatch`), so nothing can be appended.
-_DQ = r'"(?:[^"`$\\]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)*"'  # double-quoted; parameter expansion only
-_BARE = r"""[^\s"'`;&|<>$()\\]+"""
-_ARG = r'(?:"\$\(pwd\)"|' + _DQ + "|" + _BARE + ")"
-_ARGS = r"(?P<args>(?: " + _ARG + r")*)"
-_RESOLVE = (
-    r'MODEL="\$\(bash (?:[^\s"\'`;&|$()<>\\]*/|"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/review/)'
-    r'agy-newest-model\.sh"?\)" && '
-)
-TEMPLATES = (
-    ("checked form", re.compile(_RESOLVE + r'agy --model "\$MODEL"' + _ARGS)),
-    (
-        "checked form, PTY-wrapped",
-        re.compile(
-            _RESOLVE
-            + r"python3 (?:[^\s\"'`;&|$()<>\\]*/)?pty-capture\.py(?: (?:--timeout [0-9]+|"
-            + _DQ
-            + "|"
-            + _BARE
-            + r'))* -- agy --model "\$MODEL"'
-            + _ARGS
-        ),
-    ),
-    ("non-session command", re.compile(r"agy (?:models|--help|-h|--version)")),
-)
-# NO ARGUMENT MAY SET A MODEL: `"$MODEL"` must be the only model the launch can run (codex r11). The test
-# is on the argument's UNQUOTED value, because shell quote removal turns `"--model=old"` and `"--model" x`
-# into real options (codex r12). A quoted prompt that merely mentions `--model` is not an option.
-_MODEL_OPTION = re.compile(r"-{1,2}model(?:=|$)")
-_ARG_TOKEN = re.compile(_ARG)
+# NO APPROVED TEMPLATES (COREDEV-2887). The checked forms this gate once approved resolved the model through
+# `scripts/review/agy-newest-model.sh`, which no longer ships; approving them now would let a resurrected
+# recipe launch an unisolated `agy` against a missing resolver. `DeclarationControls` asserts they are undeclared.
 
 # THE CLOSED EXEMPTION LIST: (file, the unit's EXACT text, reason). Keyed by text, never by line number,
 # so a line shift costs nothing; any edit to an exempt unit fails the gate until it is re-entered here.
 REASONS = frozenset(
     {
-        "historical demonstration",  # a failed invocation the docs record on purpose
         "message or comment text",  # agy named inside a string or prose, not run
-        "behaviour-tested launch",  # a real launch whose resolution an executed test proves
-        "presence probe",  # checks agy exists; starts no session
+        "a refusal of the retired CLI",  # a rule that REJECTS an agy grant
     }
 )
 EXEMPTIONS: tuple[tuple[str, str, str], ...] = (
-    # -- historical demonstration (4) --
-    (
-        "skills/gemini-review/SKILL.md",
-        'agy -p "..."',
-        "historical demonstration",
-    ),
-    (
-        "skills/gemini-review/SKILL.md",
-        'agy -p "..." > /tmp/out.txt',
-        "historical demonstration",
-    ),
-    (
-        "skills/gemini-review/SKILL.md",
-        'agy -p "..." | tee /tmp/out.txt',
-        "historical demonstration",
-    ),
-    (
-        "skills/gemini-review/SKILL.md",
-        'script -q out.txt agy -p "..."',
-        "historical demonstration",
-    ),
-    # -- behaviour-tested launch (3) --
-    (
-        "scripts/review/agy-newest-model.sh",
-        'listing = subprocess.run(["agy", "models"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,',
-        "behaviour-tested launch",
-    ),
-    (
-        "scripts/review/isolated-agy-review.sh",
-        'agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL") >/dev/null',
-        "behaviour-tested launch",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        '(cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy --model "${MODEL}" -p "ping") ||',
-        "behaviour-tested launch",
-    ),
-    # -- presence probe (1) --
-    (
-        "scripts/review/preflight-agy.sh",
-        'command -v agy >/dev/null 2>&1 || die "agy is not on PATH — the gate is fail-closed, not waived"',
-        "presence probe",
-    ),
-    # -- message or comment text (24) --
     (
         "scripts/pty-capture.py",
-        "Some CLIs (Antigravity `agy`, OpenAI `codex exec`) only emit their output to a",
-        "message or comment text",
-    ),
-    (
-        "scripts/review-verdict.py",
-        '"review — `agy` writes exactly 0 bytes from a non-TTY on failure)")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        '"the measured <id>TAB<label> listing (a PTY-attached agy fuses escapes to the newest entry)")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail("`agy models` lists no gemini-<major>[.<minor>]-flash-high model; pass one explicitly")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail(f"`agy models` did not finish within {timeout:g}s")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail(f"`agy models` exited {listing.returncode}")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail(f"`agy models` line {number} is not <id>TAB<label>: {line!r}")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail(f"`agy models` lists {ident!r}, a flash-high id in an unrecognized version form, so the "',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail(f"`agy models` printed a forbidden byte 0x{byte:02x} at offset {offset}; its stdout is not "',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/agy-newest-model.sh",
-        'fail(f"could not run `agy models`: {error}")',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/capture-gemini-review.sh",
-        'TIMEOUT="${5-1800}" # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/isolated-agy-review.sh",
-        'TIMEOUT="${3:-1800}" # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run',
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'This is the COREDEV-2607 failure mode. Do not run a review with this agy build.\\n' >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: %s\\n' \"$1\" >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: FAILED — agy MUTATED the working tree during a ping:\\n' >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: FAILED — agy left the checkout unreadable (its Git metadata is gone or\\n' >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: FAILED — could not fingerprint the checkout before the ping.\\n' >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: healthy\\n'",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: no model resolved (agy-newest-model.sh, above) — the ping did not run\\n' >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: no pong in %s — agy is unavailable or unauthenticated. Run `agy` interactively\\n' \"$PING\" >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\\n' >&2",
-        "message or comment text",
-    ),
-    (
-        "scripts/review/preflight-agy.sh",
-        "printf 'corrupt). Do not run a review with this agy build.\\n' >&2",
+        "Some CLIs (OpenAI `codex exec`; the retired Antigravity `agy`) only emit their output to a",
         "message or comment text",
     ),
     (
         "scripts/validate-plugin-assembly.py",
         '"agy": "any agy invocation outside the isolation harness — agy has NO read-only mode",',
-        "message or comment text",
+        "a refusal of the retired CLI",
     ),
     (
         "scripts/validate-plugin-assembly.py",
@@ -253,26 +78,6 @@ EXEMPTIONS: tuple[tuple[str, str, str], ...] = (
         "message or comment text",
     ),
 )
-
-
-def _model_option_in(args: str) -> bool:
-    for token in _ARG_TOKEN.findall(args):
-        value = token[1:-1] if token.startswith('"') and token.endswith('"') else token
-        if _MODEL_OPTION.match(value):
-            return True
-    return False
-
-
-def approved(text: str) -> str | None:
-    """The approved template `text` fully matches, or None."""
-    for name, template in TEMPLATES:
-        match = template.fullmatch(text)
-        if match and not (
-            "args" in template.groupindex
-            and _model_option_in(match.group("args") or "")
-        ):
-            return name
-    return None
 
 
 def _flagish(token: str, flags: tuple[str, ...]) -> bool:
@@ -355,24 +160,24 @@ def undeclared(found, exemptions=EXEMPTIONS):
     return [
         (path, number, unit)
         for path, number, unit in found
-        if not approved(unit) and (path, unit) not in exempt
+        if (path, unit) not in exempt
     ]
 
 
 class RecipeGate(unittest.TestCase):
-    """The shipped tree: every unit approved or exempt, and the exemption list closed and live."""
+    """The shipped tree: every `agy` unit declared, and the exemption list closed and live."""
 
     maxDiff = None
 
-    def test_every_shipped_agy_unit_uses_the_checked_form_or_is_exempt(self):
+    def test_no_shipped_unit_launches_the_retired_cli(self):
         missing = undeclared(list(shipped_units()))
         self.assertEqual(
             [],
             missing,
             "\n".join(
-                f"{path}:{number}: `{unit}` launches agy without resolving its model first. Use the checked "
-                f'form (MODEL="$(bash …/agy-newest-model.sh)" && agy --model "$MODEL" …), or add an EXEMPTIONS '
-                f"entry with a reason"
+                f"{path}:{number}: `{unit}` names the retired `agy` CLI. The Gemini arm runs through "
+                "scripts/review/capture-gemini-review.sh; remove the launch, or, if it is only text, add an "
+                "EXEMPTIONS entry with a reason"
                 for path, number, unit in missing
             ),
         )
@@ -387,19 +192,19 @@ class RecipeGate(unittest.TestCase):
                     live,
                     "a stale exemption: no shipped unit has this exact text",
                 )
-                self.assertIsNone(approved(text), "an approved form needs no exemption")
 
 
 class DeclarationControls(unittest.TestCase):
-    """Cell M7: the declaration cannot pass by approving everything, nor by failing everything."""
+    """The declaration cannot pass by declaring everything, nor by failing everything."""
 
-    def assertUnapproved(self, text: str) -> None:
-        self.assertIsNone(
-            approved(text),
-            f"approved a launch that does not resolve its model: {text!r}",
+    def assertUndeclared(self, text: str) -> None:
+        self.assertEqual(
+            [("x.sh", 1, text)],
+            undeclared([("x.sh", 1, text)]),
+            f"an agy launch passed undeclared: {text!r}",
         )
 
-    def test_bare_and_prefixed_launches_are_not_approved(self):
+    def test_every_launch_shape_is_undeclared(self):
         for text in (
             'agy -p "…"',
             "agy -p ping",
@@ -407,92 +212,31 @@ class DeclarationControls(unittest.TestCase):
             "agy -c",
             "agy --add-dir d -c",
             "agy",
-            "agy --add-dir d",
-            "agy --add-dir d --continue",
             "agy --add-dir d --conversation 123",
-            # codex r9: the `--help` hiders and the prefixed forms
             'agy -p "Explain --help in agy"',
-            "agy -p ping # check --help later",
-            "agy -p ping && agy --help",
-            'agy --add-dir "$(pwd)" -p "Explain --help in agy"',
             "env agy -p ping",
             "MODEL=old agy -p ping",
-            "command agy -p ping",
-            # codex r10
             'echo "$(agy -p ping)"',
-            'result="$(agy --add-dir "$(pwd)" -p ping)"',
-            'agy -p "|"',
-            'agy -p "|" --add-dir "$(pwd)"',
-            # non-session forms with something appended
-            "agy models; agy -p x",
-            "agy --version && agy -c",
+            "agy models",
+            "agy --version",
         ):
             with self.subTest(text=text):
-                self.assertUnapproved(text)
+                self.assertUndeclared(text)
 
-    def test_nothing_can_be_appended_to_the_checked_form(self):
-        resolve = 'MODEL="$(bash scripts/review/agy-newest-model.sh)"'
+    def test_the_formerly_approved_checked_forms_are_undeclared(self):
+        """What COREDEV-2875 approved resolved its model through a script that no longer ships."""
         for text in (
-            f'{resolve} && agy --model "$MODEL" -p x; agy -p y',
-            f'{resolve} && agy --model "$MODEL" -p "$(cat f)"',
-            f'{resolve} ; agy --model "$MODEL" -p x',
-            f"{resolve} && agy --model old -p x",
-            'MODEL="$(bash "${EVIL}/agy-newest-model.sh")" && agy --model "$MODEL" -p y',
             (
-                'MODEL="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/agy-newest-model.sh"; agy -p x)" && '
-                'agy --model "$MODEL" -p y'
+                'MODEL="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/agy-newest-model.sh")" && agy --model "$MODEL" '
+                '--add-dir "$(pwd)" --print-timeout 28m -p "Read and follow .agy-prompt-${TICKET}r${ROUND}.md"'
+            ),
+            (
+                'MODEL="$(bash scripts/review/agy-newest-model.sh)" && python3 pty-capture.py --allocated '
+                '"$GEMINI_TRANSCRIPT" -- agy --model "$MODEL" --add-dir "$(pwd)" -p "Read and follow x.md"'
             ),
         ):
-            with self.subTest(text=text):
-                self.assertUnapproved(text)
-
-    def test_no_second_model_option_quoted_or_not(self):
-        resolve = 'MODEL="$(bash scripts/review/agy-newest-model.sh)" && '
-        pty = resolve + "python3 scripts/pty-capture.py out -- "
-        for prefix in (resolve, pty):
-            for extra in (
-                '--model "$OTHER_MODEL"',
-                "--model=gemini-3.6-flash-high",
-                "-model old",
-                "--model old",
-                # codex r12: shell quote removal makes these real options
-                '"--model" "$OTHER_MODEL"',
-                '"--model=gemini-3.6-flash-high"',
-                '"-model" old',
-            ):
-                with self.subTest(prefix=prefix[-25:], extra=extra):
-                    self.assertUnapproved(f'{prefix}agy --model "$MODEL" {extra} -p x')
-
-    def test_the_approved_forms_pass(self):
-        for text, expected in (
-            (
-                (
-                    'MODEL="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/agy-newest-model.sh")" && agy --model "$MODEL" '
-                    '--add-dir "$(pwd)" --print-timeout 28m -p "Read and follow .agy-prompt-${TICKET}r${ROUND}.md"'
-                ),
-                "checked form",
-            ),
-            (
-                'MODEL="$(bash scripts/review/agy-newest-model.sh)" && agy --model "$MODEL" -i "x"',
-                "checked form",
-            ),
-            # a quoted prompt that merely MENTIONS --model is not an option
-            (
-                'MODEL="$(bash scripts/review/agy-newest-model.sh)" && agy --model "$MODEL" -p "explain --model"',
-                "checked form",
-            ),
-            (
-                (
-                    'MODEL="$(bash scripts/review/agy-newest-model.sh)" && python3 pty-capture.py --allocated '
-                    '"$GEMINI_TRANSCRIPT" -- agy --model "$MODEL" --add-dir "$(pwd)" -p "Read and follow x.md"'
-                ),
-                "checked form, PTY-wrapped",
-            ),
-            ("agy models", "non-session command"),
-            ("agy --version", "non-session command"),
-        ):
-            with self.subTest(text=text):
-                self.assertEqual(expected, approved(text))
+            with self.subTest(text=text[:60]):
+                self.assertUndeclared(text)
 
     def test_units_are_found_however_the_markdown_hides_them(self):
         cases = {

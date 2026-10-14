@@ -150,7 +150,7 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         self.assertEqual(1, argv.count(allocated))
         self.assertTrue(Path(allocated).is_file())
 
-        # BOTH arms now route through an isolation harness (`isolated-agy-review.sh` /
+        # BOTH arms now route through an isolation harness (`isolated-gemini-review.sh` /
         # `isolated-codex-review.sh`), so both leave exactly one helper record carrying the allocated
         # path as the harness's second positional argument (PR #63 recheck, P1 — the codex arm gained
         # the gemini arm's isolation). Asserted symmetrically so a future divergence fails here.
@@ -263,8 +263,7 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
                 "TMPDIR": str(self.tmpdir),
                 "CLAUDE_PLUGIN_ROOT": str(plugin_root),
                 "M5_WRITER_LOG": str(log),
-                # An explicit gemini-arm model (COREDEV-2875): this fixture tests path binding, not
-                # selection, and its stub does not answer `agy models`.
+                # An explicit gemini-arm model: this fixture tests path binding, not model selection.
                 "MODEL": "gemini-fixture-flash-high",
                 "PATH": str(fake_bin) + os.pathsep + env.get("PATH", ""),
             }
@@ -397,9 +396,9 @@ class M51AndM52PropagationProofs(M5PathFixture):
             # that repeats the operand pair, so the bare pair now occurs twice and `_replace_once`
             # refused rather than mutating an arbitrary one — the zero/two-hit guard doing its job.
             "gemini": (
-                'exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" '
+                'exec bash "${SCRIPT_DIR}/isolated-gemini-review.sh" "${GEMINI_TRANSCRIPT}.prompt" '
                 '"$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
-                'exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" '
+                'exec bash "${SCRIPT_DIR}/isolated-gemini-review.sh" "${GEMINI_TRANSCRIPT}.prompt" '
                 '"${XDG_STATE_HOME}/derived-gemini.txt" "$TIMEOUT" "$PLAN"',
             ),
         }

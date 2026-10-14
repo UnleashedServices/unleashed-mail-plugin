@@ -60,7 +60,7 @@ PROMPT_REL="$1"
 OUT="$2"
 TIMEOUT="${3:-1800}" # the whole review's wall clock; the `gemini` CLI has no print-timeout of its own
 PLAN_REL="${4-}"     # optional: the plan the run is BOUND to (see the copy below)
-# Reviewer model: `gemini-3.1-pro-preview` (COREDEV-2887). 3.1 Pro was retired from `agy`, whose
+# Reviewer model: the `DEFAULT_MODEL` below (COREDEV-2887). 3.1 Pro was retired from `agy`, whose
 # remaining flash family the maintainer judged short of Pro for gate reviews and which stopped answering
 # on 2026-10-12. The `gemini` CLI has NO model-listing command, so there is nothing to resolve from: the
 # default is this one literal, and a retired preview fails the preflight and the round CLOSED with the
@@ -127,7 +127,7 @@ trap cleanup EXIT
 # CONTENT-AWARE, NOT STATUS-CATEGORY-ONLY (PR #63 recheck, P1). `git status --porcelain` emits one
 # line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the line byte-identical
 # and this comparison — the gate-bearing COREDEV-2607 detector, whose failure VOIDS the round —
-# saw nothing. The same defect was found and fixed in `preflight-agy.sh` first; the fix did not
+# saw nothing. The same defect was found and fixed in the (retired) `agy` preflight first; the fix did not
 # reach here, so the rule now lives in `tree-fingerprint.sh` and all three source it.
 BEFORE_STATUS="$(git status --porcelain)"
 if ! BEFORE="$(tree_fingerprint "${REPO}")"; then

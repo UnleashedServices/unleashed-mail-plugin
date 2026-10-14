@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The Gemini arm must review the bytes its `.plan` sidecar attests to.
 
-THE FINDING (PR #63 recheck, P1). `isolated-agy-review.sh` builds its review tree with
+THE FINDING (PR #63 recheck, P1). The isolation harness (then `isolated-agy-review.sh`, now
+`isolated-gemini-review.sh`) builds its review tree with
 a PRIVATE clone of `$(git rev-parse HEAD)` (`disposable_checkout`), so `agy` reads the **committed** plan.
 `bind-prompt.py` hashes the **working-tree** plan into `<transcript>.plan`. When the plan has
 uncommitted edits — the normal state during the documented review iteration — the transcript approves
@@ -14,9 +15,9 @@ Refusing an uncommitted plan would break the iterate-then-review loop the proces
 the bound bytes into the checkout makes the binding TRUE instead of merely checkable: the reviewer
 reads exactly what the sidecar attests to.
 
-The stub reads the plan through the `--add-dir` the harness hands it, not through its own working
-directory — an earlier version of this probe reported nothing because a relative read landed
-somewhere else entirely, which looked like the fix failing.
+The stub reads the plan by the absolute `$tree` path (the disposable checkout, which the harness makes the
+CLI's working directory), never by a relative path — an earlier version of this probe reported nothing
+because a relative read landed somewhere else entirely, which looked like the fix failing.
 """
 
 from __future__ import annotations
@@ -30,20 +31,19 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CAPTURE = REPO / "scripts" / "review" / "capture-gemini-review.sh"
-HARNESS = REPO / "scripts" / "review" / "isolated-agy-review.sh"
+HARNESS = REPO / "scripts" / "review" / "isolated-gemini-review.sh"
+# The reviewer stand-in: a `gemini` that runs a fixture's BASH body and wraps its stdout as the CLI's JSON
+# (COREDEV-2887). The body sees `$tree` (the disposable checkout) and `$prompt` (the prompt path).
+GEMINI_SHIM = REPO / "scripts" / "tests" / "fixtures" / "gemini-cli-shim.py"
 
 COMMITTED = "COMMITTED VERSION"
 EDITED = "EDITED VERSION - not committed"
 
-# The harness refuses an assembled prompt below a size floor, so a two-line probe never reaches `agy`
+# The harness refuses an assembled prompt below a size floor, so a two-line probe never reaches the reviewer
 # at all — the guard is real and this fixture has to clear it rather than trip it.
 PROMPT_BODY = "Review the plan for correctness, security and completeness.\n" * 40
 
-AGY_STUB = """#!/usr/bin/env bash
-tree=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in --add-dir) tree="$2"; shift 2 ;; *) shift ;; esac
-done
+REVIEWER_BODY = """#!/usr/bin/env bash
 tail -1 "$tree/docs/planning/FEATURE_PLAN.md" > "$UM_PROBE_OUT" 2>/dev/null || echo "<absent>" > "$UM_PROBE_OUT"
 printf 'VERDICT: APPROVE\\n'
 """
@@ -76,12 +76,14 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
 
         stubs = self.root / ".stubs"
         stubs.mkdir()
-        stub = stubs / "agy"
-        stub.write_text(AGY_STUB, encoding="utf-8")
+        stub = stubs / "gemini"
+        shutil.copyfile(GEMINI_SHIM, stub)
         stub.chmod(0o755)
+        self.body = stubs / "reviewer-body.sh"
+        self.body.write_text(REVIEWER_BODY, encoding="utf-8")
 
         # OUTSIDE the repository. The stub writing inside it is a reviewer mutating the checkout, which
-        # `isolated-agy-review.sh` detects and exits 3 for — correctly. That went unnoticed until the
+        # the harness detects and exits 3 for — correctly. That went unnoticed until the
         # capture status began propagating: before that the harness returned 0 regardless, so the
         # detector fired into a void. The fixture's own instrumentation must not look like the defect
         # the harness exists to catch.
@@ -93,13 +95,13 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["UM_PROBE_OUT"] = str(self.probe)
-        # An explicit gemini-arm model (COREDEV-2875): this fixture tests binding, isolation and status
-        # propagation, not selection — selection is test_agy_model_resolution's. Without it the wrapper
-        # would resolve via `agy models`, which this stub does not answer, and fail closed first.
+        self.env["GEMINI_SHIM_BODY"] = str(self.body)
+        # An explicit gemini-arm model: this fixture tests binding, isolation and status propagation, not model
+        # selection or the default (test_gemini_cli_arm covers those). The shim answers as whatever `-m` names.
         self.env["MODEL"] = "gemini-fixture-flash-high"
 
     def allocated_transcript(self, name: str, plan_bytes: bytes, recorded: bytes):
-        """A reserved leaf with the sidecars `isolated-agy-review.sh` reads, built by hand.
+        """A reserved leaf with the sidecars the isolation harness reads, built by hand.
 
         `plan_bytes` is what `.planbytes` holds; `recorded` is what `.plan`'s digest attests to. Passing
         two different values is the substitution scenario; passing the same value is the control.
@@ -250,18 +252,14 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         )
 
     def test_a_failing_reviewer_propagates_its_status(self):
-        """`isolated-agy-review.sh` captured the status in `RC` and then discarded it.
+        """The isolation harness (then `isolated-agy-review.sh`) captured the status in `RC`, then discarded it.
 
         The script ended with a successful diagnostic `echo`, so a stub exiting 23 printed
         `EXIT=23 … FAILED REVIEW` while the helper reported success — leaving the caller unable to tell
         a completed review from an auth, model or timeout failure, which is the distinction the gate
         depends on (PR #63 recheck, P2).
         """
-        stub = self.root / ".stubs" / "agy"
-        stub.write_text(
-            '#!/usr/bin/env bash\nprintf "output\\n"\nexit 23\n', encoding="utf-8"
-        )
-        stub.chmod(0o755)
+        self.install_stub('#!/usr/bin/env bash\nprintf "output\\n"\nexit 23\n')
         result = self.capture("7")
         self.assertEqual(23, result.returncode, result.stdout + result.stderr)
 
@@ -479,22 +477,13 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.assertNotIn("GATE FAILED", result.stdout + result.stderr)
 
     MUTATING_STUB = """#!/usr/bin/env bash
-tree=""; prompt=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --add-dir) tree="$2"; shift 2 ;;
-    -p) prompt="${2#Read and follow }"; shift 2 ;;
-    *) shift ;;
-  esac
-done
 %s
 printf 'VERDICT: APPROVE\\n'
 """
 
     def install_stub(self, body: str) -> None:
-        stub = self.root / ".stubs" / "agy"
-        stub.write_text(body, encoding="utf-8")
-        stub.chmod(0o755)
+        """Replace the reviewer's BASH body; the `gemini` shim runs it with `$tree` and `$prompt` set."""
+        self.body.write_text(body, encoding="utf-8")
 
     def test_staging_never_writes_through_a_symlink_leaf_from_committed_HEAD(self):
         """PR #63 recheck, P1 — reproduced: an outside victim was overwritten.
@@ -685,7 +674,7 @@ printf 'VERDICT: APPROVE\\n'
         for the fix. Measured: spec rc 3 + `MUTATED the working tree`; control rc 0, `TREE=clean`.
         """
         # CLEAN in git's terms: the fixture keeps its stubs and its XDG state INSIDE the repo, so
-        # without an ignore rule those two are `??` lines before the run and `.stubs/agy` is ` M`
+        # without an ignore rule those two are `??` lines before the run and `.stubs/reviewer-body.sh` is ` M`
         # after `install_stub` — dirt the fixture owns, not the scenario. Ignored, then committed.
         (self.root / ".gitignore").write_text(".stubs/\nstate/\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)

@@ -49,7 +49,7 @@ SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gemini-preflight.XXXXXX")" || die "could n
 cleanup_scratch() { rm -rf "${SCRATCH}"; }
 trap cleanup_scratch EXIT
 
-# Fingerprint the checkout so a violation is DETECTED, not merely made unlikely. `isolated-agy-review.sh`
+# Fingerprint the checkout so a violation is DETECTED, not merely made unlikely. The review harness
 # earns its keep with exactly this assertion; the preflight had no equivalent.
 #
 # CONTENT, NOT JUST STATUS CATEGORY (PR #63 recheck, P2) — and the rule lives in ONE file, because the

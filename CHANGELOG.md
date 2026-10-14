@@ -13,6 +13,49 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.36] — 2026-10-14
+
+### Changed
+
+- **The plan gate's Gemini arm runs the `gemini` CLI with `gemini-3.1-pro-preview` (COREDEV-2887).**
+  Gemini 3.1 Pro was retired from the Antigravity CLI (`agy`), whose remaining Flash arm stopped
+  answering on 2026-10-12. The arm keeps its isolation harness (a disposable checkout, fingerprinted
+  before and after, exit 3 on a surviving change); only the command inside it changed.
+  - **`scripts/review/gemini-review-run.py`, the adapter.** Runs the CLI with `-o json` and asserts
+    that `stats.models` names exactly the requested model (complete strings), so a fallback or a
+    plan-mode route to Flash is refused, never recorded. A JSON `error`, non-JSON output or a non-zero
+    CLI status also refuse. Its diagnostics file is opened FIRST and made its stderr, so a refused run
+    leaves the transcript EMPTY (MISSING at both persistence layers) and nothing but the validated
+    response reaches it. CRLF and lone CR become LF.
+  - **`scripts/review/gemini-review-policy.toml`.** Headless plan mode auto-approves `exit_plan_mode`
+    and then runs in YOLO (observed writing). The per-run policy denies `exit_plan_mode`, `write_file`,
+    `replace`, `run_shell_command`, `invoke_agent` and every MCP tool, at priority 999, in every mode.
+  - **No MCP server starts:** a per-run random `--allowed-mcp-server-names` value (a fixed name was
+    matched by a server configured under it).
+  - **No foreign environment file:** the CLI loads the first `.gemini/.env` or `.env` above its working
+    directory; the adapter refuses any that is not in `$HOME`. A committed `.gemini` or `.env` in the
+    reviewed tree is refused before anything is staged.
+  - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
+    before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
+    routing off.
+  - **`scripts/review/preflight-gemini.sh`** pings through the same adapter, is healthy only on a
+    whole-answer `pong` from the gate's model, keeps the CLI's diagnostics at `<ping>.diag`, and names
+    the model on every failure.
+- **The gemini-review skill, `AGENT_CONTRACTS.md` §2, `CLAUDE.md` and the README** describe the new arm.
+  The skill grants exactly `capture-gemini-review.sh` and `preflight-gemini.sh`, and no `Bash(gemini *)`;
+  the assembly validator now refuses that grant. A non-zero capture is MISSING for its round.
+- **`test_agy_recipe_gate` is now a retirement declaration:** no shipped text may launch `agy`.
+
+### Removed
+
+- `scripts/review/isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`, with the tests
+  that exercised only them. Their shared cases are ported to `scripts/tests/test_gemini_cli_arm.py`.
+
+### Known gap (inherited, all arms)
+
+- A VOIDED round's transcript stays on disk after exit 3, and persistence refuses only an empty or absent
+  one. COREDEV-2888 makes persistence require a clean-round receipt from the harness.
+
 ## [2.8.34] — 2026-10-12
 
 ### Changed
