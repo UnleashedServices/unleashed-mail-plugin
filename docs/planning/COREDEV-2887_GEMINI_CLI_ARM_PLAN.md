@@ -1,12 +1,13 @@
 # COREDEV-2887 — The plan gate's Gemini arm moves from `agy` (Flash) to the `gemini` CLI (3.1 Pro Preview)
 
-**Status:** Planning, revision 6. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
+**Status:** Planning, revision 7. Urgent (High). Round 1: codex `REQUEST_CHANGES` (Q1: 2, Q2: 4); gemini 3.1 Pro through
 the prototype `REQUEST_CHANGES` (Q1: 2 claimed, both disproven; Q2: 1). Round 2: codex `REQUEST_CHANGES` (Q1: 1, Q2: 5);
 gemini `REQUEST_CHANGES` (Q1: 1 claimed, disproven by a discriminating live probe; Q2: 1, the same as codex's fourth).
 Round 3: codex `REQUEST_CHANGES` (Q1: 3, Q2: 4); gemini `APPROVE_WITH_NOTES` (Q1: 0; Q2: 1, declined).
 Round 4: codex `REQUEST_CHANGES` (Q1: 1, Q2: 3); gemini `APPROVE` (Q1: 0, Q2: 0).
 Round 5: codex `REQUEST_CHANGES` (Q1: 3, Q2: 1); gemini `REQUEST_CHANGES` (Q1: 1, Q2: 0). Every Q1 was in revision 5's
 void machinery, which revision 6 REMOVES; the inherited property it chased moves, for all three arms, to COREDEV-2888.
+Round 6: codex `APPROVE_WITH_NOTES` (Q1: 0, Q2: 2); gemini `APPROVE` (Q1: 0, Q2: 0) — the first round with no Q1.
 **Ticket:** COREDEV-2887 (Epic COREDEV-2485).
 **Branch / worktree:** `feat/COREDEV-2887-gemini-cli-arm`, `.claude/worktrees/2887-gemini-cli`, cut from `origin/alpha` at
 `5c04728`.
@@ -143,6 +144,16 @@ full gate, and open a PR into `alpha`.
   adapter's EMPTY transcript on a refused run (round 3) is a different property, new to this arm, and stays.
   5. **(codex Q2, adopted)** G4a's "exactly once" did not cover `--skip-trust=false` or `--diagnostics=…`. **Fix:**
      boolean options are counted in both forms, and `--diagnostics` is refused in both forms, each with a mutant.
+- **Round 6 (revision 6), codex `APPROVE_WITH_NOTES`, Q1: 0, Q2: 2; gemini (`gemini-3.1-pro-preview`) `APPROVE`, Q1: 0,
+  Q2: 0.** Codex found the COREDEV-2888 scope decision reasonable and the stated threat model coherent. Both Q2s were
+  verified against the files and adopted in revision 7:
+  1. **(Q2) §6 claimed synthesis enforces a void.** It does not: `review-synthesis` has no capture-status input, and
+     persistence normalizes only an explicit MISSING or an absent or empty transcript. **Fix:** until COREDEV-2888, the
+     CALLER enforces a void (§6), and the §3.4 skill rewrite states that a non-zero capture is MISSING.
+  2. **(Q2) §0.2's "exit 3 on any change" overstated the inherited fingerprints.** `tree-fingerprint.sh` itself
+     documents three residuals: a write inside an ALREADY-untracked directory of the live checkout, ignored paths other
+     than `.verdicts`, and a disposable-tree edit reverted before the run ends. **Fix:** §0.2 describes detection of
+     SURVIVING changes within the fingerprints' coverage and names the residuals, which this plan does not change.
 - **Comparison replay of round 3, `gemini-3.8-flash` (the same bytes, digest `da901792`, the same harness and prompt):
   `APPROVE_WITH_NOTES`, Q1: 0, Q2: 3.** All three were verified against the files and adopted in revision 5; none had
   been raised by either arm.
@@ -170,8 +181,10 @@ Gemini 3.1 Pro **Preview** remains available through the `gemini` CLI (0.64.0 in
 1. A gate round's Gemini arm is reviewed by `gemini-3.1-pro-preview`, and the round FAILS rather than passes if any
    other model answered (fallback or routing).
 2. The reviewer cannot change the tree under review. As today, that is guaranteed by isolation (a disposable private
-   checkout plus before-and-after fingerprints, exit 3 on any change), with the CLI's own read-only mode and a deny
-   policy as additional layers.
+   checkout plus before-and-after fingerprints, exit 3 on any change that SURVIVES the run within the fingerprints'
+   coverage), with the CLI's own read-only mode and a deny policy as additional layers. The inherited residuals,
+   documented in `tree-fingerprint.sh` and unchanged here: a write inside an ALREADY-untracked directory of the live
+   checkout, ignored paths other than `.verdicts`, and a disposable-tree edit reverted before the run ends.
 
    **What isolation defends against.** A reviewer that WRITES (agent-mode implementing, COREDEV-2607) or otherwise
    misbehaves is detected, and its round voids with exit 3. The deny policy and the CLI's workspace boundary keep it
@@ -360,6 +373,9 @@ re-pointed at the new harness, not deleted.
    - the per-round prompt keeps its name, `.agy-prompt-<T>r<N>.md`: the `.gitignore` glob (`.agy-*.md`), the skill's
      `Edit(.agy-prompt-*.md)` grant and every existing gate document already use it, and renaming would widen this
      urgent change for no protection. The skill says the prefix is historical;
+   - the capture step states that a NON-ZERO capture exit (3 void, 4 refused, or the CLI's status) makes the arm
+     MISSING for the round, and that its transcript must not be passed to synthesis: until COREDEV-2888, nothing
+     downstream reads that status;
    - the arm is still invoked as `/unleashed-mail:gemini-review`.
 5. Re-point or update the tests that drive the Gemini capture path or read the recipe, the harness or the skill. Each
    keeps its property and changes only the binary or script it names (a stub `gemini` emitting the CLI's JSON, in place
@@ -510,8 +526,9 @@ case.
   approval. Revoking the transcript after the fact was tried in revision 5 and abandoned (round 5). COREDEV-2888 (High)
   fixes it for all three arms with positive evidence: each harness writes a `<leaf>.clean` receipt (the certified
   transcript's digest) only after every post-run check passes, and `review-verdict.py write` requires a matching
-  receipt for any approving reviewer. Until then, a void is enforced by the harness's exit 3 and by synthesis, which
-  treats a failed round as MISSING.
+  receipt for any approving reviewer. Until then, the CALLER enforces a void: a capture that exited non-zero (3 void,
+  4 refused, or the CLI's own status) must not be passed to synthesis, which reads only the transcript and has no
+  capture-status input. The §3.4 skill rewrite states this in the capture step.
 - **A reviewed repository that commits a `.gemini` or `.env` entry** cannot be reviewed by this arm: the harness
   refuses right after creating the checkout. Committed settings (MCP servers, tools, approval) or a committed `.env` (endpoint,
   credentials, flags) would otherwise configure the reviewer. Neither this repository nor UnleashedMail commits either
