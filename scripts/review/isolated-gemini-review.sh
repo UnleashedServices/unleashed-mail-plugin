@@ -273,6 +273,13 @@ fi
 # baseline below, so it is part of what the harness placed and a reviewer edit to it still voids the round.
 # A reviewed tree that already carries a `.gemini` entry is refused rather than merged into: whatever is
 # committed there would otherwise configure the reviewer, and a symlink there could redirect the write.
+# A COMMITTED `.env` IS REFUSED TOO (codex, plan round 2): the CLI loads a workspace `.env`, so a reviewed
+# repository could set the reviewer's environment (endpoint, credentials, flags). Neither this repository nor
+# UnleashedMail commits one (checked 2026-10-14).
+if [[ -e "${TREE}/.env" ]] || [[ -L "${TREE}/.env" ]]; then
+	echo "GATE FAILED — the reviewed tree commits a .env entry; refusing to let it configure the reviewer" >&2
+	exit 1
+fi
 if [[ -e "${TREE}/.gemini" ]] || [[ -L "${TREE}/.gemini" ]]; then
 	echo "GATE FAILED — the reviewed tree already has a .gemini entry; refusing to configure the reviewer through it" >&2
 	exit 1

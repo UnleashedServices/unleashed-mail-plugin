@@ -83,7 +83,7 @@ MODEL="$(sed -nE 's/^DEFAULT_MODEL="([A-Za-z0-9][A-Za-z0-9._-]*)"$/\1/p' "${SCRI
 if [[ -n ${MODEL} ]]; then
 	(cd "${SCRATCH}" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 120 "${PING}" -- \
 		python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" \
-		--policy "${SCRIPT_DIR}/gemini-review-policy.toml" --diagnostics "${SCRATCH}/gemini.diag" -- \
+		--policy "${SCRIPT_DIR}/gemini-review-policy.toml" --diagnostics "${PING}.diag" -- \
 		"Reply with exactly the single word: pong") ||
 		CAPTURE_RC=$?
 else
@@ -91,9 +91,6 @@ else
 	CAPTURE_RC=1
 fi
 
-# Case-INSENSITIVE, and the `!` is not required: across 3 measured runs agy answered `Pong! How can I
-# help you today?`, a bare lowercase `pong`, and `Pong! Let me know…`. A `Pong!`-exact check calls a
-# healthy CLI unavailable about one run in three.
 # THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating agy cannot be reported
 # healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
 if [[ -n ${BEFORE} ]] || [[ -n ${REPO_ROOT:-} ]]; then

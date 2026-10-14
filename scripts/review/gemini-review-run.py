@@ -44,6 +44,8 @@ import os
 import subprocess  # nosec B404 — the reviewer CLI is run with a fixed argv list, never a shell
 import sys
 
+_REQUESTED = ""
+
 
 def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure reason
     """Run the review, assert the answering model, and print only the response text."""
@@ -57,6 +59,8 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
     )
     parser.add_argument("prompt", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    global _REQUESTED  # noqa: PLW0603 — every refusal names the model it was asked to confirm (codex, round 2)
+    _REQUESTED = args.model
     prompt = " ".join(a for a in args.prompt if a != "--").strip()
     if not prompt:
         return _fail("no prompt was given")
@@ -70,6 +74,11 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         "plan",
         "--policy",
         args.policy,
+        # AN ALLOWLIST THAT ADMITS NOTHING: no configured MCP server — user, workspace or extension — is started.
+        # The policy denies MCP tool CALLS; this stops the server PROCESS from being spawned at all, which a
+        # policy cannot (gemini, plan round 2). The name cannot match a real server.
+        "--allowed-mcp-server-names",
+        "unleashed-mail-gate-review-no-mcp",
         "-o",
         "json",
         "-p",
@@ -77,7 +86,7 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
     ]
     try:
         proc = subprocess.run(
-            argv, capture_output=True, text=True, check=False
+            argv, capture_output=True, text=True, check=False, env=_cli_env()
         )  # nosec B603 — fixed argv, no shell
     except FileNotFoundError:
         return _fail("the `gemini` CLI is not on PATH")
@@ -103,23 +112,44 @@ def main() -> int:  # noqa: PLR0911 — one return per distinct, named failure r
         )
     stats = data.get("stats")
     models = stats.get("models") if isinstance(stats, dict) else None
-    answered = sorted(str(m)[:80] for m in models) if isinstance(models, dict) else []
+    # THE FULL IDENTITY IS COMPARED (codex, plan round 2, Q1): keys were truncated to 80 characters BEFORE the
+    # comparison, so a requested 80-character id matched an answering `<id>-fallback`. Only the diagnostic
+    # below is shortened.
+    answered = sorted(str(m) for m in models) if isinstance(models, dict) else []
     if answered != [args.model]:
         return _fail(
-            f"answered by {answered!r}, not {args.model!r}. A fallback or routed model is not the reviewer the "
-            "gate records; the round is not a review."
+            f"answered by {[m[:80] for m in answered]!r}, not {args.model!r}. A fallback or routed model is not "
+            "the reviewer the gate records; the round is not a review."
         )
     response = data.get("response")
     if not isinstance(response, str) or not response.strip():
         return _fail("the CLI returned no response text")
+    # LINE ENDINGS NORMALIZED HERE, not left to the PTY (codex, plan round 2): a PTY turns CRLF into CRCRLF and
+    # `pty-capture.py` removes only one CR, so CRLF reached the transcript. CRLF and lone CR become LF.
+    response = response.replace("\r\n", "\n").replace("\r", "\n")
     sys.stdout.write(response if response.endswith("\n") else response + "\n")
     return 0
+
+
+def _cli_env() -> dict[str, str]:
+    """The CLI's environment, with the session TRUSTED BEFORE settings load.
+
+    gemini 0.64.0 loads settings before it parses arguments and excludes an untrusted workspace's settings, while
+    `--skip-trust` only takes effect during argument parsing (codex, plan round 2). The staged routing-off workspace
+    setting could therefore be ignored. `GEMINI_CLI_TRUST_WORKSPACE=true` — the CLI's own documented alternative —
+    is read before settings, so the disposable checkout's `.gemini/settings.json` applies. The model assertion
+    above remains the guarantee if it ever does not.
+    """
+    env = dict(os.environ)
+    env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+    return env
 
 
 def _fail(reason: str, status: int = 4) -> int:
     """Report a refused run on ONE line of fixed text (no newline can enter it), and return its status."""
     print(
-        "GEMINI ARM FAILED — " + reason.replace("\n", " ").replace("\r", " "),
+        f"GEMINI ARM FAILED [{_REQUESTED!r}] — "
+        + reason.replace("\n", " ").replace("\r", " "),
         file=sys.stderr,
     )
     return status
