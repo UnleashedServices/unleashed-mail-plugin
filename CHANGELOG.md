@@ -13,6 +13,112 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.36] — 2026-10-14
+
+### Changed
+
+- **The plan gate's Gemini arm runs the `gemini` CLI with `gemini-3.1-pro-preview` (COREDEV-2887).**
+  Gemini 3.1 Pro was retired from the Antigravity CLI (`agy`), whose remaining Flash arm stopped
+  answering on 2026-10-12. The arm keeps its isolation harness (a disposable checkout, fingerprinted
+  before and after, exit 3 on a surviving change); only the command inside it changed.
+  - **`scripts/review/gemini-review-run.py`, the adapter.** Runs the CLI with `-o json` and asserts
+    that `stats.models` names exactly the requested model (complete strings), so a fallback or a
+    plan-mode route to Flash is refused, never recorded. A JSON `error`, non-JSON output or a non-zero
+    CLI status also refuse. Its diagnostics file is opened FIRST and made its stderr, so a refused run
+    leaves the transcript EMPTY (MISSING at both persistence layers) and nothing but the validated
+    response reaches it. CRLF and lone CR become LF.
+  - **`scripts/review/gemini-review-policy.toml`.** Headless plan mode auto-approves `exit_plan_mode`
+    and then runs in YOLO (observed writing). The per-run policy denies `exit_plan_mode`, `write_file`,
+    `replace`, `run_shell_command`, `invoke_agent` and every MCP tool, at priority 999, in every mode.
+  - **No MCP server starts:** a per-run random `--allowed-mcp-server-names` value (a fixed name was
+    matched by a server configured under it).
+  - **No foreign environment file:** the CLI loads the first `.gemini/.env` or `.env` above its working
+    directory; the adapter refuses any that is not in `$HOME`. A committed `.gemini` or `.env` in the
+    reviewed tree is refused before anything is staged, and so is a committed `GEMINI.md` context file at
+    any depth: the CLI injects those into every prompt (measured steering the reviewer), and in 0.64.0 no
+    setting removes the default name. The scan also matches every context name the operator's user or
+    system settings configure (`context.fileName` only adds names); unparseable settings refuse.
+  - **No extensions, bounded output:** the adapter passes `--extensions none` (an installed extension's
+    context and hooks would otherwise run outside the deny policy), and reads the CLI's output under a
+    16 MiB cap, stopping a runaway CLI rather than buffering it. Its stderr is drained into the
+    diagnostics file under its own 16 MiB cap.
+  - **What else cannot reach the reviewer:** a committed `.agents` entry (workspace Agent Skills) is
+    refused; settings-level hooks are switched off in the staged settings; operator settings that add
+    `context.includeDirectories` refuse (that list concatenates across scopes, so it cannot be emptied);
+    `GEMINI_SYSTEM_MD` and the IDE's workspace variables are not passed to the CLI; the settings scan
+    follows `GEMINI_CLI_HOME`; and the adapter runs the `gemini` found on `PATH` outside the reviewed
+    checkout, skipping relative entries, so a branch-committed `gemini` can never be the reviewer.
+  - **Nothing the reviewed branch commits runs as the arm's own code** (fourth review round).
+    `scripts/review/reviewer-env.sh` is sourced first by the capture wrapper, the harness and the
+    preflight:
+    - **PATH:** only absolute entries outside the live checkout are kept, so a relative entry (such as
+      `.`) or a direnv-style `bin` inside the checkout cannot supply `python3`, `git` or `gemini`.
+    - **Python:** every `python3` those scripts run is isolated (`-I -B`), including the heredocs in
+      `tree-fingerprint.sh`. `python3 -c` and `python3 -` put the working directory first on the import
+      path, so a `json.py` or `hashlib.py` committed at the repository root could replace the standard
+      library inside the gate's own checks. This was reproduced.
+
+    The adapter also has new checks:
+    - **Absolute configuration paths only:** a relative `GEMINI_CLI_HOME`,
+      `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`,
+      `GEMINI_CLI_TRUSTED_FOLDERS_PATH` or `GEMINI_EXP` refuses the round.
+    - **Credentials only from a `.env` file:** the `.env` the CLI would load may set only
+      `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, the CLI's
+      own allowlist for an untrusted workspace. The CLI loads that file after every check, so anything
+      else it set would go unchecked. Set other variables in the shell instead.
+    - **No Node loaders:** `NODE_OPTIONS` and `NODE_PATH` are not passed to the CLI.
+    - **A `gemini` that resolves into a reviewed tree is skipped,** whether through a PATH entry or a
+      symlink. The resolved file is what runs. The reviewed trees are the disposable checkout and the
+      live checkout, which the harness and the preflight pass as `--reviewed-root`.
+
+  - **Fifth review round:**
+    - **Configuration paths:** an absolute configuration path that points inside a reviewed tree now
+      refuses too.
+    - **Custom tools:** operator settings with `tools.discoveryCommand` or `tools.callCommand` refuse.
+      The discovery command runs on the checkout at startup, and the tools it registers are outside
+      the deny policy.
+    - **Temporary files:** a `TMPDIR` inside the checkout refuses, for both the harness and the
+      preflight.
+    - **Shell startup file:** `BASH_ENV` is unset for every shell the arm starts.
+    - **Diagnostics:** an unwritable diagnostics file stops the CLI, so it can't block on a full
+      stderr pipe.
+  - **Sixth review round:**
+    - **User skills:** the staged settings switch off the operator's user Agent Skills
+      (`skills.enabled: false`).
+    - **Policy files:** operator settings with `policyPaths` or `adminPolicyPaths` refuse. Admin-tier
+      policies outrank the arm's deny policy.
+
+  - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
+    before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
+    routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt
+    under an ignored path (a custom `XDG_STATE_HOME` such as `~/logs`) stays readable.
+  - **`scripts/review/preflight-gemini.sh`** pings through the same adapter, is healthy only on a
+    whole-answer `pong` from the gate's model, keeps the CLI's diagnostics at `<ping>.diag`, and names
+    the model on every failure.
+  - **Shared settings:** the preflight stages the same workspace settings as a review, from the new
+    `scripts/review/gemini-review-settings.json`, so settings-level hooks are off for the ping too.
+- **The gemini-review skill, `AGENT_CONTRACTS.md` §2, `CLAUDE.md` and the README** describe the new arm.
+  The skill grants exactly `capture-gemini-review.sh` and `preflight-gemini.sh`, and no `Bash(gemini *)`;
+  the assembly validator now refuses that grant. A non-zero capture is MISSING for its round.
+- **`test_agy_recipe_gate` is now a retirement declaration:** no shipped text may launch `agy`.
+
+### Removed
+
+- `scripts/review/isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`, with the tests
+  that exercised only them. Their shared cases are ported to `scripts/tests/test_gemini_cli_arm.py`.
+
+### Known gap (inherited, all arms)
+
+- A VOIDED round's transcript stays on disk after exit 3, and persistence refuses only an empty or absent
+  one. COREDEV-2888 makes persistence require a clean-round receipt from the harness.
+- **Inline Python imports from the working directory (COREDEV-2891, High).** Elsewhere in the plugin,
+  inline `python3 -c` and heredoc launches can still import a module from the working directory. That
+  covers the Codex and Kimi harnesses, the hook libraries, and `tree-fingerprint.sh` when another arm
+  sources it. Only the Gemini arm is isolated here.
+- **The first shell still reads `BASH_ENV` (COREDEV-2892, Medium).** Bash runs `BASH_ENV` before the
+  script's first line, so only a change to the skill's launch line (`bash -p` or `env -u BASH_ENV`)
+  can stop it. Until then, start the arm with `BASH_ENV` unset.
+
 ## [2.8.35] — 2026-10-13
 
 ### Fixed

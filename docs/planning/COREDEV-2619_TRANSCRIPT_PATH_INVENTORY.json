@@ -194,9 +194,9 @@
       "destination": {
         "line": 32,
         "payloads": [
-          "    MODEL=\"$(bash review/agy-newest-model.sh)\" && python3 pty-capture.py --allocated \"$GEMINI_TRANSCRIPT\" -- agy --model \"$MODEL\" --add-dir \"$(pwd)\" -p \"Read and follow .agy-prompt-$TICKET-r$ROUND.md\""
+          "    python3 pty-capture.py --allocated \"$GEMINI_TRANSCRIPT\" -- python3 \"$ADAPTER\" --model \"$MODEL\" --policy \"$POLICY\" --diagnostics \"$GEMINI_TRANSCRIPT.diag\" -- \"Read and follow $TREE/$PROMPT_REL\""
         ],
-        "payloadSha256": "60fd65aa98be88c9c19dce2c51373b21d01a67bd21b97f4e1e9dbfccc9668c0d"
+        "payloadSha256": "578d5954d31166edaa2de1d6e45578d6ba22d4775f003df97aceca8bfcafa09c"
       },
       "sourceSha256": "5a3eb5808cdf4ae356f45bb138dc2dfee451b644714aed7dcbe9cacd9228699e",
       "precedingAnchorLine": 30,
@@ -422,11 +422,11 @@
       "reason": "The fixed-path cleanup grant is removed when allocation eliminates pre-cleaning.",
       "contracts": ["S-PRECLEAN"],
       "destination": {
-        "line": 16,
+        "line": 18,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(agy models), Edit(.agy-prompt-*.md), Read"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh), Edit(.agy-prompt-*.md), Read"
         ],
-        "payloadSha256": "15b3ff082be3c696afd9e326122300d46c1a0861fb48469d3b8a726f78329703"
+        "payloadSha256": "3e7b5a1a99a9c39e975a5a65871365351077d6b49f3c88b357c1dd10eb30e21a"
       },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,
@@ -442,7 +442,7 @@
       "reason": "The isolated review helper must capture to the single allocated output argument.",
       "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 120,
+        "line": 136,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
           "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
@@ -464,7 +464,7 @@
       "reason": "The primary isolated review recipe must capture to the allocated output argument.",
       "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 212,
+        "line": 204,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
           "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
@@ -486,7 +486,7 @@
       "reason": "The live capture instruction must identify the allocated target, not a shared path.",
       "contracts": ["S-CAPTURE", "S-THREAD"],
       "destination": {
-        "line": 278,
+        "line": 234,
         "payloads": [
           "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -507,7 +507,7 @@
       "reason": "Synthesis must receive both reviewers' allocated paths as opaque arguments.",
       "contracts": ["S-THREAD"],
       "destination": {
-        "line": 281,
+        "line": 238,
         "payloads": [
           "8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

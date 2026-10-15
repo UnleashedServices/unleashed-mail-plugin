@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.35
+# UnleashedMail — Claude Code Plugin v2.8.36
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,31 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.36
+
+**The plan gate's Gemini arm runs again, on Gemini 3.1 Pro.** Google retired 3.1 Pro from the Antigravity
+CLI (`agy`), and `agy`'s Flash arm stopped answering, so the arm now runs Google's `gemini` CLI with
+`gemini-3.1-pro-preview`, inside the same isolation harness. Re-login once with `gemini` (OAuth), then
+run `/unleashed-mail:gemini-review` as before.
+
+- **The answering model is checked.** The CLI can fall back to another model mid-session; an adapter
+  reads the CLI's own JSON stats and refuses the round unless the requested model, and only it, answered.
+- **Plan mode is not trusted.** Headless, the CLI's plan mode can switch itself to YOLO and write (we
+  watched it do so). Each run loads a deny policy that withholds every write, shell, delegation and MCP
+  tool; the disposable checkout and its before/after fingerprints remain the guarantee.
+- **A refused run leaves an empty transcript,** which every gate layer already treats as MISSING, and the
+  harness prints the reason. Any non-zero capture is MISSING for that round.
+- **Your Gemini `.env` may hold only credentials.** The CLI loads `~/.gemini/.env` (or `~/.env`) after
+  the arm's checks. That file may set only `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`
+  and `GOOGLE_CLOUD_LOCATION`, the CLI's own list for untrusted folders. Any other key refuses the round
+  and is named. Export other variables in your shell instead.
+- **The reviewed branch cannot run its own code as the arm's.** PATH keeps only entries outside the
+  checkout. Every `python3` the arm starts ignores the working directory and `PYTHONPATH`, so a
+  committed `json.py` can't replace the standard library. The `gemini` that runs is a real file
+  outside the checkout.
+- **Removed:** `isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`. The per-round
+  prompt keeps its `.agy-prompt-<T>r<N>.md` name.
 
 ### v2.8.35
 
@@ -496,7 +521,7 @@ both bases first.
 ### v2.6.4
 
 - **Reviewer isolation** (`COREDEV-2607`) — a plan review once _implemented_ the plan it was reviewing,
-  modifying 6 shipped scripts. [`scripts/review/isolated-agy-review.sh`](scripts/review/isolated-agy-review.sh)
+  modifying 6 shipped scripts. `scripts/review/isolated-agy-review.sh` (retired in v2.8.36; now `isolated-gemini-review.sh`)
   now runs the `agy` reviewer against a disposable detached checkout and **fails the round** if the real
   working tree changed. `agy` has no read-only flag — four candidates were tested and all four wrote
   files — so the fix isolates rather than constrains.
@@ -899,7 +924,7 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 | `accessibility-patterns`      | Accessibility implementation patterns for macOS/SwiftUI                                                                                                                                                                |
 | `swiftlint-config`            | SwiftLint rule configuration, violation remediation                                                                                                                                                                    |
 | `spm-management`              | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit                                                                                                                                 |
-| `gemini-review`               | Plan/debug review via Antigravity CLI (`agy`); routes through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py) PTY wrapper for guaranteed non-TTY output capture                                          |
+| `gemini-review`               | Plan/debug review via the `gemini` CLI, run isolated (disposable checkout, deny policy, model asserted); captured through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py)                                |
 | `codex-review`                | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
 | `create-feature-plan`         | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template                                                                                                                                   |
 | `review-synthesis`            | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation                                          |
@@ -929,7 +954,7 @@ Agents are designed for **flexible parallel execution** in any combination. The 
 The plugin enforces these non-negotiable processes:
 
 1. **Planning document** — `docs/planning/FEATURE_NAME_PLAN.md` for every feature (no exceptions)
-2. **Plan review gate** — Every plan must be reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity CLI `agy`) and `/unleashed-mail:codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Namespaced names are canonical — the plugin registers its skills namespaced, so those invocations always resolve; the bare `/gemini-review` / `/codex-review` forms resolve only where the consumer workspace ships its own local copies. The scripted, digest-bound gate binds `docs/planning/*_PLAN.md` documents; debug/bug-investigation reviews reuse the same reviewers in advisory mode — see the review skills.)
+2. **Plan review gate** — Every plan must be reviewed by **both** `/unleashed-mail:gemini-review` (the `gemini` CLI, run isolated) and `/unleashed-mail:codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Namespaced names are canonical — the plugin registers its skills namespaced, so those invocations always resolve; the bare `/gemini-review` / `/codex-review` forms resolve only where the consumer workspace ships its own local copies. The scripted, digest-bound gate binds `docs/planning/*_PLAN.md` documents; debug/bug-investigation reviews reuse the same reviewers in advisory mode — see the review skills.)
 3. **Context7 usage** — Mandatory for code generation, setup, config, API docs lookup
 4. **Jira ticket hygiene** — Every change tracked at `https://unleashedservices.atlassian.net/` (project key `COREDEV`), updated throughout, with Epic association
 5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types

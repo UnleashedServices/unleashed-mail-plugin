@@ -374,10 +374,10 @@ _JOB_DIGESTS = {
     # COREDEV-2875: the pin moved to 2.1.294 (Haiku 5.5's alias needs 2.1.293+), in both jobs.
     # COREDEV-2882: Dependabot bumped actions/setup-node 7.0.0 -> 7.1.0; validate and load-check use it and are re-frozen.
     ("plugin-ci.yml", "validate"): (
-        "d5fa4c7fecd06e752d58347092860c8076a983c2003c4c14b8950d974bd3bfa7"
+        "120b13709f15434c0896f4253c960c6955fa558f05a9f0854071f4b5d5508666"
     ),
     ("plugin-ci.yml", "py39-smoke"): (
-        "e87d60109f929643f84ee362d581e4306ab54bf98cf8c3e269e814163b3f7de7"
+        "fad79e05ac711c5a9634006bc85adece76727081362ec2177078d2af90bafa61"
     ),
     ("plugin-ci.yml", "linux-primitive-probe"): (
         "9364cf91c8d53c02b357618450f37ecf61aa320657983615bd9361e96bb3e904"

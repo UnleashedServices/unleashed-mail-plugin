@@ -101,7 +101,7 @@ trap cleanup EXIT
 # CONTENT-AWARE, NOT STATUS-CATEGORY-ONLY (PR #63 recheck, P1). `git status --porcelain` emits one
 # line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the line byte-identical
 # and this comparison — the gate-bearing COREDEV-2607 detector, whose failure VOIDS the round —
-# saw nothing. The same defect was found and fixed in `preflight-agy.sh` first; the fix did not
+# saw nothing. The same defect was found and fixed in the (retired) `agy` preflight first; the fix did not
 # reach here, so the rule now lives in `tree-fingerprint.sh` and all three source it.
 BEFORE_STATUS="$(git status --porcelain)"
 if ! BEFORE="$(tree_fingerprint "$REPO")"; then

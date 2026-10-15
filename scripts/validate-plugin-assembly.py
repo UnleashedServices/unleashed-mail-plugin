@@ -280,6 +280,10 @@ BROAD_BASH_PREFIXES = {
     "gh": "every GitHub CLI command, including merges and releases",
     "codex": "any codex invocation, including `-s danger-full-access`, outside every wrapper",
     "agy": "any agy invocation outside the isolation harness — agy has NO read-only mode",
+    "gemini": (
+        "any gemini CLI launch outside the isolation harness and its adapter — headless plan mode is NOT "
+        "read-only, and only the adapter asserts the answering model (COREDEV-2887)"
+    ),
     "kimi": "any kimi invocation outside a harness",
     "rm": "unbounded deletion",
     "sudo": "privilege escalation",
