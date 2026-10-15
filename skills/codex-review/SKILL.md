@@ -35,7 +35,7 @@ All plans and debugging sessions must also be reviewed by Codex CLI — non-nego
 > "capture the review elsewhere" recovery: at the user's direction, capture the second review with the
 > kimi harness instead —
 > `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh" <prompt-file> <out-transcript> <commit> [timeout] <plan>`
-> — **this one is deliberately NOT pre-approved and will prompt.** Unlike the agy and codex harnesses it
+> — **this one is deliberately NOT pre-approved and will prompt.** Unlike the gemini and codex harnesses it
 > owns its output path rather than taking an allocator's reserved leaf, so it uses non-allocated
 > `pty-capture`, which creates and truncates whatever single-linked path it is handed. A blanket
 > `Bash(... isolated-kimi-review.sh *)` grant therefore turned this read-only review skill into a way to
@@ -73,7 +73,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 
 `codex exec` only reliably emits its result to a **real terminal**. When stdout is piped, redirected (`> file`, `| tee`), or the process is backgrounded — Claude Code's Bash tool, `run_in_background`, CI — codex can finish successfully yet write **0 bytes**. That is the recurring failure: the run "worked" but nothing was captured. The `-o PATH` flag mitigates it but is easy to forget and does not cover every backgrounded case.
 
-**Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md) uses for `agy` — one PTY wrapper, both review CLIs.
+**Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md)'s harness runs its adapter under — one PTY wrapper, both review arms.
 
 ```bash
 # Write this round's prompt to a PER-ROUND file first — `.codex-prompt-${TICKET}r${ROUND}.md`,
@@ -92,8 +92,8 @@ Docs: https://developers.openai.com/codex/cli/reference
 #     budget is short and is never a reason to drop the tier. Provisional until a full plan review
 #     is timed at ultra. The previous 600s cap
 #     SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
-#     (COREDEV-2504). This is NOT the same cap as gemini-review, which is 1800s because `agy` needs a
-#     longer `--print-timeout`; an earlier note here claimed they matched (deep review, P2). Keep
+#     (COREDEV-2504). This is NOT the same cap as gemini-review's 1800s (that arm's whole-review wall
+#     clock); an earlier note here claimed they matched (deep review, P2). Keep
 #     the Monitor pattern below: an outer runner timeout could otherwise kill the
 #     run before the wrapper's cap fires.
 #   * MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed
@@ -141,7 +141,7 @@ codex exec -c model_reasoning_effort=ultra -s read-only "/security-reviewer [FIL
 
 # Full diff review — built-in `codex review` (outputs to STDOUT; no -o — capture via the PTY wrapper)
 codex -c model_reasoning_effort=ultra review --uncommitted
-codex -c model_reasoning_effort=ultra review --base main
+codex -c model_reasoning_effort=ultra review --base "<PR-base-branch>"  # each PR's own base: version branch (app feature, hotfix PR into it), alpha (plugin feature), main (promotion, hotfix PR into main)
 codex -c model_reasoning_effort=ultra review --commit <SHA>
 
 # Save agent output to file

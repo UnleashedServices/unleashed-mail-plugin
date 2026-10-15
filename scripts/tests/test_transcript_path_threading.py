@@ -7,7 +7,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -18,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 REPO = Path(__file__).resolve().parents[2]
 ALLOCATE = REPO / "scripts" / "review" / "allocate-transcript.sh"
-ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
+ISOLATED_GEMINI = REPO / "scripts" / "review" / "isolated-gemini-review.sh"
 ISOLATED_CODEX = REPO / "scripts" / "review" / "isolated-codex-review.sh"
 STAGE_BOUND_PLAN = REPO / "scripts" / "review" / "stage-bound-plan.py"
 STAGE_PROMPT = REPO / "scripts" / "review" / "stage-prompt.py"
@@ -115,10 +114,10 @@ import sys
 
 args = sys.argv[1:]
 # Both isolation harnesses are logged: the codex arm now runs `isolated-codex-review.sh` for the same
-# reason the gemini arm runs `isolated-agy-review.sh` — review a disposable checkout with the bound
+# reason the gemini arm runs `isolated-gemini-review.sh` — review a disposable checkout with the bound
 # plan staged, never the live file (PR #63 recheck, P1). Symmetric handling here keeps the helper-log
 # assertions symmetric.
-if args and pathlib.Path(args[0]).name in ("isolated-agy-review.sh", "isolated-codex-review.sh"):
+if args and pathlib.Path(args[0]).name in ("isolated-gemini-review.sh", "isolated-codex-review.sh"):
     with open(os.environ["THREAD_HELPER_LOG"], "a", encoding="utf-8") as stream:
         stream.write(json.dumps(args) + "\n")
     clean_env = dict(os.environ)
@@ -576,19 +575,19 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         # name is what keeps the fix from being reverted silently.
         self.assertEqual(
             [
-                str(self.plugin / "scripts" / "review" / "isolated-agy-review.sh"),
+                str(self.plugin / "scripts" / "review" / "isolated-gemini-review.sh"),
                 gemini_path + ".prompt",
                 gemini_path,
             ],
             gemini_helpers[0][:3],
         )
         # FIVE operands now: the PLAN travels as the fifth. The harness reviews a detached checkout of
-        # HEAD, so without it `agy` reads the COMMITTED plan while `<transcript>.plan` describes the
+        # HEAD, so without it the reviewer reads the COMMITTED plan while `<transcript>.plan` describes the
         # working-tree one — and with uncommitted edits, the normal state during review iteration, the
         # transcript approved one version while the artifact recorded it as evidence for another
         # (PR #63 recheck, P1). Asserting the count keeps the operand from being quietly dropped.
         self.assertEqual(5, len(gemini_helpers[0]), gemini_helpers[0])
-        self._assert_recipe_timeout_exceeds_print_timeout(gemini_helpers[0][3])
+        self._assert_recipe_timeout_is_the_whole_wall_clock(gemini_helpers[0][3])
         self.assertEqual(
             PLAN_RELATIVE,
             gemini_helpers[0][4],
@@ -752,29 +751,25 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
             self.reviewer_values(argv),
         )
 
-    def _assert_recipe_timeout_exceeds_print_timeout(self, recipe_timeout: str) -> None:
-        """Bind the recipe's timeout to the wrapper's `--print-timeout`, never to a literal.
+    def _assert_recipe_timeout_is_the_whole_wall_clock(
+        self, recipe_timeout: str
+    ) -> None:
+        """The recipe's timeout bounds the whole review, and nothing passes the retired `--print-timeout`.
 
-        This previously asserted `"1500"`, which pinned a DEFECTIVE value as the expected one: the
-        wrapper had moved to `--print-timeout 28m` (1680s), so 1500 SIGTERMs a live review at 25
-        minutes. Applying the correct fix turned CI red while leaving it green on the bug (PR #63
-        review, gap 12). Assert the INVARIANT that actually matters instead -- the wrapper's cap must
-        exceed the print-timeout it is wrapping -- so either value may be retuned without editing a
-        test, and no retuning can reintroduce the inversion.
+        The `agy` arm coupled two values: the wrapper's cap had to EXCEED `agy --print-timeout` or a live review
+        was SIGTERMed before `agy` could report its own timeout (PR #63 review, gap 12). The `gemini` CLI has no
+        such option — it would reject `--print-timeout` as an unknown argument and every round would fail — so
+        the invariant is now that the flag reaches neither the harness nor the adapter, and that the operand
+        handed through is a positive number of seconds (COREDEV-2887 plan §2.1).
         """
-        wrapper = (
-            self.plugin / "scripts" / "review" / "isolated-agy-review.sh"
-        ).read_text()
-        match = re.search(r"--print-timeout\s+(\d+)m", wrapper)
-        self.assertIsNotNone(match, "wrapper must pass an explicit --print-timeout")
-        print_timeout_seconds = int(match.group(1)) * 60
-        self.assertGreater(
-            int(recipe_timeout),
-            print_timeout_seconds,
-            "the recipe's wrapper timeout must EXCEED agy's --print-timeout "
-            f"({print_timeout_seconds}s), or a live review is SIGTERMed before agy can "
-            "report its own diagnosable timeout",
-        )
+        self.assertGreater(int(recipe_timeout), 0)
+        for script in ("isolated-gemini-review.sh", "gemini-review-run.py"):
+            text = (self.plugin / "scripts" / "review" / script).read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn(
+                "--print-timeout", text, f"{script} passes agy's retired option"
+            )
 
 
 class NestedScratchWorktreeStillStages(unittest.TestCase):

@@ -49,7 +49,7 @@ die() {
 [ -n "$ROUND" ] || die "bind ROUND to the --round operand"
 [ -n "$PROMPT" ] || die "name the PER-ROUND prompt file — there is no shared default"
 [ -n "$PLAN" ] || die "name the plan this round reviews — the transcript is bound to it"
-# Parity with the other arm, which has always checked this (`isolated-agy-review.sh`). `$(cat …)` on a
+# Parity with the other arm, which has always checked this (`isolated-gemini-review.sh`). `$(cat …)` on a
 # missing file expands EMPTY, so without this codex would be handed an empty prompt and would review
 # nothing — and whatever it said about nothing would be parsed for a verdict.
 [ -r "$PROMPT" ] || die "prompt file is not readable: $PROMPT"

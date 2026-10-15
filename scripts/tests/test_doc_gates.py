@@ -877,15 +877,16 @@ class COREDEV2603_WorktreeOrdering(unittest.TestCase):
 
 
 class COREDEV2607_ReviewerIsolation(unittest.TestCase):
-    """The gemini reviewer must not be pointed at the working tree (COREDEV-2607).
+    """The gemini reviewer must not be pointed at the working tree (COREDEV-2607, COREDEV-2887).
 
-    `agy` is not read-only and no flag makes it so. A plan review implemented the plan instead of
-    reviewing it — 6 shipped scripts modified, 5 files created — and the skill at the time documented
-    `agy --add-dir "$(pwd)"` as THE recipe with no warning at all.
+    The reviewer CLI is not read-only. Under `agy` a plan review implemented the plan instead of reviewing it
+    — 6 shipped scripts modified, 5 files created — while the skill documented `agy --add-dir "$(pwd)"` as
+    THE recipe with no warning. The `gemini` CLI's headless plan mode is not a boundary either: it
+    auto-approves `exit_plan_mode` and then runs in YOLO (COREDEV-2887 F4). Isolation is the guarantee.
     """
 
     SKILL = os.path.join(_ROOT, "skills", "gemini-review", "SKILL.md")
-    WRAPPER = os.path.join(_ROOT, "scripts", "review", "isolated-agy-review.sh")
+    WRAPPER = os.path.join(_ROOT, "scripts", "review", "isolated-gemini-review.sh")
 
     @classmethod
     def setUpClass(cls):
@@ -894,57 +895,65 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
 
     def test_the_isolation_wrapper_ships(self):
         self.assertTrue(
-            os.path.exists(self.WRAPPER), "isolated-agy-review.sh must ship"
+            os.path.exists(self.WRAPPER), "isolated-gemini-review.sh must ship"
         )
         self.assertTrue(os.access(self.WRAPPER, os.X_OK), "wrapper must be executable")
 
     def test_the_skill_recommends_the_wrapper(self):
-        self.assertIn("isolated-agy-review.sh", self.skill)
+        self.assertIn("isolated-gemini-review.sh", self.skill)
 
     def test_the_skill_warns_that_agy_can_write(self):
         self.assertIn(
             "NOT READ-ONLY",
             self.skill,
-            "the skill must lead with the fact that agy can write to the tree",
+            "the skill must lead with the fact that the reviewer CLI can write to the tree",
         )
 
     def test_the_tested_ineffective_flags_are_recorded(self):
-        """So nobody 'fixes' this by adding --mode plan. All four were tested; all four wrote."""
-        for flag in ("--mode plan", "--sandbox"):
+        """So nobody 'fixes' this with plan mode: both headless modes were tested, and both wrote (F4, F11)."""
+        for flag in ("--approval-mode plan", "--approval-mode yolo", "YOLO"):
             with self.subTest(flag=flag):
                 self.assertIn(flag, self.skill)
 
-    def test_every_raw_agy_invocation_is_warned_or_superseded(self):
-        """A raw launch pointed at the working tree may appear only where the surrounding text flags the risk.
+    def test_every_raw_cli_launch_is_warned(self):
+        """The skill ships NO runnable raw reviewer launch; a launch-shaped example sits only beside its warning.
 
-        It reads the recipe gate's UNITS (COREDEV-2875 §3), never an exact substring: the checked form puts
-        `--model` first, so `agy --add-dir "$(pwd)"` would match nothing and this test would pass without
-        reading the example (codex r4). Any unit whose `--add-dir` names anything but the isolated
-        `"$TREE"` needs a warning marker in the twelve lines above it, and at least one such unit must be
-        read, so the test can never pass vacuously.
+        `agy` is retired (COREDEV-2887), so no unit of the skill may name it at all — the recipe gate's units,
+        read here, must be empty. A `gemini` launch (the word followed by a session flag) bypasses the
+        adapter's model assertion, the deny policy and the isolation harness, so each one needs a warning
+        marker on its own line or in the twelve lines above it, and at least one must be read, so the test
+        can never pass vacuously.
         """
+        self.assertEqual(
+            [],
+            [
+                unit
+                for _, unit in recipe.units("skills/gemini-review/SKILL.md", self.skill)
+            ],
+            "the gemini-review skill still ships an agy unit",
+        )
+        launch = re.compile(
+            r"(?<![\w./-])gemini\s+(?:-p|--prompt|-m|--model|--approval-mode|-o|--output-format"
+            r"|--skip-trust|--policy|-y|--yolo|-i|--prompt-interactive)(?![\w-])"
+        )
+        markers = (
+            "NOT READ-ONLY",
+            "Why not just",
+            "none of the arm's guarantees",
+            "COREDEV-2607",
+        )
         lines = self.skill.split("\n")
         found = 0
-        for number, unit in recipe.units("skills/gemini-review/SKILL.md", self.skill):
-            for value in re.findall(r'--add-dir[ =]("[^"]*"|\S+)', unit):
-                if value == '"$TREE"':
-                    continue
-                found += 1
-                window = "\n".join(lines[max(0, number - 13) : number - 1])
-                with self.subTest(line=number):
-                    self.assertTrue(
-                        any(
-                            k in window
-                            for k in (
-                                "SUPERSEDED",
-                                "can write",
-                                "NOT READ-ONLY",
-                                "isolated wrapper",
-                                "COREDEV-2607",
-                            )
-                        ),
-                        f"unwarned raw agy invocation at line {number} — its --add-dir is {value}",
-                    )
+        for number, line in enumerate(lines, start=1):
+            if not launch.search(line):
+                continue
+            found += 1
+            window = "\n".join(lines[max(0, number - 13) : number])
+            with self.subTest(line=number):
+                self.assertTrue(
+                    any(marker in window for marker in markers),
+                    f"unwarned raw gemini launch at line {number}: {line.strip()[:120]}",
+                )
         self.assertGreater(
             found, 0, "no raw launch was read at all — the gate would pass vacuously"
         )
@@ -952,7 +961,9 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
     def test_the_wrapper_asserts_the_tree_is_unchanged(self):
         with open(self.WRAPPER, encoding="utf-8") as fh:
             src = fh.read()
-        self.assertIn('tree_fingerprint "$REPO"', src, "must fingerprint the live tree")
+        self.assertIn(
+            'tree_fingerprint "${REPO}"', src, "must fingerprint the live tree"
+        )
         self.assertIn(
             "exit 3",
             src,
@@ -961,7 +972,7 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
         # A PRIVATE clone, never `git worktree add` — a linked worktree's `.git` points into the
         # maintainer's real repository, and the reviewer's git operations landed there (PR #67 pass 6).
         self.assertIn(
-            'disposable_checkout "$REPO" "$SHA"',
+            'disposable_checkout "${REPO}" "${SHA}"',
             src,
             "must review a private disposable checkout",
         )
@@ -969,7 +980,7 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
             "worktree add", src, "a linked worktree hands the reviewer the real .git"
         )
         self.assertIn(
-            'disposable_fingerprint "$TREE"',
+            'disposable_fingerprint "${TREE}"',
             src,
             "the disposable checkout must be compared by CONTENT, not by git status",
         )
@@ -1053,132 +1064,88 @@ class DeepReviewP2Fixes(unittest.TestCase):
             if os.path.isfile(produced):
                 os.remove(produced)
 
-    def test_agy_arm_default_is_the_model_its_own_comment_names(self):
-        """The comment and the model the arm runs cannot disagree — now as a FAMILY (COREDEV-2875).
+    def test_gemini_arm_default_is_one_literal_the_preflight_reads(self):
+        """The model the arm runs is ONE literal, and the preflight pings exactly it (COREDEV-2887).
 
-        The comment once described a switch the code never made; then a pinned version went stale while
-        `agy models` listed two newer ones. So no version is pinned: the comment names the flash-high
-        family, and the resolver selects from exactly that family. Either can be edited; they cannot
-        drift apart.
+        The `gemini` CLI has no model listing to resolve from (the retired `agy` arm resolved the newest
+        flash-high from `agy models`), so the harness declares `DEFAULT_MODEL` once. A second literal — in the
+        preflight, which would then ping a model the gate never runs, or in the adapter — is a value that goes
+        stale on its own schedule, so neither may carry one.
         """
-        source = _read("scripts/review/isolated-agy-review.sh")
-        resolver = _read("scripts/review/agy-newest-model.sh")
-        self.assertIsNone(
-            re.search(r'^MODEL="\$\{MODEL:-', source, re.MULTILINE),
-            "a pinned MODEL default is back",
+        harness = _read("scripts/review/isolated-gemini-review.sh")
+        preflight = _read("scripts/review/preflight-gemini.sh")
+        adapter = _read("scripts/review/gemini-review-run.py")
+        defaults = re.findall(r'^DEFAULT_MODEL="([^"]+)"$', harness, re.MULTILINE)
+        self.assertEqual(
+            1,
+            len(defaults),
+            "the harness must declare exactly one DEFAULT_MODEL literal",
         )
         self.assertIn(
-            'MODEL="$(bash "${SCRIPT_DIR}/agy-newest-model.sh")"',
-            source,
-            "the wrapper no longer resolves its model",
+            "DEFAULT_MODEL=", preflight, "the preflight must read the harness's literal"
         )
-        self.assertIn("# Reviewer model: the flash-high family.", source)
-        pattern = re.search(
-            r'^FLASH_HIGH = re\.compile\(r"([^"]+)"\)', resolver, re.MULTILINE
-        )
-        assert pattern is not None, "the resolver's candidate pattern moved"
-        self.assertTrue(pattern.group(1).endswith("-flash-high"), pattern.group(1))
-        self.assertNotIn(
-            "pro",
-            pattern.group(1),
-            "the pro family failed 5 of 6 rounds — never a candidate",
-        )
-        self.assertIn('if not ident.endswith("-flash-high"):', resolver)
+        self.assertIn('"${SCRIPT_DIR}/isolated-gemini-review.sh")"', preflight)
+        literal = re.compile(r"gemini-\d+(?:\.\d+)?-(?:pro|flash)[\w.-]*")
+        for name, text in (("the preflight", preflight), ("the adapter", adapter)):
+            with self.subTest(file=name):
+                self.assertEqual(
+                    [], literal.findall(text), f"{name} carries a second model literal"
+                )
 
-    def test_agy_preflight_ping_is_allocated_per_run(self):
-        """A shared `/tmp/agy-ping.txt` lets a dead CLI read as healthy.
+    def test_gemini_preflight_ping_is_allocated_per_run(self):
+        """A shared ping path lets a dead CLI read as healthy.
 
         The preflight decides whether the mandatory gate can run at all. With one shared path, a
         preflight that dies before writing leaves the PREVIOUS run's `pong` in place and the next
         reader calls the CLI available; two concurrent preflights also overwrite each other
-        (deep review, P2). Both surfaces that document it must allocate per run AND re-read the path
-        they allocated, never a re-derived name.
+        (deep review, P2). Both surfaces that document it route through the granted wrapper, and the
+        wrapper allocates per run and re-reads the path it allocated, never a re-derived name.
         """
         for rel in ("skills/gemini-review/SKILL.md", "AGENT_CONTRACTS.md"):
             with self.subTest(file=rel):
                 source = _read(rel)
-                self.assertNotIn(
-                    "/tmp/agy-ping.txt",
+                for fixed in ("/tmp/agy-ping.txt", "/tmp/gemini-ping.txt"):
+                    self.assertNotIn(
+                        fixed, source, f"{rel} documents a fixed shared preflight path"
+                    )
+                self.assertIn(
+                    "scripts/review/preflight-gemini.sh",
                     source,
-                    f"{rel} still documents a fixed shared preflight path",
+                    f"{rel} must route the preflight through the granted wrapper",
                 )
-                if (
-                    rel.startswith("skills/")
-                    or "scripts/review/preflight-agy.sh" in source
-                ):
-                    # The caller routes through the wrapper, which allocates and re-reads the path
-                    # itself. AGENT_CONTRACTS.md §2 joined the skills here (2026-08-17 remediation):
-                    # it had gone on teaching the INLINE recipe the wrapper was extracted to replace,
-                    # whose reproduced defects are cwd pollution — which can now VOID a round under
-                    # AF-5's freeze rule — and no exit-status check. The property this gate protects
-                    # (a ping path allocated per run) is asserted on the wrapper below either way.
-                    self.assertIn(
-                        "scripts/review/preflight-agy.sh",
-                        source,
-                        f"{rel} must route the preflight through the granted wrapper",
-                    )
-                else:
-                    self.assertRegex(
-                        source,
-                        r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"',
-                        f"{rel} must allocate the ping path per run with a portable template",
-                    )
-                    self.assertIn(
-                        '"$PING"',
-                        source,
-                        f"{rel} must pass and re-read the allocated path, not a re-derived name",
-                    )
-        # And the wrapper itself must do the allocating it now owns.
-        wrapper = _read("scripts/review/preflight-agy.sh")
+        wrapper = _read("scripts/review/preflight-gemini.sh")
         self.assertRegex(
-            wrapper, r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"'
+            wrapper, r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/gemini-ping\.X{6,}"\)"'
         )
-        self.assertIn('grep -qi pong "$PING"', wrapper)
+        self.assertIn(
+            '"${PING}"', wrapper, "the answer must be read from the path allocated"
+        )
 
-    def test_gemini_skill_quotes_the_model_the_wrapper_actually_defaults_to(self):
-        """The skill describes the RULE the wrapper runs, and nothing pins a version (COREDEV-2875).
+    def test_gemini_skill_states_the_model_rule_and_quotes_no_model(self):
+        """The skill and CLAUDE.md name the RULE the harness runs, never a model id (COREDEV-2875, -2887).
 
-        It once quoted the wrapper's default line, so the two drifted: the script moved to a flash-high
-        model while the skill still quoted `gemini-3.1-pro-high` and told operators to fall back by
-        editing `settings.json` — a route the wrapper makes inert, because it always passes `--model`
-        (deep review, codex inline). Now there is no default to quote: the skill, the wrapper's comment
-        and CLAUDE.md name the rule, and a versioned flash-high literal in any of them fails here.
+        Quoting the default is how the docs drifted before: the script moved models while the skill still
+        quoted the old one and told operators to fall back by editing `settings.json`, a route the wrapper
+        makes inert because it always passes the model (deep review, codex inline). So the docs point at
+        the harness's `DEFAULT_MODEL`, and a model id in either fails here.
         """
-        script = _read("scripts/review/isolated-agy-review.sh")
-        resolver = _read("scripts/review/agy-newest-model.sh")
         skill = _read("skills/gemini-review/SKILL.md")
         claude = _read("CLAUDE.md")
-
+        rule = "model: the `DEFAULT_MODEL` that `isolated-gemini-review.sh` declares"
         self.assertIn(
-            "(binary `agy`, model: the newest `gemini-*-flash-high` that `agy models` lists)",
+            "(binary `gemini`, " + rule,
             skill,
-            "the skill's frontmatter description must state the rule the wrapper runs",
+            "the skill's frontmatter description must state the rule the harness runs",
         )
-        self.assertIn(
-            "scripts/review/agy-newest-model.sh",
-            skill,
-            "the skill must name the resolver",
-        )
-        self.assertIn(
-            "the newest `gemini-*-flash-high` that `agy models` lists", claude
-        )
-        versioned = re.compile(r"gemini-\d+(?:\.\d+)?-flash-high")
-        for name, text in (
-            ("the wrapper", script),
-            ("the resolver", resolver),
-            ("the gemini-review skill", skill),
-            ("CLAUDE.md", claude),
-        ):
+        self.assertIn(rule, claude)
+        literal = re.compile(r"gemini-\d+(?:\.\d+)?-(?:pro|flash)[\w.-]*")
+        for name, text in (("the gemini-review skill", skill), ("CLAUDE.md", claude)):
             with self.subTest(file=name):
-                self.assertEqual(
-                    [],
-                    versioned.findall(text),
-                    f"{name} pins a versioned flash-high model",
-                )
+                self.assertEqual([], literal.findall(text), f"{name} quotes a model id")
         self.assertNotIn(
             "temporarily edit settings.json and restore after",
             skill,
-            "settings.json cannot affect a wrapper round — the wrapper always passes --model",
+            "settings.json cannot choose a wrapper round's model — the adapter always passes it",
         )
 
 

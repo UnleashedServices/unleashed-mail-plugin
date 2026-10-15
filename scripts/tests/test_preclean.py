@@ -8,12 +8,11 @@ import subprocess
 import unittest
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[2]
 REVIEW = "review"
 CODEX_SKILL = "skills/" + "codex-" + REVIEW + "/SKILL.md"
 GEMINI_SKILL = "skills/" + "gemini-" + REVIEW + "/SKILL.md"
-ISOLATED_HELPER = "scripts/review/" + "isolated-agy-" + REVIEW + ".sh"
+ISOLATED_HELPER = "scripts/review/" + "isolated-gemini-" + REVIEW + ".sh"
 
 ALLOWED_TOOLS = "allowed" + "-tools"
 PLUGIN_ROOT_NAME = "CLAUDE_PLUGIN_" + "ROOT"
@@ -21,11 +20,7 @@ PLUGIN_ROOT_TOKEN = "${" + PLUGIN_ROOT_NAME + "}"
 TMP_ROOT = "/" + "tmp"
 
 CODEX_PRECLEAN = (
-    "rm -f "
-    + TMP_ROOT
-    + "/codex-out.txt "
-    + TMP_ROOT
-    + "/codex-out.txt.captureid"
+    "rm -f " + TMP_ROOT + "/codex-out.txt " + TMP_ROOT + "/codex-out.txt.captureid"
 )
 GEMINI_PRECLEAN = 'rm -f "$OUT" "$OUT.captureid"'
 PRECLEAN_COMMANDS = {
@@ -39,13 +34,21 @@ PRECLEAN_COMMANDS = {
 # the destructive cleanup tool with `--apply` and `pty-capture.py <any path> -- <any command>`
 # (deep review, P1). The wildcards are gone; the property is now pinned to the exact entrypoints, which
 # is what it always meant.
-CAPTURE_CODEX_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/capture-codex-review.sh *)"
-AUDIT_CODEX_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/audit-codex.sh *)"
-CAPTURE_GEMINI_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/capture-gemini-review.sh *)"
-PREFLIGHT_AGY_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/preflight-agy.sh)"
+CAPTURE_CODEX_GRANT = (
+    "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/capture-codex-review.sh *)"
+)
+AUDIT_CODEX_GRANT = (
+    "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/audit-codex.sh *)"
+)
+CAPTURE_GEMINI_GRANT = (
+    "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/capture-gemini-review.sh *)"
+)
+PREFLIGHT_GEMINI_GRANT = (
+    "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/preflight-gemini.sh)"
+)
 REQUIRED_GRANTS = {
     CODEX_SKILL: (CAPTURE_CODEX_GRANT, AUDIT_CODEX_GRANT),
-    GEMINI_SKILL: (CAPTURE_GEMINI_GRANT, PREFLIGHT_AGY_GRANT),
+    GEMINI_SKILL: (CAPTURE_GEMINI_GRANT, PREFLIGHT_GEMINI_GRANT),
 }
 
 RM_GRANT = re.compile(r"Bash\([ \t]*rm[ \t]+-f(?:[ \t]+|(?=\)))")
@@ -146,7 +149,10 @@ def _direct_validator_lexeme_hits(tree: dict[str, str]) -> list[tuple[str, int]]
     hits = []
     for path, text in tree.items():
         source_path = Path(path)
-        if not path.startswith("scripts/") or source_path.suffix not in VALIDATOR_SOURCE_SUFFIXES:
+        if (
+            not path.startswith("scripts/")
+            or source_path.suffix not in VALIDATOR_SOURCE_SUFFIXES
+        ):
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
             if ALLOWED_TOOLS in line and PLUGIN_ROOT_TOKEN in line:
@@ -163,7 +169,9 @@ class SPrecleanProofs(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.tree = _tracked_text_tree()
         test_path = Path(__file__).resolve()
-        cls.tree[str(test_path.relative_to(REPO))] = test_path.read_text(encoding="utf-8")
+        cls.tree[str(test_path.relative_to(REPO))] = test_path.read_text(
+            encoding="utf-8"
+        )
 
     def test_M2_3_no_tmp_literal_survives_in_any_allowed_tools_line(self) -> None:
         self.assertEqual([], _tmp_allowed_tool_hits(self.tree))
@@ -192,14 +200,18 @@ class SPrecleanProofs(unittest.TestCase):
         rewritten_grant = ", Bash(rm -f /var/state/unleashed-transcript*)"
         for path, (line_number, line) in allowed_by_path.items():
             with self.subTest(path=path):
-                mutated = _replace_line(self.tree, path, line_number, line + rewritten_grant)
+                mutated = _replace_line(
+                    self.tree, path, line_number, line + rewritten_grant
+                )
                 self.assertEqual([], _tmp_allowed_tool_hits(mutated))
                 self.assertIn((path, line_number), _rm_grant_hits(mutated))
 
     def test_M2_8_preclean_commands_are_absent_from_the_source_files(self) -> None:
         self.assertEqual([], _preclean_command_hits(self.tree))
 
-    def test_M2_8_each_preclean_command_reintroduction_is_detected_in_its_file(self) -> None:
+    def test_M2_8_each_preclean_command_reintroduction_is_detected_in_its_file(
+        self,
+    ) -> None:
         for path, command in PRECLEAN_COMMANDS.items():
             with self.subTest(path=path):
                 mutated = dict(self.tree)

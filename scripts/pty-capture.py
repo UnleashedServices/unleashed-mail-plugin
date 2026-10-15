@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-Some CLIs (Antigravity `agy`, OpenAI `codex exec`) only emit their output to a
+Some CLIs (OpenAI `codex exec`; the retired Antigravity `agy`) only emit their output to a
 real terminal. When stdout is piped, redirected (`> file`, `| tee`), or the
 process is backgrounded — i.e. Claude Code's Bash tool, CI scripts, any
 non-TTY context — they produce **0 bytes** even though the command itself
@@ -27,9 +27,9 @@ Examples
     python3 pty-capture.py --allocated "$CODEX_TRANSCRIPT" -- \
         codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt-$TICKET-r$ROUND.md)"
 
-    # Antigravity (agy) review. Resolve the newest flash-high model FIRST, as its own command, and launch
-    # only if that succeeded: inside `--model "$(...)"` a failed resolution would still launch agy.
-    MODEL="$(bash review/agy-newest-model.sh)" && python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- agy --model "$MODEL" --add-dir "$(pwd)" -p "Read and follow .agy-prompt-$TICKET-r$ROUND.md"
+    # Gemini review, as the isolation harness runs it inside its disposable checkout ($TREE), with ADAPTER and
+    # POLICY the arm's adapter and deny policy (both in review/). Never a raw `gemini`: it is not read-only headless.
+    python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- python3 "$ADAPTER" --model "$MODEL" --policy "$POLICY" --diagnostics "$GEMINI_TRANSCRIPT.diag" -- "Read and follow $TREE/$PROMPT_REL"
 
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 = failure). Captured output is written to <out-path>, which is REQUIRED — there

@@ -12,8 +12,8 @@ You should receive an acknowledgement within a few business days.
 CI runs a history-aware [gitleaks](https://github.com/gitleaks/gitleaks) scan
 (`.github/workflows/plugin-ci.yml`, the `secret-scan` job) over the **full git history**
 on every push to `main` or `alpha`, and every pull request **targeting `main` or `alpha`**
-(the workflow's `push`/`pull_request` triggers filter on those two branches). `main` is the integration trunk releases are cut from and `alpha` is a
-gated pre-release branch; both are covered. Until COREDEV-2494 the triggers filtered on `main`
+(the workflow's `push`/`pull_request` triggers filter on those two branches). Feature and fix PRs target `alpha`, and
+`main`, the branch releases are cut from, receives work only by an `alpha` → `main` promotion (COREDEV-2883); both are covered. Until COREDEV-2494 the triggers filtered on `main`
 alone, so PRs into `alpha` — which is most of them — ran no scan at all. The ruleset extends the gitleaks default;
 the configuration and the accepted-exposure allowlist live in [`.gitleaks.toml`](.gitleaks.toml).
 
@@ -38,7 +38,7 @@ public and rotated on the provider side:
   client should be reviewed/rotated on the GCP side and treated as if public.
 
 Both are allowlisted in `.gitleaks.toml` so the scan passes on the existing history while still
-failing on any **new** secret — or any *other* historical secret not on the allowlist.
+failing on any **new** secret — or any _other_ historical secret not on the allowlist.
 
 The `firebase-debug.log` exemption is **commit-scoped** to the only two commits that file ever
 existed in (`edc27bf` added it, `1f18944` removed it), so a new secret committed into that exact

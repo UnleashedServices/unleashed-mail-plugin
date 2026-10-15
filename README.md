@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.32
+# UnleashedMail — Claude Code Plugin v2.8.36
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,62 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.36
+
+**The plan gate's Gemini arm runs again, on Gemini 3.1 Pro.** Google retired 3.1 Pro from the Antigravity
+CLI (`agy`), and `agy`'s Flash arm stopped answering, so the arm now runs Google's `gemini` CLI with
+`gemini-3.1-pro-preview`, inside the same isolation harness. Re-login once with `gemini` (OAuth), then
+run `/unleashed-mail:gemini-review` as before.
+
+- **The answering model is checked.** The CLI can fall back to another model mid-session; an adapter
+  reads the CLI's own JSON stats and refuses the round unless the requested model, and only it, answered.
+- **Plan mode is not trusted.** Headless, the CLI's plan mode can switch itself to YOLO and write (we
+  watched it do so). Each run loads a deny policy that withholds every write, shell, delegation and MCP
+  tool; the disposable checkout and its before/after fingerprints remain the guarantee.
+- **A refused run leaves an empty transcript,** which every gate layer already treats as MISSING, and the
+  harness prints the reason. Any non-zero capture is MISSING for that round.
+- **Your Gemini `.env` may hold only credentials.** The CLI loads `~/.gemini/.env` (or `~/.env`) after
+  the arm's checks. That file may set only `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`
+  and `GOOGLE_CLOUD_LOCATION`, the CLI's own list for untrusted folders. Any other key refuses the round
+  and is named. Export other variables in your shell instead.
+- **The reviewed branch cannot run its own code as the arm's.** PATH keeps only entries outside the
+  checkout. Every `python3` the arm starts ignores the working directory and `PYTHONPATH`, so a
+  committed `json.py` can't replace the standard library. The `gemini` that runs is a real file
+  outside the checkout.
+- **Removed:** `isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`. The per-round
+  prompt keeps its `.agy-prompt-<T>r<N>.md` name.
+
+### v2.8.35
+
+**Agents now treat UnleashedMail's version branch, not `main`, as the place work lands.**
+
+- **The branch convention says where work integrates.** `AGENT_CONTRACTS.md` called `main` "the
+  integration trunk". In UnleashedMail, all work lands on the version branch (`1.0X.0000`, now
+  `1.02.0000`), and `main` receives only promotions and hotfixes. The base-branch detection that
+  `swift-reviewer` and `changeset.sh` use already worked this way; the contract line now agrees.
+- **`release-manager` builds the changelog from the version branch.** It listed PRs merged into
+  `main`, which holds only promotions, so it missed every feature PR. It now derives the branch from
+  `MARKETING_VERSION`, and stops rather than run the query with an empty base.
+- **`codex-review` reviews against the PR's own base.** Its full-diff example used `--base main`,
+  which would review a feature branch against `main` and pull in the version branch's unreleased
+  work. `main` remains the right base for a promotion, and for a hotfix's PR into `main` (its PR into
+  the version branch uses the version branch).
+
+### v2.8.34
+
+**You can install `alpha` from the store.** Add the marketplace as
+`UnleashedServices/unleashed-mail-plugin#alpha` (see "Release channels").
+
+- **The marketplace's ref now decides the plugin's ref.** The plugin's marketplace entry pointed at
+  GitHub with no branch, so it always installed `main`, even from a marketplace added at `#alpha`. It
+  now uses the relative source `"./"`, which installs the marketplace's own tree.
+- **Existing installs carry on.** Measured on throwaway branches: an install updates in place across
+  the change, under its own key, including one still keyed `npranson-unleashed-mail-plugin`. As
+  always, the version bump is what moves it.
+- **CI checks the shipped manifest.** The load check used to rewrite the source before installing,
+  so CI never tested the shipped value. It now asserts the source is `"./"` and fails otherwise, and
+  the assembly validator enforces the same rule.
 
 ### v2.8.32
 
@@ -465,7 +521,7 @@ both bases first.
 ### v2.6.4
 
 - **Reviewer isolation** (`COREDEV-2607`) — a plan review once _implemented_ the plan it was reviewing,
-  modifying 6 shipped scripts. [`scripts/review/isolated-agy-review.sh`](scripts/review/isolated-agy-review.sh)
+  modifying 6 shipped scripts. `scripts/review/isolated-agy-review.sh` (retired in v2.8.36; now `isolated-gemini-review.sh`)
   now runs the `agy` reviewer against a disposable detached checkout and **fails the round** if the real
   working tree changed. `agy` has no read-only flag — four candidates were tested and all four wrote
   files — so the fix isolates rather than constrains.
@@ -708,10 +764,20 @@ claude plugin update unleashed-mail
 # Restart Claude Code
 ```
 
-> **Migrating from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was
-> renamed to `UnleashedServices/unleashed-mail-plugin`, and Claude Code's plugin-rename migration
-> does not cover marketplace-name changes — an install keyed as
-> `unleashed-mail@npranson-unleashed-mail-plugin` will stop resolving. Re-point it once:
+> **Installed from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was renamed
+> to `UnleashedServices/unleashed-mail-plugin`, but an install keyed as
+> `unleashed-mail@npranson-unleashed-mail-plugin` keeps resolving and updating. This was measured in
+> COREDEV-2885 (witness W2): after the rename the install stayed listed and enabled, and it then updated in
+> place, under the old key, across the plugin-source change. Update it under that key:
+>
+> ```bash
+> claude plugin marketplace update npranson-unleashed-mail-plugin
+> claude plugin update unleashed-mail@npranson-unleashed-mail-plugin
+> # Restart Claude Code
+> ```
+>
+> Re-pointing is optional, and only renames the key. Removing a marketplace uninstalls its plugins, so
+> reinstall afterwards:
 >
 > ```bash
 > claude plugin marketplace remove npranson-unleashed-mail-plugin
@@ -719,6 +785,33 @@ claude plugin update unleashed-mail
 > claude plugin install unleashed-mail   # reinstall under the new marketplace
 > # Restart Claude Code
 > ```
+
+### Release channels
+
+Work lands on `alpha` and reaches `main` by promotion. The ref you add the marketplace at decides which
+one you install, because the plugin's marketplace entry uses the relative source `"./"`: it installs the
+marketplace's own tree.
+
+| Channel          | Add the marketplace as                          | You get                               |
+| ---------------- | ----------------------------------------------- | ------------------------------------- |
+| stable (default) | `UnleashedServices/unleashed-mail-plugin`       | `main`: promoted, released work       |
+| alpha            | `UnleashedServices/unleashed-mail-plugin#alpha` | `alpha`: merged work not yet promoted |
+
+Both channels share one marketplace name, so a machine follows one channel at a time. To switch, remove
+the marketplace (which uninstalls the plugin), add it at the other ref, and reinstall. Remove it under
+the key it is REGISTERED as, which `claude plugin marketplace list` shows. That is
+`unleashedservices-unleashed-mail-plugin`, or `npranson-unleashed-mail-plugin` for an install added
+before the rename:
+
+```bash
+claude plugin marketplace remove unleashedservices-unleashed-mail-plugin   # or npranson-unleashed-mail-plugin
+claude plugin marketplace add UnleashedServices/unleashed-mail-plugin#alpha   # drop "#alpha" to go back
+claude plugin install unleashed-mail
+# Restart Claude Code
+```
+
+Updates on either channel arrive with each version bump, through the two update commands above. To try
+a single branch or checkout without changing channel, use `--plugin-dir`, below.
 
 For local development against an unpushed clone:
 
@@ -831,7 +924,7 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 | `accessibility-patterns`      | Accessibility implementation patterns for macOS/SwiftUI                                                                                                                                                                |
 | `swiftlint-config`            | SwiftLint rule configuration, violation remediation                                                                                                                                                                    |
 | `spm-management`              | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit                                                                                                                                 |
-| `gemini-review`               | Plan/debug review via Antigravity CLI (`agy`); routes through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py) PTY wrapper for guaranteed non-TTY output capture                                          |
+| `gemini-review`               | Plan/debug review via the `gemini` CLI, run isolated (disposable checkout, deny policy, model asserted); captured through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py)                                |
 | `codex-review`                | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
 | `create-feature-plan`         | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template                                                                                                                                   |
 | `review-synthesis`            | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation                                          |
@@ -861,7 +954,7 @@ Agents are designed for **flexible parallel execution** in any combination. The 
 The plugin enforces these non-negotiable processes:
 
 1. **Planning document** — `docs/planning/FEATURE_NAME_PLAN.md` for every feature (no exceptions)
-2. **Plan review gate** — Every plan must be reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity CLI `agy`) and `/unleashed-mail:codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Namespaced names are canonical — the plugin registers its skills namespaced, so those invocations always resolve; the bare `/gemini-review` / `/codex-review` forms resolve only where the consumer workspace ships its own local copies. The scripted, digest-bound gate binds `docs/planning/*_PLAN.md` documents; debug/bug-investigation reviews reuse the same reviewers in advisory mode — see the review skills.)
+2. **Plan review gate** — Every plan must be reviewed by **both** `/unleashed-mail:gemini-review` (the `gemini` CLI, run isolated) and `/unleashed-mail:codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Namespaced names are canonical — the plugin registers its skills namespaced, so those invocations always resolve; the bare `/gemini-review` / `/codex-review` forms resolve only where the consumer workspace ships its own local copies. The scripted, digest-bound gate binds `docs/planning/*_PLAN.md` documents; debug/bug-investigation reviews reuse the same reviewers in advisory mode — see the review skills.)
 3. **Context7 usage** — Mandatory for code generation, setup, config, API docs lookup
 4. **Jira ticket hygiene** — Every change tracked at `https://unleashedservices.atlassian.net/` (project key `COREDEV`), updated throughout, with Epic association
 5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types

@@ -240,7 +240,7 @@ def _contract_problems(
         problems.append(f"{location}: destination lacks S-WRAPPER allocation")
     # `CODEX_TRANSCRIPT` joins `GEMINI_TRANSCRIPT` as accepted evidence: the codex arm now hands its
     # allocated leaf to `isolated-codex-review.sh` exactly as the gemini arm hands it to
-    # `isolated-agy-review.sh` (COREDEV-2642, P1 — the `--allocated` write moved into the shared
+    # `isolated-gemini-review.sh` (COREDEV-2642, P1 — the `--allocated` write moved into the shared
     # isolation harness for both arms), so the capture recipe shows the threaded transcript name rather
     # than `--allocated` directly. Symmetric with the gemini whitelist entry.
     if "S-CAPTURE" in contracts and not any(

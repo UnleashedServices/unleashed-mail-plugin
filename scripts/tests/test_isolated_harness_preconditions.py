@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pre-run refusals carried by MORE THAN ONE isolated review harness, gated as a family.
 
-`isolated-codex-review.sh` and `isolated-agy-review.sh` carry byte-identical copies of two refusals
+`isolated-codex-review.sh` and `isolated-gemini-review.sh` carry byte-identical copies of two refusals
 that run before the reviewer is launched:
 
   * the AMBIGUOUS PLAN OPERAND check — a relative operand that names one file from the caller's
@@ -118,9 +118,8 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         # `GIT_CONFIG_NOSYSTEM`, so it is set back AFTER sanitising (codex, PR #73).
         self.env["GIT_CONFIG_NOSYSTEM"] = "1"
         self.env["UM_HARNESS_WITNESS"] = str(self.witness)
-        # An explicit gemini-arm model (COREDEV-2875): this fixture tests binding, isolation and status
-        # propagation, not selection — selection is test_agy_model_resolution's. Without it the wrapper
-        # would resolve via `agy models`, which this stub does not answer, and fail closed first.
+        # An explicit gemini-arm model: this fixture tests the pre-run refusals, not model selection
+        # (test_gemini_cli_arm covers the default and the overrides).
         self.env["MODEL"] = "gemini-fixture-flash-high"
 
         self.build_repo(self.repo)
@@ -192,9 +191,7 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         # A canonical launch record. Neither harness reads it before the guards under test — only
         # `pty-capture --allocated` does, downstream — but a fixture should still look like something
         # the allocator could have written.
-        token = (
-            "gemini" if reviewer_binary(harness) == "agy" else reviewer_binary(harness)
-        )
+        token = reviewer_binary(harness)
         Path(f"{out}.launch").write_text("a" * 32 + f" {token}\n", encoding="utf-8")
         return out, prompt
 

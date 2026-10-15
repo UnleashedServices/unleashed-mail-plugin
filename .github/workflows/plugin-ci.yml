@@ -9,7 +9,7 @@ name: plugin-ci
 
 on:
   push:
-    # `main` is the trunk releases are cut from; `alpha` is a gated pre-release branch. BOTH are
+    # Feature/fix PRs land on `alpha`; `main` takes only alpha -> main promotions (COREDEV-2883). BOTH are
     # gated, which is the point of this filter. Until COREDEV-2494
     # this triggered on `main` only, so 56 of alpha's 57 commits merged with ZERO checks: every audit
     # PR targeted alpha and reported "no checks". Worse, PR #36 ADDED `claude plugin validate` and #31
@@ -67,7 +67,7 @@ jobs:
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/gemini-review-run.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -409,7 +409,7 @@ jobs:
         with:
           python-version: "3.9"
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/gemini-review-run.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
       - name: bind-prompt.py real invocation on 3.9
         # bind-prompt.py runs inside the BLOCKING plan-review gate on macOS stock 3.9, and byte-compile
         # cannot catch a runtime-evaluated union or an fd-API mismatch (PR #63 recheck, P3 — the same
@@ -583,8 +583,8 @@ jobs:
     # recover part of what this one expression gave away.
     #
     # The matrix is still COMPUTED rather than filtered with a step-level `if:` — an `if:` still
-    # provisions the runner — and `alpha` is included because releases are cut from it and it has
-    # never run this leg at all.
+    # provisions the runner — and `alpha` is included because every change integrates there before
+    # `main` (COREDEV-2883), and it had never run this leg at all.
     #
     # `redactor-equivalence (macos-latest)` is deliberately still NOT a required check. Requiring it
     # is a separate, ordered step: this change must land and be observed green on real pull requests

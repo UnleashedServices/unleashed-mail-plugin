@@ -8,6 +8,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Version updates open against alpha: the branch flow is main > alpha > feature work
+    # (COREDEV-2883). GitHub always opens SECURITY updates against the default branch (main), and
+    # once target-branch is set the options below apply to version updates only. Dependabot reads
+    # this file from the default branch, so the setting takes effect when alpha is promoted to main.
+    target-branch: alpha
     commit-message:
       prefix: "chore(deps)"
     labels:

@@ -43,7 +43,8 @@ Current state: `1.02.260601` (Beta) — `Config/Base.xcconfig` is authoritative 
 - **Feature branches**: `1.0X/feature-name` off the matching version branch (`1.0X.0000`)
   where `X` is the RELEASE stage digit (e.g., `1.02/coredev-1899-foo` for Beta features)
 - **Hotfix branches**: off the version branch, merged to BOTH the version branch AND `main`
-- **Trunk**: `main` is the integration trunk
+- **Integration branch**: the version branch (`1.0X.0000`). All work lands there before `main`;
+  `main` receives only version-branch promotions and hotfixes (COREDEV-2884)
 
 > ❌ Never use `feature/desc`, `fix/desc`, or `claude/desc-sessionId` patterns. Those don't carry
 > the version-stage signal needed for release routing.
@@ -109,26 +110,28 @@ Before any implementation begins:
 
 ### Preflight & unavailable-reviewer recovery
 
-The gate depends on the `agy` (gemini) and `codex` CLIs being installed and authenticated. On a fresh
+The gate depends on the `gemini` and `codex` CLIs being installed and authenticated. On a fresh
 machine or in CI they may be absent — the gate must NOT silently pass, and must NOT hard-wedge the dev
 loop with no escape.
 
-- **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
-  isn't misread as unavailable, and allocate the ping path PER RUN — a shared one lets a preflight that
-  died before writing leave the previous `pong` for the next reader, so a dead CLI reads as healthy —
-  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"`, which is the EXTRACTED form of the
-  inline recipe this used to spell out (v2.7.0). Do not hand-roll the inline `mktemp` + `pty-capture`
-  version again: it polluted the caller's cwd — which under AF-5's freeze rule can now VOID a round —
-  and checked no exit status. The wrapper greps case-insensitively for `pong` — NOT the literal `Pong!`, which agy returns
-  only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
-  unavailable and sends you down the recovery path for no reason (bare
-  `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
-  codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
-  is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
-  A **healthy ping but a failed review is an invocation problem, not an unavailable CLI** — `agy -p`
-  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 28m`; a tiny transcript
-  (e.g. `Error: timeout waiting for response`) is a _failure_, never a verdict. Fix the invocation and
-  re-run; that is not a reviewer-unavailable situation.
+- **Preflight (run first):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh"` — the one
+  granted form. It allocates the ping path PER RUN (a shared one lets a preflight that died before writing
+  leave the previous `pong` for the next reader, so a dead CLI reads as healthy), pings through the SAME
+  adapter a review runs through — so the answering model is asserted — from a scratch directory with the
+  checkout fingerprinted before and after, and is healthy only on a WHOLE-answer `pong` from the gate's
+  model. Every failure line names the model. Do not hand-roll an inline ping: the earlier inline recipe
+  polluted the caller's cwd — which under AF-5's freeze rule can VOID a round — and checked no exit status.
+  For codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that
+  it is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
+  A **healthy ping but a failed review** needs its reason read before anything else: the harness prints
+  the adapter's refusal (`gemini arm (<model>): GEMINI ARM FAILED [...] — <reason>`), and the CLI's own
+  stderr is in `<transcript>.diag`. A capacity error (`429`, exit 173) is not an unavailable CLI — retry
+  later as a new round.
+- **A non-zero capture is `MISSING` for that reviewer**, whatever its transcript holds: 3 is a VOID (the
+  reviewer changed the tree or the staged basis), 4 a refused run, anything else the CLI's own failure.
+  Nothing downstream reads the capture status — `review-synthesis` reads only the transcript and
+  `persist-verdict.sh` refuses only an empty or absent one — so never pass a non-zero capture's transcript
+  to synthesis. (Persistence requiring proof of a clean round is COREDEV-2888.)
 - **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
   `REQUEST_CHANGES` — a missing/empty transcript is never `APPROVE` (see 3a); implementation does not start.
 - **Recovery — the user chooses; there is no scripted waiver (COREDEV-2493).** If either reviewer is
@@ -576,7 +579,7 @@ unchanged and still mandatory.
 | ------------------------ | ----------------------- | ------- | ------------------------------------- |
 | `verdict-report`         | `swift-reviewer`        | `in`    | `agents/swift-reviewer.md:613`        |
 | `brainstorm-summary`     | `brainstorm`            | `in`    | `skills/brainstorm/SKILL.md:150`      |
-| `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:237`       |
+| `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:236`       |
 | `pr-review-report`       | `pr-review`             | `in`    | `skills/pr-review/SKILL.md:68`        |
 | `security-findings`      | `security-reviewer`     | `out`   | `agents/security-reviewer.md:208`     |
 | `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:287`  |

@@ -90,9 +90,11 @@ two different failures**, depending on how far the user got:
 normalization table maps *missing / empty / **unparseable** transcript* → `MISSING`):
 
 1. the reviewer **never ran** — install/authenticate the CLI, or capture the review elsewhere;
-2. it ran but the transcript was **empty or unparseable** — re-capture it (`agy` writes exactly 0 bytes
-   from a non-TTY on failure, and needs `--print-timeout 28m`; a tiny transcript is a failure, not a
-   verdict).
+2. it ran but the transcript was **empty or unparseable** — re-capture it (a refused or failed Gemini run
+   leaves its transcript EMPTY, with the reason on the harness's stderr and in `<transcript>.diag`; a tiny
+   transcript is a failure, not a verdict). A capture that exited NON-ZERO is this case whatever its
+   transcript says — a void (exit 3) can still hold the reviewer's `VERDICT:` line, and nothing downstream
+   reads the capture status (COREDEV-2888).
 
 Check the transcript before assuming (1): the fix for (2) is a re-run, not an install. What they share —
 and it is the load-bearing half — is that **no plan edit clears either**.
@@ -104,17 +106,14 @@ a reviewer that never ran (that misread is the wedge COREDEV-2493 exists to remo
 and stands on its own. `verify` reports that case as `TWO SEPARATE problems: …` — address the requested
 changes *and* recover the missing reviewer. Neither alone passes the gate.
 
-First **rule out a bad invocation**: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"` reporting **`healthy`** (a `pong` from the model the gate resolves) means the CLI is healthy
-and the review call was wrong (`agy` needs `--print-timeout 28m`; a tiny transcript is a failure, not a
-verdict). A healthy ping plus a failed review is a **you** problem, not an availability problem — fix the
-flag and re-run.
+First **rule out a bad invocation**: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh"` reporting **`healthy`** (a whole-answer `pong` from the model the gate runs) means the CLI is healthy
+and the round failed for a reason of its own — read the harness's `gemini arm (<model>): GEMINI ARM FAILED`
+line and `<transcript>.diag` before anything else. A capacity error (`429`, exit 173) means retry later as a
+new round, not an unavailable reviewer; anything else in that line is a **you** problem — fix it and re-run.
 
-> **Match the ping with `grep -qi pong` — case-insensitive, and do not require the `!`.** Across three
-> measured runs `agy` answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let
-> me know how I can help you today.` A `Pong!`-exact check reports a **healthy** CLI as unavailable
-> roughly one run in three — sending you down this recovery path (and escalating to the user) when the
-> only real problem was a missing `--print-timeout 28m`. That is the exact misdiagnosis this step exists
-> to prevent.
+> **The preflight matches the WHOLE answer** — `pong`, case-insensitive, optionally ending in one `.` or
+> `!` — so `not pong` or `pong unavailable` cannot read as healthy, and every failure line names the
+> model. Do not hand-roll a looser check: the retired `agy` arm's `grep -qi pong` passed both (COREDEV-2887).
 
 If it is genuinely unavailable, STOP and present the recovery choices to the **user** — install/authenticate
 the CLI, capture the review on another machine, or explicitly direct the work outside `/implement`. That last

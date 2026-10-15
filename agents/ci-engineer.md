@@ -43,10 +43,12 @@ Structure workflows in `.github/workflows/`:
 ```yaml
 name: CI
 on:
+  # `main` AND the version (integration) branch, e.g. `1.02.0000`: feature PRs target the version branch,
+  # so a `[main]`-only filter would run no checks on them (COREDEV-2884).
   push:
-    branches: [main]
+    branches: [main, "[0-9]+.[0-9]+.0000"]
   pull_request:
-    branches: [main]
+    branches: [main, "[0-9]+.[0-9]+.0000"]
 
 jobs:
   test:
