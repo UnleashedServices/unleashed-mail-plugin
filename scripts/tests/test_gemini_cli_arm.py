@@ -710,22 +710,29 @@ class G8NothingTheCliLoadsResolvesFromTheCheckout(_StubGemini, unittest.TestCase
     )
 
     def test_a_relative_configuration_path_refuses(self):
-        """Each names a file the CLI reads; a relative value resolves from the checkout (PR #124 review, P1)."""
+        """Each names a file the CLI reads; a relative value resolves from the checkout (PR #124 review, P1).
+
+        `../steer.json` resolves OUTSIDE the checkout, so only the relative-path check can stop it — the containment
+        check alone would pass it (a mutation-table survivor) — and the refusal's REASON is asserted for both values.
+        """
         for name in self.PATH_VARIABLES:
-            with self.subTest(variable=name):
-                if self.log.exists():
-                    self.log.unlink()
-                before = self.env.get(name)
-                self.env[name] = "steer/config.json"
-                result, raw, diag = self.adapter(name=f"relative-{name}")
-                if before is None:
-                    self.env.pop(name)
-                else:
-                    self.env[name] = before
-                self.assertEqual(4, result.returncode, diag)
-                self.assertEqual(b"", raw)
-                self.assertEqual([], self.calls())
-                self.assertIn(name, diag)
+            for value in ("steer/config.json", "../steer.json"):
+                with self.subTest(variable=name, value=value):
+                    if self.log.exists():
+                        self.log.unlink()
+                    before = self.env.get(name)
+                    self.env[name] = value
+                    result, raw, diag = self.adapter(
+                        name=f"relative-{name}-{value.count('..')}"
+                    )
+                    if before is None:
+                        self.env.pop(name)
+                    else:
+                        self.env[name] = before
+                    self.assertEqual(4, result.returncode, diag)
+                    self.assertEqual(b"", raw)
+                    self.assertEqual([], self.calls())
+                    self.assertIn(f"{name} is a relative path", diag)
 
     def test_an_absolute_configuration_path_runs_positive_control(self):
         self.env["GEMINI_EXP"] = str(self.tmp / "experiments.json")
@@ -740,6 +747,71 @@ class G8NothingTheCliLoadsResolvesFromTheCheckout(_StubGemini, unittest.TestCase
         result, _, diag = self.adapter()
         self.assertEqual(0, result.returncode, diag)
         self.assertEqual([None, None], self.calls()[0]["node"])
+
+    def test_an_absolute_configuration_path_into_a_reviewed_tree_refuses(self):
+        """Absolute is not enough: a path INTO the checkout or a `--reviewed-root` is the branch's file (PR #124, P1)."""
+        live = self.tmp / "live"
+        live.mkdir()
+        for label, value, extra in (
+            ("into the working directory", self.workdir / "settings.json", ()),
+            (
+                "into a reviewed root",
+                live / "settings.json",
+                ("--reviewed-root", str(live)),
+            ),
+        ):
+            with self.subTest(case=label):
+                if self.log.exists():
+                    self.log.unlink()
+                self.env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(value)
+                result, raw, diag = self.adapter(
+                    name=label.replace(" ", "-"), extra=extra
+                )
+                self.assertEqual(4, result.returncode, diag)
+                self.assertEqual(b"", raw)
+                self.assertEqual([], self.calls())
+                self.assertIn(
+                    "GEMINI_CLI_SYSTEM_SETTINGS_PATH names a path inside a reviewed tree",
+                    diag,
+                )
+
+    DRAIN_PROBE = (
+        "import importlib.util, json, os, sys, threading\n"
+        "spec = importlib.util.spec_from_file_location('adapter', sys.argv[1])\n"
+        "adapter = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(adapter)\n"
+        "read_end, write_end = os.pipe()\n"
+        "os.close(read_end)\n"
+        "saved = os.dup(2)\n"
+        "os.dup2(write_end, 2)\n"
+        "source_read, source_write = os.pipe()\n"
+        "os.write(source_write, b'a diagnostic line\\n')\n"
+        "os.close(source_write)\n"
+        "class Cli:\n"
+        "    def __init__(self):\n"
+        "        self.stderr = os.fdopen(source_read, 'rb')\n"
+        "        self.killed = False\n"
+        "    def kill(self):\n"
+        "        self.killed = True\n"
+        "cli = Cli()\n"
+        "adapter._drain_stderr(cli, threading.Event())\n"
+        "os.dup2(saved, 2)\n"
+        "print(json.dumps({'killed': cli.killed}))\n"
+    )
+
+    def test_an_unwritable_diagnostics_file_stops_the_cli_rather_than_the_drain(self):
+        """A failed write must not end the drain silently: the CLI would block on a full pipe (PR #124, Gemini)."""
+        result = subprocess.run(
+            [sys.executable, "-c", self.DRAIN_PROBE, str(ADAPTER)],
+            cwd=self.workdir,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"killed": True}, json.loads(result.stdout.splitlines()[-1]))
 
     # A separate interpreter imports the adapter with `subprocess.Popen` replaced, so the exact launch is observable:
     # through a shebang script argv[0] is never visible to the child, and a real dispatching shim is a native binary.
@@ -1531,6 +1603,20 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
         self.assertIn("to learn its context file names", result.stderr)
         self.assertEqual([], self.calls())
 
+    def test_operator_settings_with_custom_tool_commands_refuse(self):
+        """`tools.discoveryCommand` runs on the checkout at startup; `callCommand` runs what it found (PR #124, P1)."""
+        for key in ("discoveryCommand", "callCommand"):
+            with self.subTest(setting=key):
+                if self.log.exists():
+                    self.log.unlink()
+                self.operator_home(
+                    json.dumps({"tools": {key: "./tools/run.sh"}}) + "\n"
+                )
+                result, _ = self.capture()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("configures command-based custom tools", result.stderr)
+                self.assertEqual([], self.calls())
+
     def test_a_committed_mcp_json_does_not_refuse(self):
         (self.root / ".mcp.json").write_text('{"mcpServers": {}}\n', encoding="utf-8")
         self.git("add", "--", ".mcp.json")
@@ -1625,6 +1711,31 @@ class G8bTheArmRunsNothingFromTheCheckout(_ReviewRepo, unittest.TestCase):
         result, leaf = self.capture()
         self.assert_a_clean_review(result, leaf)
         self.assertEqual(1, len(self.calls()), "the installed stub did not run")
+
+    def test_no_child_shell_reads_the_inherited_bash_env(self):
+        """`BASH_ENV` runs before a non-interactive script: the entrypoint the operator starts has read it already
+        (COREDEV-2892), but none of the shells the arm starts may — not the allocator, not the harness (PR #124, P1).
+        """
+        sourced = self.tmp / "bash-env-sourced.log"
+        bash_env = self.tmp / "bash-env.sh"
+        bash_env.write_text(f'printf "%s\\n" "$0" >> "{sourced}"\n', encoding="utf-8")
+        self.env["BASH_ENV"] = str(bash_env)
+        result, leaf = self.capture()
+        self.assert_a_clean_review(result, leaf)
+        shells = sourced.read_text(encoding="utf-8").splitlines()
+        # One line per shell that read it (`$0` is still `bash` when `BASH_ENV` runs): the entrypoint's, and no other.
+        self.assertEqual(1, len(shells), shells)
+
+    def test_a_temporary_directory_inside_the_checkout_refuses(self):
+        """`mktemp` would create the disposable tree inside the tree being fingerprinted (PR #124 review, P2)."""
+        inside = self.root / "tmp"
+        inside.mkdir()
+        self.env["TMPDIR"] = str(inside)
+        result, _ = self.capture()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("is inside the checkout", result.stderr)
+        self.assertEqual([], self.calls())
+        self.assertEqual([], sorted(p.name for p in inside.iterdir()))
 
 
 class G5Preflight(_StubGemini, unittest.TestCase):
@@ -1885,6 +1996,18 @@ class G5Preflight(_StubGemini, unittest.TestCase):
         self.env["GEMINI_STUB_RESPONSE"] = "pong"
         self.env["PATH"] = f"{linkbin}{os.pathsep}{self.env['PATH']}"
         self.assert_healthy_and_nothing_planted_ran(self.run_preflight(), ran)
+
+    def test_a_temporary_directory_inside_the_checkout_refuses_naming_the_model(self):
+        """The ping and its diagnostics would land in the fingerprinted checkout (PR #124 review, P2)."""
+        inside = self.root / "tmp"
+        inside.mkdir()
+        self.env["TMPDIR"] = str(inside)
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        result = self.run_preflight()
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn(f"gemini preflight ({DEFAULT_MODEL}): TMPDIR", result.stderr)
+        self.assertEqual([], self.calls())
+        self.assertEqual([], sorted(p.name for p in inside.iterdir()))
 
 
 if __name__ == "__main__":  # pragma: no cover

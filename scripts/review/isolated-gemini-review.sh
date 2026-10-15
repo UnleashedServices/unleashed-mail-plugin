@@ -100,6 +100,12 @@ REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="${PWD}"
 # resolution below).
 CALLER_PWD="${PWD}"
 cd "${REPO}" || exit 1
+# THE DISPOSABLE TREE IS CREATED OUTSIDE THE CHECKOUT (PR #124 review, P2): `mktemp` places it under `TMPDIR`, and a
+# `TMPDIR` inside the checkout would put the reviewer's tree inside the tree being fingerprinted.
+if TMP_PHYSICAL="$(reviewer_tmp_inside "${REPO}")"; then
+	echo "GATE FAILED — TMPDIR (${TMP_PHYSICAL}) is inside the checkout; set it outside ${REPO} to run the gate" >&2
+	exit 1
+fi
 [[ -r ${PROMPT_REL} ]] || {
 	echo "prompt not readable: ${REPO}/${PROMPT_REL}" >&2
 	exit 1
@@ -255,6 +261,15 @@ for path in settings_paths():
         sys.exit(
             f"GATE FAILED — {path} adds workspace directories (context.includeDirectories); the reviewer could read "
             "them. Remove the setting to run the gate."
+        )
+    # COMMAND-BASED CUSTOM TOOLS REFUSE (PR #124 review, P1): `tools.discoveryCommand` runs at startup on the project
+    # root — the checkout — before any policy decision, and registers `discovered_tool_*` tools the deny policy does not
+    # name; `tools.callCommand` then runs them. Neither belongs in a review.
+    tools = data.get("tools") if isinstance(data, dict) else None
+    if isinstance(tools, dict) and (tools.get("discoveryCommand") or tools.get("callCommand")):
+        sys.exit(
+            f"GATE FAILED — {path} configures command-based custom tools (tools.discoveryCommand / callCommand); they "
+            "would run outside the deny policy. Remove the setting to run the gate."
         )
     configured = context.get("fileName") if isinstance(context, dict) else None
     for name in [configured] if isinstance(configured, str) else configured if isinstance(configured, list) else []:

@@ -52,6 +52,7 @@ Exit:  the CLI's status when it fails · 4 the diagnostics file could not be cre
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -98,13 +99,19 @@ def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 — one per named refusal
     prompt = " ".join(prompt_args).strip()
     if not prompt:
         return _fail("no prompt was given")
-    # A RELATIVE CONFIGURATION PATH IS THE BRANCH'S (PR #124 review, P1). Each variable names a file or directory the
-    # CLI reads its configuration from, and a relative value resolves from its working directory: the checkout.
+    trees = _reviewed_trees(Path.cwd(), args.reviewed_root)
+    # A CONFIGURATION PATH MUST BE THE OPERATOR'S (PR #124 review, P1, twice). Each variable names a file or directory the
+    # CLI reads its configuration from: a relative value resolves from its working directory — the checkout — and an
+    # absolute one may still point INTO a reviewed tree, where the branch supplies the file.
     for name in _PATH_VARIABLES:
         value = os.environ.get(name, "")
         if value and not Path(value).is_absolute():
             return _fail(
                 f"{name} is a relative path, which the CLI would resolve inside the reviewed checkout"
+            )
+        if value and _inside(Path(os.path.realpath(value)), trees):
+            return _fail(
+                f"{name} names a path inside a reviewed tree, which the branch controls"
             )
     env_file, foreign = _env_file(Path.cwd())
     if foreign:
@@ -127,7 +134,7 @@ def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 — one per named refusal
                 "shell, where this adapter checks it"
             )
 
-    resolved = _resolve_cli(Path.cwd(), args.reviewed_root)
+    resolved = _resolve_cli(trees)
     if resolved is None:
         return _fail(
             "no executable `gemini` CLI on PATH outside the reviewed trees (relative PATH entries are skipped)"
@@ -229,27 +236,35 @@ def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 — one per named refusal
     return 0
 
 
-def _resolve_cli(cwd: Path, reviewed_roots: list[str]) -> tuple[str, str] | None:
+def _resolve_cli(trees: list[Path]) -> tuple[str, str] | None:
     """The `gemini` the review runs: an ABSOLUTE executable on PATH whose real file is outside every reviewed tree.
 
     A bare name resolves through PATH, so a `.` (or any relative) entry, or an absolute entry inside the
     checkout, would run a branch-committed `gemini` that prints a valid envelope naming the requested model
     (PR #124 review, P1). Relative entries are skipped. Every candidate is then RESOLVED to its real file and skipped if
     that file is inside a reviewed tree — which covers an entry inside one and a `gemini` SYMLINKED into one alike (PR
-    #124 review, P2) — and the real file is what runs, so the file checked is the file executed. The reviewed trees are
-    the working directory and each `--reviewed-root` (the live checkout). Returns the PATH entry's `gemini` (the name
-    it is invoked by) and that real file.
+    #124 review, P2) — and the real file is what runs, so the file checked is the file executed. `trees` comes from
+    `_reviewed_trees`. Returns the PATH entry's `gemini` (the name it is invoked by) and that real file.
     """
-    forbidden = [cwd.resolve(), *(Path(root).resolve() for root in reviewed_roots)]
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry or not Path(entry).is_absolute():
             continue
         candidate = Path(os.path.realpath(Path(entry) / "gemini"))
-        if any(candidate == root or root in candidate.parents for root in forbidden):
+        if _inside(candidate, trees):
             continue
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(Path(entry) / "gemini"), str(candidate)
     return None
+
+
+def _reviewed_trees(cwd: Path, reviewed_roots: list[str]) -> list[Path]:
+    """The trees the reviewed branch controls: the working directory (the disposable checkout) and each root given."""
+    return [cwd.resolve(), *(Path(root).resolve() for root in reviewed_roots)]
+
+
+def _inside(path: Path, trees: list[Path]) -> bool:
+    """Whether `path` is one of `trees` or lies beneath one."""
+    return any(path == tree or tree in path.parents for tree in trees)
 
 
 def _drain_stderr(proc: subprocess.Popen[bytes], capped: threading.Event) -> None:
@@ -265,7 +280,13 @@ def _drain_stderr(proc: subprocess.Popen[bytes], capped: threading.Event) -> Non
             capped.set()
             proc.kill()
             break
-        os.write(2, chunk)
+        try:
+            os.write(2, chunk)
+        except OSError:
+            # An unwritable diagnostics file (a full disk) must not end the drain: the CLI would then block on a
+            # full pipe until the outer timeout. Stopping it fails the run (PR #124 review, Gemini).
+            proc.kill()
+            break
         written += len(chunk)
     proc.stderr.close()
 
@@ -427,11 +448,13 @@ def _fail(reason: str, status: int = 4) -> int:
     One line of fixed text whose embedded values are `repr()`-escaped, so the harness and the preflight can
     find it (`^GEMINI ARM FAILED`) and print it for the operator.
     """
-    print(
-        f"GEMINI ARM FAILED [{_REQUESTED!r}] — "
-        + reason.replace("\n", " ").replace("\r", " "),
-        file=sys.stderr,
-    )
+    # An unwritable diagnostics file must not turn a refusal into a traceback: the status still refuses the run.
+    with contextlib.suppress(OSError):
+        print(
+            f"GEMINI ARM FAILED [{_REQUESTED!r}] — "
+            + reason.replace("\n", " ").replace("\r", " "),
+            file=sys.stderr,
+        )
     return status
 
 

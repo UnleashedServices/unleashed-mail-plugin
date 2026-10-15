@@ -74,7 +74,10 @@ All plans and debugging sessions must be reviewed by the Gemini arm before imple
 - **PATH:** only absolute entries outside the live checkout are kept.
 - **Python:** every `python3` the arm's scripts run is isolated (`-I -B`), so a committed `json.py` cannot replace the standard library.
 - **The `gemini` binary:** the adapter resolves it, through any symlink, to a real file outside both the disposable and the live checkout, and runs that file.
-- **Environment:** the adapter refuses a relative `GEMINI_CLI_HOME`, `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`, `GEMINI_CLI_TRUSTED_FOLDERS_PATH` or `GEMINI_EXP`. It does not pass on `GEMINI_SYSTEM_MD`, `NODE_OPTIONS`, `NODE_PATH` or the IDE's workspace folders.
+- **Environment:** the adapter refuses a `GEMINI_CLI_HOME`, `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`, `GEMINI_CLI_TRUSTED_FOLDERS_PATH` or `GEMINI_EXP` that is relative or points inside the disposable or live checkout.
+- **Temporary files:** the arm refuses a `TMPDIR` inside the checkout.
+- **Custom tools:** Gemini settings that configure command-based custom tools (`tools.discoveryCommand` / `tools.callCommand`) refuse the round. Those commands run outside the deny policy.
+- **Shell startup file:** start the arm with `BASH_ENV` unset. The arm unsets it for every shell it starts, but the shell you start has already read it (COREDEV-2892). It does not pass on `GEMINI_SYSTEM_MD`, `NODE_OPTIONS`, `NODE_PATH` or the IDE's workspace folders.
 
 The preflight stages the same workspace settings for its ping (`scripts/review/gemini-review-settings.json`). A committed `.mcp.json` is fine: the CLI does not read it.
 

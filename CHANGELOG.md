@@ -71,6 +71,18 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
       symlink. The resolved file is what runs. The reviewed trees are the disposable checkout and the
       live checkout, which the harness and the preflight pass as `--reviewed-root`.
 
+  - **Fifth review round:**
+    - **Configuration paths:** an absolute configuration path that points inside a reviewed tree now
+      refuses too.
+    - **Custom tools:** operator settings with `tools.discoveryCommand` or `tools.callCommand` refuse.
+      The discovery command runs on the checkout at startup, and the tools it registers are outside
+      the deny policy.
+    - **Temporary files:** a `TMPDIR` inside the checkout refuses, for both the harness and the
+      preflight.
+    - **Shell startup file:** `BASH_ENV` is unset for every shell the arm starts.
+    - **Diagnostics:** an unwritable diagnostics file stops the CLI, so it can't block on a full
+      stderr pipe.
+
   - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
     before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
     routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt
@@ -98,6 +110,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   inline `python3 -c` and heredoc launches can still import a module from the working directory. That
   covers the Codex and Kimi harnesses, the hook libraries, and `tree-fingerprint.sh` when another arm
   sources it. Only the Gemini arm is isolated here.
+- **The first shell still reads `BASH_ENV` (COREDEV-2892, Medium).** Bash runs `BASH_ENV` before the
+  script's first line, so only a change to the skill's launch line (`bash -p` or `env -u BASH_ENV`)
+  can stop it. Until then, start the arm with `BASH_ENV` unset.
 
 ## [2.8.34] — 2026-10-12
 

@@ -295,7 +295,7 @@ MUTANTS = [
     (
         "a gemini resolving into a reviewed tree allowed",
         A,
-        "        if any(candidate == root or root in candidate.parents for root in forbidden):",
+        "        if _inside(candidate, trees):",
         "        if False:",
         [
             T + "G2NothingUnvalidatedReachesTheTranscript",
@@ -362,8 +362,8 @@ MUTANTS = [
     (
         "reviewed roots ignored",
         A,
-        "    forbidden = [cwd.resolve(), *(Path(root).resolve() for root in reviewed_roots)]",
-        "    forbidden = [cwd.resolve()]",
+        "    return [cwd.resolve(), *(Path(root).resolve() for root in reviewed_roots)]",
+        "    return [cwd.resolve()]",
         [
             T + "G8NothingTheCliLoadsResolvesFromTheCheckout",
             T + "G8bTheArmRunsNothingFromTheCheckout",
@@ -392,6 +392,56 @@ MUTANTS = [
         "            executable=cli,\n",
         "",
         [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    # --- PR #124 fifth review ---
+    (
+        "absolute config paths into a reviewed tree allowed",
+        A,
+        "        if value and _inside(Path(os.path.realpath(value)), trees):",
+        "        if False:",
+        [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    (
+        "drain dies on an unwritable diagnostics file",
+        A,
+        "        try:\n            os.write(2, chunk)\n        except OSError:\n",
+        "        os.write(2, chunk)\n        if False:\n",
+        [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    (
+        "custom tool commands allowed",
+        H,
+        '    if isinstance(tools, dict) and (tools.get("discoveryCommand") or tools.get("callCommand")):',
+        "    if False:",
+        [T + "G7AReviewedTreeCannotConfigureItsReviewer"],
+    ),
+    (
+        "harness TMPDIR inside the checkout allowed",
+        H,
+        'if TMP_PHYSICAL="$(reviewer_tmp_inside "${REPO}")"; then',
+        "if false; then",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "preflight TMPDIR inside the checkout allowed",
+        P,
+        'TMP_PHYSICAL="$(reviewer_tmp_inside "${CHECKOUT_TOP}")"; then',
+        "false; then",
+        [T + "G5Preflight"],
+    ),
+    (
+        "BASH_ENV inherited by child shells",
+        E,
+        "unset BASH_ENV ENV\n",
+        "",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "TMPDIR containment never matches",
+        E,
+        '\t[[ ${tmp} == "${top}" || ${tmp} == "${top}"/* ]]\n',
+        "\tfalse\n",
+        [T + "G8bTheArmRunsNothingFromTheCheckout", T + "G5Preflight"],
     ),
     (
         "adapter launched without -I",

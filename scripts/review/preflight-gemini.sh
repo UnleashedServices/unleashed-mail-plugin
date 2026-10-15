@@ -33,6 +33,12 @@ die() {
 
 command -v gemini >/dev/null 2>&1 || die "the gemini CLI is not on PATH — the gate is fail-closed, not waived"
 
+# THE PING AND ITS DIAGNOSTICS LIVE OUTSIDE THE CHECKOUT (PR #124 review, P2): both are created under `TMPDIR`, and
+# inside the checkout they would land in the tree this preflight fingerprints — a healthy CLI reported as mutating it.
+if CHECKOUT_TOP="$(git rev-parse --show-toplevel 2>/dev/null)" && TMP_PHYSICAL="$(reviewer_tmp_inside "${CHECKOUT_TOP}")"; then
+	die "TMPDIR (${TMP_PHYSICAL}) is inside the checkout; set it outside ${CHECKOUT_TOP} to run the preflight"
+fi
+
 # PER-RUN ping path. A shared one lets a preflight that died before writing leave the PREVIOUS run's
 # `pong` in place, so a dead CLI reads as healthy — and the preflight is what decides whether the
 # mandatory gate can run at all (deep review, P2).
