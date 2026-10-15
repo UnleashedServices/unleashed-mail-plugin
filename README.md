@@ -33,6 +33,22 @@ run `/unleashed-mail:gemini-review` as before.
 - **Removed:** `isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`. The per-round
   prompt keeps its `.agy-prompt-<T>r<N>.md` name.
 
+### v2.8.35
+
+**Agents now treat UnleashedMail's version branch, not `main`, as the place work lands.**
+
+- **The branch convention says where work integrates.** `AGENT_CONTRACTS.md` called `main` "the
+  integration trunk". In UnleashedMail, all work lands on the version branch (`1.0X.0000`, now
+  `1.02.0000`), and `main` receives only promotions and hotfixes. The base-branch detection that
+  `swift-reviewer` and `changeset.sh` use already worked this way; the contract line now agrees.
+- **`release-manager` builds the changelog from the version branch.** It listed PRs merged into
+  `main`, which holds only promotions, so it missed every feature PR. It now derives the branch from
+  `MARKETING_VERSION`, and stops rather than run the query with an empty base.
+- **`codex-review` reviews against the PR's own base.** Its full-diff example used `--base main`,
+  which would review a feature branch against `main` and pull in the version branch's unreleased
+  work. `main` remains the right base for a promotion, and for a hotfix's PR into `main` (its PR into
+  the version branch uses the version branch).
+
 ### v2.8.34
 
 **You can install `alpha` from the store.** Add the marketplace as
