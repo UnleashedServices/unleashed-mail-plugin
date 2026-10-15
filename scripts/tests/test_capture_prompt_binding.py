@@ -103,7 +103,9 @@ class CapturePromptBindingTests(unittest.TestCase):
         # SAME implementation guards `audit-codex.sh`, after the recheck found the identical defect on
         # that sibling entrypoint. A fixture that copies only the binder tests a binder that cannot
         # import its own rules — which is how this line was added, from a `ModuleNotFoundError`.
-        for name in ("bind-prompt.py", "containment.py"):
+        # And `reviewer-env.sh`, which the Gemini wrapper sources from its own directory before anything else
+        # (PR #124 review): without it the wrapper refuses before the binding these cells test.
+        for name in ("bind-prompt.py", "containment.py", "reviewer-env.sh"):
             source = REPO / "scripts" / "review" / name
             shutil.copy2(source, self.review / name)
             (self.review / name).chmod(0o755)

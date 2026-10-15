@@ -29,6 +29,10 @@
 #       prompt, or a malformed marker · otherwise the isolation harness's status (3 = the reviewer
 #       MUTATED the working tree, round void).
 set -uo pipefail
+# THE ARM'S OWN ENVIRONMENT FIRST, before any command is looked up on PATH (`reviewer-env.sh`, PR #124 review):
+# PATH keeps only absolute entries outside the checkout, and every `python3` this shell runs is isolated (`-I`).
+case "${BASH_SOURCE[0]}" in */*) _env_dir="${BASH_SOURCE[0]%/*}" ;; *) _env_dir=. ;; esac
+. "${_env_dir}/reviewer-env.sh" || exit 1
 
 TICKET="${1-}"
 ROUND="${2-}"

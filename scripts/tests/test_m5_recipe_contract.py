@@ -132,6 +132,13 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         plan = self.root / "FIXTURE_PLAN.md"
         if not plan.exists():
             plan.write_text("# fixture plan\n", encoding="utf-8")
+        # The Gemini helper sources `reviewer-env.sh` from its own directory first (PR #124 review).
+        (review_dir / "reviewer-env.sh").write_text(
+            CAPTURE_HELPERS["gemini"]
+            .parent.joinpath("reviewer-env.sh")
+            .read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         bind = review_dir / "bind-prompt.py"
         bind.write_text(
             CAPTURE_HELPERS["codex"]

@@ -79,7 +79,8 @@ if log:
         handle.write(json.dumps({"argv": argv, "trust": os.environ.get("GEMINI_CLI_TRUST_WORKSPACE"),
                                  "cwd": os.getcwd(), "settings": settings,
                                  "system_md": os.environ.get("GEMINI_SYSTEM_MD"),
-                                 "ide": sorted(k for k in os.environ if k.startswith("GEMINI_CLI_IDE_"))}) + "\n")
+                                 "ide": sorted(k for k in os.environ if k.startswith("GEMINI_CLI_IDE_")),
+                                 "node": [os.environ.get("NODE_OPTIONS"), os.environ.get("NODE_PATH")]}) + "\n")
 sys.stderr.write("VERDICT: APPROVE\n")
 sys.stderr.flush()
 if os.environ.get("GEMINI_STUB_KILL_PARENT"):
@@ -160,6 +161,44 @@ def _absent(argv: list[str], flag: str) -> None:
         raise AssertionError(f"{flag} reached the CLI as {occurrences!r}")
 
 
+# Standard-library modules the arm's interpreters import (the harness's heredocs, the fingerprints, the writer, the
+# adapter, the binder) — and `sitecustomize`, which an interpreter imports from its startup path (G8b).
+SHADOWED = (
+    "json",
+    "re",
+    "hashlib",
+    "secrets",
+    "subprocess",
+    "argparse",
+    "threading",
+    "struct",
+    "signal",
+    "select",
+    "pty",
+    "tempfile",
+    "shutil",
+    "sitecustomize",
+)
+
+
+def _plant_modules(directory: Path, ran: Path) -> None:
+    """A module per `SHADOWED` name in `directory` that records, in `ran`, that it was imported — then fails."""
+    for name in SHADOWED:
+        (directory / f"{name}.py").write_text(
+            "import os\n"
+            f"open(os.path.join({str(ran)!r}, __name__), 'w').close()\n"
+            "raise ImportError('planted ' + __name__)\n",
+            encoding="utf-8",
+        )
+
+
+def _plant_executable(path: Path, ran: Path, label: str) -> None:
+    """An executable at `path` that records, in `ran`, that it ran — then fails."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'#!/bin/sh\n: > "{ran}/{label}"\nexit 97\n', encoding="utf-8")
+    path.chmod(0o755)
+
+
 class _StubGemini:
     """A temporary directory with the recording `gemini` stub first on PATH."""
 
@@ -169,7 +208,12 @@ class _StubGemini:
         stubs = self.tmp / ".stubs"
         stubs.mkdir()
         stub = stubs / "gemini"
-        stub.write_text(GEMINI_STUB, encoding="utf-8")
+        # `-I`: the real CLI is a Node program, so a `json.py` committed in its working directory (G8b) is nothing to
+        # it; the stand-in must not import one either, or it would report the arm's isolation as broken.
+        stub.write_text(
+            GEMINI_STUB.replace("#!/usr/bin/env python3", f"#!{sys.executable} -I", 1),
+            encoding="utf-8",
+        )
         stub.chmod(0o755)
         self.log = (
             self.tmp / "gemini-calls.jsonl"
@@ -179,7 +223,8 @@ class _StubGemini:
             "MODEL", None
         )  # never let an inherited value steer the default path
         for name in list(self.env):
-            if name.startswith("GEMINI_STUB_") or name == "GEMINI_CLI_TRUST_WORKSPACE":
+            # Every inherited CLI or Node variable is the machine's, not the cell's (G8 sets them deliberately).
+            if name.startswith("GEMINI_") or name in ("NODE_OPTIONS", "NODE_PATH"):
                 self.env.pop(name)
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
         self.env["GEMINI_STUB_LOG"] = str(self.log)
@@ -192,6 +237,9 @@ class _StubGemini:
         self.env["GEMINI_CLI_SYSTEM_DEFAULTS_PATH"] = str(
             self.tmp / "absent-system-defaults.json"
         )
+        # The CLI's home too: its `.env` is the one the adapter scans when no other is found (G7b), and the
+        # operator's real one is machine state.
+        self.env["GEMINI_CLI_HOME"] = str(self.tmp / "cli-home")
         self.workdir = self.tmp / "cwd"
         self.workdir.mkdir()
 
@@ -204,7 +252,9 @@ class _StubGemini:
             if line
         ]
 
-    def adapter(self, model: str = DEFAULT_MODEL, name: str = "leaf"):
+    def adapter(
+        self, model: str = DEFAULT_MODEL, name: str = "leaf", extra: tuple = ()
+    ):
         """Run the adapter exactly as the harness does: under `pty-capture.py`, stdout and stderr merged."""
         leaf = self.tmp / f"{name}.txt"
         result = subprocess.run(
@@ -221,6 +271,7 @@ class _StubGemini:
                 model,
                 "--policy",
                 str(POLICY),
+                *extra,
                 "--diagnostics",
                 f"{leaf}.diag",
                 "--",
@@ -517,6 +568,11 @@ class G7bNoForeignEnvironmentFile(_StubGemini, unittest.TestCase):
         )
 
     def test_an_ancestor_env_file_refuses_before_the_cli_runs(self):
+        """A foreign file is refused AS FOREIGN, even when it sets only a credential key the operator's file may set.
+
+        It sets an ALLOWLISTED key on purpose: a key outside the list would be refused by the credential check
+        anyway, which masked a deleted foreign-file check (a mutation-table survivor). The reason is asserted too.
+        """
         for relative in (".env", ".gemini/.env"):
             with self.subTest(file=relative):
                 if self.log.exists():
@@ -526,7 +582,7 @@ class G7bNoForeignEnvironmentFile(_StubGemini, unittest.TestCase):
                 inner.mkdir(parents=True)
                 (outer / relative).parent.mkdir(parents=True, exist_ok=True)
                 (outer / relative).write_text(
-                    "CODE_ASSIST_ENDPOINT=http://127.0.0.1:9\n", encoding="utf-8"
+                    "GOOGLE_CLOUD_PROJECT=not-the-operators\n", encoding="utf-8"
                 )
                 result, raw, diag = self.run_from(inner)
                 self.assertEqual(4, result.returncode, diag)
@@ -537,6 +593,7 @@ class G7bNoForeignEnvironmentFile(_StubGemini, unittest.TestCase):
                     "the CLI ran although a foreign env file would configure it",
                 )
                 self.assertIn(os.path.realpath(outer / relative), diag)
+                self.assertIn("which is not the operator's", diag)
 
     def test_a_home_reached_through_a_symlink_is_still_the_operators(self):
         """`$HOME` may be a symlink; the walk is physical (`Path.cwd()`), and `$HOME` is matched resolved too.
@@ -564,6 +621,216 @@ class G7bNoForeignEnvironmentFile(_StubGemini, unittest.TestCase):
         result, _, diag = self.run_from(inner)
         self.assertEqual(0, result.returncode, diag)
         self.assertEqual(1, len(self.calls()))
+
+    def test_an_operator_env_file_may_set_only_credentials(self):
+        """The CLI loads the operator's `.env` AFTER every check, so it may set only the CLI's credential keys.
+
+        PR #124 review, P1: a relative `GEMINI_SYSTEM_MD` there brought the dropped variable back, from the checkout.
+        Each form the CLI's own parser accepts is used, and the refusal names the key without echoing its value.
+        """
+        home = self.tmp / "home"
+        inner = home / "work" / "tree"
+        inner.mkdir(parents=True)
+        self.env["HOME"] = str(home)
+        for relative, line, key in (
+            (".env", "GEMINI_SYSTEM_MD=VALUE-NEVER-ECHOED", "GEMINI_SYSTEM_MD"),
+            (".gemini/.env", "export NODE_OPTIONS=VALUE-NEVER-ECHOED", "NODE_OPTIONS"),
+            (".env", "GEMINI_CLI_HOME: VALUE-NEVER-ECHOED", "GEMINI_CLI_HOME"),
+        ):
+            with self.subTest(file=relative, key=key):
+                for stale in (home / ".env", home / ".gemini" / ".env"):
+                    if stale.exists():
+                        stale.unlink()
+                if self.log.exists():
+                    self.log.unlink()
+                target = home / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    f"GOOGLE_CLOUD_PROJECT=operator\n{line}\n", encoding="utf-8"
+                )
+                result, raw, diag = self.run_from(inner)
+                self.assertEqual(4, result.returncode, diag)
+                self.assertEqual(b"", raw)
+                self.assertEqual([], self.calls(), "the CLI ran with an unchecked key")
+                self.assertIn(key, diag)
+                self.assertNotIn("VALUE-NEVER-ECHOED", diag)
+
+    def test_an_env_file_that_is_not_plain_ascii_refuses(self):
+        """Outside printable ASCII, Python and the loader's JavaScript read its key pattern differently.
+
+        A leading byte-order mark hid `GEMINI_SYSTEM_MD` from the scan while the CLI loaded it (PR #124 local review,
+        P2, reproduced against the bundled parser), so such a file refuses rather than being half-understood.
+        """
+        home = self.tmp / "home"
+        inner = home / "work" / "tree"
+        inner.mkdir(parents=True)
+        self.env["HOME"] = str(home)
+        for label, data in (
+            ("byte-order mark", b"\xef\xbb\xbfGEMINI_SYSTEM_MD=./injected.md\n"),
+            (
+                "line separator",
+                "GOOGLE_CLOUD_PROJECT=a\u2028GEMINI_SYSTEM_MD=x\n".encode(),
+            ),
+            ("non-ASCII comment", "# clé\nGOOGLE_CLOUD_PROJECT=a\n".encode()),
+        ):
+            with self.subTest(case=label):
+                if self.log.exists():
+                    self.log.unlink()
+                (home / ".env").write_bytes(data)
+                result, raw, diag = self.run_from(inner)
+                self.assertEqual(4, result.returncode, diag)
+                self.assertEqual(b"", raw)
+                self.assertEqual([], self.calls())
+                self.assertIn("plain ASCII", diag)
+
+    def test_the_cli_homes_fallback_file_is_checked_too(self):
+        """Outside `$HOME`, the loader falls back to the CLI home's `.env` (`$GEMINI_CLI_HOME`); it is scanned too."""
+        cli_home = self.tmp / "cli-home-fallback"
+        (cli_home / ".gemini").mkdir(parents=True)
+        self.env["GEMINI_CLI_HOME"] = str(cli_home)
+        for text, status in (("GEMINI_API_KEY=x\n", 0), ("GEMINI_EXP=steer.json\n", 4)):
+            with self.subTest(text=text):
+                if self.log.exists():
+                    self.log.unlink()
+                (cli_home / ".gemini" / ".env").write_text(text, encoding="utf-8")
+                result, _, diag = self.run_from(self.workdir)
+                self.assertEqual(status, result.returncode, diag)
+                self.assertEqual(1 if status == 0 else 0, len(self.calls()))
+
+
+class G8NothingTheCliLoadsResolvesFromTheCheckout(_StubGemini, unittest.TestCase):
+    """G8: a configuration path, a Node loader or the `gemini` binary itself cannot come from a reviewed tree."""
+
+    PATH_VARIABLES = (
+        "GEMINI_CLI_HOME",
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+        "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+        "GEMINI_CLI_TRUSTED_FOLDERS_PATH",
+        "GEMINI_EXP",
+    )
+
+    def test_a_relative_configuration_path_refuses(self):
+        """Each names a file the CLI reads; a relative value resolves from the checkout (PR #124 review, P1)."""
+        for name in self.PATH_VARIABLES:
+            with self.subTest(variable=name):
+                if self.log.exists():
+                    self.log.unlink()
+                before = self.env.get(name)
+                self.env[name] = "steer/config.json"
+                result, raw, diag = self.adapter(name=f"relative-{name}")
+                if before is None:
+                    self.env.pop(name)
+                else:
+                    self.env[name] = before
+                self.assertEqual(4, result.returncode, diag)
+                self.assertEqual(b"", raw)
+                self.assertEqual([], self.calls())
+                self.assertIn(name, diag)
+
+    def test_an_absolute_configuration_path_runs_positive_control(self):
+        self.env["GEMINI_EXP"] = str(self.tmp / "experiments.json")
+        result, _, diag = self.adapter()
+        self.assertEqual(0, result.returncode, diag)
+        self.assertEqual(1, len(self.calls()))
+
+    def test_node_loader_variables_are_not_inherited(self):
+        """The CLI is a Node program: a relative `--require` or `NODE_PATH` entry would load the checkout's code."""
+        self.env["NODE_OPTIONS"] = "--require ./steer.js"
+        self.env["NODE_PATH"] = "."
+        result, _, diag = self.adapter()
+        self.assertEqual(0, result.returncode, diag)
+        self.assertEqual([None, None], self.calls()[0]["node"])
+
+    # A separate interpreter imports the adapter with `subprocess.Popen` replaced, so the exact launch is observable:
+    # through a shebang script argv[0] is never visible to the child, and a real dispatching shim is a native binary.
+    LAUNCH_PROBE = (
+        "import importlib.util, json, subprocess, sys\n"
+        "spec = importlib.util.spec_from_file_location('adapter', sys.argv[1])\n"
+        "adapter = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(adapter)\n"
+        "def launch(argv, **kwargs):\n"
+        "    print(json.dumps({'argv0': argv[0], 'executable': kwargs.get('executable')}), flush=True)\n"
+        "    raise FileNotFoundError(argv[0])\n"
+        "subprocess.Popen = launch\n"
+        "sys.argv = ['adapter', '--model', 'm', '--policy', 'p', '--diagnostics', sys.argv[2], '--', 'prompt']\n"
+        "adapter.main()\n"
+    )
+
+    def test_the_checked_file_runs_under_the_name_it_was_found_by(self):
+        """A tool-manager shim (mise) is a symlink to one binary that dispatches on argv[0] (local Codex review, P2).
+
+        The real file the resolver checked is what executes (`executable`), and argv[0] stays the PATH entry's
+        `gemini`, so the shim still knows which tool it is.
+        """
+        manager = self.tmp / "manager" / "tool-manager"
+        manager.parent.mkdir()
+        manager.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        manager.chmod(0o755)
+        shims = self.tmp / "shims"
+        shims.mkdir()
+        (shims / "gemini").symlink_to(manager)
+        self.env["PATH"] = f"{shims}{os.pathsep}{self.env['PATH']}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                self.LAUNCH_PROBE,
+                str(ADAPTER),
+                str(self.tmp / "probe.diag"),
+            ],
+            cwd=self.workdir,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        launch = json.loads(result.stdout.splitlines()[0])
+        self.assertEqual(str(shims / "gemini"), launch["argv0"])
+        self.assertEqual(os.path.realpath(manager), launch["executable"])
+
+    def test_a_gemini_resolving_into_a_reviewed_tree_is_never_run(self):
+        """Through a symlink or a PATH entry, a `gemini` whose real file is in a `--reviewed-root` is skipped.
+
+        PR #124 review, P2. Each case also runs WITHOUT the root, and there the planted CLI does run: the fixture
+        reaches it, so the guarded run discriminates.
+        """
+        live = self.tmp / "live"
+        forged = live / "tools" / "gemini"
+        forged.parent.mkdir(parents=True)
+        marker = self.tmp / "FORGED_RAN"
+        forged.write_text(f'#!/bin/sh\n: > "{marker}"\nexit 0\n', encoding="utf-8")
+        forged.chmod(0o755)
+        linkbin = self.tmp / "linkbin"
+        linkbin.mkdir()
+        (linkbin / "gemini").symlink_to(forged)
+        path_before = self.env["PATH"]
+        for label, entry in (
+            ("symlink-into-it", str(linkbin)),
+            ("entry-inside-it", str(forged.parent)),
+        ):
+            for guarded in (False, True):
+                with self.subTest(case=label, reviewed_root=guarded):
+                    if marker.exists():
+                        marker.unlink()
+                    if self.log.exists():
+                        self.log.unlink()
+                    self.env["PATH"] = f"{entry}{os.pathsep}{path_before}"
+                    extra = ("--reviewed-root", str(live)) if guarded else ()
+                    result, _, diag = self.adapter(
+                        name=f"{label}-{guarded}", extra=extra
+                    )
+                    self.env["PATH"] = path_before
+                    if not guarded:
+                        self.assertTrue(
+                            marker.exists(), "the fixture never reached the planted CLI"
+                        )
+                        continue
+                    self.assertEqual(0, result.returncode, diag)
+                    self.assertFalse(marker.exists(), f"{label}: the planted CLI ran")
+                    self.assertEqual(
+                        1, len(self.calls()), "the installed stub did not run"
+                    )
 
 
 class G3TheTranscriptIsTheNormalizedResponse(_StubGemini, unittest.TestCase):
@@ -1204,6 +1471,9 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
         (home / ".gemini").mkdir(parents=True, exist_ok=True)
         (home / ".gemini" / "settings.json").write_text(settings, encoding="utf-8")
         self.env["HOME"] = str(home)
+        self.env.pop(
+            "GEMINI_CLI_HOME", None
+        )  # an operator whose CLI home is the default, `$HOME`
 
     def test_a_name_the_operators_settings_add_is_refused_too(self):
         """`context.fileName` only ADDS names, so a committed file under any configured name is refused (PR #124)."""
@@ -1276,6 +1546,85 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
         result, _ = self.capture()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, len(self.calls()))
+
+
+class G8bTheArmRunsNothingFromTheCheckout(_ReviewRepo, unittest.TestCase):
+    """G8b: the arm's own processes run nothing the reviewed branch commits — through PATH, the import path or a link.
+
+    PR #124 review: `python3 -c` and `python3 -` put the working directory first on the import path, and the
+    harness runs them from the live checkout; a relative or in-checkout PATH entry resolves into it. Each planted
+    file records that it ran, outside every tree, and the round must still complete as a review.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.ran = self.tmp / "planted-ran"
+        self.ran.mkdir()
+
+    def plant_modules(self) -> None:
+        _plant_modules(self.root, self.ran)
+
+    def plant_executable(self, relative: str) -> None:
+        _plant_executable(self.root / relative, self.ran, relative.replace("/", "-"))
+
+    def assert_a_clean_review(self, result, leaf) -> None:
+        self.assertEqual([], sorted(p.name for p in self.ran.iterdir()), result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIsNotNone(leaf)
+        self.assertEqual(REVIEW_TEXT, leaf.read_text(encoding="utf-8"))
+
+    def test_committed_modules_do_not_replace_the_standard_library(self):
+        self.plant_modules()
+        self.commit_all("plant modules at the root")
+        result, leaf = self.capture()
+        self.assert_a_clean_review(result, leaf)
+
+    def test_a_relative_python_path_does_not_reach_the_arms_interpreters(self):
+        """`PYTHONPATH=.` resolves from each process's working directory: the live checkout, or the disposable one.
+
+        Run through the harness directly, after allocation: `allocate-transcript.sh` is shared with the other arms,
+        runs in a separate shell, and is outside this arm's isolation (stated in `reviewer-env.sh`).
+        """
+        self.plant_modules()
+        self.commit_all("plant modules at the root")
+        leaf = self.allocate_and_bind()
+        self.env["PYTHONPATH"] = "."
+        result = self.run_isolated(leaf)
+        self.assert_a_clean_review(result, leaf)
+
+    def test_a_path_entry_into_the_checkout_runs_nothing_from_it(self):
+        """A relative entry and an absolute one inside the checkout (a direnv `PATH_add bin`) are both dropped.
+
+        Each guard is exercised ALONE: `.` resolves INTO the checkout, so the in-checkout guard would drop it anyway;
+        `../outside-bin` is relative but resolves OUTSIDE it now — and would resolve into the disposable checkout's
+        surroundings once the harness changes directory — so only the relative-entry guard stops it.
+        """
+        for relative in ("python3", "git", "bin/python3", "bin/git", "bin/mktemp"):
+            self.plant_executable(relative)
+        self.commit_all("plant executables")
+        for name in ("python3", "git"):
+            _plant_executable(
+                self.tmp / "outside-bin" / name, self.ran, f"{name}-outside-bin"
+            )
+        self.env["PATH"] = os.pathsep.join(
+            [".", "../outside-bin", str(self.root / "bin"), self.env["PATH"]]
+        )
+        result, leaf = self.capture()
+        self.assert_a_clean_review(result, leaf)
+
+    def test_a_gemini_linked_into_the_live_checkout_is_never_run(self):
+        """A `gemini` in an outside PATH directory that LINKS into the live checkout: the harness names the checkout
+        to the adapter (`--reviewed-root`), which resolves the link and skips it (PR #124 review, P2).
+        """
+        self.plant_executable("tools/gemini")
+        self.commit_all("plant a gemini")
+        linkbin = self.tmp / "linkbin"
+        linkbin.mkdir()
+        (linkbin / "gemini").symlink_to(self.root / "tools" / "gemini")
+        self.env["PATH"] = f"{linkbin}{os.pathsep}{self.env['PATH']}"
+        result, leaf = self.capture()
+        self.assert_a_clean_review(result, leaf)
+        self.assertEqual(1, len(self.calls()), "the installed stub did not run")
 
 
 class G5Preflight(_StubGemini, unittest.TestCase):
@@ -1488,6 +1837,54 @@ class G5Preflight(_StubGemini, unittest.TestCase):
         self.assertEqual(
             [], [line for line in result.stderr.splitlines() if line.startswith("??")]
         )
+
+    def test_the_ping_runs_with_the_reviews_workspace_settings(self):
+        """The ping stages the SAME settings file a review does — hooks off among them (PR #124 review, P2)."""
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        result = self.run_preflight()
+        self.assertEqual(0, result.returncode, result.stderr)
+        settings = json.loads(self.calls()[0]["settings"])
+        self.assertEqual(
+            json.loads(
+                (REVIEW / "gemini-review-settings.json").read_text(encoding="utf-8")
+            ),
+            settings,
+        )
+        self.assertIs(False, settings["hooksConfig"]["enabled"])
+
+    def assert_healthy_and_nothing_planted_ran(self, result, ran: Path) -> None:
+        self.assertEqual([], sorted(p.name for p in ran.iterdir()), result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("healthy", result.stdout)
+
+    def test_a_path_entry_into_the_checkout_runs_nothing_from_it(self):
+        ran = self.tmp / "planted-ran"
+        ran.mkdir()
+        _plant_executable(self.root / "python3", ran, "python3")
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        self.env["PATH"] = f".{os.pathsep}{self.env['PATH']}"
+        self.assert_healthy_and_nothing_planted_ran(self.run_preflight(), ran)
+
+    def test_a_python_path_into_the_checkout_does_not_reach_the_ping(self):
+        """`-I` ignores `PYTHONPATH` whatever it names; here, absolutely, the checkout (PR #124 review, P1)."""
+        ran = self.tmp / "planted-ran"
+        ran.mkdir()
+        _plant_modules(self.root, ran)
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        self.env["PYTHONPATH"] = str(self.root)
+        self.assert_healthy_and_nothing_planted_ran(self.run_preflight(), ran)
+
+    def test_a_gemini_linked_into_the_checkout_does_not_answer(self):
+        """The preflight names the checkout to the adapter too (`--reviewed-root`), so a linked `gemini` is skipped."""
+        ran = self.tmp / "planted-ran"
+        ran.mkdir()
+        _plant_executable(self.root / "tools" / "gemini", ran, "gemini")
+        linkbin = self.tmp / "linkbin"
+        linkbin.mkdir()
+        (linkbin / "gemini").symlink_to(self.root / "tools" / "gemini")
+        self.env["GEMINI_STUB_RESPONSE"] = "pong"
+        self.env["PATH"] = f"{linkbin}{os.pathsep}{self.env['PATH']}"
+        self.assert_healthy_and_nothing_planted_ran(self.run_preflight(), ran)
 
 
 if __name__ == "__main__":  # pragma: no cover

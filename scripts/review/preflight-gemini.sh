@@ -15,6 +15,10 @@
 # quota, answered with another model, or answered something else. A non-zero exit is NOT a waiver: the
 # gate is fail-closed and the operator chooses the recovery.
 set -uo pipefail
+# THE ARM'S OWN ENVIRONMENT FIRST, before any command is looked up on PATH (`reviewer-env.sh`, PR #124 review):
+# PATH keeps only absolute entries outside the checkout, and every `python3` this shell runs is isolated (`-I`).
+case "${BASH_SOURCE[0]}" in */*) _env_dir="${BASH_SOURCE[0]%/*}" ;; *) _env_dir=. ;; esac
+. "${_env_dir}/reviewer-env.sh" || exit 1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
@@ -48,6 +52,11 @@ SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gemini-preflight.XXXXXX")" || die "could n
 # shellcheck disable=SC2329 # invoked by the EXIT trap on the next line
 cleanup_scratch() { rm -rf "${SCRATCH}"; }
 trap cleanup_scratch EXIT
+# THE PING RUNS THE REVIEW'S CONFIGURATION (PR #124 review, P2): the workspace settings the harness stages — hooks
+# off among them — from the same file, so a user-level hook can neither rewrite the ping's answer nor run for it.
+if ! mkdir "${SCRATCH}/.gemini" || ! cp "${SCRIPT_DIR}/gemini-review-settings.json" "${SCRATCH}/.gemini/settings.json"; then
+	die "could not stage the reviewer's workspace settings in the scratch directory"
+fi
 
 # Fingerprint the checkout so a violation is DETECTED, not merely made unlikely. The review harness
 # earns its keep with exactly this assertion; the preflight had no equivalent.
@@ -82,9 +91,11 @@ CAPTURE_RC=0
 # A resolution failure IS a preflight failure, retained like the capture status so the fingerprint
 # comparison below still runs.
 if [[ -n ${MODEL} ]]; then
+	# `-I -B`: the adapter is executed by `pty-capture.py`, not by this shell (`reviewer-env.sh`).
 	(cd "${SCRATCH}" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 120 "${PING}" -- \
-		python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" \
-		--policy "${SCRIPT_DIR}/gemini-review-policy.toml" --diagnostics "${PING}.diag" -- \
+		python3 -I -B "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" \
+		--policy "${SCRIPT_DIR}/gemini-review-policy.toml" ${REPO_ROOT:+--reviewed-root "${REPO_ROOT}"} \
+		--diagnostics "${PING}.diag" -- \
 		"Reply with exactly the single word: pong") ||
 		CAPTURE_RC=$?
 else

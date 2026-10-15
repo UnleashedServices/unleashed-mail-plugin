@@ -34,6 +34,10 @@
 #       wrote anything else there (the COREDEV-2607 signature) · 4 the answering model could not be
 #       confirmed (gemini-review-run.py), so the capture is not a review
 set -uo pipefail
+# THE ARM'S OWN ENVIRONMENT FIRST, before any command is looked up on PATH (`reviewer-env.sh`, PR #124 review):
+# PATH keeps only absolute entries outside the checkout, and every `python3` this shell runs is isolated (`-I`).
+case "${BASH_SOURCE[0]}" in */*) _env_dir="${BASH_SOURCE[0]%/*}" ;; *) _env_dir=. ;; esac
+. "${_env_dir}/reviewer-env.sh" || exit 1
 
 # NO BYTECODE FROM THIS HARNESS, ANYWHERE (COREDEV-2650; extended after PR #81 review).
 # The reviewer subshell below sets this too — that is the load-bearing one, because a `.pyc` inside
@@ -413,18 +417,17 @@ fi
 # `.geminiignore` must not be able to hide the plan from the reviewer either.
 # HOOKS OFF (PR #124 review, P1): the CLI's settings-level hooks — a system separate from extensions — run commands
 # that can inject context or rewrite model requests and responses; this workspace setting overrides the user's.
-if ! python3 - "${TREE}" <<'PY'; then
+# ONE FILE, `gemini-review-settings.json`, which the preflight stages for its ping too (PR #124 review, P2), so the
+# health check runs the configuration a review runs.
+if ! python3 - "${TREE}" "${SCRIPT_DIR}/gemini-review-settings.json" <<'PY'; then
 import os
 import sys
 
 tree = sys.argv[1]
+with open(sys.argv[2], "rb") as source:
+    payload = source.read()
 os.mkdir(os.path.join(tree, ".gemini"), 0o700)
 path = os.path.join(tree, ".gemini", "settings.json")
-payload = (
-    b'{"general": {"plan": {"modelRouting": false}}, '
-    b'"context": {"fileFiltering": {"respectGitIgnore": false, "respectGeminiIgnore": false}}, '
-    b'"hooksConfig": {"enabled": false}}\n'
-)
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
 try:
     os.write(fd, payload)
@@ -515,9 +518,11 @@ fi
 # NEVER to the transcript: pty-capture records stdout and stderr together, so stderr text could otherwise
 # supply an anchored `VERDICT:` (codex, plan round 1). `.diag` is created exclusively by the adapter, so a
 # pre-existing entry there refuses the round rather than being written through.
+# The adapter is executed by `pty-capture.py`, not by this shell, so it passes `-I -B` itself (`reviewer-env.sh`);
+# `--reviewed-root` lets it refuse a `gemini` that resolves into this checkout (PR #124 review, P2).
 (cd "${TREE}" && export PYTHONDONTWRITEBYTECODE=1 && python3 "${PLUGIN_WRITER}" --timeout "${TIMEOUT}" --allocated "${OUT}" -- \
-	python3 "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" --policy "${SCRIPT_DIR}/gemini-review-policy.toml" \
-	--diagnostics "${OUT}.diag" -- \
+	python3 -I -B "${SCRIPT_DIR}/gemini-review-run.py" --model "${MODEL}" --policy "${SCRIPT_DIR}/gemini-review-policy.toml" \
+	--reviewed-root "${REPO}" --diagnostics "${OUT}.diag" -- \
 	"Read and follow ${TREE}/${PROMPT_REL}") >/dev/null
 RC=$?
 

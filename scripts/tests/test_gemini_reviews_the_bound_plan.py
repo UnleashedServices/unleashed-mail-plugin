@@ -74,8 +74,10 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         # The uncommitted edit. This is the whole scenario.
         self.plan.write_text(f"# Plan\n{EDITED}\n", encoding="utf-8")
 
-        stubs = self.root / ".stubs"
-        stubs.mkdir()
+        # OUTSIDE the repository: the arm keeps only PATH entries outside the checkout (`reviewer-env.sh`, PR #124
+        # review), so a stub directory inside it is dropped — which is the point — and the fixture's must not be.
+        stubs = Path(tempfile.mkdtemp(prefix="gemini-stubs-"))
+        self.addCleanup(shutil.rmtree, stubs, ignore_errors=True)
         stub = stubs / "gemini"
         shutil.copyfile(GEMINI_SHIM, stub)
         stub.chmod(0o755)
@@ -673,10 +675,10 @@ printf 'VERDICT: APPROVE\\n'
         `tree-fingerprint.sh` has the HEAD probe removed — the round PASSES, which is the deletion test
         for the fix. Measured: spec rc 3 + `MUTATED the working tree`; control rc 0, `TREE=clean`.
         """
-        # CLEAN in git's terms: the fixture keeps its stubs and its XDG state INSIDE the repo, so
-        # without an ignore rule those two are `??` lines before the run and `.stubs/reviewer-body.sh` is ` M`
-        # after `install_stub` — dirt the fixture owns, not the scenario. Ignored, then committed.
-        (self.root / ".gitignore").write_text(".stubs/\nstate/\n", encoding="utf-8")
+        # CLEAN in git's terms: the fixture keeps its XDG state INSIDE the repo, so without an ignore rule it is a
+        # `??` line before the run — dirt the fixture owns, not the scenario. Ignored, then committed. (Its stubs
+        # live outside the repo since PR #124: the arm drops PATH entries inside the checkout.)
+        (self.root / ".gitignore").write_text("state/\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
         subprocess.run(["git", "commit", "-qm", "clean"], cwd=self.root, check=True)
 

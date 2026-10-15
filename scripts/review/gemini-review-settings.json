@@ -1,0 +1,7 @@
+{
+  "general": { "plan": { "modelRouting": false } },
+  "context": {
+    "fileFiltering": { "respectGitIgnore": false, "respectGeminiIgnore": false }
+  },
+  "hooksConfig": { "enabled": false }
+}

@@ -33,12 +33,18 @@ THINGS: the validated, normalized response text, or NOTHING.
    directory's. A disposable checkout under a repository-local `TMPDIR` would let a committed ancestor file
    set the reviewer's environment (endpoint, credentials, flags). The same walk runs here, from this
    process's working directory — which IS the CLI's — and any file it reaches that is not in `$HOME` refuses
-   the run before the CLI starts.
+   the run before the CLI starts. The operator's own file may set only credentials (PR #124 review): it loads
+   AFTER every check here, so anything else it set would be unchecked.
+7. NOTHING THE CLI LOADS RESOLVES FROM THE CHECKOUT (PR #124 review): a relative configuration path refuses the run,
+   `NODE_OPTIONS`/`NODE_PATH` are not inherited, and the `gemini` that runs is a real file outside every reviewed
+   tree — the working directory and each `--reviewed-root` — however PATH and symlinks reach it.
 
 NORMALIZATION, STATED: CRLF and lone CR become LF, and a trailing newline is ensured; `pty-capture.py` then
 strips ANSI escape sequences and removes the CR the PTY adds before each LF (codex, plan round 2).
 
-Usage: gemini-review-run.py --model M --policy FILE --diagnostics PATH -- <prompt text>
+Usage: gemini-review-run.py --model M --policy FILE [--reviewed-root DIR ...] --diagnostics PATH -- <prompt text>
+       Run it as `python3 -I -B`: the working directory is the reviewed checkout, and `-I` keeps it (and
+       `PYTHONPATH`) off the import path, so a committed `secrets.py` cannot stand in for the standard library.
 Exit:  the CLI's status when it fails · 4 the diagnostics file could not be created, the answering model
        could not be confirmed, or the output was not the expected JSON · 0 a confirmed review was printed
 """
@@ -48,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import subprocess  # nosec B404 — the reviewer CLI is run with a fixed argv list, never a shell
 import sys
@@ -62,7 +69,7 @@ _STDOUT_CAP = 16 * 1024 * 1024
 _STDERR_CAP = 16 * 1024 * 1024
 
 
-def main() -> int:  # noqa: PLR0911, PLR0912 — one per named refusal
+def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 — one per named refusal
     """Run the review, assert the answering model, and print only the response text."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", required=True)
@@ -71,6 +78,12 @@ def main() -> int:  # noqa: PLR0911, PLR0912 — one per named refusal
         "--diagnostics",
         required=True,
         help="file for every stderr byte; created exclusively, never part of the transcript",
+    )
+    parser.add_argument(
+        "--reviewed-root",
+        action="append",
+        default=[],
+        help="a tree the reviewed branch controls (the live checkout); the `gemini` run may not resolve into it",
     )
     parser.add_argument("prompt", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -85,20 +98,43 @@ def main() -> int:  # noqa: PLR0911, PLR0912 — one per named refusal
     prompt = " ".join(prompt_args).strip()
     if not prompt:
         return _fail("no prompt was given")
-    foreign = _foreign_env_file(Path.cwd())
-    if foreign is not None:
+    # A RELATIVE CONFIGURATION PATH IS THE BRANCH'S (PR #124 review, P1). Each variable names a file or directory the
+    # CLI reads its configuration from, and a relative value resolves from its working directory: the checkout.
+    for name in _PATH_VARIABLES:
+        value = os.environ.get(name, "")
+        if value and not Path(value).is_absolute():
+            return _fail(
+                f"{name} is a relative path, which the CLI would resolve inside the reviewed checkout"
+            )
+    env_file, foreign = _env_file(Path.cwd())
+    if foreign:
         return _fail(
-            f"the CLI would load the environment file {str(foreign)!r}, which is not the operator's; refusing to let it "
-            "configure the reviewer"
+            f"the CLI would load the environment file {str(env_file)!r}, which is not the operator's; refusing to let "
+            "it configure the reviewer"
         )
+    if env_file is not None:
+        keys = _env_file_keys(env_file)
+        if keys is None:
+            return _fail(
+                f"the environment file {str(env_file)!r} the CLI would load could not be read as plain ASCII text, "
+                "so the keys it would set cannot be confirmed"
+            )
+        unexpected = sorted(keys - _ENV_FILE_KEYS)
+        if unexpected:
+            return _fail(
+                f"the CLI would load {str(env_file)!r}, which sets {[key[:80] for key in unexpected]!r}; a review "
+                f"accepts only {sorted(_ENV_FILE_KEYS)!r} from an environment file — set anything else in the "
+                "shell, where this adapter checks it"
+            )
 
-    cli = _resolve_cli(Path.cwd())
-    if cli is None:
+    resolved = _resolve_cli(Path.cwd(), args.reviewed_root)
+    if resolved is None:
         return _fail(
-            "no executable `gemini` CLI on PATH outside the reviewed checkout (relative PATH entries are skipped)"
+            "no executable `gemini` CLI on PATH outside the reviewed trees (relative PATH entries are skipped)"
         )
+    invoked, cli = resolved
     argv = [
-        cli,
+        invoked,
         "--skip-trust",  # the disposable checkout is untrusted; without this the CLI refuses (rc 55)
         "-m",
         args.model,
@@ -125,8 +161,15 @@ def main() -> int:  # noqa: PLR0911, PLR0912 — one per named refusal
     try:
         # stderr is DRAINED into this process's stderr — the diagnostics file — under its own cap, so a runaway
         # CLI cannot fill the disk through it either (PR #124 review, P2).
+        # THE CHECKED FILE RUNS, under the name it was found by (local Codex review, P2): `executable` is the real
+        # file `_resolve_cli` checked, and argv[0] stays the PATH entry's `gemini`, because a tool-manager shim
+        # (mise) is a symlink to one binary that chooses the tool from argv[0].
         proc = subprocess.Popen(  # nosec B603 — fixed argv, no shell
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_cli_env()
+            argv,
+            executable=cli,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_cli_env(),
         )
     except FileNotFoundError:
         return _fail("the `gemini` CLI is not on PATH")
@@ -186,23 +229,26 @@ def main() -> int:  # noqa: PLR0911, PLR0912 — one per named refusal
     return 0
 
 
-def _resolve_cli(cwd: Path) -> str | None:
-    """The `gemini` the review runs: an ABSOLUTE executable on PATH, outside the reviewed checkout.
+def _resolve_cli(cwd: Path, reviewed_roots: list[str]) -> tuple[str, str] | None:
+    """The `gemini` the review runs: an ABSOLUTE executable on PATH whose real file is outside every reviewed tree.
 
     A bare name resolves through PATH, so a `.` (or any relative) entry, or an absolute entry inside the
     checkout, would run a branch-committed `gemini` that prints a valid envelope naming the requested model
-    (PR #124 review, P1). Such entries are skipped, and the first executable found elsewhere is run by path.
+    (PR #124 review, P1). Relative entries are skipped. Every candidate is then RESOLVED to its real file and skipped if
+    that file is inside a reviewed tree — which covers an entry inside one and a `gemini` SYMLINKED into one alike (PR
+    #124 review, P2) — and the real file is what runs, so the file checked is the file executed. The reviewed trees are
+    the working directory and each `--reviewed-root` (the live checkout). Returns the PATH entry's `gemini` (the name
+    it is invoked by) and that real file.
     """
-    here = cwd.resolve()
+    forbidden = [cwd.resolve(), *(Path(root).resolve() for root in reviewed_roots)]
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry or not Path(entry).is_absolute():
             continue
-        directory = Path(entry).resolve()
-        if directory == here or here in directory.parents:
+        candidate = Path(os.path.realpath(Path(entry) / "gemini"))
+        if any(candidate == root or root in candidate.parents for root in forbidden):
             continue
-        candidate = directory / "gemini"
         if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
+            return str(Path(entry) / "gemini"), str(candidate)
     return None
 
 
@@ -252,13 +298,14 @@ def _read_bounded(proc: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
     return b"".join(chunks), overflowed
 
 
-def _foreign_env_file(start: Path) -> Path | None:
-    """The environment file the CLI's loader would pick from `start`, when it is not the operator's own.
+def _env_file(start: Path) -> tuple[Path | None, bool]:
+    """The environment file the CLI's loader would pick from `start`, and whether it is FOREIGN (not the operator's).
 
     Mirrors gemini 0.64.0's `findEnvFile` for a trusted session: from `start` up to `/`, the first
-    `<dir>/.gemini/.env`, else `<dir>/.env`, wins; if none exists, the loader falls back to `$HOME`'s. A
-    file found AT `$HOME` while walking is the operator's, and the loader stops there too. Existence is
-    tested without following symlinks, so a dangling link is refused rather than skipped.
+    `<dir>/.gemini/.env`, else `<dir>/.env`, wins; if none exists, the loader falls back to the CLI's home
+    directory's (`$GEMINI_CLI_HOME`, else `$HOME`). A file found AT `$HOME` while walking is the operator's, and
+    the loader stops there too. Existence is tested without following symlinks while walking, so a dangling link
+    is refused rather than skipped.
     """
     home = os.environ.get("HOME", "")
     homes = {Path(home), Path(home).resolve()} if home else set()
@@ -267,10 +314,36 @@ def _foreign_env_file(start: Path) -> Path | None:
     while True:
         for candidate in (current / ".gemini" / ".env", current / ".env"):
             if candidate.is_symlink() or candidate.exists():
-                return None if current in homes else candidate
+                return candidate, current not in homes
         if current.parent == current:
-            return None
+            break
         current = current.parent
+    cli_home = os.environ.get("GEMINI_CLI_HOME") or home
+    if cli_home:
+        for candidate in (Path(cli_home) / ".gemini" / ".env", Path(cli_home) / ".env"):
+            if candidate.exists():  # the loader's `existsSync` follows links
+                return candidate, False
+    return None, False
+
+
+def _env_file_keys(path: Path) -> set[str] | None:
+    """Every key the CLI's loader would read from `path`, or None if it is unreadable or not plain ASCII text.
+
+    The loader's own pattern is run as-is, which reproduces its key set only where Python's `re` and JavaScript agree
+    on every class the pattern uses. They agree on printable ASCII, tab and line breaks; elsewhere they do not (a
+    leading byte-order mark is whitespace to JavaScript and not to Python, so it hid `GEMINI_SYSTEM_MD` from this
+    scan while the CLI loaded it — PR #124 local review, P2, reproduced). So any other byte refuses.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if not set(raw) <= _ENV_FILE_BYTES:
+        return None
+    text = raw.decode("ascii")
+    return {
+        match.group(1) for match in _DOTENV_LINE.finditer(re.sub(r"\r\n?", "\n", text))
+    }
 
 
 def _redirect_stderr(path: str) -> bool:
@@ -293,7 +366,42 @@ def _redirect_stderr(path: str) -> bool:
 # NOT INHERITED (PR #124 review, P1). `GEMINI_SYSTEM_MD` replaces the CLI's whole system prompt, and a RELATIVE
 # value resolves from the reviewer's working directory — the reviewed checkout — so a branch could supply it; the
 # gate always runs the built-in prompt. `GEMINI_CLI_IDE_*` would add an IDE's workspace folders as readable roots.
-_DROPPED_ENV = frozenset({"GEMINI_SYSTEM_MD", "GEMINI_WRITE_SYSTEM_MD"})
+# `NODE_OPTIONS` and `NODE_PATH` load code into the CLI, which is a Node program: a relative `--require`/`--import`
+# or `NODE_PATH` entry resolves from the checkout too (PR #124 review, P1: the Python form of the same class).
+_DROPPED_ENV = frozenset(
+    {"GEMINI_SYSTEM_MD", "GEMINI_WRITE_SYSTEM_MD", "NODE_OPTIONS", "NODE_PATH"}
+)
+
+# CONFIGURATION PATHS the CLI reads (0.64.0): its home (user settings, the home `.env`, user context and skills), the
+# system settings and defaults, the trusted-folders file and the experiments file. Absolute values only.
+_PATH_VARIABLES = (
+    "GEMINI_CLI_HOME",
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+    "GEMINI_CLI_TRUSTED_FOLDERS_PATH",
+    "GEMINI_EXP",
+)
+
+# AN ENVIRONMENT FILE MAY SUPPLY ONLY CREDENTIALS (PR #124 review, P1). The CLI loads the operator's `.env` AFTER this
+# adapter has checked the environment, and a file key it loads is in force for the whole session: a relative
+# `GEMINI_SYSTEM_MD` there brought the dropped variable back, from the checkout. Rather than a list of dangerous names,
+# the file may set only the four keys the CLI itself accepts from an UNTRUSTED workspace's `.env`
+# (`AUTH_ENV_VAR_WHITELIST`); anything else belongs in the shell, where the checks above see it.
+_ENV_FILE_KEYS = frozenset(
+    {
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    }
+)
+# The loader's own line pattern (dotenv, as bundled in gemini 0.64.0), so the keys found are the keys it loads —
+# on the bytes below, where Python and JavaScript read the pattern alike (`_env_file_keys`).
+_ENV_FILE_BYTES = frozenset(b"\t\n\r" + bytes(range(0x20, 0x7F)))
+_DOTENV_LINE = re.compile(
+    r"""(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)""",
+    re.MULTILINE,
+)
 
 
 def _cli_env() -> dict[str, str]:

@@ -21,6 +21,9 @@ from pathlib import Path
 A = "scripts/review/gemini-review-run.py"
 H = "scripts/review/isolated-gemini-review.sh"
 P = "scripts/review/preflight-gemini.sh"
+W = "scripts/review/capture-gemini-review.sh"
+E = "scripts/review/reviewer-env.sh"
+S = "scripts/review/gemini-review-settings.json"
 T = "scripts.tests.test_gemini_cli_arm."
 MUTANTS = [
     (
@@ -84,14 +87,14 @@ MUTANTS = [
     ),
     (
         "routing-off not staged",
-        H,
-        """b'{"general": {"plan": {"modelRouting": false}}, '""",
-        """b'{"general": {"plan": {}}, '""",
+        S,
+        '  "general": { "plan": { "modelRouting": false } },\n',
+        "",
         [T + "G4aWhatTheCliReceives"],
     ),
     (
         "file filtering left on",
-        H,
+        S,
         '"respectGitIgnore": false, "respectGeminiIgnore": false',
         '"respectGitIgnore": true, "respectGeminiIgnore": true',
         [T + "G4aWhatTheCliReceives"],
@@ -127,8 +130,8 @@ MUTANTS = [
     (
         "ancestor env walk dropped",
         A,
-        "    foreign = _foreign_env_file(Path.cwd())",
-        "    foreign = None",
+        "    if foreign:\n        return _fail(",
+        "    if False:\n        return _fail(",
         [T + "G7bNoForeignEnvironmentFile"],
     ),
     (
@@ -263,10 +266,10 @@ MUTANTS = [
     ),
     (
         "hooks left on",
-        H,
-        '"hooksConfig": {"enabled": false}',
-        '"hooksConfig": {"enabled": true}',
-        [T + "G4aWhatTheCliReceives"],
+        S,
+        '"hooksConfig": { "enabled": false }',
+        '"hooksConfig": { "enabled": true }',
+        [T + "G4aWhatTheCliReceives", T + "G5Preflight"],
     ),
     (
         "GEMINI_CLI_HOME ignored",
@@ -290,11 +293,14 @@ MUTANTS = [
         [T + "G2NothingUnvalidatedReachesTheTranscript"],
     ),
     (
-        "PATH entries inside the checkout allowed",
+        "a gemini resolving into a reviewed tree allowed",
         A,
-        "        if directory == here or here in directory.parents:",
+        "        if any(candidate == root or root in candidate.parents for root in forbidden):",
         "        if False:",
-        [T + "G2NothingUnvalidatedReachesTheTranscript"],
+        [
+            T + "G2NothingUnvalidatedReachesTheTranscript",
+            T + "G8NothingTheCliLoadsResolvesFromTheCheckout",
+        ],
     ),
     (
         "system prompt and IDE roots inherited",
@@ -316,6 +322,157 @@ MUTANTS = [
         '    prompt_args = args.prompt[1:] if args.prompt[:1] == ["--"] else args.prompt',
         '    prompt_args = [a for a in args.prompt if a != "--"]',
         [T + "G2NothingUnvalidatedReachesTheTranscript"],
+    ),
+    # --- PR #124 fourth review: nothing the reviewed tree commits runs as the arm's own code ---
+    (
+        "relative configuration paths allowed",
+        A,
+        "        if value and not Path(value).is_absolute():",
+        "        if False:",
+        [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    (
+        "env file keys unchecked",
+        A,
+        "        if unexpected:",
+        "        if False:",
+        [T + "G7bNoForeignEnvironmentFile"],
+    ),
+    (
+        "env file read beyond plain ASCII",
+        A,
+        "    if not set(raw) <= _ENV_FILE_BYTES:\n        return None\n",
+        "",
+        [T + "G7bNoForeignEnvironmentFile"],
+    ),
+    (
+        "CLI-home fallback file skipped",
+        A,
+        '    cli_home = os.environ.get("GEMINI_CLI_HOME") or home\n',
+        '    cli_home = ""\n',
+        [T + "G7bNoForeignEnvironmentFile"],
+    ),
+    (
+        "node loaders inherited",
+        A,
+        '{"GEMINI_SYSTEM_MD", "GEMINI_WRITE_SYSTEM_MD", "NODE_OPTIONS", "NODE_PATH"}',
+        '{"GEMINI_SYSTEM_MD", "GEMINI_WRITE_SYSTEM_MD"}',
+        [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    (
+        "reviewed roots ignored",
+        A,
+        "    forbidden = [cwd.resolve(), *(Path(root).resolve() for root in reviewed_roots)]",
+        "    forbidden = [cwd.resolve()]",
+        [
+            T + "G8NothingTheCliLoadsResolvesFromTheCheckout",
+            T + "G8bTheArmRunsNothingFromTheCheckout",
+        ],
+    ),
+    (
+        "link checked but not resolved",
+        A,
+        '        candidate = Path(os.path.realpath(Path(entry) / "gemini"))',
+        '        candidate = Path(entry) / "gemini"',
+        [
+            T + "G8NothingTheCliLoadsResolvesFromTheCheckout",
+            T + "G8bTheArmRunsNothingFromTheCheckout",
+        ],
+    ),
+    (
+        "argv[0] is the resolved file",
+        A,
+        "    argv = [\n        invoked,",
+        "    argv = [\n        cli,",
+        [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    (
+        "the invoked path runs, not the checked file",
+        A,
+        "            executable=cli,\n",
+        "",
+        [T + "G8NothingTheCliLoadsResolvesFromTheCheckout"],
+    ),
+    (
+        "adapter launched without -I",
+        H,
+        '\tpython3 -I -B "${SCRIPT_DIR}/gemini-review-run.py"',
+        '\tpython3 "${SCRIPT_DIR}/gemini-review-run.py"',
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "live checkout not named to the adapter",
+        H,
+        '\t--reviewed-root "${REPO}" --diagnostics',
+        "\t--diagnostics",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "harness environment not sourced",
+        H,
+        '. "${_env_dir}/reviewer-env.sh" || exit 1',
+        ":",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "capture environment not sourced",
+        W,
+        '. "${_env_dir}/reviewer-env.sh" || exit 1',
+        ":",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "preflight environment not sourced",
+        P,
+        '. "${_env_dir}/reviewer-env.sh" || exit 1',
+        ":",
+        [T + "G5Preflight"],
+    ),
+    (
+        "preflight adapter launched without -I",
+        P,
+        '\t\tpython3 -I -B "${SCRIPT_DIR}/gemini-review-run.py"',
+        '\t\tpython3 "${SCRIPT_DIR}/gemini-review-run.py"',
+        [T + "G5Preflight"],
+    ),
+    (
+        "preflight checkout not named to the adapter",
+        P,
+        '${REPO_ROOT:+--reviewed-root "${REPO_ROOT}"} ',
+        "",
+        [T + "G5Preflight"],
+    ),
+    (
+        "preflight settings not staged",
+        P,
+        (
+            'if ! mkdir "${SCRATCH}/.gemini" || ! cp "${SCRIPT_DIR}/gemini-review-settings.json" '
+            '"${SCRATCH}/.gemini/settings.json"; then\n'
+            '\tdie "could not stage the reviewer\'s workspace settings in the scratch directory"\nfi\n'
+        ),
+        "",
+        [T + "G5Preflight"],
+    ),
+    (
+        "relative PATH entries kept",
+        E,
+        "\t[[ ${_re_entry} == /* ]] || continue\n",
+        "",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "in-checkout PATH entries kept",
+        E,
+        '\t\tif [[ ${_re_real} == "${_re_top}" || ${_re_real} == "${_re_top}"/* ]]; then',
+        "\t\tif false; then",
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
+    ),
+    (
+        "python3 not isolated",
+        E,
+        'python3() { command python3 -I -B "$@"; }',
+        'python3() { command python3 -B "$@"; }',
+        [T + "G8bTheArmRunsNothingFromTheCheckout"],
     ),
 ]
 

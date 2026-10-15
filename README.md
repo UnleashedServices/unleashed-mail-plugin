@@ -22,6 +22,14 @@ run `/unleashed-mail:gemini-review` as before.
   tool; the disposable checkout and its before/after fingerprints remain the guarantee.
 - **A refused run leaves an empty transcript,** which every gate layer already treats as MISSING, and the
   harness prints the reason. Any non-zero capture is MISSING for that round.
+- **Your Gemini `.env` may hold only credentials.** The CLI loads `~/.gemini/.env` (or `~/.env`) after
+  the arm's checks. That file may set only `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`
+  and `GOOGLE_CLOUD_LOCATION`, the CLI's own list for untrusted folders. Any other key refuses the round
+  and is named. Export other variables in your shell instead.
+- **The reviewed branch cannot run its own code as the arm's.** PATH keeps only entries outside the
+  checkout. Every `python3` the arm starts ignores the working directory and `PYTHONPATH`, so a
+  committed `json.py` can't replace the standard library. The `gemini` that runs is a real file
+  outside the checkout.
 - **Removed:** `isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`. The per-round
   prompt keeps its `.agy-prompt-<T>r<N>.md` name.
 

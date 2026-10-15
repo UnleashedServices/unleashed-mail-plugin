@@ -110,8 +110,10 @@ class EndToEndGate(unittest.TestCase):
             check=True,
         )
 
-        stubs = self.root / ".stubs"
-        stubs.mkdir()
+        # OUTSIDE the repository: the Gemini arm keeps only PATH entries outside the checkout (`reviewer-env.sh`,
+        # PR #124 review), so a stub directory inside it is dropped — which is the point.
+        stubs = Path(tempfile.mkdtemp(prefix="e2e-stubs-"))
+        self.addCleanup(shutil.rmtree, stubs, ignore_errors=True)
         codex = stubs / "codex"
         codex.write_text(REVIEWER_STUB, encoding="utf-8")
         codex.chmod(0o755)

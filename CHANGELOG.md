@@ -48,6 +48,29 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     `GEMINI_SYSTEM_MD` and the IDE's workspace variables are not passed to the CLI; the settings scan
     follows `GEMINI_CLI_HOME`; and the adapter runs the `gemini` found on `PATH` outside the reviewed
     checkout, skipping relative entries, so a branch-committed `gemini` can never be the reviewer.
+  - **Nothing the reviewed branch commits runs as the arm's own code** (fourth review round).
+    `scripts/review/reviewer-env.sh` is sourced first by the capture wrapper, the harness and the
+    preflight:
+    - **PATH:** only absolute entries outside the live checkout are kept, so a relative entry (such as
+      `.`) or a direnv-style `bin` inside the checkout cannot supply `python3`, `git` or `gemini`.
+    - **Python:** every `python3` those scripts run is isolated (`-I -B`), including the heredocs in
+      `tree-fingerprint.sh`. `python3 -c` and `python3 -` put the working directory first on the import
+      path, so a `json.py` or `hashlib.py` committed at the repository root could replace the standard
+      library inside the gate's own checks. This was reproduced.
+
+    The adapter also has new checks:
+    - **Absolute configuration paths only:** a relative `GEMINI_CLI_HOME`,
+      `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`,
+      `GEMINI_CLI_TRUSTED_FOLDERS_PATH` or `GEMINI_EXP` refuses the round.
+    - **Credentials only from a `.env` file:** the `.env` the CLI would load may set only
+      `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, the CLI's
+      own allowlist for an untrusted workspace. The CLI loads that file after every check, so anything
+      else it set would go unchecked. Set other variables in the shell instead.
+    - **No Node loaders:** `NODE_OPTIONS` and `NODE_PATH` are not passed to the CLI.
+    - **A `gemini` that resolves into a reviewed tree is skipped,** whether through a PATH entry or a
+      symlink. The resolved file is what runs. The reviewed trees are the disposable checkout and the
+      live checkout, which the harness and the preflight pass as `--reviewed-root`.
+
   - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
     before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
     routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt
@@ -55,6 +78,8 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - **`scripts/review/preflight-gemini.sh`** pings through the same adapter, is healthy only on a
     whole-answer `pong` from the gate's model, keeps the CLI's diagnostics at `<ping>.diag`, and names
     the model on every failure.
+  - **Shared settings:** the preflight stages the same workspace settings as a review, from the new
+    `scripts/review/gemini-review-settings.json`, so settings-level hooks are off for the ping too.
 - **The gemini-review skill, `AGENT_CONTRACTS.md` §2, `CLAUDE.md` and the README** describe the new arm.
   The skill grants exactly `capture-gemini-review.sh` and `preflight-gemini.sh`, and no `Bash(gemini *)`;
   the assembly validator now refuses that grant. A non-zero capture is MISSING for its round.
@@ -69,6 +94,10 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 - A VOIDED round's transcript stays on disk after exit 3, and persistence refuses only an empty or absent
   one. COREDEV-2888 makes persistence require a clean-round receipt from the harness.
+- **Inline Python imports from the working directory (COREDEV-2891, High).** Elsewhere in the plugin,
+  inline `python3 -c` and heredoc launches can still import a module from the working directory. That
+  covers the Codex and Kimi harnesses, the hook libraries, and `tree-fingerprint.sh` when another arm
+  sources it. Only the Gemini arm is isolated here.
 
 ## [2.8.34] — 2026-10-12
 
