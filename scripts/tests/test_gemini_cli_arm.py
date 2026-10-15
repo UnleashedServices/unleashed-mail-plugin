@@ -1261,6 +1261,7 @@ class G4aWhatTheCliReceives(_ReviewRepo, unittest.TestCase):
                     }
                 },
                 "hooksConfig": {"enabled": False},
+                "skills": {"enabled": False},  # PR #124 review, P1: no user skills
             },
             json.loads(calls[0]["settings"]),
         )
@@ -1615,6 +1616,20 @@ class G7AReviewedTreeCannotConfigureItsReviewer(_ReviewRepo, unittest.TestCase):
                 result, _ = self.capture()
                 self.assertEqual(1, result.returncode, result.stderr)
                 self.assertIn("configures command-based custom tools", result.stderr)
+                self.assertEqual([], self.calls())
+
+    def test_operator_settings_with_supplemental_policy_files_refuse(self):
+        """`policyPaths`/`adminPolicyPaths` load policies beside the arm's; admin-tier ones outrank it (PR #124, P1)."""
+        for key in ("policyPaths", "adminPolicyPaths"):
+            with self.subTest(setting=key):
+                if self.log.exists():
+                    self.log.unlink()
+                self.operator_home(
+                    json.dumps({key: ["policies/allow-writes.toml"]}) + "\n"
+                )
+                result, _ = self.capture()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn(f"sets {key}; a supplemental policy file", result.stderr)
                 self.assertEqual([], self.calls())
 
     def test_a_committed_mcp_json_does_not_refuse(self):

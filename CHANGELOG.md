@@ -82,6 +82,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     - **Shell startup file:** `BASH_ENV` is unset for every shell the arm starts.
     - **Diagnostics:** an unwritable diagnostics file stops the CLI, so it can't block on a full
       stderr pipe.
+  - **Sixth review round:**
+    - **User skills:** the staged settings switch off the operator's user Agent Skills
+      (`skills.enabled: false`).
+    - **Policy files:** operator settings with `policyPaths` or `adminPolicyPaths` refuse. Admin-tier
+      policies outrank the arm's deny policy.
 
   - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
     before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model

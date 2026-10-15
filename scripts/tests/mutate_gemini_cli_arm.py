@@ -443,6 +443,21 @@ MUTANTS = [
         "\tfalse\n",
         [T + "G8bTheArmRunsNothingFromTheCheckout", T + "G5Preflight"],
     ),
+    # --- PR #124 sixth review ---
+    (
+        "user skills left enabled",
+        S,
+        '"skills": { "enabled": false }',
+        '"skills": { "enabled": true }',
+        [T + "G4aWhatTheCliReceives"],
+    ),
+    (
+        "supplemental policy files allowed",
+        H,
+        "        if isinstance(data, dict) and data.get(key):",
+        "        if False:",
+        [T + "G7AReviewedTreeCannotConfigureItsReviewer"],
+    ),
     (
         "adapter launched without -I",
         H,

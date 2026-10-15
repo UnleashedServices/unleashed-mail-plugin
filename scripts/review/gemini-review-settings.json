@@ -3,5 +3,6 @@
   "context": {
     "fileFiltering": { "respectGitIgnore": false, "respectGeminiIgnore": false }
   },
-  "hooksConfig": { "enabled": false }
+  "hooksConfig": { "enabled": false },
+  "skills": { "enabled": false }
 }

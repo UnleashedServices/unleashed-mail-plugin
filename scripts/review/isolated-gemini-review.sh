@@ -271,6 +271,15 @@ for path in settings_paths():
             f"GATE FAILED — {path} configures command-based custom tools (tools.discoveryCommand / callCommand); they "
             "would run outside the deny policy. Remove the setting to run the gate."
         )
+    # NO SUPPLEMENTAL POLICY FILES (PR #124 review, P1): `policyPaths` and `adminPolicyPaths` load policy files beside
+    # the arm's `--policy`; admin-tier rules outrank it, and a relative entry resolves from the checkout. The arm's own
+    # policy is the only one a review loads.
+    for key in ("policyPaths", "adminPolicyPaths"):
+        if isinstance(data, dict) and data.get(key):
+            sys.exit(
+                f"GATE FAILED — {path} sets {key}; a supplemental policy file could override the review's deny policy. "
+                "Remove the setting to run the gate."
+            )
     configured = context.get("fileName") if isinstance(context, dict) else None
     for name in [configured] if isinstance(configured, str) else configured if isinstance(configured, list) else []:
         cleaned = os.path.normpath(str(name).strip()).lower() if str(name).strip() else ""
@@ -430,6 +439,9 @@ fi
 # own task (reproduced: `UNREADABLE` by default, the file's word with filtering off). This checkout holds only
 # committed files plus what the harness staged, so nothing in it is legitimately ignored — and a committed
 # `.geminiignore` must not be able to hide the plan from the reviewer either.
+# USER SKILLS OFF (PR #124 review, P1): `skills.enabled` defaults to true, and the CLI offers the operator's user skills
+# (`~/.gemini/skills`, `~/.agents/skills`) to the model, which may activate one in plan mode; the committed workspace
+# tier (`.agents`) is refused above. A system-settings override of either setting is the administrator's decision.
 # HOOKS OFF (PR #124 review, P1): the CLI's settings-level hooks — a system separate from extensions — run commands
 # that can inject context or rewrite model requests and responses; this workspace setting overrides the user's.
 # ONE FILE, `gemini-review-settings.json`, which the preflight stages for its ping too (PR #124 review, P2), so the
