@@ -43,7 +43,8 @@ Current state: `1.02.260601` (Beta) — `Config/Base.xcconfig` is authoritative 
 - **Feature branches**: `1.0X/feature-name` off the matching version branch (`1.0X.0000`)
   where `X` is the RELEASE stage digit (e.g., `1.02/coredev-1899-foo` for Beta features)
 - **Hotfix branches**: off the version branch, merged to BOTH the version branch AND `main`
-- **Trunk**: `main` is the integration trunk
+- **Integration branch**: the version branch (`1.0X.0000`). All work lands there before `main`;
+  `main` receives only version-branch promotions and hotfixes (COREDEV-2884)
 
 > ❌ Never use `feature/desc`, `fix/desc`, or `claude/desc-sessionId` patterns. Those don't carry
 > the version-stage signal needed for release routing.

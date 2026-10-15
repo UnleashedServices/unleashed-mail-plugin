@@ -13,6 +13,27 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.35] — 2026-10-13
+
+### Fixed
+
+- **Shipped guidance named `main` as UnleashedMail's integration branch (COREDEV-2884).** In the app,
+  all work lands on the version branch (`1.0X.0000`, now `1.02.0000`); `main` receives only
+  promotions and hotfixes. The app's merged-PR history shows this, and so does the base-branch
+  detection already in `swift-reviewer`, `code-simplifier` and `scripts/review/changeset.sh`.
+  - `AGENT_CONTRACTS.md` "Branch convention": the "Trunk: `main` is the integration trunk" line
+    now names the version branch as the integration branch.
+  - `agents/release-manager.md` changelog generation: `gh pr list --base main` listed only
+    promotion PRs, missing every feature PR. It now lists the version branch's merges, deriving
+    the branch from `MARKETING_VERSION` and refusing an empty one (`gh pr list --base ""` drops the
+    filter and lists every branch's merges).
+  - `skills/codex-review/SKILL.md`: the full-diff example's `--base main` is now the PR's own base
+    branch: the version branch for an app feature, `alpha` for a plugin feature, `main` only for a
+    promotion. A hotfix merges to both, as two PRs, and each is reviewed against its own base.
+  - `agents/ci-engineer.md` "Main CI Workflow" template: its `push`/`pull_request` filters were
+    `[main]` only, so a workflow built from it ran no checks on the feature PRs that target the
+    version branch. Both now also match `[0-9]+.[0-9]+.0000`.
+
 ## [2.8.34] — 2026-10-12
 
 ### Changed
