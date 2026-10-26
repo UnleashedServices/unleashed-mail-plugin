@@ -6,7 +6,6 @@ description: >
   evaluating UnleashedMail for organization-wide deployment. Surfaces compliance,
   security, scale, admin control, and integration edge cases. Use during brainstorming
   and planning — not execution.
-effort: xhigh
 model: sonnet
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit

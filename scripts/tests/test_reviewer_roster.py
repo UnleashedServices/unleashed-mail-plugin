@@ -39,6 +39,16 @@ class _RosterFixture:
     def _env(self):
         env = dict(os.environ)
         env["CLAUDE_PLUGIN_DATA"] = self.home  # context_base() honours this
+        # COREDEV-2617 §4.2a: sourcing a family lib with the variable set PUBLISHES, eagerly, into
+        # ${HOME}/.claude/unleashed-mail/bases/. With the developer's REAL HOME inherited here, an
+        # authenticating temp target would land an entry in the real store, and this class's
+        # cleanup would then delete the target — leaving a STALE entry that makes every later reader
+        # refuse the whole store (codex, PR #67; reproduced with a 0700 target under ~/.claude).
+        # This suite is about the roster, not publication: HOME is sandboxed to its own scratch
+        # root AND publication is switched off, so neither a code change nor an authenticating
+        # TMPDIR can reach the real store.
+        env["HOME"] = self.home
+        env["_UNLEASHED_PUBLISH_OK"] = "0"
         return env
 
     def _run_held(self, held):

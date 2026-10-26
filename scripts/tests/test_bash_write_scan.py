@@ -499,8 +499,6 @@ class Robustness(unittest.TestCase):
         self.assertIn("Keychain.swift", targets(cmd))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FetchToFile(unittest.TestCase):
@@ -527,3 +525,7 @@ class FetchToFile(unittest.TestCase):
         # `curl -O` (URL-derived remote name) and a bare fetch name no local path -> no target (documented).
         self.assertEqual(targets("curl -fsSL https://example.com/install.sh"), [])
         self.assertEqual(targets("curl -O https://example.com/file"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

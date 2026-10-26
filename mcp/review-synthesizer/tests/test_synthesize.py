@@ -1,6 +1,10 @@
 """Deterministic synthesis: dedup, ownership routing, scope, verdict, render."""
+import contextlib
+import importlib.util
+import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -9,6 +13,71 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import synthesize as S  # noqa: E402
 from schema import parse_finding  # noqa: E402
+
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "synthesize.py")
+_MUTANT_SEQ = [0]
+
+
+def load_mutant(tc, old, new):
+    """Import a COPY of synthesize.py with `old` -> `new`, asserting the mutation APPLIED: the anchor
+    occurs exactly once and the replacement preserves the line count. A mutation that silently fails
+    to apply otherwise reads as a passing control — the single most common way a mutation proof
+    proves nothing. The copy lands in a fresh temp file under a fresh module name, which also
+    sidesteps CPython's .pyc staleness trap (its cache key is (mtime SECONDS, size), so a
+    same-length in-place mutate/run/restore inside one second silently reuses old bytecode)."""
+    with open(SRC, encoding="utf-8") as fh:
+        src = fh.read()
+    tc.assertEqual(src.count(old), 1, f"mutant anchor must occur exactly once: {old!r}")
+    mutated = src.replace(old, new)
+    tc.assertNotEqual(src, mutated, "mutant replacement was a no-op")
+    tc.assertEqual(src.count("\n"), mutated.count("\n"),
+                   "mutant changed the line count — it must be line-for-line")
+    d = tempfile.mkdtemp(prefix="synmutant")
+    tc.addCleanup(shutil.rmtree, d, True)
+    path = os.path.join(d, "synthesize_mutant.py")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(mutated)
+    _MUTANT_SEQ[0] += 1
+    name = f"_synthesize_mutant_{_MUTANT_SEQ[0]}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod               # @dataclass resolves cls.__module__ through sys.modules
+    tc.addCleanup(sys.modules.pop, name, None)
+    spec.loader.exec_module(mod)          # `from schema import ...` resolves via sys.path above
+    return mod
+
+
+class CliFixture(unittest.TestCase):
+    """A real blocker in a real changeset — the CLI's documented CI-gating input."""
+
+    BLOCKER = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                   category="credential", file="MyApp/Auth.swift", line=10, lineEnd=12,
+                   finding="hardcoded API key", evidence="let k = 'sk-live'", fix="move to Keychain")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="syncli")
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.fj = self._findings("findings.json", [self.BLOCKER])
+        self.clean = self._findings("clean.json", [])
+        self.lowconf = self._findings("low.json", [dict(self.BLOCKER, confidence="low")])
+        self.ch = os.path.join(self.d, "changed.txt")
+        self._changed("MyApp/Auth.swift")
+
+    def _findings(self, name, findings):
+        p = os.path.join(self.d, name)
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump({"findings": findings}, fh)
+        return p
+
+    def _changed(self, *entries):
+        with open(self.ch, "w", encoding="utf-8") as fh:
+            fh.write("".join(e + "\n" for e in entries))
+
+    def run_main(self, mod, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = mod.main(argv)
+        return rc, out.getvalue(), err.getvalue()
 
 
 def f(**over):
@@ -80,6 +149,132 @@ class TestAuditPR53CLIHardening(unittest.TestCase):
             with open(ch, "w", encoding="utf-8") as fh:
                 fh.write("MyApp/RealFile.swift\n")
             self.assertEqual(S.main([p, "--chnged", ch]), 2, "an unknown --flag must fail closed (exit 2)")
+
+
+class TestS1EmptyChangesetFailsClosed(unittest.TestCase):
+    """S1: `--changed` present but EMPTY (or all-blank, or `.`-only) scoped every finding to
+    pre-existing and exited 0 APPROVE — a CI-gating fail-open reachable from a real shell mistake
+    (`git diff --name-only base..head > changed.txt` on an empty range writes a 0-byte file). The
+    guard must refuse (exit 2) instead of certifying an unreviewed changeset clean."""
+
+    # A finding that is VALID (sourceAgent + evidence present, relative path) so it LOADS rather than
+    # being quarantined. An earlier reproduction of this bug was masked exactly there: a fixture
+    # missing sourceAgent/evidence is quarantined, and quarantine forces NEEDS_DISCUSSION/rc=1 — a
+    # plausible-looking refusal that hides the APPROVE. The control cell below pins that distinction.
+    _BLOCKER = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                    category="credential", file="MyApp/RealFile.swift", line=1, lineEnd=1,
+                    finding="hardcoded token", evidence="let t = \"AKIA...\"", fix="move to Keychain")
+
+    def _run(self, changed_text):
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [self._BLOCKER]}, fh)
+            ch = os.path.join(d, "changed.txt")
+            with open(ch, "w", encoding="utf-8") as fh:
+                fh.write(changed_text)
+            # Redirected so the suite's own output stays readable (gemini, PR #77) — the refusal
+            # diagnostics and the rendered report otherwise interleave with the runner's dots and
+            # bury the summary line. CliFixture.run_main already does this; this was the outlier.
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return S.main([fp, "--changed", ch])
+
+    def test_zero_byte_changed_file_refuses(self):
+        self.assertEqual(self._run(""), 2,
+                         "a 0-byte --changed file must fail closed, not APPROVE every finding as pre-existing")
+
+    def test_blank_lines_only_refuses(self):
+        self.assertEqual(self._run("\n   \n\t\n\n"), 2,
+                         "an all-whitespace --changed file must fail closed")
+
+    def test_dot_only_refuses(self):
+        # `.` canonicalises to the empty path, so it is an empty changeset wearing a plausible disguise.
+        self.assertEqual(self._run(".\n"), 2, "a `.`-only --changed file must fail closed")
+
+    def _run_findings(self, findings, changed_text):
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": findings}, fh)
+            ch = os.path.join(d, "changed.txt")
+            with open(ch, "w", encoding="utf-8") as fh:
+                fh.write(changed_text)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = S.main([fp, "--changed", ch])
+            return rc, out.getvalue(), err.getvalue()
+
+    def test_no_findings_and_an_empty_changeset_still_APPROVES(self):
+        # THE NARROWING HALF (codex, PR #77). The first cut of this guard tested whether a findings
+        # PATH was supplied, not whether it held any rows — so a genuinely clean run (`findings.json`
+        # holding `[]` beside an empty `git diff --name-only`, i.e. nothing changed and nothing found)
+        # was REFUSED with exit 2. That is a false refusal, and it also diverged from the MCP twin at
+        # mcp_server.py:185, which guards on the parsed `findings_in` list and accepted the same input.
+        # Refusing an empty changeset is only correct when there is something that WOULD mis-scope.
+        rc, out, err = self._run_findings([], "")
+        self.assertIn("## Verdict (provisional): **APPROVE**", out)
+        self.assertNotIn("refusing to synthesize", err)
+        self.assertEqual(rc, 0, "nothing changed and nothing found is a clean review, not a refusal")
+
+    def test_a_quarantined_row_still_counts_as_a_row(self):
+        # `bad` counts as well as `findings`: a row that only quarantined is still a row that would
+        # mis-scope, and the MCP twin's `findings_in` is likewise the raw list. Guarding on parsed
+        # findings ALONE would reopen the fail-open for any input whose rows all fail schema.
+        rc, _, err = self._run_findings([{"severity": "nonsense"}], "")
+        self.assertIn("refusing to synthesize", err)
+        self.assertEqual(rc, 2)
+
+    def test_a_file_level_load_failure_reaches_the_quarantine_report(self):
+        """A file that will not PARSE has no finding rows, so nothing can mis-scope — and its real
+        error must not be replaced by the empty-changeset message (codex, PR #77).
+
+        Measured before the fix: a truncated JSON with an empty `--changed` printed only "your
+        changeset is empty", a true statement about the wrong problem, and returned before
+        `render_markdown` could name the parse failure.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "trunc.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                fh.write('{"findings": [{"severity"')      # deliberately unparseable
+            ch = os.path.join(d, "changed.txt")
+            open(ch, "w").close()
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = S.main([fp, "--changed", ch])
+        self.assertNotIn("refusing to synthesize", err.getvalue(),
+                         "a file-level parse failure must not be reported as an empty changeset")
+        self.assertIn("could not read/parse", out.getvalue(),
+                      "the actual quarantine reason must reach the report")
+        self.assertEqual(rc, 1)
+
+    def test_a_non_object_row_is_quarantined_not_a_traceback(self):
+        """`_load` quarantines ANY schema-invalid row verbatim — including `null`, numbers, booleans
+        and arrays. The file-level discriminator must not assume the row is a dict.
+
+        Measured before the fix (both bots, PR #77): `{"findings": [null]}` with an empty
+        `--changed` produced `TypeError: 'NoneType' object is not iterable` — a traceback where the
+        whole design is to quarantine malformed input and keep going.
+        """
+        for row in (None, 1, True, [{"a": 1}], "str", {"severity": "nonsense"}):
+            with self.subTest(row=row):
+                rc, _, err = self._run_findings([row], "")
+                self.assertIn("refusing to synthesize", err,
+                              f"a quarantined row ({row!r}) is still a ROW and would mis-scope")
+                self.assertEqual(rc, 2)
+
+    def test_a_quarantined_ROW_still_refuses(self):
+        """The narrowing half: a row that quarantines is still a ROW, and it would still mis-scope,
+        so the refusal must stand. Distinguishing file-level failures must not weaken this."""
+        rc, _, err = self._run_findings([{"severity": "nonsense"}], "")
+        self.assertIn("refusing to synthesize", err)
+        self.assertEqual(rc, 2)
+
+    def test_control_real_path_still_reviews(self):
+        # CONTROL — without this the three cells above pass against a synthesizer that refuses
+        # EVERYTHING, proving nothing. The same fixture and the same blocker must reach a real verdict
+        # (REQUEST_CHANGES, rc=1) as soon as the changeset names the file the finding is in.
+        self.assertEqual(self._run("MyApp/RealFile.swift\n"), 1,
+                         "a real changed path must still produce REQUEST_CHANGES, not the refusal")
 
 
 class TestExactDedup(unittest.TestCase):
@@ -478,6 +673,333 @@ class TestCliLoad(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             rc = S.main(["--changed", "/no/such/changed_file_xyz.txt"])
         self.assertEqual(rc, 2)
+
+
+
+
+class TestS2CliGatingExitCode(CliFixture):
+    """S2: `synthesize.py` main()'s gating exit code was unexecuted in BOTH directions. Proven by
+    tripwire: replacing main()'s first success-path line with `raise` left the suite 231/231 OK, so
+    no test reached the success path at all — the CLI is advertised as CI-droppable and nothing
+    exercised it end to end (_load -> synthesize -> render -> gating exit)."""
+
+    ANCHOR = '    return 0 if review.verdict.decision.startswith("APPROVE") else 1'
+
+    def test_cli_exit_code_tracks_the_verdict(self):
+        # Assert the VERDICT TEXT as well as the code. Exit 1 alone cannot discriminate: a gating
+        # REQUEST_CHANGES and a non-gating NEEDS_DISCUSSION both exit 1, and exit 2 is emitted by
+        # five different guards. The text is the only observable that separates them.
+        rc, out, _ = self.run_main(S, [self.fj, "--changed", self.ch])
+        self.assertIn("## Verdict (provisional): **REQUEST_CHANGES**", out)
+        self.assertIn("hardcoded API key", out, "the finding itself must reach the report")
+        self.assertEqual(rc, 1, "a gating verdict must exit non-zero for CI")
+
+        rc0, out0, _ = self.run_main(S, [self.clean, "--changed", self.ch])
+        self.assertIn("## Verdict (provisional): **APPROVE**", out0)
+        self.assertEqual(rc0, 0, "a clean review must exit 0")
+
+        # Third invocation, required by the above: a LOW-confidence blocker is NOT confirmed by the
+        # default verify gate, so it lands in Needs Confirmation and does not gate. Same exit code
+        # as REQUEST_CHANGES, different verdict — this is the pair rc cannot tell apart.
+        rc1, out1, _ = self.run_main(S, [self.lowconf, "--changed", self.ch])
+        self.assertIn("## Verdict (provisional): **NEEDS_DISCUSSION**", out1)
+        self.assertEqual(rc1, 1)
+        self.assertNotEqual(out1, out, "NEEDS_DISCUSSION must not render as REQUEST_CHANGES")
+
+    def test_mutant_control_always_zero_would_green_a_ci_job(self):
+        m = load_mutant(self, self.ANCHOR,
+                        '    return 0  # MUTANT                                                  ')
+        rc, out, _ = self.run_main(m, [self.fj, "--changed", self.ch])
+        self.assertIn("REQUEST_CHANGES", out)
+        self.assertEqual(rc, 0, "control must exhibit the fail-open: green CI with a blocker on screen")
+
+    def test_mutant_control_always_one_would_red_every_job(self):
+        m = load_mutant(self, self.ANCHOR,
+                        '    return 1  # MUTANT                                                  ')
+        rc, out, _ = self.run_main(m, [self.clean, "--changed", self.ch])
+        self.assertIn("APPROVE", out)
+        self.assertEqual(rc, 1, "control must exhibit the opposite failure: red CI on a clean review")
+
+
+class TestS2DefaultVerifyGate(unittest.TestCase):
+    """S2 cont. — `synthesize.py`'s default verify gate (:199), the predicate that decides whether a
+    blocker is CONFIRMED (gating) or merely NEEDS CONFIRMATION (non-gating). Unpinned in both
+    directions before this."""
+
+    ANCHOR = '    return f.confidence == "high"'
+
+    def test_default_verify_confirms_only_high_confidence(self):
+        self.assertTrue(S.default_verify(f(severity="blocker", confidence="high")))
+        for c in ("medium", "low"):
+            self.assertFalse(S.default_verify(f(severity="blocker", confidence=c)), c)
+
+    def test_verdict_through_the_default_gate(self):
+        hi = S.synthesize([f(severity="blocker", confidence="high")], {"A.swift"})
+        self.assertEqual(hi.verdict.decision, "REQUEST_CHANGES")
+        self.assertEqual((len(hi.verdict.confirmed_blockers), len(hi.verdict.needs_confirmation)), (1, 0))
+        lo = S.synthesize([f(severity="blocker", confidence="low")], {"A.swift"})
+        self.assertEqual(lo.verdict.decision, "NEEDS_DISCUSSION")
+        self.assertEqual((len(lo.verdict.confirmed_blockers), len(lo.verdict.needs_confirmation)), (0, 1))
+        self.assertIn("### Needs Confirmation (non-gating)", S.render_markdown(lo))
+
+    def test_mutant_control_confirm_everything(self):
+        m = load_mutant(self, self.ANCHOR, "    return True  # MUTANT      ")
+        self.assertEqual(m.synthesize([f(severity="blocker", confidence="low")],
+                                      {"A.swift"}).verdict.decision, "REQUEST_CHANGES")
+
+    def test_mutant_control_confirm_nothing(self):
+        m = load_mutant(self, self.ANCHOR, "    return False  # MUTANT     ")
+        self.assertEqual(m.synthesize([f(severity="blocker", confidence="high")],
+                                      {"A.swift"}).verdict.decision, "NEEDS_DISCUSSION")
+
+
+class TestS4ChangedGuardAdmitsAndRejects(CliFixture):
+    """S4: the NARROWING half of the CLI's abs/traversal changed-path guard (:454). One member of a
+    five-member `is_abs_or_traversal` family; the other four were pinned individually, this one was
+    not. Both halves are needed and for different reasons — `_bad_changed = sorted(changed)` (reject
+    EVERYTHING) passed the suite, and so did a POSIX-only narrowing that lets `../`, `~/` and `C:\\`
+    through to a mis-scoped bogus APPROVE."""
+
+    ANCHOR = "    _bad_changed = sorted({c for c in changed if is_abs_or_traversal(c)})"
+
+    def test_a_normal_changeset_is_admitted(self):
+        rc, out, err = self.run_main(S, [self.fj, "--changed", self.ch])
+        self.assertNotIn("absolute/traversal", err)
+        self.assertIn("REQUEST_CHANGES", out)
+        self.assertEqual(rc, 1)
+
+    def test_every_abs_or_traversal_form_is_rejected_by_name(self):
+        # Assert WHICH diagnostic, not merely the code: several guards share exit 2, so an exit-code
+        # assertion cannot tell this rejection from an unrelated one firing first.
+        for entry in ("/abs/Auth.swift", "../MyApp/Auth.swift", "~/MyApp/Auth.swift",
+                      "C:\\MyApp\\Auth.swift", "\\\\server\\share\\Auth.swift", "~user/Auth.swift"):
+            with self.subTest(entry=entry):
+                self._changed(entry)
+                rc, out, err = self.run_main(S, [self.fj, "--changed", self.ch])
+                self.assertIn("--changed contains absolute/traversal paths", err)
+                self.assertIn(entry, err, "the diagnostic must name the offending entry")
+                self.assertEqual(rc, 2)
+                self.assertNotIn("Verdict", out, "a rejected changeset must not print a verdict")
+
+    def test_mutant_control_posix_only_narrowing_fails_open_to_approve(self):
+        m = load_mutant(self, self.ANCHOR,
+                        '    _bad_changed = sorted({c for c in changed if c.startswith("/")})     ')
+        for entry in ("../MyApp/Auth.swift", "~/MyApp/Auth.swift", "C:\\MyApp\\Auth.swift"):
+            with self.subTest(entry=entry):
+                self._changed(entry)
+                rc, out, _ = self.run_main(m, [self.fj, "--changed", self.ch])
+                self.assertIn("**APPROVE**", out, "control must exhibit the mis-scoped bogus APPROVE")
+                self.assertEqual(rc, 0)
+
+    def test_mutant_control_reject_everything_bricks_the_cli(self):
+        m = load_mutant(self, self.ANCHOR,
+                        "    _bad_changed = sorted(changed)                                       ")
+        rc, _, err = self.run_main(m, [self.fj, "--changed", self.ch])
+        self.assertIn("MyApp/Auth.swift", err)
+        self.assertEqual(rc, 2, "control must exhibit the opposite failure: every changeset rejected")
+
+
+class TestS4ChangedFlagWithoutValue(CliFixture):
+    """T6-adjacent, landed with S4 because it shares the fixture: `--changed` as the LAST argv token
+    leaves `changed_path` None, and without the explicit None arm `os.path.exists(None)` raises
+    TypeError — a traceback where a diagnostic belongs."""
+
+    def test_trailing_changed_flag_gets_a_diagnostic_not_a_traceback(self):
+        rc, _, err = self.run_main(S, [self.fj, "--changed"])
+        self.assertIn("error: --changed file not found: None", err)
+        self.assertEqual(rc, 2)
+
+    def test_mutant_control_without_the_none_arm_raises_typeerror(self):
+        m = load_mutant(
+            self,
+            "    if changed_explicit and (changed_path is None or not os.path.exists(changed_path)):",
+            "    if changed_explicit and (not os.path.exists(changed_path)):" + " " * 26)
+        with self.assertRaises(TypeError):
+            self.run_main(m, [self.fj, "--changed"])
+
+
+class TestS5ClusterNeverCollapsesALineDimension(unittest.TestCase):
+    """S5, LINE dimension (`synthesize.py:61`). A file-level finding is `line == 0` but MAY still
+    carry a non-zero `lineEnd`. Without the guard, `a.line <= b.lineEnd and b.line <= a.lineEnd`
+    reads 0 <= 4 and 3 <= 120 — the file-level finding absorbs the line-range one, whose row and
+    `loc` vanish from the consolidated table while clusterSize doubles. clusterSize is rendered as
+    corroboration weight, so the same mutation simultaneously DROPS a finding and INFLATES the
+    apparent confidence of the one that swallowed it."""
+
+    ANCHOR = "    if a.line == 0 or b.line == 0:"
+
+    def _pair(self):
+        return (f(category="logic", line=0, lineEnd=120, finding="FILE-LEVEL", fix="FIX_FILE"),
+                f(category="error-handling", line=3, lineEnd=4, finding="LINE-RANGE", fix="FIX_LINE"))
+
+    def test_file_level_finding_with_a_line_end_never_absorbs_a_line_range_one(self):
+        a, b = self._pair()
+        self.assertEqual((a.line, a.lineEnd), (0, 120),
+                         "premise: a file-level finding CAN carry a non-zero lineEnd")
+        self.assertFalse(S._overlap(a, b))
+        r = S.synthesize([a, b], {"A.swift"})
+        self.assertEqual(sorted(len(c.findings) for c in r.clusters), [1, 1],
+                         "clusterSize is corroboration weight — it must not be inflated by absorption")
+        report = S.render_report(r)
+        self.assertIn("A.swift (file-level)", report)
+        self.assertIn("A.swift:3-4", report, "the line-range finding keeps its own row and loc")
+
+    def test_both_file_level_still_cluster(self):
+        # The narrowing half: two genuine file-level findings SHOULD still cluster, so the guard
+        # cannot simply be `return False` for anything touching line 0.
+        cs = S.cluster_findings([f(category="logic", line=0, lineEnd=0),
+                                 f(category="error-handling", line=0, lineEnd=0)])
+        self.assertEqual(len(cs), 1)
+
+    def test_mutant_control_without_the_guard_the_file_level_row_absorbs_it(self):
+        m = load_mutant(self, self.ANCHOR, "    if False:  # MUTANT               ")
+        a, b = self._pair()
+        self.assertTrue(m._overlap(a, b))
+        r = m.synthesize([a, b], {"A.swift"})
+        self.assertEqual([len(c.findings) for c in r.clusters], [2])
+        self.assertNotIn("A.swift:3-4", m.render_report(r), "control: the line-range loc disappears")
+
+
+class TestS5ClusterNeverCollapsesBFileDimension(unittest.TestCase):
+    """S5, FILE dimension (`synthesize.py:92`) — found by the critic, absent from the sweep. The same
+    class of defect one axis over: drop the `a.file != b.file` half and two findings in DIFFERENT
+    files cluster whenever their line ranges happen to overlap. Line numbers collide constantly
+    across files, so this is not an exotic input — it is the common case."""
+
+    ANCHOR = "    if a.file != b.file or not _overlap(a, b):"
+
+    def _pair(self):
+        return (f(category="logic", file="A.swift", line=10, lineEnd=20, finding="IN-A", fix="FIX_A"),
+                f(category="logic", file="B.swift", line=12, lineEnd=18, finding="IN-B", fix="FIX_B"))
+
+    def test_findings_in_different_files_never_cluster(self):
+        a, b = self._pair()
+        self.assertTrue(S._overlap(a, b), "premise: the LINE ranges do overlap — only the file differs")
+        self.assertFalse(S._candidate(a, b))
+        r = S.synthesize([a, b], {"A.swift", "B.swift"})
+        self.assertEqual(sorted(len(c.findings) for c in r.clusters), [1, 1])
+        report = S.render_report(r)
+        self.assertIn("A.swift:10-20", report)
+        self.assertIn("B.swift:12-18", report, "the finding in the other file keeps its own row")
+        self.assertIn("IN-A", report)
+        self.assertIn("IN-B", report)
+
+    def test_same_file_overlapping_still_clusters(self):
+        # Narrowing half: the file check must not become `return False` for everything.
+        a, b = self._pair()
+        b_same = f(category="logic", file="A.swift", line=12, lineEnd=18, finding="IN-B", fix="FIX_B")
+        self.assertTrue(S._candidate(a, b_same))
+        self.assertEqual(len(S.cluster_findings([a, b_same])), 1)
+
+    def test_mutant_control_without_the_file_check_a_finding_vanishes(self):
+        m = load_mutant(self, self.ANCHOR,
+                        "    if not _overlap(a, b):  # MUTANT: file check dropped")
+        a, b = self._pair()
+        self.assertTrue(m._candidate(a, b), "control premise: the mutant treats them as one defect")
+        r = m.synthesize([a, b], {"A.swift", "B.swift"})
+        self.assertEqual([len(c.findings) for c in r.clusters], [2],
+                         "control: clusterSize doubles — rendered as corroboration weight")
+        report = m.render_report(r)
+        self.assertNotIn("B.swift:12-18", report, "control: the other file's loc disappears")
+
+
+class TestS1EmptyChangesetCauseClauseIsSharedAndTrue(unittest.TestCase):
+    """The empty-changeset refusal exists on TWO entry points that must stay identical — the CLI and
+    `mcp_server._call_synthesize`. This module has now been bitten THREE times by those twins drifting
+    (S1 itself; the `findings_explicit` vs `findings_in` predicate; and this wording), so the cause
+    clause lives in ONE constant that both import, and this cell pins that.
+
+    It also pins the clause's TRUTH. It used to read "every finding would mis-scope to pre-existing",
+    which is a FALSE UNIVERSAL (codex, PR #77): `in_gating_scope` keeps a finding gating regardless of
+    `changed_files` when its family is in `_ALWAYS_GATING_FAMILIES` or its scope is
+    "structural-pipeline", so those rows would not mis-scope at all."""
+
+    _ROW = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                category="credential", file="A.swift", line=1, lineEnd=1, finding="k",
+                evidence="e", fix="x")
+
+    def test_both_arms_emit_the_same_cause_clause(self):
+        # Assert the EMITTED message on BOTH arms, not merely that a shared constant exists. An
+        # earlier version asserted `assertIs` on the constant alone — and a mutant that hardcoded a
+        # different literal at the MCP raise site SURVIVED it, because the constant was still shared,
+        # just unused. Importing a constant is a mechanism; emitting it is the outcome.
+        import mcp_server as MS
+        self.assertIs(MS._EMPTY_CHANGESET_CAUSE, S._EMPTY_CHANGESET_CAUSE,
+                      "the twins must share ONE constant, not two equal literals that can drift")
+
+        with self.assertRaises(Exception) as caught:
+            MS._call_synthesize({"findings": [self._ROW], "changed_files": []})
+        self.assertIn(S._EMPTY_CHANGESET_CAUSE, str(caught.exception),
+                      "the MCP arm must EMIT the shared cause clause, not merely import it")
+
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [dict(severity="blocker", confidence="high",
+                                             sourceAgent="security-reviewer", category="credential",
+                                             file="A.swift", line=1, lineEnd=1, finding="k",
+                                             evidence="e", fix="x")]}, fh)
+            ch = os.path.join(d, "changed.txt")
+            open(ch, "w").close()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = S.main([fp, "--changed", ch])
+            self.assertEqual(rc, 2)
+            cli_err = err.getvalue()
+        self.assertIn(S._EMPTY_CHANGESET_CAUSE, cli_err,
+                      "the CLI must state the shared cause clause verbatim")
+
+    def test_the_cause_clause_does_not_claim_EVERY_finding_mis_scopes(self):
+        # The false universal this replaced. Proven false below by the sibling cell.
+        self.assertNotIn("every finding", S._EMPTY_CHANGESET_CAUSE.lower())
+
+    def test_a_globally_gating_finding_really_would_not_mis_scope(self):
+        # PROOF that the old wording was false, and the reason the new wording is narrowed. Bypass the
+        # guard by calling the library entry point directly with an empty changeset: a structural-
+        # pipeline finding does NOT land in pre_existing — it gates.
+        # BOTH global-gating mechanisms, because `in_gating_scope` has two independent ones and an
+        # earlier version of this cell exercised only `scope`: mutating the `_ALWAYS_GATING_FAMILIES`
+        # branch left it green, so the cell did not cover what its own docstring claimed.
+        globals_ = [
+            ("scope", f(severity="blocker", confidence="high", category="logic",
+                        file="A.swift", scope="structural-pipeline")),
+            ("family:verification", f(severity="blocker", confidence="high", category="verification",
+                                      file="A.swift")),
+            ("family:parity", f(severity="blocker", confidence="high", category="parity",
+                                file="A.swift")),
+            ("family:test-coverage", f(severity="blocker", confidence="high", category="test-coverage",
+                                       file="A.swift")),
+        ]
+        for mechanism, glob_blocker in globals_:
+            with self.subTest(mechanism=mechanism):
+                r = S.synthesize([glob_blocker], set())
+                self.assertEqual(r.pre_existing, [],
+                                 f"a globally-gating finding ({mechanism}) must not mis-scope")
+                self.assertEqual(r.verdict.decision, "REQUEST_CHANGES")
+
+        # ...and the contrast that makes the refusal correct for everything else.
+        dep_blocker = f(severity="blocker", confidence="high", category="credential", file="A.swift")
+        r2 = S.synthesize([dep_blocker], set())
+        self.assertEqual(len(r2.pre_existing), 1, "a changed-file-dependent finding DOES mis-scope")
+        self.assertTrue(r2.verdict.decision.startswith("APPROVE"),
+                        "which is exactly the bogus APPROVE the guard exists to refuse")
+
+    def test_the_refusal_is_per_input_not_per_row(self):
+        # Deliberate, and documented: a globally-gating finding is refused ALONGSIDE the rest rather
+        # than split out. Splitting it would make the CLI answer where the MCP twin refuses — the
+        # exact drift this class exists to prevent. Recorded as behaviour so a future change is a
+        # deliberate one on BOTH arms, not an accident on one.
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [dict(severity="blocker", confidence="high",
+                                             sourceAgent="security-reviewer", category="logic",
+                                             file="A.swift", line=1, lineEnd=1, finding="k",
+                                             evidence="e", fix="x", scope="structural-pipeline")]}, fh)
+            ch = os.path.join(d, "changed.txt")
+            open(ch, "w").close()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(S.main([fp, "--changed", ch]), 2)
 
 
 if __name__ == "__main__":

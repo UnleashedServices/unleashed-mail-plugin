@@ -4,7 +4,6 @@ description: >
   Error handling and logging patterns for UnleashedMail. Covers typed Swift errors,
   PII redaction, structured logging, recovery patterns, and testing error paths.
   Activates when implementing error handling, logging, or error recovery logic.
-effort: xhigh
 allowed-tools: Read, Grep, Glob
 ---
 

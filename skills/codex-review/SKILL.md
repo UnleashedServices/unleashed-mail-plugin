@@ -1,138 +1,203 @@
 ---
 name: codex-review
-description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
+description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /unleashed-mail:gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
-effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(codex *), Bash(rm -f /tmp/codex-out.txt*)
+# The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
+# step prompted for permission (or was denied) before the newly narrowed capture grant could run —
+# so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
+# per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
+# Edit(...), NOT Write(...): since Claude Code 2.1.210 file-permission rules are consulted for
+# `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but NEVER consulted (docs:
+# "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
+# CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read
 ---
 
 # Codex CLI Review
 
-All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/gemini-review` (not as a replacement). Post-implementation audits also run Codex.
+All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/unleashed-mail:gemini-review` (not as a replacement). Post-implementation audits also run Codex.
 
-> **Preflight:** `command -v codex && codex --version`. If `codex` is unavailable (fresh machine / CI), the gate is **fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+> **Scope and round hygiene:** the granted capture wrapper is **plan-only** — `bind-prompt.py` binds
+> `docs/planning/*_PLAN.md` documents and refuses a prompt naming no plan before the reviewer launches;
+> debug reviews are **advisory** (no verdict artifact) unless the investigation is written up as a
+> `*_PLAN.md`. And write **both** per-round prompt files (`.agy-prompt-*`, `.codex-prompt-*`) **before**
+> launching either arm, then freeze the working tree until both rounds land — the isolation harnesses
+> void a round on any live-tree change, a new untracked file included. Consumer repos must ignore
+> `.agy-*.md` / `.codex-*.md` / `.kimi-*.md` / `.gate-*-prompt.md`. Full rules: the "Scope and round
+> hygiene" section of `/unleashed-mail:gemini-review`. (2026-08-17 audit, AF-3/AF-5.)
+
+> **Preflight:** `command -v codex && codex --version`. If `codex` is unavailable (fresh machine / CI), the gate is **fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the _user_ choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+>
+> **Codex quota outage → kimi stand-in (user-directed).** Preflight the stand-in with
+> `command -v kimi` (fail-closed if absent, exactly as for codex), and write its prompt to a
+> `.kimi-prompt-<round>.md` file — both are covered by this skill's grants. A weekly/billing quota hit is the
+> "capture the review elsewhere" recovery: at the user's direction, capture the second review with the
+> kimi harness instead —
+> `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh" <prompt-file> <out-transcript> <commit> [timeout] <plan>`
+> — **this one is deliberately NOT pre-approved and will prompt.** Unlike the gemini and codex harnesses it
+> owns its output path rather than taking an allocator's reserved leaf, so it uses non-allocated
+> `pty-capture`, which creates and truncates whatever single-linked path it is handed. A blanket
+> `Bash(... isolated-kimi-review.sh *)` grant therefore turned this read-only review skill into a way to
+> overwrite an arbitrary user file with no further prompt (codex, PR #69 — reproduced under `~/Documents`
+> with the write mocked). The grant was removed rather than narrowed; approve the stand-in per round,
+> and read the path you approve. **Follow-up:** a `capture-kimi-review.sh` that owns its allocation, as
+> `capture-codex-review.sh` does, would make a safe grant possible
+> — **always passing `<plan>`** (the harness basis-checks the plan named on its command line, defaulting
+> to the COREDEV-2617 plan it was built for; a defaulted plan under a different prompt certifies the
+> wrong document). **Its model is the operator's Kimi configuration**: the harness passes none, and the
+> plugin names none, exactly as for codex (COREDEV-2875). Kimi's own quota symptom, for recognition: `EXIT=1` with a large transcript and a
+> 403 in the tail. **This does not change the scripted quorum:** `review-verdict.py` still records
+> `codex=MISSING`, and the gate refuses — by design. The kimi transcript is the captured evidence the
+> user cites when explicitly directing the workflow exception per §2; it is persisted alongside, never
+> silently substituted as codex's verdict. (Harness parameterized 2026-08-17, audit AF-12.)
 
 Docs: https://developers.openai.com/codex/cli/reference
 
-| Trigger | When |
-|---------|------|
-| New plan or architecture decision | BEFORE any code is written |
-| Bug investigation or debugging | BEFORE proposing fixes |
-| Post-implementation audit | AFTER code is written — read-only scan for security, concurrency, UX/perf, accessibility |
+| Trigger                           | When                                                                                     |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| New plan or architecture decision | BEFORE any code is written                                                               |
+| Bug investigation or debugging    | BEFORE proposing fixes                                                                   |
+| Post-implementation audit         | AFTER code is written — read-only scan for security, concurrency, UX/perf, accessibility |
 
 ## Setup
 
 - **Tool:** `codex` CLI.
 - **Working directory:** always run from the project root (top-level workspace directory containing `Unleashed Mail.xcodeproj/`). Codex resolves relative paths against `$PWD`.
-- **Model:** `~/.codex/config.toml` sets `model = "gpt-5.6-sol"` (Codex 5.6 "Sol"; `codex-cli` 0.144.4, verified 2026-07-16). The model is inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded).
-- **⚠️ Effort: ALWAYS pass `-c model_reasoning_effort=xhigh` on a review call — do not rely on the config default.** The config *should* carry `model_reasoning_effort = "xhigh"`, but that setting is fragile: the Codex 5.6 upgrade silently reset it to **`low`** once already. A plain `codex exec` inheriting a `low` default reviews at low and silently under-powers the gate, with no error to notice. So every review recipe below passes `-c model_reasoning_effort=xhigh` explicitly — it makes the gate resilient to a config reset and correct on any machine regardless of its default. There is no dedicated `--reasoning-effort` flag; the generic `-c key=value` (confirmed on `codex-cli` 0.144.4) is the mechanism.
-- **Pinning a config value one-off (rarely needed):** `codex exec -c model=gpt-5.6-sol -c model_reasoning_effort=xhigh -s read-only "PROMPT"` — the `-c model=…` shows an explicit model pin. Normally let the config supply the model and only force effort; never `--model` (zero-byte failure on this install).
+- **Model:** the plugin names **no** Codex model (COREDEV-2875). Every `codex exec` and `codex review` call inherits it from `~/.codex/config.toml`: keep that file's `model` key on the newest model your account lists, and leave `review_model` **unset** so `codex review` follows `model` too. Read the model a run actually used from its SESSION RECORD, not from the banner, which only echoes what was requested: `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl` carries `model` and `collaboration_mode.settings.reasoning_effort`. **Do not pass `--model`** on a ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded). A model pinned in this file goes stale silently: it named `gpt-6-astra`, then `gpt-6.1-sol`, each after the config had moved on (COREDEV-2872, COREDEV-2875). **Probe `codex` before a gate round when the release lineage moves.**
+- **⚠️ Effort: ALWAYS pass `-c model_reasoning_effort=ultra` on a review call — do not rely on the config default.** The ladder, read from the shipped binary's own enum (it serialises in ascending order), is **`minimal` < `low` < `medium` < `high` < `xhigh` < `max` < `ultra`**. `ultra` is the ceiling; this file previously mandated `xhigh`, which is **fifth of seven** — correct when it was written, and a silent under-powering of the gate once Astra shipped the two tiers above it.
+- **⚠️ The CLI does NOT validate this value.** Measured on `codex-cli` 0.153.4 (the ladder was re-read from the 0.160.0 native binary on 2026-10-03 and is unchanged, so `ultra` is still the ceiling): `-c model_reasoning_effort=definitely-not-valid` is echoed back in the run banner and the review proceeds at the backend default — no error, no warning, no exit code. A stale or mistyped tier is therefore an invisible downgrade, which is the same class as the config reset the 5.6 upgrade caused (it silently became `low`). Passing the tier explicitly is what makes the gate resilient to a config reset; the wrappers additionally assert the token against the seven known tiers and exit 2 rather than let a typo run. There is no dedicated `--reasoning-effort` flag; the generic `-c key=value` is the mechanism.
+- **Overriding a config value one-off (rarely needed):** `codex exec -c model_reasoning_effort=ultra -s read-only "PROMPT"` — the generic `-c key=value` overrides any config key for one run. Let the config supply the model and only force effort; never `--model` (zero-byte failure on this install).
 
 ## ⚠️ Always capture output via the PTY wrapper (eliminates 0-byte / STDN failures)
 
 `codex exec` only reliably emits its result to a **real terminal**. When stdout is piped, redirected (`> file`, `| tee`), or the process is backgrounded — Claude Code's Bash tool, `run_in_background`, CI — codex can finish successfully yet write **0 bytes**. That is the recurring failure: the run "worked" but nothing was captured. The `-o PATH` flag mitigates it but is easy to forget and does not cover every backgrounded case.
 
-**Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md) uses for `agy` — one PTY wrapper, both review CLIs.
+**Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md)'s harness runs its adapter under — one PTY wrapper, both review arms.
 
 ```bash
-# Put the prompt in a workspace file, then run codex through the wrapper.
-# Wrapper timeout is 1200s: mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
-# SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
-# (COREDEV-2504). Matches gemini-review. Keep the Monitor pattern below — an outer runner timeout could
-# otherwise kill the run before the wrapper's cap fires.
-# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (codex absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
-# previous-round transcript that review-synthesis would read as THIS round's verdict. Absent maps to
-# MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
-rm -f /tmp/codex-out.txt /tmp/codex-out.txt.captureid
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/codex-out.txt -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
-# Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
+# Write this round's prompt to a PER-ROUND file first — `.codex-prompt-${TICKET}r${ROUND}.md`,
+# never a shared `.codex-prompt.md`: two concurrent rounds would otherwise cross-wire prompt and
+# transcript (deep review, P1). Bind TICKET, ROUND and PLAN (the plan being reviewed), then run this ONE command. It allocates
+# the per-run transcript leaf, prints the `UNLEASHED_TRANSCRIPT=` marker for synthesis to bind, and
+# captures the review into that exact leaf through the PTY wrapper.
+#
+# ONE command, so the `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant above covers it. This
+# used to be two `:` guards, an `if`/`else` around the allocator and a `case` on the marker — a compound
+# command matching no grant, so the block every gate round must run prompted every time.
+#
+# The rules it carries, which now live in one place instead of in a skill body:
+#   * timeout 2400s — RAISED WITH THE TIER. `xhigh` ran to ~12 min against a 1200s cap; `ultra` is
+#     two tiers above it and runs longer, so the cap moved with it. Exit 124 means the WRAPPER
+#     budget is short and is never a reason to drop the tier. Provisional until a full plan review
+#     is timed at ultra. The previous 600s cap
+#     SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
+#     (COREDEV-2504). This is NOT the same cap as gemini-review's 1800s (that arm's whole-review wall
+#     clock); an earlier note here claimed they matched (deep review, P2). Keep
+#     the Monitor pattern below: an outer runner timeout could otherwise kill the
+#     run before the wrapper's cap fires.
+#   * MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed
+#     one. Each round allocates its own leaf, so a wrapper that never starts (codex absent / auth
+#     expired / a Bash-tool kill before pty-capture's finally-write) leaves that leaf ABSENT — never a
+#     STALE previous-round transcript that review-synthesis would read as THIS round's verdict. Absent
+#     maps to MISSING -> the gate fails closed.
+#   * DO NOT `rm -f` the reserved leaf on a retry; retries must RE-ALLOCATE (gap 14). The script says
+#     why at the line that would tempt you.
+# COREDEV2619_CODEX_CAPTURE_BEGIN
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 2400
+# COREDEV2619_CODEX_CAPTURE_END
+# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
+# matches codex's. Preserve the marker remainder byte-for-byte for synthesis.
 
-# Skill-based audit through the wrapper:
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/security.txt -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
+# Skill-based audit through the wrapper, as ONE granted command.
+# `audit-codex.sh` ALLOCATES its own per-run output and HARD-CODES `-s read-only` and
+# `model_reasoning_effort=ultra`. The old form needed `Bash(codex *)` and
+# `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)`, which between them pre-approved any codex
+# invocation (including `-s danger-full-access`) and `pty-capture.py <any path> -- <any command>`
+# — arbitrary child execution writing anywhere (deep review, P1). It prints the transcript path.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh" /security-reviewer [FILES]
 ```
 
-Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. Read `<out-path>` back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
+Interface: `pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]`.
+Read the allocated path back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill
+running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
 
 ## Monitor, not Bash background (user-confirmed preference)
 
 > **Source:** user auto-memory `feedback_codex_monitor_pattern.md` — this is a project-specific operational preference the user has confirmed, not a rule from the original `.claude/prompts/codex-review.md` (workspace-only artifact).
 
-For non-trivial `codex exec` runs, route the process through the `Monitor` tool. Reason on this project: `Bash run_in_background` has produced 0-byte outputs on long Codex runs, while `Monitor` has been reliable. **Combine the two:** run the PTY wrapper above *under* `Monitor` (`pty-capture.py /tmp/out.txt -- codex exec …`) so a long run is both reliably scheduled and reliably captured — the wrapper guarantees the bytes land in the file, `Monitor` guarantees you don't block on it.
+For non-trivial `codex exec` runs, route the process through the `Monitor` tool. Reason on this project: `Bash run_in_background` has produced 0-byte outputs on long Codex runs, while `Monitor` has been reliable. **Combine the two:** run the PTY wrapper above _under_ `Monitor` (`pty-capture.py /tmp/out.txt -- codex exec …`) so a long run is both reliably scheduled and reliably captured — the wrapper guarantees the bytes land in the file, `Monitor` guarantees you don't block on it.
 
 ## Invocation patterns
 
-> **Capture:** the forms below show the codex *command shape*. From any non-TTY context (Claude Code's Bash tool, CI, backgrounded runs) wrap each with `pty-capture.py <out> -- …` per the PTY-wrapper section above so output is never lost. The `-o PATH` forms are the in-terminal fallback.
+> **Capture:** the forms below show the codex _command shape_. From any non-TTY context (Claude Code's Bash tool, CI, backgrounded runs) wrap each with `pty-capture.py <out> -- …` per the PTY-wrapper section above so output is never lost. The `-o PATH` forms are the in-terminal fallback.
 
 ```bash
 # Plan / debug review (non-interactive, read-only)
-codex exec -c model_reasoning_effort=xhigh -s read-only "PROMPT_HERE"
+codex exec -c model_reasoning_effort=ultra -s read-only "PROMPT_HERE"
 
 # Targeted agent-role audit (post-implementation) — see skill list below
-codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/security-reviewer [FILES]"
 
 # Full diff review — built-in `codex review` (outputs to STDOUT; no -o — capture via the PTY wrapper)
-codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted
-codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --base main
-codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --commit <SHA>
+codex -c model_reasoning_effort=ultra review --uncommitted
+codex -c model_reasoning_effort=ultra review --base "<PR-base-branch>"  # each PR's own base: version branch (app feature, hotfix PR into it), alpha (plugin feature), main (promotion, hotfix PR into main)
+codex -c model_reasoning_effort=ultra review --commit <SHA>
 
 # Save agent output to file
-codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMPT_HERE"
+codex exec -c model_reasoning_effort=ultra -s read-only -o /tmp/output.md "PROMPT_HERE"
 ```
 
-> **The built-in `codex review` path pins EFFORT, not the MODEL.** `-c model_reasoning_effort=xhigh`
-> only overrides effort; the built-in review resolves its model from config — and if `~/.codex/config.toml`
-> sets `review_model` (a recognized key, verified on 0.144.4), `codex review` uses THAT, not the session
-> `model`. So a machine left with a stale `review_model` can run the diff audit on an old model despite the
-> v2.5.0 "review tooling is on `gpt-5.6-sol`" guidance. For the built-in path, either verify `review_model`
-> is unset/`gpt-5.6-sol` or pin it inline with a `-c review_model=gpt-5.6-sol` override alongside the effort
-> override. The `codex exec "/skill …"` audits are unaffected — they inherit the session `model`.
+> **The built-in `codex review` path resolves its MODEL from config.** `-c model_reasoning_effort=ultra`
+> only overrides effort. If `~/.codex/config.toml` sets `review_model` (a recognized key, verified on
+> 0.153.4), `codex review` uses THAT, not the session `model`, so a stale `review_model` runs the diff audit
+> on an old model. **Leave `review_model` unset** so the review follows `model`, and keep `model` current:
+> `grep -n review_model ~/.codex/config.toml` should print nothing. The `codex exec "/skill …"` audits
+> inherit the session `model` either way.
 >
 > ```bash
-> codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted
+> codex -c model_reasoning_effort=ultra review --uncommitted
 > ```
 
 ## `codex exec` flags (non-interactive)
 
-| Flag | Purpose |
-|------|---------|
-| `exec` | Non-interactive scripted execution (no TUI) |
-| `-s read-only` / `--sandbox read-only` | Prevents file modifications — safe for audits |
-| `-s workspace-write` | Allows writes within project directory |
-| `-m MODEL` / `--model MODEL` | Override model selection (do not use on this install) |
-| `-o PATH` / `--output-last-message PATH` | Write final response to file |
-| `--ephemeral` | Run without persisting session files |
+| Flag                                     | Purpose                                               |
+| ---------------------------------------- | ----------------------------------------------------- |
+| `exec`                                   | Non-interactive scripted execution (no TUI)           |
+| `-s read-only` / `--sandbox read-only`   | Prevents file modifications — safe for audits         |
+| `-s workspace-write`                     | Allows writes within project directory                |
+| `-m MODEL` / `--model MODEL`             | Override model selection (do not use on this install) |
+| `-o PATH` / `--output-last-message PATH` | Write final response to file                          |
+| `--ephemeral`                            | Run without persisting session files                  |
 
 ## `codex review` flags (built-in review mode)
 
-| Flag | Purpose |
-|------|---------|
-| `--uncommitted` | Review staged, unstaged, and untracked changes |
-| `--base BRANCH` | Review changes against the given base branch |
-| `--commit SHA` | Review changes introduced by a specific commit |
+| Flag            | Purpose                                                                                                                                                     |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--uncommitted` | Review staged, unstaged, and untracked changes                                                                                                              |
+| `--base BRANCH` | Review changes against the given base branch                                                                                                                |
+| `--commit SHA`  | Review changes introduced by a specific commit                                                                                                              |
 | `--title TITLE` | Commit title for the review summary — **requires `--commit`** (`codex review --title …` alone errors: `Usage: codex review --commit <SHA> --title <TITLE>`) |
-| `[PROMPT]` | Custom review instructions (`-` reads from stdin) — a **review target of its own**, mutually exclusive with `--uncommitted`/`--base`/`--commit` |
+| `[PROMPT]`      | Custom review instructions (`-` reads from stdin) — a **review target of its own**, mutually exclusive with `--uncommitted`/`--base`/`--commit`             |
 
 `codex review` takes exactly **one** review target: `--uncommitted`, `--base`, `--commit`, **or** a
-custom `[PROMPT]` — they **conflict** and cannot be combined. Verified on `codex-cli` 0.144.4:
+custom `[PROMPT]` — they **conflict** and cannot be combined. Verified on `codex-cli` 0.153.4:
 `codex review --uncommitted "focus on X"` exits non-zero with the argument-conflict error
 (`--uncommitted` cannot be used with `[PROMPT]`). So `[PROMPT]` steers a review INSTEAD of a diff
 target, not on top of one. It writes to
 **stdout only — there is no `-o`/`--output-last-message`** on `codex review` (that flag is
 `codex exec`-only), so capture it via the mandated PTY wrapper. For a steerable review of specific
-changes, keep the instructions on `codex exec -c model_reasoning_effort=xhigh -s read-only "/skill ..."`,
+changes, keep the instructions on `codex exec -c model_reasoning_effort=ultra -s read-only "/skill ..."`,
 which carries the skill rubric and takes both a prompt and file targets.
 
 ## Codex skills — mirror of the Unleashed Mail plugin
 
 Codex has first-class skills that mirror every Unleashed Mail plugin agent, command, and skill. Invoke the skill by name inside `codex exec` — skills carry their own rubric and output contract.
 
-General form: `codex exec -c model_reasoning_effort=xhigh -s read-only "/<skill-name> [ARGS or FILES]"`
+General form: `codex exec -c model_reasoning_effort=ultra -s read-only "/<skill-name> [ARGS or FILES]"`
 
 **Review** (run the first five in parallel, then synthesize with `/swift-reviewer`):
+
 - `/security-reviewer` — credential exposure, injection, insecure storage, entitlement misuse, OAuth flaws, supply-chain risks
 - `/concurrency-reviewer` — race conditions, data races, actor isolation, unsafe threading, deprecated Swift/Apple APIs
 - `/ux-perf-reviewer` — UI responsiveness, animation, memory, DB query perf, network optimization
@@ -152,7 +217,7 @@ General form: `codex exec -c model_reasoning_effort=xhigh -s read-only "/<skill-
 
 **Infrastructure:** `/agent-orchestration`
 
-**Review tooling (v2.4.1):** `/gemini-review`, `/codex-review`, `/create-feature-plan` (canonical bare workspace names; the plugin also bundles them namespaced as `/unleashed-mail:gemini-review` etc.)
+**Review tooling:** `/unleashed-mail:gemini-review`, `/unleashed-mail:codex-review`, `/unleashed-mail:create-feature-plan` — the namespaced forms are canonical and always resolve; the bare names resolve only where the consumer workspace ships local copies
 
 If a skill is missing from a given install, list `~/.codex/skills/` before falling back to a free-form prompt.
 
@@ -160,35 +225,46 @@ If a skill is missing from a given install, list `~/.codex/skills/` before falli
 
 ```bash
 # Parallel audit — one codex exec per skill, run concurrently via Monitor
-codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
-codex exec -c model_reasoning_effort=xhigh -s read-only "/concurrency-reviewer [FILES]"
-codex exec -c model_reasoning_effort=xhigh -s read-only "/ux-perf-reviewer [FILES]"
-codex exec -c model_reasoning_effort=xhigh -s read-only "/accessibility-auditor [FILES]"
-codex exec -c model_reasoning_effort=xhigh -s read-only "/prompt-review [FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/security-reviewer [FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/concurrency-reviewer [FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/ux-perf-reviewer [FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/accessibility-auditor [FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/prompt-review [FILES]"
 
 # Synthesize after the five complete
-codex exec -c model_reasoning_effort=xhigh -s read-only "/swift-reviewer [PRIOR_OUTPUTS or FILES]"
+codex exec -c model_reasoning_effort=ultra -s read-only "/swift-reviewer [PRIOR_OUTPUTS or FILES]"
 
 # Implementation consult
-codex exec -c model_reasoning_effort=xhigh -s read-only "/grdb-patterns How should I add a ValueObservation for [TABLE]?"
+codex exec -c model_reasoning_effort=ultra -s read-only "/grdb-patterns How should I add a ValueObservation for [TABLE]?"
 
-# Plan / debug (unstructured — when no skill is a good fit)
-codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
+# Plan / debug (unstructured — when no skill is a good fit). `--` ends option parsing so
+# free-form content that begins with `-` (a Markdown bullet) cannot be read as a flag (AF-11).
+codex exec -c model_reasoning_effort=ultra -s read-only -- "PLAN_OR_DEBUG_CONTENT"
 ```
 
 ## Full workflow (plan or debug → implementation → post-impl audit)
 
-1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/codex-out.txt` + `/tmp/agy-out.txt` into one auditable **Combined verdict** block before implementation.
+1. **Plan review:** `codex exec -c model_reasoning_effort=ultra -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer "<name>=<STATUS>:<allocated-path>"` argument to produce the auditable **Combined verdict** block before implementation.
 2. **Post-implementation audit:** run the five Codex audit skills in parallel (`/security-reviewer`, `/concurrency-reviewer`, `/ux-perf-reviewer`, `/accessibility-auditor`, `/prompt-review`) with `-s read-only`
-3. **Full diff review:** optionally also run `codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted`
+3. **Full diff review:** optionally also run `codex -c model_reasoning_effort=ultra review --uncommitted`
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
 5. Incorporate feedback from both Gemini and Codex before considering work complete
+
+## Required invocation inputs
+
+/unleashed-mail:codex-review --ticket <T> --round <N> <plan>
+
+Ticket and round are required operands received from that invocation; never infer either from the plan,
+branch, or prior transcript. If either is absent, stop before allocation. Bind the received operands to
+`TICKET`, `ROUND` and `PLAN` in the same Bash invocation, then run the complete allocation-and-capture recipe
+above. It passes the hard-coded reviewer literal `codex`, removes only the marker prefix, and quotes every
+later expansion of `CODEX_TRANSCRIPT` so the allocated path remains one opaque argument.
 
 ## Safety rules
 
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-approvals-and-sandbox` is reserved for externally sandboxed CI environments only
-- `codex exec -c model_reasoning_effort=xhigh -s read-only` with skill prompts is the preferred pattern for targeted reviews
-- `codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`). The `review_model` pin is needed because the built-in review path resolves its model from `review_model`, not the session `model` (see the callout above)
+- `codex exec -c model_reasoning_effort=ultra -s read-only` with skill prompts is the preferred pattern for targeted reviews
+- `codex -c model_reasoning_effort=ultra review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`). Leave `review_model` unset: when it is set, the built-in review path resolves its model from it, not from the session `model` (see the callout above)
 
 Both Gemini and Codex must review plans before implementation begins. Neither review is optional.

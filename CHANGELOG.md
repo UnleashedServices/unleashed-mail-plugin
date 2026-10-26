@@ -7,11 +7,2954 @@ releases use the `MAJOR.MINOR.PATCH` version in `.claude-plugin/plugin.json` (di
 from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 > **Maintenance:** add every change under `[Unreleased]` as you make it, grouped by
-> *Added / Changed / Fixed / Removed*. When you bump `plugin.json`, move the
+> _Added / Changed / Fixed / Removed_. When you bump `plugin.json`, move the
 > `[Unreleased]` items under a new dated `[x.y.z]` heading and start a fresh
 > `[Unreleased]`.
 
 ## [Unreleased]
+
+## [2.8.36] — 2026-10-14
+
+### Changed
+
+- **The plan gate's Gemini arm runs the `gemini` CLI with `gemini-3.1-pro-preview` (COREDEV-2887).**
+  Gemini 3.1 Pro was retired from the Antigravity CLI (`agy`), whose remaining Flash arm stopped
+  answering on 2026-10-12. The arm keeps its isolation harness (a disposable checkout, fingerprinted
+  before and after, exit 3 on a surviving change); only the command inside it changed.
+  - **`scripts/review/gemini-review-run.py`, the adapter.** Runs the CLI with `-o json` and asserts
+    that `stats.models` names exactly the requested model (complete strings), so a fallback or a
+    plan-mode route to Flash is refused, never recorded. A JSON `error`, non-JSON output or a non-zero
+    CLI status also refuse. Its diagnostics file is opened FIRST and made its stderr, so a refused run
+    leaves the transcript EMPTY (MISSING at both persistence layers) and nothing but the validated
+    response reaches it. CRLF and lone CR become LF.
+  - **`scripts/review/gemini-review-policy.toml`.** Headless plan mode auto-approves `exit_plan_mode`
+    and then runs in YOLO (observed writing). The per-run policy denies `exit_plan_mode`, `write_file`,
+    `replace`, `run_shell_command`, `invoke_agent` and every MCP tool, at priority 999, in every mode.
+  - **No MCP server starts:** a per-run random `--allowed-mcp-server-names` value (a fixed name was
+    matched by a server configured under it).
+  - **No foreign environment file:** the CLI loads the first `.gemini/.env` or `.env` above its working
+    directory; the adapter refuses any that is not in `$HOME`. A committed `.gemini` or `.env` in the
+    reviewed tree is refused before anything is staged, and so is a committed `GEMINI.md` context file at
+    any depth: the CLI injects those into every prompt (measured steering the reviewer), and in 0.64.0 no
+    setting removes the default name. The scan also matches every context name the operator's user or
+    system settings configure (`context.fileName` only adds names); unparseable settings refuse.
+  - **No extensions, bounded output:** the adapter passes `--extensions none` (an installed extension's
+    context and hooks would otherwise run outside the deny policy), and reads the CLI's output under a
+    16 MiB cap, stopping a runaway CLI rather than buffering it. Its stderr is drained into the
+    diagnostics file under its own 16 MiB cap.
+  - **What else cannot reach the reviewer:** a committed `.agents` entry (workspace Agent Skills) is
+    refused; settings-level hooks are switched off in the staged settings; operator settings that add
+    `context.includeDirectories` refuse (that list concatenates across scopes, so it cannot be emptied);
+    `GEMINI_SYSTEM_MD` and the IDE's workspace variables are not passed to the CLI; the settings scan
+    follows `GEMINI_CLI_HOME`; and the adapter runs the `gemini` found on `PATH` outside the reviewed
+    checkout, skipping relative entries, so a branch-committed `gemini` can never be the reviewer.
+  - **Nothing the reviewed branch commits runs as the arm's own code** (fourth review round).
+    `scripts/review/reviewer-env.sh` is sourced first by the capture wrapper, the harness and the
+    preflight:
+    - **PATH:** only absolute entries outside the live checkout are kept, so a relative entry (such as
+      `.`) or a direnv-style `bin` inside the checkout cannot supply `python3`, `git` or `gemini`.
+    - **Python:** every `python3` those scripts run is isolated (`-I -B`), including the heredocs in
+      `tree-fingerprint.sh`. `python3 -c` and `python3 -` put the working directory first on the import
+      path, so a `json.py` or `hashlib.py` committed at the repository root could replace the standard
+      library inside the gate's own checks. This was reproduced.
+
+    The adapter also has new checks:
+    - **Absolute configuration paths only:** a relative `GEMINI_CLI_HOME`,
+      `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`,
+      `GEMINI_CLI_TRUSTED_FOLDERS_PATH` or `GEMINI_EXP` refuses the round.
+    - **Credentials only from a `.env` file:** the `.env` the CLI would load may set only
+      `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, the CLI's
+      own allowlist for an untrusted workspace. The CLI loads that file after every check, so anything
+      else it set would go unchecked. Set other variables in the shell instead.
+    - **No Node loaders:** `NODE_OPTIONS` and `NODE_PATH` are not passed to the CLI.
+    - **A `gemini` that resolves into a reviewed tree is skipped,** whether through a PATH entry or a
+      symlink. The resolved file is what runs. The reviewed trees are the disposable checkout and the
+      live checkout, which the harness and the preflight pass as `--reviewed-root`.
+
+  - **Fifth review round:**
+    - **Configuration paths:** an absolute configuration path that points inside a reviewed tree now
+      refuses too.
+    - **Custom tools:** operator settings with `tools.discoveryCommand` or `tools.callCommand` refuse.
+      The discovery command runs on the checkout at startup, and the tools it registers are outside
+      the deny policy.
+    - **Temporary files:** a `TMPDIR` inside the checkout refuses, for both the harness and the
+      preflight.
+    - **Shell startup file:** `BASH_ENV` is unset for every shell the arm starts.
+    - **Diagnostics:** an unwritable diagnostics file stops the CLI, so it can't block on a full
+      stderr pipe.
+  - **Sixth review round:**
+    - **User skills:** the staged settings switch off the operator's user Agent Skills
+      (`skills.enabled: false`).
+    - **Policy files:** operator settings with `policyPaths` or `adminPolicyPaths` refuse. Admin-tier
+      policies outrank the arm's deny policy.
+
+  - **Trust:** `--skip-trust` plus `GEMINI_CLI_TRUST_WORKSPACE=true`, because workspace settings load
+    before the flag applies; the disposable checkout's own `.gemini/settings.json` turns plan-mode model
+    routing off, and turns the CLI's `.gitignore`/`.geminiignore` file filtering off, so a staged prompt
+    under an ignored path (a custom `XDG_STATE_HOME` such as `~/logs`) stays readable.
+  - **`scripts/review/preflight-gemini.sh`** pings through the same adapter, is healthy only on a
+    whole-answer `pong` from the gate's model, keeps the CLI's diagnostics at `<ping>.diag`, and names
+    the model on every failure.
+  - **Shared settings:** the preflight stages the same workspace settings as a review, from the new
+    `scripts/review/gemini-review-settings.json`, so settings-level hooks are off for the ping too.
+- **The gemini-review skill, `AGENT_CONTRACTS.md` §2, `CLAUDE.md` and the README** describe the new arm.
+  The skill grants exactly `capture-gemini-review.sh` and `preflight-gemini.sh`, and no `Bash(gemini *)`;
+  the assembly validator now refuses that grant. A non-zero capture is MISSING for its round.
+- **`test_agy_recipe_gate` is now a retirement declaration:** no shipped text may launch `agy`.
+
+### Removed
+
+- `scripts/review/isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`, with the tests
+  that exercised only them. Their shared cases are ported to `scripts/tests/test_gemini_cli_arm.py`.
+
+### Known gap (inherited, all arms)
+
+- A VOIDED round's transcript stays on disk after exit 3, and persistence refuses only an empty or absent
+  one. COREDEV-2888 makes persistence require a clean-round receipt from the harness.
+- **Inline Python imports from the working directory (COREDEV-2891, High).** Elsewhere in the plugin,
+  inline `python3 -c` and heredoc launches can still import a module from the working directory. That
+  covers the Codex and Kimi harnesses, the hook libraries, and `tree-fingerprint.sh` when another arm
+  sources it. Only the Gemini arm is isolated here.
+- **The first shell still reads `BASH_ENV` (COREDEV-2892, Medium).** Bash runs `BASH_ENV` before the
+  script's first line, so only a change to the skill's launch line (`bash -p` or `env -u BASH_ENV`)
+  can stop it. Until then, start the arm with `BASH_ENV` unset.
+
+## [2.8.35] — 2026-10-13
+
+### Fixed
+
+- **Shipped guidance named `main` as UnleashedMail's integration branch (COREDEV-2884).** In the app,
+  all work lands on the version branch (`1.0X.0000`, now `1.02.0000`); `main` receives only
+  promotions and hotfixes. The app's merged-PR history shows this, and so does the base-branch
+  detection already in `swift-reviewer`, `code-simplifier` and `scripts/review/changeset.sh`.
+  - `AGENT_CONTRACTS.md` "Branch convention": the "Trunk: `main` is the integration trunk" line
+    now names the version branch as the integration branch.
+  - `agents/release-manager.md` changelog generation: `gh pr list --base main` listed only
+    promotion PRs, missing every feature PR. It now lists the version branch's merges, deriving
+    the branch from `MARKETING_VERSION` and refusing an empty one (`gh pr list --base ""` drops the
+    filter and lists every branch's merges).
+  - `skills/codex-review/SKILL.md`: the full-diff example's `--base main` is now the PR's own base
+    branch: the version branch for an app feature, `alpha` for a plugin feature, `main` only for a
+    promotion. A hotfix merges to both, as two PRs, and each is reviewed against its own base.
+  - `agents/ci-engineer.md` "Main CI Workflow" template: its `push`/`pull_request` filters were
+    `[main]` only, so a workflow built from it ran no checks on the feature PRs that target the
+    version branch. Both now also match `[0-9]+.[0-9]+.0000`.
+
+## [2.8.34] — 2026-10-12
+
+### Changed
+
+- **The plugin's marketplace source is `"./"` (COREDEV-2885),** so the ref a machine adds the
+  marketplace at decides which plugin bytes it installs: no ref gives `main`, `#alpha` gives `alpha`.
+  - **Why.** The entry was `{"source":"github","repo":"UnleashedServices/unleashed-mail-plugin"}` with no
+    `ref`, which installs the default branch from ANY marketplace ref. Measured on Claude Code 2.1.296
+    in an isolated config: a marketplace added at `#alpha` installed main's commit (`a100645`, not
+    alpha's `91ee033`).
+  - **Migration, measured** (witnesses W1/W1′/W2/W2′, on throwaway branches with isolated configs). An
+    install made from the `github` source updated IN PLACE, under the same key and scope, to the `"./"`
+    fixture's version, commit and sentinel. That includes a registration keyed by the marketplace's
+    former name, `npranson-unleashed-mail-plugin`. With the version unchanged, the update was skipped:
+    the version bump, not the source change, is what moves an install.
+  - `README.md`: a "Release channels" section. The former-key note no longer claims such installs
+    "stop resolving"; W2 showed they keep resolving and updating.
+  - `CLAUDE.md` "Branch flow": the alpha channel's join command.
+
+### Fixed
+
+- **CI's load check tested a manifest one field different from the shipped one.**
+  `scripts/ci-load-check.sh` rewrote the copy's source to `"./"` before installing. It now ASSERTS the
+  shipped source is `"./"` and fails before any install otherwise. Its mutant table is re-executed:
+  - the `github` mutants now red at step 1;
+  - a new mutant, installing from a second tree without the sentinel, reds at the sentinel check.
+- `scripts/validate-plugin-assembly.py` enforces the same rule (`check_marketplace_source`, with tests in
+  `MarketplaceSourceIsRelative`).
+- **The load check's mutant table had drifted with the CLI.** Re-executed on Claude Code 2.1.296, the #61
+  `hooks`-key mutant is no longer reported in `list --json`'s `errors`, so step 4 passes and step 6 (the
+  hooks-key check, previously labelled unreachable) catches it. The table and its note now record that.
+  The mutant is still caught; only the step that catches it moved.
+
+## [2.8.32] — 2026-10-10
+
+### Fixed
+
+- **A retargeted PR could satisfy ruleset `Control` with checks run against its OLD base
+  (COREDEV-2879).** On PR #110, retargeted from main to alpha, the new `trunk-check` run checked out
+  a merge commit that GitHub had not yet recomputed. It linted main's range (1 file; against alpha
+  the range would have been 46 files) and went green. plugin-ci, whose `pull_request` trigger lacked
+  `edited`, did not re-run at all, so its five required contexts stayed old-base results.
+  - **`scripts/ci/resolve-trunk-range.sh` certifies the merge commit's first parent** against two live
+    references before resolving. Both comparisons use first-parent membership: the commit must once
+    have been a tip of that branch.
+    1. The tip of the event's base branch. This catches a merge ref GitHub had not yet recomputed after
+       a retarget: `STALE MERGE REF`.
+    2. The first parent of the PR's current `refs/pull/<n>/merge`. This catches a re-run of a
+       pre-retarget event, whose payload still names the old base: `OBSOLETE EVENT`.
+
+    Plain ancestry is not enough, because alpha's catch-up merges bring old main tips in as SECOND
+    parents. A base that merely advanced still resolves. On success the output is unchanged
+    (`upstream=HEAD^1`), so guard/action parity holds. The check fails closed if the fetch fails, the
+    base ref is unset, or the PR number cannot be read. The resolver's pinned digest moved in both
+    `guard-resolver-digest` steps.
+
+  - **`plugin-ci.yml`'s `pull_request` takes `types: [opened, synchronize, reopened, edited]`,** equal
+    to trunk-check's. Every event therefore re-runs all six required contexts on the same merge commit.
+    A title or body edit now restarts plugin-ci, cancelling the in-flight run.
+  - **Tests:**
+    - `test_trunk_upstream_parity.py` covers the plan's topology (F8 rows R1-R6 and R8-R10) on depth-2
+      clones against a bare origin, each with its reason asserted. The existing merge-ref fixtures gain
+      an origin.
+    - `test_trunk_check_workflow.py` asserts the two trigger sets are equal.
+    - Five frozen digests are re-derived: two run bodies, two jobs, and plugin-ci's workflow level.
+  - **Plan gate:** six rounds of dual review. Rounds 5 and 6 were both double APPROVE on byte-identical
+    plan bytes (`6a08f76930ff`), with no findings. Rounds 1-4 found and fixed: a title edit after a
+    retarget releasing the gate; a check that read the event's base rather than the PR's current one;
+    ancestry versus first-parent membership; and pre-ship runs. Rounds 5 and 6 are recorded here, not
+    in the plan's review log, because editing the plan would void the verdict bound to those bytes.
+  - **Post-gate deviation (lint-driven, so not covered by the plan approval).** The repository's
+    `enable=all` shellcheck flagged two things the plan's §2.1 block carried:
+    - SC2312: the tip inside the `STALE MERGE REF` message masked a `git rev-parse` status. It is now
+      computed first, with its own fail-closed `die`.
+    - SC2310: `set -e` is off inside an `if` condition. This is intended, because the helper returns its
+      verdict, and a `shellcheck disable` comment with that reason records it.
+
+    Behaviour is unchanged, apart from one side effect: a mutant that ignores the fetch failure now
+    misreports it as "has no tip" rather than `STALE MERGE REF`. It is still caught only by R6's reason
+    assertion (§4 V5; battery 13/13).
+
+  - **Boundaries stated, not covered** (plan §6): manual re-runs of obsolete runs (**COREDEV-2881**); a
+    fresh `workflow_dispatch` of plugin-ci on a PR's branch, which is pre-existing (**COREDEV-2880**);
+    alpha until its catch-up; and runs created before this ships, mitigated by refreshing every PR open
+    at ship time.
+
+## [2.8.31] — 2026-10-08
+
+### Changed
+
+- **Every model caller the plugin ships uses the newest model (COREDEV-2875).**
+  - **The gemini arm resolves its model at run time.** `scripts/review/agy-newest-model.sh` prints
+    the newest recognized `gemini-<major>[.<minor>]-flash-high` that `agy models` lists. The pinned
+    `gemini-3.6-flash-high` had gone stale while 3.7 and 3.8 were listed. The resolver fails closed,
+    and never skips, on any of these:
+    - a timeout (60 s, lowerable only, and finite);
+    - a non-zero listing;
+    - a control or non-ASCII byte (a PTY-attached agy fuses `\r\x1b[K` to the newest entry);
+    - a line that is not `<id>TAB<label>`;
+    - an unrecognized flash-high version form;
+    - no candidate.
+
+    An explicit `MODEL`, or the capture wrapper's sixth operand, still wins.
+
+  - **Every agy launch resolves.** That covers the isolated wrapper, `preflight-agy.sh` (whose bare
+    ping used agy's global setting), the gemini-review recipes (`-p`, `-i` and `-c` alike),
+    `implement`'s health check, and the `pty-capture.py` example. Recipes use the checked form,
+    `MODEL="$(bash …/agy-newest-model.sh)" && agy --model "$MODEL" …`, because a failed `$(…)`
+    inside `--model` would still launch agy.
+  - **Every model id is one token** (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`) before it reaches an argv
+    or a record. The capture wrapper checks its sixth operand before allocating a leaf.
+  - **The model a round ran is recorded in `<transcript>.model`.** It is written with one
+    `O_CREAT|O_EXCL|O_NOFOLLOW` open, never `set -C`, which opens a FIFO. It is not written into the
+    transcript: a banner line there made a silent reviewer's transcript non-empty, and the verdict
+    writer would then have accepted it. `.model` joins `DERIVED_SIBLING_SUFFIXES`.
+  - **Codex:** `codex-review` pins no model. The skill says to leave `review_model` unset and keep
+    `~/.codex/config.toml`'s `model` current. The Kimi stand-in follows its own config, as stated.
+  - **Frontmatter:** `validate-plugin-assembly.py` accepts in `model:` only a runtime alias or
+    `inherit`, for agents and, newly, for skills. A concrete model id and `default` are rejected,
+    with a message naming the family's alias.
+  - **App guidance:** `ai-engineer` defaults to `claude-opus-5-5`. Cheap and bulk routes use
+    `claude-haiku-5-5`. The request rules gain a Haiku 5.5 column: it accepts `thinking: disabled`
+    at low–high effort and a forced `tool_choice`, and it has no server-side fallback. Opus 5.5
+    gets the refusal and `fallbacks` rules. `concurrency-reviewer` flags Haiku 5.5's three 400s, and
+    the AGENT_CONTRACTS §13 anchor moves to `:287`.
+  - **CI pins Claude Code 2.1.294** in the `validate` and `load-check` jobs, which clears Haiku
+    5.5's 2.1.293 floor. `MODEL_ALIASES`, `KNOWN_SKILL_KEYS` and `KNOWN_EVENTS` were re-verified
+    against that binary and are unchanged.
+  - **`skills/implement/SKILL.md` is exempt from prettier** (`.trunk/trunk.yaml`; the frozen
+    config digest and ignore-list literal are re-pinned with the reason). Its recipe bytes are
+    frozen by `test_callers_scan`'s M5.13–M5.15 contract, and prettier re-indents them. This
+    change is the first edit to that file under the blocking pre-commit gate, so it is the first
+    to meet the conflict. It is a deviation from the plan, recorded here because the gated plan
+    cannot be edited without voiding its verdict.
+  - **The touched shell and Python files are formatter-clean**, as the pre-commit gate requires.
+    shfmt re-tabs the agy harness scripts, so the diff for those files is larger than the change.
+
+### Added
+
+- `scripts/tests/test_agy_model_resolution.py`: the resolver, the production capture path, the
+  override, the one-token id, `.model` exclusivity (regular file, FIFO, symlinks), a silent reviewer
+  at both layers, and the shipped recipe text executed.
+- `scripts/tests/test_agy_recipe_gate.py`: every shipped unit naming agy must FULLY match an
+  approved template, or appear by exact text in a closed, reasoned exemption list. It is a
+  declaration, not a detector: five review rounds bypassed a shell matcher. The raw-checkout warning
+  gate reads the same units.
+
+### Deferred
+
+- COREDEV-2876: a `#`-led line inside a multi-line quoted string or heredoc is skipped as a comment
+  by the recipe gate, although a substitution on it runs (a declared boundary).
+
+## [2.8.30] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2780 cell 11: mutants are GENERATED from the registry (COREDEV-2869 part 1).** The
+  registry's header said cell 11 generated one mutant per case. In fact 130 hand-written recipes and
+  8 hand-written raw tuples built them, and none of them read the registry's `op`, `target` or
+  `payload`. Eleven asserted diagnostics (21 executions), 28 mutants and 19 operators had drifted
+  from their cases.
+  - `_classify` gives every one of the 149 cases exactly one executor.
+  - `_mutate` builds the 222 structural (case, entry) mutants. Its per-operator postconditions are
+    type-strict, and check both the declared VALUE and that nothing outside the edit changed,
+    including where a step is placed.
+  - `_raw_mutation` writes the raw cases verbatim and lints them as text: 304 texts, 0 findings.
+  - The target-set family runs as its 24 executions through the real resolve-once boundary.
+  - The C2 and C16 `local-divergence` cases now execute their declared local op. They had been
+    counted as injected, and only the comparator catches them.
+  - The registry's case fields now follow one grammar, documented in its header: 157 fields across
+    95 cases.
+  - Four payloads that contradicted cell 11's minimum list are corrected to it: `job-if`, the two
+    `defaults`, and C5's step-scope `env`.
+  - 63 red controls, each run against the shipped code: all 63 go red.
+  - **PR #108 review (codex):** a raw case whose obligation kind no raw class runs was counted as
+    executed and diagnosed by nothing. Obligation kinds are now a closed set, raw accounting is keyed
+    on the kinds the raw classes actually run, and `_raw_problems` fails closed.
+  - **PR #108 second review (codex).**
+    - A remote case is `injected` only in the shape cell 16 implements, an `add` of `{context: …}` to
+      the observation. Cell 16 reads its context from the case.
+    - Every obligation must declare at least one known entry.
+    - Raw execution is tracked per (case, entry), so a raw-only obligation with no entries can no
+      longer pass untested.
+  - **PR #108 third review (codex).** The raw census is pinned independently (`RAW_EXECUTIONS = 16`), so
+    deleting a raw case can no longer shrink every check with it. The target-set family's schema is
+    closed, so a misspelt `expect` fails rather than falling through to the refusal branch.
+  - **Local diff review (codex).** Duplicate family dimensions are rejected. Refusal forms now place the
+    forbidden pattern after a valid entry, so a resolver that validates only the first item of a side
+    fails. Duplicates are closed as a class: censuses count distinct (case, entry) pairs, an obligation
+    may not repeat an entry, obligation ids are unique, and the registry may not repeat a mapping key.
+
+## [2.8.29] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2873: agent and skill guidance corrected against primary sources.** This is item (c) of the
+  2026-10-03 external audit. The plan was reviewed by both arms and the double approval reproduced across
+  rounds 3–5 on byte-identical plan bytes. The audit was corrected where it was wrong: Apple's April 2026
+  Xcode 26 upload rule does not cover macOS, and `claude-sonnet-5` is legacy, not invalid.
+  - `ai-engineer`: recommends `claude-sonnet-5-5` and sets `output_config.effort` explicitly. A new "Claude
+    5.5 request rules" table lists the five request settings that Opus 5.5 and Sonnet 5.5 reject with a 400
+    (thinking budget, `thinking: disabled`, non-default sampling, assistant prefill, forced `tool_choice`).
+    Each is paired with the migration guides' own replacement, alongside Sonnet 5.5's `between_tools`
+    limits.
+  - `ai-engineer`: documents the app's existing Foundation Models gating (`@available(macOS 26.0, *)`,
+    `#if canImport(FoundationModels)`, the `SystemLanguageModel.default.availability` mapping) and requires
+    an availability check before every call. Fallback routing is labelled as a recommendation.
+  - `concurrency-reviewer`, the declared correctness owner, flags the five 5.5 shapes as `logic`/`blocker`.
+    `prompt-review` was considered and rejected, because it excludes correctness by contract.
+  - Toolchain text now matches the app's CI: `macos-26` runners, the newest installed Xcode, a macOS 15.0
+    deployment target and Swift 6 language mode. This replaces "Xcode 16.3+ / Swift 6.1 / macos-15"
+    everywhere a complete scan found it (`ci-engineer`, `xcode-build-fixer`, `docs-engineer`,
+    `release-manager`, `tester`, `spm-management`). Dated measurements are kept.
+  - The Graph subscription
+    example replaces its past date with a placeholder, and it now states the 1,440-minute limit for
+    subscriptions with resource data and the 45-minute floor.
+  - `validate-hooks.py` knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch` (33 events). Each was
+    rejected before the change and accepted after it (`--root`, `--require-manifest`).
+  - CI's Claude Code pin moves 2.1.220 → 2.1.289. From 2.1.289 a bare `claude plugin validate --strict .`
+    validates the PLUGIN root and fails on the contributor `CLAUDE.md` warning, so the strict step now
+    names `.claude-plugin/marketplace.json`. That is the same object at the same strictness, and a corrupted
+    manifest still fails. This command change follows the plan's "fix or hold the pin" rule and was made
+    after the gate, so it is ungated.
+  - **Deferred: the brainstorm skill's "macOS 25" wording (COREDEV-2874).** The file carries existing
+    prettier debt, and three suites pin its lines (the transcript-path inventory, the callers-scan frozen
+    regions and the COREDEV-2605 anchors). Formatting it broke 20 tests, so the fix needs its own
+    coordinated pass. It is unchanged here.
+  - `AGENT_CONTRACTS.md` §13's `concurrency-findings` anchor moved from `:269` to `:286`, following the
+    `## Output Format` heading that the new checklist item shifted. This is position only.
+  - **PR #107 review (codex), all four fixed.**
+    - `docs-engineer`'s README and CONTRIBUTING templates no longer close early. Each template's nested
+      fence closed the outer one: on `main` too, made explicit here by prettier. The rest of each template
+      had rendered as agent instructions, and the following section as a code block.
+    - `ai-engineer`'s example comment called effort the ONLY 5.5 thinking control. That is true of
+      Opus 5.5 only: Sonnet 5.5 also takes `between_tools`.
+    - This plan's acceptance count is corrected to 28/28.
+  - **PR #107 second review (codex, P2).** The example sent `output_config.effort` unconditionally.
+    Claude Haiku 4.5 does not support effort, so a request whose `model` override names it would
+    fail every call. The example now sends effort only where the Models API reports
+    `capabilities.effort.supported`. The 5.5 rules and `concurrency-reviewer`'s request-shape item
+    say so too.
+  - **PR #107 third review (gemini).** `validate-hooks.py` drops two ranges, `0x2060–0x2064` and
+    `0x2065–0x2069`, that `0x2060–0x206F` already covered. The predicate is identical on all 1,114,112
+    code points. The `MIN-20` comment moves above a loop that black had wrapped across five lines.
+
+## [2.8.28] — 2026-10-03
+
+### Fixed
+
+- **COREDEV-2872: the review gate's CLI docs had drifted from what actually runs.** Each fact below was
+  re-verified on 2026-10-03.
+  - **Gemini fallback.** `skills/gemini-review/SKILL.md` named `gemini-2.5-pro` as the one-run fallback,
+    and `agy models` (agy 1.2.16) no longer lists it. A dead name fails exactly when a fallback is
+    needed, so the skill now gives the rule instead of a literal: pick a currently listed
+    `gemini-*-flash-high` other than the primary, and never `gemini-3.1-pro-high`, which failed to emit
+    a parseable verdict in 5 of 6 rounds. `agy models` is now granted exactly (`Bash(agy models)`), so
+    the fallback works without a permission prompt; it runs no prompt (PR #106 review).
+  - **Codex model.** `skills/codex-review/SKILL.md` said the config sets `gpt-6-astra` and pinned it
+    inline (`-c review_model=gpt-6-astra`) on the built-in `codex review` commands. The configured
+    model is `gpt-6.1-sol`, and the round-66 session record shows `gpt-6.1-sol` at `ultra`. Following
+    the skill forced the old model, so the pins and the setup text now say `gpt-6.1-sol`. They also show
+    how to read a run's real model and effort from `~/.codex/sessions/…/rollout-*.jsonl`. The effort
+    ladder, re-read from the 0.160.0 binary, is unchanged.
+  - **Effort default.** `AGENT_CONTRACTS.md` §11 now records the documented defaults: Opus, Sonnet and
+    Haiku 5.5 run at `medium` and Opus 4.7 at `xhigh` when nothing sets a level (PR #106 review). Since
+    the plugin's assets inherit the session's level, review and gate sessions should set one explicitly.
+  - **A broken example in the Gemini skill.** Step 1 of "Slim-argv + workspace prompt file" had lost
+    its opening fence, so the example's `#` comment lines rendered as markdown headings. The fence now
+    opens before step 1, as intended. A formatter pass would otherwise have rewritten those "headings".
+    In `AGENT_CONTRACTS.md`, the plan-gate step list (`00.`, `0.`, `1.`…) carries a `prettier-ignore`
+    marker, because prettier renumbers it and other documents cite those step numbers. The Gemini skill's
+    numbered workflow list carries one too: prettier would dedent a continuation line inside a
+    multi-line code span, which the COREDEV-2619 transcript-path inventory pins byte for byte. That
+    inventory's three `destination.line` values for the Gemini skill moved with the edits above
+    (210→212, 272→277, 275→280), derived from where each frozen payload now occurs exactly once.
+    No payload or hash changed.
+
+## [2.8.27] — 2026-10-02
+
+### Fixed
+
+- **COREDEV-2780 cell 11: the mutant validity rule is a standing test (COREDEV-2869).** Each contract
+  mutant must be a workflow GitHub would accept, so that it fails its own diagnostic and not schema
+  validation. The rule ran only as one-off sweeps, because `validate` installed actionlint after the
+  scripts suite. `validate` now installs it first (in `RUNNER_TEMP`), and actionlint runs over all
+  220 (case, entry) pairs. The `if-cond` note on the six `if: false` cases is allowed per case
+  (`actionlint_allow`), and an allowance that stops firing fails as stale. The test refuses to skip
+  in `validate`.
+- **COREDEV-2780 cell 15: target-set resolution is ONCE, before entry selection (COREDEV-2869).** The
+  registry declared it, but the required and canary comparisons each resolved on their own. Two
+  resolution calls leave two places for a per-entry resolver to hide. A single boundary now resolves
+  once and checks every entry's recorded branches. One entry-parameterised comparator receives the
+  result. A sentinel test substitutes one value at that boundary and requires both entries' verdicts
+  and diagnostics to follow it. It fails on a comparator that ignores the result and on one that
+  resolves per entry.
+- **COREDEV-2850 plan §6 step 3: the probe-PR cells are observed and JUDGED.**
+  Probe PR #103 was never merged. It ran the bundle's six-entry required literal and observed the cells
+  that no unit test can show:
+  - A finding-neutral edit to the recorded-unformatted `scripts/validate-hooks.py` went GREEN
+    (cell 1), and so did a format-only defect (arm E).
+  - A new shellcheck finding went RED (cell 2).
+  - A new bandit `B602` finding went RED with no lint finding (cell 3).
+
+  `COREDEV-2850-probe-observations.json` records the runs from their own job logs.
+  `test_coredev_2850_probe_evidence.py` refuses the record if any of these stop holding:
+  - its action inputs still hash to the contract's digest, under the pinned action;
+  - each run's conclusion matches its cell;
+  - each red is bound to findings of a single category;
+  - cell 1 used the recorded reproduction;
+  - the canary cells are marked DEFERRED.
+
+  After review (codex, PR #104), the judge also requires three things:
+  - cell 2b's format-only stimulus, bound to the hook's formatter finding on that file;
+  - at least one finding in the hook block;
+  - every red finding on its planted fixture, including that fixture's own diagnostic (`SC2086`,
+    `B602`).
+
+- **COREDEV-2780: the contract checker parsed workflows as YAML 1.1; GitHub parses YAML 1.2.**
+  PyYAML's default reads unquoted `yes`/`no` as booleans, so `save-annotations: yes`, `lfs: yes` and
+  `persist-credentials: no` passed the checker while the runner received the STRINGS (codex, plan r59).
+  Workflows are now parsed with the WHOLE YAML 1.2 core scalar schema. Replacing only the booleans
+  left `timeout-minutes: 017` passing as YAML 1.1 octal 15 where GitHub reads 17 (codex, plan r60).
+  The synonyms and the octal form are mutated as raw text on both entries, and every case failed
+  under the loader it replaces. An explicit tag (`!!bool yes`, `!!int 1_5`) bypassed implicit resolution
+  altogether (codex, plan r61). Workflows may now carry no explicit tags, and the pinned scalars must be
+  spelled canonically. The tags are checked
+  over the raw text, and each pinned value at its YAML PATH, from its own source span. A line regex
+  had accepted a forbidden `+15` behind a decoy line inside a block string (codex, plan r62).
+  The resolver table is now an allowlist of the four core scalars: it had filtered PyYAML's 1.1 table,
+  which kept 1.1's merge key `<<` and value `=` (plan r65). The standing raw-text tests' own source
+  generators failed on two permitted, actionlint-clean layouts: a flow mapping that ends a line before
+  its closing brace (4 errors), and an anchored key, whose anchor the quoting replaced (20 errors;
+  codex, plan r65). Both layouts are now bases of every raw test, and any generated variant that does
+  not load equal to its base raises by name. Fed back in as the shipped source, three of those bases
+  were parser errors (codex, plan r66; COREDEV-2871). The builder now declares its domain (no anchor or
+  alias, the trunk inputs one block mapping of scalars, no `cache-key` yet) and refuses anything outside
+  it by name. Its splice ends at the last input's line, not its end mark, which for a block scalar is the
+  next line's start. The merge-key test is written in the mapping's own syntax and runs on all 38
+  sources, and a variant that fails to parse is named. Each test failed with its fix undone.
+- **COREDEV-2868: the drift detector could warn three times for one session in one bucket.** Its dedup
+  sweep removed every marker older than the CURRENT bucket. An invocation that captured bucket w
+  before a boundary and paused before its `O_EXCL` could find w swept by a session already in w+1,
+  re-create it, and warn again. codex reproduced three warnings against the detector's own body (plan
+  r56). The sweep now keeps the previous bucket, so that `O_EXCL` fails, and a combined
+  concurrent-boundary test failed against the old sweep.
+- **COREDEV-2850: the parity harness fixture failed CI's repo-wide actionlint.** Its `printf` writes a
+  literal, unexpanded `$name`, because that unbraced reference IS the fixture's finding. ShellCheck reports
+  that as info-level SC2016, and CI's actionlint fails on any ShellCheck finding. A scoped
+  `# shellcheck disable=SC2016` states the intent. The job's frozen digest in `test_python39_floor.py`
+  is updated. Behaviour, and therefore the recorded parity evidence, is unchanged.
+- **COREDEV-2860: the config-freeze mutant battery had a macOS-only oracle.** One mutant
+  (`resolve-one-side`) was measured on macOS, where `$TMPDIR` sits under the symlink
+  `/var -> /private/var`. On Linux there is no such link, so resolving one side IS resolving both, and the
+  mutant failed a different set of rows. CI's `validate` job went red (run 37070992110) while
+  `darwin-suite` stayed green. The fixture is now built under an explicit symlinked ancestor on every
+  platform, and a new control fails if that link is ever lost. Reproduced on macOS with a symlink-free
+  `TMPDIR` before fixing.
+- **COREDEV-2780: three gaps in the shipped `trunk-check` contract checker (codex, plan r44).**
+  Each was reproduced before it was fixed. **C2** accepted any `types:` containing `edited`, so
+  `types: [edited]`, which drops `synchronize` so the gate never re-runs on a new commit, passed. It now
+  requires exactly `opened, synchronize, reopened, edited`. **C8** blacklisted six step keys instead of
+  freezing the complete step mapping, so a sibling key such as `timeout-minutes` passed. It is now a
+  per-kind allowlist (`name`+`run`, or `name`+`uses`+`with`). **Checkout** was never checked for a SHA
+  pin, so `actions/checkout@v4` passed. It must now be `actions/checkout@<40-hex SHA>`. **`fetch-depth`'s
+  value** (codex, plan r56) was never checked, so depth 1, depth 2 or omission passed. It is now exactly
+  2 on the required job and 0 on the canary, which needs full history for a multi-commit push. Both
+  integer operands are now checked by TYPE as well as value (codex, plan r57), because
+  `fetch-depth: false` and `timeout-minutes: 15.0` had passed (`False == 0`, `15.0 == 15`). **A duplicate
+  step** (codex, plan r45) passed the sequence check, so a second checkout after the guards could replace
+  the tree they had inspected. Any sequence unequal to the declared five is now a problem. **The job
+  `name`** (codex, plan r46) was never checked, only the job ID, so the canary renamed `validate` would
+  have emitted a REQUIRED context. Each entry's effective context is now pinned, and a
+  PRESENT name decides it whatever its value, by key membership (`name: false` had fallen back to the
+  job ID, codex plan r63, and then `name: null` had too, codex plan r64). **A sibling job**
+  (both review arms, plan r47) appended under `jobs:` was never inspected, because every check read the
+  first job. Each workflow must now declare exactly one. Cell 11's
+  per-step minimum (each injection form, `shell` and `working-directory` on every run step, and `if:`
+  and `continue-on-error` on every step) is now declared in the registry and executed: 54 new cases,
+  all valid workflows (216 case x entry pairs, each checked with actionlint). A standing test now runs every registry case on every entry its obligation
+  declares, so an `entries:` claim cannot outrun what is tested. That test found the canary's own
+  event and guard-body obligations missing from the registry (codex, plan r52), and they are now added. The C6/C6a launcher and resolver
+  guard fixtures now also run against the CANARY's own guard bodies (codex, plan r53). Its resolver
+  guard is different bytes, and had never been executed.
+- **COREDEV-2780 cell 11: five contract mutants were workflows GitHub would reject (codex, plan r42).**
+  Cell 11 requires each mutant to fail its own CONTRACT diagnostic, not schema validation. The registry
+  prescribed three that GitHub would reject outright: a root-level `schedule` (not a root key),
+  `branches-ignore` beside `branches`, and removing the only trigger, which leaves `on: {}`. The
+  hand-written suite had drifted from the registry on two more: an empty `on.schedule`, and `needs:`
+  naming a job that did not exist. All five are corrected in `COREDEV-2780-contract.yaml` and
+  `test_trunk_check_workflow.py`, verified by an actionlint 1.7.12 sweep over all 69 mutants.
+  Generating mutants from the registry and executing that check in CI is COREDEV-2869.
+- **`trunk-check` over-reach (COREDEV-2850): the required gate failed clean edits to files that were
+  already unformatted.** Trunk evaluates its five `formatter: true` linters (black, isort, prettier,
+  shfmt, taplo) whole-file and reports pre-existing formatting debt as NEW on any touched file, so an
+  edit to one of the ~73% of tracked files with such debt went red for debt the author did not
+  introduce. The required job now passes
+  `--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo`; the push canary keeps the
+  formatters, so their findings are still observed. Measured: a genuine new lint defect is still
+  caught under the new filter.
+- **Cell 4 is genuinely strict.** It replaced a substring test — which a seven-name literal, a security
+  exclusion and an issue-code suppression all passed — with a frozen exclusion SET, an exact
+  required-versus-canary difference in both directions, and rejection of issue codes and security
+  linters, each mutant asserted to fail with its own diagnostic.
+- **The parity harness's fixture was replaced by measurement, not by the plan's guess.** The old
+  fixture's only finding was shfmt's, which the new filter silences. `codespell` — the first
+  suggestion — is reported but not autofixed by trunk; an unbraced variable reference
+  (`shellcheck/SC2250`) is both, and leaves the file clean.
+
+### Security
+
+- **`[extend] useDefault` must be exactly `true`, whatever custom rules exist (codex, PR #104 P1).**
+  The content check refused `useDefault = false` only when the file defined NO rules. Gitleaks
+  replaces its built-in rules with a custom file's unless `useDefault = true`. So one narrow dummy
+  `[[rules]]` entry beside `useDefault = false`, or no `[extend]` table at all, switched off every
+  default secret detector, and both `trunk-check` and `secret-scan` stayed green. The string
+  `"true"` is refused as well. Each spelling failed the test before the fix.
+- **The gitleaks content check reads keys the way gitleaks does: case-insensitively (audit, PR #104).**
+  Each of these spellings stopped the pinned gitleaks 8.30.1 detecting a planted key, and the
+  case-sensitive check accepted all of them:
+  - `disabledrules`;
+  - `UseDefault = false` beside `useDefault = true`;
+  - `Regexes` or `Paths` blanket allowlists;
+  - a custom `[[rules]]` entry reusing a built-in id with a never-matching regex.
+
+  Keys are now lowercased before checking, two keys of one table that differ only by case are
+  refused, and any custom rule outside `ALLOWED_CUSTOM_RULE_IDS` (empty) is refused. A custom rule
+  REPLACES a built-in rule with the same id. Each spelling failed the test before the fix, and every
+  config that gitleaks stops detecting under is now refused.
+
+- **Security-linter configs outside the frozen tree (COREDEV-2860).** gitleaks reads `.gitleaks.toml`
+  and zizmor reads `.github/zizmor.yml`, neither of which was frozen, so a blanket allowlist appended to
+  `.gitleaks.toml` disarmed both `trunk-check` and the separate `secret-scan` required context with the
+  test suite green. The freeze now covers the union of every config `.trunk/trunk.yaml` references and
+  every `direct_configs` candidate of every enabled security linter — ten paths, including
+  `.gitleaksignore`, a suppression lever nothing else caught.
+- **References are adjudicated, never resolved.** `..` is refused rather than collapsed, containment is
+  component-wise, and a symlink at ANY path component is refused; every config is recorded as
+  canonical JSON so neither its kind nor a record boundary can be forged, and anything but a regular
+  file or directory is refused before it is read.
+- **Content checks close the hole against intent, not only accident.** A digest only makes a weakening
+  visible — it can be re-pinned in the same commit. A blanket gitleaks allowlist (global, legacy or
+  per-rule; `.*`, `.+`, `\S` and the like, judged behaviourally), `useDefault = false`, `disabledRules`,
+  a disabled zizmor audit, or an ignore covering every workflow is now refused outright.
+- **A mutant battery runs against the real code**: 29 single-decision operators over 30 rows, each
+  failing exactly its recorded rows, proven to discriminate by weakening the production allowlist.
+  A row-21 child that CRASHES now raises with its stderr (gemini, PR #104). It used to be counted as
+  row 21 failing, which is what any operator recording row 21 expects. None of the 30 children exits
+  non-zero today, so this changes no result.
+
+## [2.8.26] — 2026-09-07
+
+### Fixed
+
+- **`keychain-security` (COREDEV-2851): the skill documented only one of `KeychainManager`'s two
+  save paths, and an agent nearly changed credential code because of it.** Working from the skill,
+  an agent in another session read the app source, found writes that add/update without ever
+  deleting a live credential, correctly concluded that could not be the same path the skill
+  described — and announced it would "resolve it at source", i.e. modify credential storage.
+  Nothing was wrong with the app. `selectSaveStrategy` picks per call (COREDEV-2514): `.legacy`,
+  **the default**, is delete-then-add; `.primitive`, flag-gated, never deletes a live item. The
+  skill was accurate about the default and silent about the other path, and that silence is what
+  pointed an agent at credential code.
+- **The rewrite was verified against the app source rather than trusted.** An adversarial pass
+  (independent derivation, three review lenses, synthesis) returned **16 edits, 5 high-risk** —
+  including a factual error in the first draft, which had claimed an absent kill-switch flag
+  resolves to `.legacy`. It does not: enable flags and the kill switch both fail closed but with
+  **opposite polarity**, and `absent` on the kill switch means _inactive_, which permits.
+- **The verification surfaced hazards more serious than the original gap**, now all documented:
+  - `.legacy` has a real destruction window — the `SecItemDelete` status is discarded, the delete
+    sits inside the retried closure, and a failed `SecItemAdd` leaves the credential **permanently
+    gone**, with no rollback and no read-back.
+  - `isProtectionTransition:` is **caller-supplied and defaults to the unsafe value**. A write that
+    removes a `kSecAttrAccessControl` must pass `true`, or the primitive can report success while
+    leaving user-presence protection installed after the user turned it off.
+  - `.rotationHot` covers only `accessToken` / `tokenExpiry`, so **`refreshToken` never takes the
+    safe path** — deliberate, and now stated.
+  - Token-refresh atomicity is the **caller's** job; `KeychainManager` has no transaction, and a
+    failed write leaves the item _absent_, not unchanged. The old security rule claimed the reverse.
+- The skill grew 79 → 241 lines and now carries an explicit **do not unify the paths, flip the
+  default, or delete the legacy path** instruction, plus the sentence that would have prevented the
+  incident: _"it does delete-then-add" and "it never deletes a live credential" are each correct,
+  about a different strategy._
+
+## [2.8.25] — 2026-09-06
+
+### Changed
+
+- **M3 (`main`): `trunk-check` is strict.** Removed the job-scoped `continue-on-error: true` that
+  M2 shipped deliberately, so a Trunk finding fails the job rather than being advisory. Cell 11's
+  C3 assertions were written at M2 and are ENABLED here — the shipped-workflow contract cell now
+  asserts at `milestone="M3"`.
+- The cells that asserted the exemption EXISTS were inverted rather than deleted, so they keep
+  their teeth: re-adding `continue-on-error` at either scope is now what must be caught, and the
+  mutant registry case that previously mutated nothing re-adds the key. That let the runner's
+  milestone carve-out — "one M3 case mutates nothing by design" — be removed, so every mutant must
+  now really change the workflow.
+- The context is still **not required** by ruleset `Control`. Making it required is M4, which needs
+  explicit maintainer instruction and evidence on both bases.
+
+## [2.8.24] — 2026-09-05
+
+### Changed
+
+- **Review tooling retargeted to Codex GPT-6 "Astra" @ `ultra`.** `~/.codex/config.toml` now carries
+  `model = "gpt-6-astra"` on `codex-cli` 0.153.4; the skill and wrappers still pinned `gpt-5.6-sol`.
+  More importantly the mandated effort, `xhigh`, is **fifth of seven** on the current ladder —
+  `minimal < low < medium < high < xhigh < max < ultra` — read from the shipped binary's own enum,
+  which serialises it in ascending order. The gate had been running two tiers below the ceiling since
+  Astra shipped, with nothing to signal it. Every review path now pins `ultra`.
+- **The pty cap moved 1200s → 2400s** alongside the tier. `xhigh` ran to ~12 min against the old cap
+  and `ultra` runs longer. Provisional until a full plan review is timed at ultra; exit 124 continues
+  to mean the wrapper budget is short and is never a reason to drop the tier.
+
+### Fixed
+
+- **The reasoning tier is now asserted, because the CLI will not do it.** Measured on 0.153.4:
+  `-c model_reasoning_effort=definitely-not-valid` is echoed in the run banner and the review
+  proceeds at the backend default — no error, no warning, no non-zero exit. A stale or mistyped tier
+  was therefore an _invisible_ downgrade of the gate, the same class as the 5.6 upgrade silently
+  resetting the config to `low`. The wrappers now check the token against the seven known tiers and
+  exit 2; verified they reject `ultrra`, an empty value, and `xhigh; rm -rf /`, while accepting each
+  real tier. The value stays non-overridable by callers — the guard catches an editing typo, not a
+  caller trying to weaken the gate.
+
+## [2.8.23] — 2026-09-04
+
+### Fixed
+
+- **COREDEV-2801 — the recurring 2.7.0 reversion has a root cause, and it was ours.**
+  `.claude-plugin/marketplace.json` declared no `version` key. When a marketplace entry omits it,
+  Claude Code resolves the installed version down a fallback branch that takes `readdir()[0]` of the
+  plugin cache directory — raw filesystem order, no sort, no semver comparison. Index 0 on the
+  maintainer's machine is `2.7.0`, so every wholesale registry rebuild reinstated 2.7.0 while
+  `origin/main` was a dozen releases ahead, silently costing that session the plugin's agents and its
+  bundled MCP server.
+
+  Verified independently of the analysis: the entry's keys are `category, description, homepage,
+name, source` with no `version`; raw `readdir` of the cache yields
+  `['2.7.0','2.8.2','2.8.3','2.8.16','2.8.1','2.8.0']`. For this plugin alone that test is degenerate
+  — 2.7.0 is simultaneously first by raw order, lexicographically, by semver and by age — so the
+  discriminating evidence came from two sibling plugins where raw and sorted order disagree, and raw
+  order won three times out of three.
+
+  `version` is a real marketplace field, not one inferred from decompiled code: 17 of 297 entries
+  installed on this machine declare it, including one with the same dict-shaped `source` as ours. It
+  is now sync point 5 in `validate-version-sync.sh`, so it cannot drift from `plugin.json` — which is
+  the only reason declaring it helps.
+
+  **Two honest limits.** Pinning only takes effect once that version is present in the cache;
+  measured, `2.8.16` pins and an uncached `2.8.22` still falls back. And this fixes the WRONG VALUE
+  being chosen, not the rebuild itself — why the registry read returns ENOENT at session start is
+  not established.
+
+- **COREDEV-2780 — five codex findings, three of them counterexamples to the previous round.** Signal
+  handlers removed the marker directory and exited while leaving `trunk` and the watchdog running
+  (measured: three live processes; now zero across SIGTERM/SIGHUP/SIGINT). The placeholder collision
+  was closed on the named keys but not the inline `tool@version` specifiers. The 3.9 checker missed
+  `Alias = Foo | Bar` and `isinstance(v, Foo | Bar)`. `_mypy()` tested any ambient binary rather than
+  the pinned release. And the survivor binding checked a clause, so deleting one of seven C6 cases
+  left the survivor green — the exact regression it claimed to detect.
+
+## [2.8.22] — 2026-09-04
+
+### Fixed
+
+- **PR #85 review findings (COREDEV-2804/2809/2810/2811).** The timeout marker no longer opens a
+  predictable path in a shared directory — demonstrated: a pre-planted symlink was followed and the
+  target truncated. It now creates a private `mkdir -m 700` directory, chosen over `mktemp -d`
+  because `mktemp` is an external binary the hook never needed; depending on it silently disabled
+  deadline recording wherever it is absent, which measured as 8 red tests and is COREDEV-2806
+  returning through its own repair. The version carve-out now requires a full three-component shape,
+  because `123`, `1.2` and `9` are legal branch names that normalised away and left the supply-chain
+  freeze byte-identical. The 3.9 floor checker scopes its future-import exemption to annotation nodes
+  instead of skipping whole modules — it inspected 0 of 20 files before — and its census addresses
+  the `py39-smoke` job by name rather than taking the first `py_compile` match, which belonged to the
+  3.12 `validate` step.
+- **Three defects found in those fixes by an adversarial pass, not by the suite.** The leftover-marker
+  assertion had gone inert: it globbed `rwt.*.deadline` while the code now writes
+  `rwt.<rand>.d/deadline`, and `pathlib`'s `*` does not cross `/`, so deleting the teardown was a
+  passing mutant. Cleanup was straight-line code, so an interrupted commit leaked a directory —
+  measured against SIGINT, SIGTERM and SIGHUP, now disposed of by a script-scope trap (SIGKILL is not
+  claimed). And the normalisation placeholder sat inside its own input space: writing `<version>`
+  verbatim produced a document byte-identical to a normalised genuine one, so the digest now carries
+  a manifest of which paths were normalised.
+- **An overclaim retracted in one field and re-committed in another.** The SessionStart evidence was
+  corrected to say it exercises the wired command and not Claude Code's dispatcher — then asserted
+  that a marker was "written by a live SessionStart", provenance never verified. It now states the
+  inference and its basis: `marker_dir` is reached only after the `--session-start` check, the
+  repository's other caller passes no such flag, and the observation isolated `XDG_STATE_HOME`.
+
+## [2.8.21] — 2026-09-04
+
+### Fixed
+
+- **COREDEV-2808 follow-up — the python3 guard was ordered behind a read that exits first.** The
+  `origin/main` lookup carries `|| exit 0`, and a CI checkout has no `refs/remotes/origin/main`, so a
+  machine without `python3` exited there and never reached the diagnostic. Caught by CI on PR #85 and
+  reproduced locally against a repo with no such ref. "I cannot run" now precedes "there is nothing
+  to compare".
+
+### Changed
+
+- **COREDEV-2805's timing test traded a 50ms race for a property that holds.** It ran the child for
+  1.95s against a 2s deadline, because reproducing the old integer-clock defect requires the child to
+  finish inside the final second. Fork and interpreter startup cross 50ms on a loaded runner, the
+  watchdog then fires for real, and a timeout becomes the correct answer — it went red in CI on
+  exactly that. No test can both reproduce a sub-second window and be stable, so the behavioural test
+  now asserts the property with a margin nothing can cross, a structural companion catches a return
+  to clock arithmetic directly (proven red against a reintroduced `${SECONDS}` sample), and the
+  discriminating 10-of-10 measurement stays recorded in COREDEV-2805's commit.
+
+## [2.8.20] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2811 — `.trunk/configs/**` was an unfrozen lever on the required gate.** Cell 4 froze
+  which linters run; nothing froze what they tolerate. The C6 guard deliberately allows those paths,
+  so the whole surface sat outside every check — a permissive `ruff.toml` or a `.bandit` skipping
+  every test would report success having enforced almost nothing. Cell 4b freezes the config tree by
+  content, and the filesystem is the oracle rather than the index, because trunk reads an untracked
+  planted config exactly like a tracked one.
+- **COREDEV-2811 — the drift fixture made four distinct sources equal.** `set_expected` pointed
+  `origin/main` at `HEAD`, so worktree, index, HEAD and origin carried identical bytes and a detector
+  reading any of them passed. Measured: with the detector mutated to read the checkout, table rows 6,
+  7 and 8 all still passed. The fixture now diverges, and the question the detector exists to answer —
+  what does `origin/main` SERVE — is finally the one under test.
+- **COREDEV-2811 — the mutation survivor corpus executed nothing.** Fourteen recorded findings whose
+  tests only checked that fields were present. Each claim is now bound to an executing registry case,
+  or declares why it needs none; stripping C5's cases reddens the survivor that rests on it.
+
+## [2.8.19] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2809 — the exactly-one-producer census had a blind spot, and an argv test asserted a
+  spelling.** A job that calls a REUSABLE workflow takes its check-run names from the CALLED file, so
+  the census could not name what it produces and skipped it silently; it now fails closed, as it
+  already did for an expression-valued job name. No such job exists yet, which is why the guard lands
+  before one does. Separately, `assertIn("--index", argv)` against the joined argument string is
+  satisfied by `--index-only` — demonstrated by mutation — so the flags are asserted as tokens and
+  the whole vector is frozen.
+- **COREDEV-2810 — the mypy 3.9 floor was advertised, not enforced.** mypy 2.3.1 refuses
+  `python_version = 3.9`: a hard error on the command line, and from a config file a note followed by
+  a silent fall back to its default. Measured: a PEP-604 annotation, a runtime TypeError on 3.9,
+  reported "Success: no issues found". The config now names a version mypy accepts and says so, and
+  the floor is enforced where it bites — a check over the files CI byte-compiles on 3.9, derived from
+  the workflow rather than hand-listed, rejecting PEP-604 in any annotation Python evaluates at
+  runtime. Byte-compilation cannot catch these: `int | None` is valid 3.9 syntax.
+
+## [2.8.18] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2807 — the local trunk gate could silently not run.** Four fall-through paths finished
+  with exit 0 having linted nothing, and a gate that is absent is worse than one that is broken:
+  `git commit` prints the same green ticks either way. `$(cd … && pwd)` is EMPTY when the cd fails,
+  so `SCRIPT_DIR` became `/scripts` and the hook took its `exit 0` branch; the missing-helper branch
+  ended the HOOK rather than the helper, taking the trunk gate and drift detector with it; an absent
+  `trunk` printed nothing; and — measured — in a checkout with no `.trunk/` the gate's own invocation
+  exits 1 with "Please run 'trunk init'", which it reported as "new findings in the staged diff", a
+  false statement about the diff that no edit to the diff can clear.
+- **COREDEV-2808 — the drift detector reported "no drift" when it could not check.** Every
+  comparison runs inside `python3 <<'PY' 2>/dev/null`; with no interpreter the heredoc fails, its
+  diagnostic is discarded and the empty-warning guard exits 0 exactly as a healthy install does. It
+  now says the check did not run, still without blocking. The real SessionStart observation that
+  `test_session_start_drift_hook.py` explicitly defers to is committed as evidence, bound by a test
+  to the command `.claude/settings.json` actually wires so it cannot decay into a souvenir.
+
+## [2.8.17] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2804 — the linter-config freeze could not see the linter SOURCE.** Cell 4 hashed only
+  the `lint:` block, leaving `plugins.sources[].uri`/`ref`, `cli.version`, `runtimes` and `actions`
+  unfrozen. Measured on the shipped tree: repointing `plugins.sources[0].uri` at
+  `github.com/attacker/plugins` left the digest byte-identical and the full suite green. The digest
+  now covers the whole document; `cli.version` and a semver `ref` still normalise so `trunk upgrade`
+  does not red the cell, while a `ref` naming a branch or SHA does — a mutable ref on the definition
+  source is the move the carve-out must not launder.
+- **COREDEV-2805 — the fourth member of the 124/137/143 family, and a live fail-open.** `timeout`
+  cannot report whether it fired, so that branch inferred it from `${SECONDS}` sampled before the
+  fork; the integer clock read up to a second high and laundered a command's own exit 124 into "we
+  timed out", passing the commit after an incomplete lint. Measured 10/10 on the shipped code, 0/10
+  after. The deadline now belongs to the watchdog that records it before it acts — the only ordering
+  where the record cannot lose the race — on both branches, with `timeout` kept as a backstop.
+- **COREDEV-2806 — the marker channel was assumed rather than probed.** `${TMPDIR:-/tmp}` may name a
+  directory that is missing or unwritable, and the write lives in a subshell whose stderr goes to
+  `/dev/null`, so a genuine timeout produced no marker and was reported as an external signal.
+  Measured: `rc=143`, fact 0. The channel is now probed by WRITING (`-w` passes on a full filesystem,
+  a read-only mount and a restrictive ACL, then fails the open), and when no directory can be
+  written `run_with_timeout` publishes that so the caller stops naming a cause it cannot evidence.
+
+## [2.8.16] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — a child's own exit 124 was read as the wrapper's timeout.** `timeout`
+  returns 124 for a real timeout and the command's own status otherwise, and `trunk` can exit 124 by
+  propagating an internal tool's timeout — reproduced: `timeout -k 5 10 sh -c 'exit 124'` returns
+  124 immediately. The gate logged "exceeded 180s" and left `overall` unchanged, allowing a commit
+  after an incomplete lint.
+
+  This is the THIRD member of one family and the third to be found only after the previous was
+  closed: 137 first, then 143, now 124. The repair is therefore structural rather than a third
+  patch — `run_with_timeout` publishes `RWT_TIMED_OUT`, and the caller reads that fact instead of
+  inferring it from a status that the child can also produce. All three statuses additionally share
+  one elapsed guard, so a fourth cannot be added without one.
+
+- **COREDEV-2801 — the detector ignored `CLAUDE_CONFIG_DIR`.** Claude Code roots its plugin state
+  there when set, and the relocation is supported — this repository exercises it itself, exporting
+  `CLAUDE_CONFIG_DIR` before `claude plugin install` in `scripts/ci-load-check.sh`. Reading only
+  `$HOME/.claude` under that setup either found nothing and took row 2 silently, or compared an
+  unrelated default-profile record. Resolved through `${CLAUDE_CONFIG_DIR:-${HOME-}/.claude}` now.
+- **COREDEV-2780 — the committed rollout evidence was named as an owner and read by nothing.**
+  `evidence/COREDEV-2780-rollout.json` was cited in comments as carrying the remote halves CI cannot
+  perform, and a repo-wide search found references only in prose. So on a runner without an
+  authenticated `gh`, the only comparison between a workflow's `branches:` and the ruleset's
+  resolved target set SKIPPED, and a divergent branch set went unchallenged — which at M4 is a
+  protected branch with no producer, or the gate running on the wrong branches.
+
+  The offline path now parses the artifact AND binds its recorded branch list to the shipped
+  workflow, so evidence recorded for a different branch set cannot certify the current one. Verified
+  in all three states with `gh` absent: unchanged passes without skipping, a divergent
+  `branches: [main, alpha, rogue]` fails naming the mismatch, and a missing artifact still skips
+  rather than inventing a pass.
+
+## [2.8.15] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — a pre-deadline SIGTERM was classified as a timeout, and allowed the commit.**
+  GNU `timeout` documents 124 for an actual timeout and the command's own status otherwise, so a 143
+  passes straight through when no deadline was reached. The hook's timeout arm accepted 124 _or_ 143
+  on the reasoning that "a TERM delivered from outside this hook still means the same thing" — which
+  is false: an external TERM says nothing about whether the deadline elapsed. A lint killed two
+  seconds in therefore reported "exceeded 180s" and left `overall` unchanged, while the adjacent arm
+  blocked the identical death by SIGKILL.
+
+  `run_with_timeout` now applies the same elapsed guard to 143 that it already applied to 137, so a
+  genuine deadline still normalises to 124 — including the degraded case where an unwritable TMPDIR
+  stops the fallback's marker being written and the hook's own watchdog TERM is what arrives. The
+  caller keys on 124 alone; anything still carrying 143 did not time out and blocks as a signal
+  death.
+
+- **COREDEV-2801 — the detector aborted when `HOME` was unset.** It runs under `set -u`, where a
+  bare `${HOME}` raises "unbound variable" — exit 1 and a message on stderr, from the one file whose
+  header states "Exit: ALWAYS 0. This is a diagnostic, not a gate." Reproduced with `env -u HOME`.
+  Both expansions use `${HOME-}` now, so an unreadable record takes Table A row 2's silent path
+  instead.
+
+  The second site is fixed for CONSISTENCY and is documented as not separately tested, rather than
+  implying coverage it does not have: with `HOME` unset the record read fails first and the script
+  exits silently before reaching it, so a mutation reverting that line stays green — verified, 0
+  evaluations under `bash -x`.
+
+### Notes
+
+- The regression test for the `HOME` fix did not exist when its mutation was first run — an earlier
+  edit script aborted before writing it and the failure was not noticed. The mutation surfaced a
+  MISSING test rather than a weak one, which is the same signal for a different reason.
+
+## [2.8.14] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 (M5a) — the watchdog orphaned its own sleeper on every fast commit.** The watchdog
+  is a subshell BLOCKED IN `sleep`; signalling the subshell alone left that `sleep` reparented to
+  PPID 1, where it ran out the full 180-second deadline. Measured: a fast run left a live sleeper
+  behind, and they accumulate across commits. It is signalled as a process GROUP now, with the same
+  bare-pid retry the other signals carry.
+
+  The regression test needed two attempts, and the first could not fail: it planted a marker in a
+  `sleep` SHIM, but the shim `exec`s, so the marker never reached the running process's argv and
+  `pgrep` matched nothing whether the fix was present or not. Reverting the fix left it green. It
+  now keys on an unusual deadline value, which appears verbatim in the sleeper's own command line.
+
+- **COREDEV-2801 — `.strip()` trimmed malformed versions into validity.** `" 2.8.5 "` is not a
+  SemVer string, but stripping made it comparable, so malformed registry data produced a
+  stale-install warning where Table A row 4 requires silence. Removing the strip was only half the
+  fix: Python's `$` also matches JUST BEFORE a trailing newline, so `"2.8.5\n"` was still accepted.
+  The grammar is anchored with `\Z` now, and every whitespace form is covered by the table test.
+- **COREDEV-2798 — the duplicate-destination key contradicted the resolution.** `_tree_problems`
+  resolves a prepend-only destination by PAYLOAD and treats `destination.line` as a stale hint,
+  because a prepend shifts every line below it — while the uniqueness key still carried that line.
+  Two rewrites naming the same README payload with different hints therefore produced two distinct
+  identities and both passed, one destination silently satisfying two obligations while the second
+  rewrite's real destination went unchecked. Prepend-only destinations are keyed by path plus
+  payload hash now, the same way they are resolved.
+
+### Notes
+
+- Nine older review threads were verified STALE against this head rather than assumed: each reported
+  defect was checked in the shipped bytes and is already fixed. Two of those checks initially read
+  "still present" and were wrong — one grep expanded `${var}` inside a double-quoted command
+  substitution, the other matched the phrase inside an explanatory comment rather than the emitted
+  message. Both were re-checked against the parsed source before being called stale.
+
+## [2.8.13] — 2026-09-03
+
+### Fixed
+
+- **COREDEV-2780 — the C6 guard enumerated regular files while the action follows symlinks.**
+  `find .trunk -type f` emits neither a symlinked file nor a symlinked directory, and never descends
+  into one. The pinned action's `locate_trunk.sh` tests `[[ -f .trunk/bin/trunk && -x … ]]`, and
+  bash's file tests follow symlinks. The enumerator did not follow; the consumer did, and a committed
+  symlink at that path passed the guard and was then selected as TRUNK_PATH — green having linted
+  nothing, on a ruleset with no bypass actors. Verified end to end against the action's real source
+  at the pinned SHA, and through commit + clone + checkout.
+
+  The allowlist rewrite one commit earlier fixed the NAME axis and left the TYPE axis exactly as it
+  was — the sweep narrowed on a second axis nobody varied. Now `! -type d`, inverting the type
+  question the same way the path question was inverted. NOT `find -L`, which resolves symlinks and
+  would emit the target path, missing the allowlist entirely. The launcher loop outside `.trunk/`
+  had the same gap in its other half — `-e` is false for a DANGLING symlink — and now tests `-L` too.
+  Both are covered by fixtures that go red when either is reverted; the previous seven were all
+  regular files, so the fix would otherwise have been unfalsifiable.
+
+- **COREDEV-2780 — the producer census could not see a `.yaml` workflow.** GitHub honours both
+  extensions; two separate censuses globbed `*.yml`. A `decoy.yaml` declaring a job named
+  `trunk-check` was invisible to both, and at M4 a second producer can report success for a required
+  context while the guarded workflow fails. One shared enumerator now, because two independently
+  patched call sites is how they diverged. It uses `not is_dir()` rather than `is_file()`: the
+  reviewed suggestion used the latter, which FOLLOWS symlinks and returns False for a dangling one,
+  silently dropping a workflow the old glob returned — the same type-axis defect as the C6 bypass, in
+  the opposite polarity, proposed in the same review batch.
+- **COREDEV-2780 — only the first of the harness's two action invocations was pin-bound.** The
+  extraction used `next(...)`, so a pin bump that updated the shipped workflow and the primary step
+  but missed the autofix control would record the new pin while the control's sensitivity was
+  established with an older action — contradicting the control's premise that only `--fix` differs.
+  Every invocation is bound now.
+- **COREDEV-2780 — the parity judge checked that the recorded digest was non-empty.** It neither
+  recomputed it from the recorded canonical form nor compared it to what the gate currently passes,
+  so an artifact recorded before `arguments` changed would keep certifying a different invocation.
+  Both are checked, with distinct diagnostics: self-consistency is not currency. The frozen digest
+  now lives once in the contract registry beside `action_pin`, read by the harness and the judge —
+  this module already refuses a second copy of the pin for the same reason. The check immediately
+  caught that the judge's own positive-control fixture was internally impossible (`canonical: "{}"`
+  with an unrelated digest).
+- **COREDEV-2801 — the SemVer grammar accepted non-ASCII digits.** Python's `\d` is Unicode-aware, so
+  `1٢.0.0` and `1.0.0-1٢` matched the "official" grammar added a day earlier, and `str.isdigit()`
+  and `int()` accept them too — so they compared as numbers and produced a stale-install warning
+  where Table A row 4 requires silence. `re.ASCII` narrows exactly the five numeric classes; the
+  pattern uses no `\w`, `\b` or `\s`, so nothing valid is rejected.
+- **COREDEV-2801 — the reversion note asserted a history it had not observed.** It said the record
+  "was reverted rather than never updated — expect it to revert again" on the strength of a directory
+  existing. A newer cache directory also exists when an update downloaded a version and then failed
+  before writing the registry, or when several scopes coexist. It now reports only what is observed —
+  the newer version is already downloaded, so the repair is a local re-select. This is the exact
+  defect class this campaign spent a day removing from guards and hook messages, reintroduced within
+  hours of fixing it elsewhere; the three tests that asserted the old phrasing were checking a
+  spelling and would have kept passing after the reword, so they were rewritten too.
+
+### Changed
+
+- The parity harness declares PyYAML rather than inheriting it from the runner image. Not a live
+  failure — the image ships it — but the harness has never run, so "it works" was untested. NOT via
+  `actions/setup-python`, which prepends a clean interpreter without PyYAML and would break a job
+  that currently works.
+
+## [2.8.12] — 2026-09-02
+
+### Added
+
+- **COREDEV-2801 — the detector distinguishes a REVERTED record from a never-updated one.**
+  Both look identical: installed is behind `origin/main`. They are not the same problem. On
+  2026-09-02 the user-scope entry read 2.7.0 while `.../unleashed-mail/2.8.3/` sat complete in the
+  install cache — written in the same second as the record — after an update on 2026-09-01 had
+  advanced it to 2.8.3 and something wrote it back. "You never updated" and "your update was undone,
+  and it will be undone again" call for different responses, so the warning now says which.
+
+  The evidence is the install cache, reached through the sibling directories of the entry's own
+  `installPath`. `${CLAUDE_PLUGIN_ROOT}` would be the obvious ground truth for what a session
+  actually LOADED — and it is unavailable here by design: it resolves against a plugin context and
+  this hook is project-scoped, confirmed against the plugins reference rather than assumed.
+
+  POST-GATE AND ADDITIVE, stated plainly. The plan's Table A is bound to a review verdict and this is
+  not in it. It changes no row's verdict: it runs only inside an existing row-7 warning and only
+  appends a sentence, so every silent row stays silent. The plan also explains why the detector could
+  not simply ship in the plugin — "a 2.7.0-pinned session runs 2.7.0's copy; it IS the defect" —
+  which is exactly why this lives in the checkout.
+
+  Three mutations verify it, and the third exposed a test of mine that could not fail: my first
+  contract test used an install EQUAL to `origin/main`, which `continue`s out of the loop before the
+  new code is reached, so a mutant that leaked the note into every row passed it. Row 8 — a locally
+  newer install, silent because every development clone looks like that — is the row that actually
+  reaches the new code, and is now the contract test.
+
+### Fixed
+
+- **COREDEV-2780 — cell 4's normalised lint digest was computed and never compared to anything.**
+  Both users of `_normalised_lint_block` compared the shipped config against a MUTATED COPY OF
+  ITSELF, which proves the function discriminates but says nothing about the config that shipped: a
+  weakening already committed is invisible, because the "before" is the weakened file too. Measured
+  with a mutation first verified to change the parsed block — widening zizmor's `success_codes` from
+  `[0]` to `[0, 1, 2]`, so security findings count as success — the whole of cell 4 passed. The
+  normalised digest is now frozen as a literal oracle and moving it is a reviewed change, exactly as
+  the ignore-list literal beside it already is.
+
+  (Recorded because it nearly went the other way: the first attempt at this demonstration inserted a
+  duplicate `success_codes` key, PyYAML kept the original, and the parsed document was unchanged. The
+  finding was real, but that proof of it was not. A mutation is not a mutation until the parse
+  differs, and the fixture now asserts so before drawing any conclusion.)
+
+- **COREDEV-2780 — CI's shellcheck gate never covered `scripts/ci/*.sh`.** `CLAUDE.md` publishes the
+  gate a developer is told to run and lists that path; `plugin-ci.yml` runs the one that actually
+  blocks and did not. So the shared range resolver — the file the required check's guard pins by
+  digest and then executes — had never been shellchecked in CI. It passes cleanly, so the omission
+  cost nothing except the guarantee. Both lists are now DERIVED and compared in both directions, so
+  the documented gate and the enforced gate cannot drift apart again silently.
+
+## [2.8.11] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the C6 launcher guard was an enumeration, and trunk reads a name it did not
+  enumerate.** `.trunk/user_trunk.yaml` is merged exactly as `.trunk/user.yaml` is; trunk's own
+  `.trunk/.gitignore` lists them one line apart. Reproduced end to end in a scratch repository: a
+  tracked `user_trunk.yaml` disabling two linters takes `trunk check --ci --upstream=HEAD~1` from
+  `exit 1 / "2 failures"` to `exit 0 / "Found no applicable linters"`, byte-identical tree
+  otherwise, while the shipped guard body run verbatim prints PASSED. Cell 4's frozen literal never
+  moves because it reads only `.trunk/trunk.yaml`; the empty-diff guard passes because the git diff
+  is genuinely non-empty. That is this ticket's founding hazard — a required context reporting green
+  having linted nothing — reached through the one name the list missed.
+
+  The guard is now an ALLOWLIST over the `.trunk/` tree, read from the filesystem rather than the
+  index, so an untracked override created by an earlier step is caught too — the first draft asked
+  `git ls-files` and the existing per-path cases immediately caught that regression. The contract
+  check that asserted each guarded path appears as a literal in the guard body has been replaced:
+  asserting an enumeration is complete cannot be the check when the enumeration was the defect.
+
+- **COREDEV-2780 — the all-linter ignore silenced secret scanning on the gate's own configuration.**
+  `.claude/**` and `.trunk/**` were excluded as "local-only trees", but between them they hold twelve
+  TRACKED files. Trunk names the damage itself: `.trunk/trunk.yaml` — the file that defines this
+  gate — was ignored for gitleaks, trufflehog, checkov, codespell, git-diff-check, prettier and
+  yamllint, and all nine tracked linter configs plus `.claude/settings.json` likewise. Narrowed to
+  the genuinely generated subdirectories. The twelve files lint clean, so this cost nothing but the
+  looking.
+- **COREDEV-2780 — a blanket mypy exemption resting on a false claim.** Its justification read
+  "there is NO mypy configuration in this repository at all — no mypy.ini … and `.trunk/configs`
+  holds only ruff.toml". `.trunk/configs/.mypy.ini` is 74 tracked lines, and the commit that added it
+  (`3b18ea3 fix(COREDEV-2771): the mypy test exemption was inert`) exists precisely because its test
+  sections were not matching. Turning the linter off wholesale reversed that fix and took the
+  correctness checks with it. The exemption now lives in `.mypy.ini` per ERROR CODE — `attr-defined`
+  and `type-arg`, the annotation noise — which took the four contract suites from 68 findings to 11
+  real ones, all now fixed: three functions annotated `-> set[str]` that return `None` (an annotation
+  my own `gh`-missing fix had made untrue), four `Any` returns through `yaml.safe_load`, an
+  incompatible dict key, a missing annotation, and **two `re.match()` results used without a `None`
+  check** — one of them entirely unguarded, so a canary guard that lost its digest literal would have
+  raised `AttributeError` instead of failing with a message naming the missing pin.
+- **COREDEV-2780 — the teardown kill had no pid retry.** Three sibling signal sites pair
+  `kill -- -PGID` with a bare-pid fallback and the fourth did not, so when `set -m` cannot grant the
+  child a process group the group kill fails with ESRCH and reaches nothing — measured, the child
+  survives. A derived structural check now finds every group-signal site by pattern and requires the
+  pairing, and names the offending site when one is missing.
+- **COREDEV-2801 — the version grammar was a character class, not SemVer.** `[0-9A-Za-z.-]+` accepts
+  what the specification forbids: `2.8.0-01` (a numeric identifier with a leading zero) and
+  `2.8.0-alpha..1` (an empty identifier). Both parsed, and because `precedence()` calls `int()` on
+  any all-digit identifier, `-01` compared as `-1` and produced a stale-install WARNING about
+  malformed registry data where Table A row 4 calls for silence. Replaced with the official grammar;
+  the table test drives every row through the real detector, both directions.
+
+## [2.8.10] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the bounded run was only bounded on the branch that does not run.**
+  `run_with_timeout` prefers `timeout`, then `gtimeout`, and only falls back to its own watchdog when
+  neither exists. v2.8.9 fixed the watchdog and returned early from the other two, so the escalation
+  and the timeout bookkeeping were proven for the branch taken when coreutils is absent — not this
+  repo's CI (`ubuntu-latest`), and not a Mac with Homebrew coreutils. Measured on the live branch: a
+  SIGTERM-ignoring child ran to its full natural lifetime, 60s against a 2s deadline. All three
+  branches now share one shape and one contract, so a guarantee proven for one holds for all.
+
+  Worth stating plainly, because it bounds the claim: against the command this hook actually runs
+  this is defence in depth, not a live hang closed. trunk 1.25.0 honours SIGTERM in 18ms, and
+  `timeout 3` and `timeout -k 5 3` are indistinguishable on it. The defect is real in the primitive;
+  its reachability through today's `trunk` is unproven, and the fix is worth having for the day that
+  changes or the cold-bootstrap window nobody has measured.
+
+  Three details, each measured rather than reasoned about. `-k 5` and not `--kill-after=5`: the
+  short form is accepted by GNU, FreeBSD, busybox and toybox, while the long form is rejected by
+  busybox (exit 1) and toybox (exit 125) — a rejected flag would fail every commit for those users,
+  trading a rare hang for universal breakage. The 137 that `-k` produces is normalised to 124 only
+  when the deadline actually elapsed, because a command that is OOM-killed reports 137 too, and
+  normalising unconditionally would turn a crashed linter into "not blocking" — a fail-open. And the
+  teardown kill moved after the wait: killing the watchdog as soon as the direct child exits cancels
+  its pending SIGKILL, so a grandchild ignoring SIGTERM outlived the deadline still holding the
+  caller's stdout, measured at 45s against a 2s deadline on **both** branches.
+
+- **COREDEV-2780 — `trunk` exit 2 was reported as findings in the developer's diff.**
+  The real binary exits 2 when the invocation itself is unusable — reproduced on trunk 1.25.0 with a
+  `--filter` naming a linter this config does not enable, which is the one literal this gate passes.
+  The hook said "new findings in the staged diff (fix them, or stage less)", which is a false
+  statement about a diff that no edit will clear. It still blocks, because a gate that did not run
+  must not report a pass, but it now says why. A signal death (128+N) gets the same treatment for the
+  same reason. Meanwhile `143` — one of the two statuses the gate did test for — is nearly
+  unreachable: it was checking for something that never arrives while missing something that does.
+- **COREDEV-2780 — the remote reads crashed on a machine with no `gh`.**
+  `check=False` covers `gh` refusing; it does not cover `gh` being absent, which raises
+  FileNotFoundError out of the exec. On any machine without the GitHub CLI the whole contract module
+  errored at discovery instead of skipping — defeating the design that had those halves return
+  `None` on purpose. Both call sites fixed, not the one reported.
+- **COREDEV-2801 — the detector hung when run by hand.**
+  `hook_payload="$(cat)"` blocks forever when stdin is a terminal, so a manual `--session-start` run
+  never returned. Reproduced under a real pty. It now degrades to the plain-text path rather than
+  substituting an empty payload — the obvious repair, and wrong: the session id would be the empty
+  string, every marker would be named for `sha256("")`, and the per-session dedup this file exists to
+  provide would silently become global.
+- **COREDEV-2780 — the zero-oid guard was SHA-1 only.**
+  It compared `before` against a 40-character literal. A repository created with
+  `--object-format=sha256` has a 64-character null oid, verified against git, and would have slipped
+  past into the `--all` branch this guard exists to block. Now matched as a class.
+
+### Added
+
+- Tests for all of it, and the branch is now a PARAMETER rather than a fixed sanitised `PATH`. The
+  previous suite pinned `PATH` so only the fallback could ever be reached and said so in its
+  docstring as though that were the point — which is exactly how the coreutils branches went
+  untested. Five mutations against the hook and two against the detector each kill their own
+  assertion, including one that reproduces the wrong repair for the TTY hang so it cannot be
+  reintroduced.
+- The pty harness enforces its deadline on every read. Its first draft used a bare `os.read` on a
+  blocking pty fd, so against the very regression it watches for it hung indefinitely instead of
+  failing — a test that can hang CI is worse than the bug it looks for.
+
+## [2.8.9] — 2026-09-02
+
+### Fixed
+
+- **COREDEV-2780 — the push canary could not resolve its own range.**
+  `.github/workflows/trunk-check-push.yml` checked out at `fetch-depth: 2`, but
+  `github.event.before` is HEAD~N for a push of N commits: a rebase-merge, a direct multi-commit
+  push, or a fast-forward of `alpha` onto `main` all place it out of reach. `git diff` then failed
+  with `bad object`, and since `set -e` is suspended inside an `if` condition the empty substitution
+  was read as an EMPTY DIFF — so the guard aborted with a message naming a cause it had never tested.
+  The pinned action receives the same `before` as `--upstream`, so a better diagnostic could not have
+  helped; the object has to be present. Now `fetch-depth: 0` on the canary leg only — the required
+  `pull_request` leg keeps depth 2, where HEAD^1 of the merge ref is exactly right — plus a
+  `git cat-file -e` presence check that reports what actually went wrong.
+- **COREDEV-2780 — cell 5's autofix positive control did not exist.**
+  The plan requires that enabling autofix change the fixture and turn the cell red. Nothing in the
+  repository ever ran the action with autofix on, and the only thing named a positive control was a
+  judge test that hand-set the post-hash — stipulating the result it existed to observe. Equal
+  pre/post hashes were therefore unfalsifiable: equal when autofix is off, and equally equal when the
+  fixture was never in the linted range at all. The harness now runs the same pinned action a second
+  time with `--fix`, into its own argv file so cell 1's parity comparison is untouched, and records
+  the action's conclusion — which cell 5 also required separately and which was unimplemented, the
+  step having had no `id:` for `steps.<id>.outcome` to address.
+- **COREDEV-2780 — the parity harness attested a pin it had not run.**
+  It recorded `uses:` read off the shipped `trunk-check.yml` while invoking its own, so bumping one
+  file would leave the evidence naming a version that run never executed. The harness now asserts the
+  two are equal and records the observed one; the judge compares by equality against the contract
+  registry's single `action_pin` rather than by substring, which had accepted any ref; and a new test
+  derives the set of workflows invoking the action by scanning rather than listing them.
+- **COREDEV-2801 — the drift detector's retention promise was not kept.**
+  The marker sweep globbed only the current session's digest, so it tidied a session only if that
+  session came back in a later window. Sessions that never resume left one inode each, indefinitely,
+  on exactly the machines where a persistently stale install keeps the warning path hot. It now
+  sweeps every session's strictly-older buckets, behind a filename shape guard — the loop unlinks in
+  a directory it no longer wholly owns — and the decision and the warning are made ahead of the
+  sweep, so a `timeout: 5` kill during cleanup cannot cost a session the notice it was run to emit.
+- **COREDEV-2780 (M5a) — the pre-commit timeout could report a clean check that never finished.**
+  `run_with_timeout`'s fallback is the branch that runs on a stock Mac, which ships neither `timeout`
+  nor `gtimeout`. It sent SIGTERM only and returned the child's own exit status, so a process that
+  traps the signal was waited on forever — and if it later exited 0, the hook printed
+  `trunk: no new findings in the staged diff` for a check that never completed. Three measured
+  pieces: a recorded deadline marker forcing `return 124`, since exit status alone cannot distinguish
+  a fast success from a late one; SIGKILL after a five-second grace, which bounds the wait from 60s
+  to 7s; and job control with a process-group kill, so a grandchild inheriting the captured pipe
+  cannot hold the caller open — 60s to 2s. The function previously had no tests.
+
+### Added
+
+- Tests for all five, against the shipped bytes rather than copies — the timeout-fallback cases slice
+  the function out of `.githooks/pre-commit` and source it, and sanitise `PATH` so the no-coreutils
+  branch is the one under test rather than whichever branch the developer's machine happens to take.
+
+  What was verified how, stated exactly, because "mutation-tested" is not true of all of it in the
+  same sense. Three timeout-fallback tests and four marker-sweep tests were checked by mutating the
+  PRODUCTION code — reverting the digest-scoped glob, deleting the shape guard, weakening `<` to
+  `<=`, dropping the deadline marker, dropping the SIGKILL, dropping the process-group kill — and
+  each mutation kills its own assertion and no other. The harness's pin-equality assertion was
+  checked by executing the extraction step with the harness bumped to a different ref. The four
+  autofix-control and conclusion cases are judge DISCRIMINATION cases over synthetic records: a
+  Python unittest cannot run a composite action, so the judge is what is testable here, and the
+  control itself is only genuinely observed on the first real harness run — which is M2c, and is not
+  claimed as done.
+
+## [2.8.8] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M5a)** — the local half of the trunk gate in `.githooks/pre-commit`:
+  `trunk check --index --no-fix --filter=-markdown-link-check`. `--index` because the commit is made
+  from the index, so checking the worktree both misses findings that are staged and reports findings
+  that are not being committed. Never `--all`. Bounded by **180 seconds**, a constant derived from
+  measurement — 1.9s warm single-file, 7.3s warm 60-file, **30.8s cold bootstrap** — plus ~6x headroom,
+  because the envelope is measured on one developer Mac while the constant is asserted across other
+  hardware. Recorded in `docs/planning/evidence/COREDEV-2780-m5a-timeout-measurement.json`.
+  The timeout is **macOS-portable**: stock macOS ships neither `timeout` nor `gtimeout`, so there is a
+  watchdog fallback needing neither. A lint finding **blocks**; a timeout **does not** — a timeout is
+  infrastructure, and blocking there teaches people to pass `--no-verify`, which disables every other
+  check as well.
+- **COREDEV-2801 (M5)** — `docs/planning/evidence/COREDEV-2801-m5-containment-experiment.json`: the
+  §3a experiment, classified as **Table B row 10** (containment for user scope only). Root cause stays
+  open; row 4's persistence interval has not elapsed.
+
+### Fixed
+
+- The pre-commit timeout watchdog no longer holds the caller's stdout pipe open for the whole timeout.
+  A background subshell inherits the hook's file descriptors, so any parent capturing the hook's
+  output blocked for the full duration even after the hook had exited.
+
+## [2.8.7] — 2026-09-01
+
+### Added
+
+- **COREDEV-2801 (M6)** — `scripts/detect-plugin-version-drift.sh`, the drift detector, plus its two
+  callers: the project `SessionStart` hook in `.claude/settings.json` (matchers `startup|resume` only,
+  `timeout: 5` as a literal) and `.githooks/pre-commit`. It takes the **repository root as an explicit
+  positional operand** and never reads `CLAUDE_PROJECT_DIR` itself — git does not set that variable for
+  hooks, and a value inherited from another project would compare against a foreign manifest, which
+  fails as a _wrong answer_ rather than an error. `expected` comes from `origin/main`. Table A's eight
+  rows are implemented exactly: only `installed < expected` warns, and silent means silent — no output
+  and no marker. The `SessionStart` surface dedups per session per seven-day epoch bucket with an
+  `O_EXCL` create whose window is encoded in the marker NAME, so a live marker is never unlinked and
+  two concurrent invocations cannot both warn. `session_id` is hashed because it is documented as
+  opaque with no filename-safety contract.
+- **COREDEV-2801 (M6)** — `scripts/tests/test_session_start_drift_hook.py` (27 tests: the declaration,
+  the anchored lookup, all eight Table A rows, the output protocol, dedup, bucket boundary and
+  concurrency) and `scripts/tests/test_precommit_trunk_gate.py` (the second caller and the hook's
+  exit-code aggregation; cell 13's trunk-check controls arrive with M5a).
+
+### Changed
+
+- `.githooks/pre-commit` now **aggregates its exit code**. Appending any passing command after the
+  checks would otherwise mask a nonzero result from them.
+
+## [2.8.6] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M2)** — `.github/workflows/trunk-check.yml`, the diff-scoped trunk gate, in its own
+  workflow file because `plugin-ci.yml` carries `workflow_dispatch` and the pinned action autodetects
+  that event as `check-mode=all`. The job is unreachable on dispatch **by construction** rather than
+  behind an `if:` guard: a job skipped by a conditional reports _Success_, and a required context is
+  satisfied by it. Five steps in C8's order — checkout, the C6a resolver-digest guard, the empty-diff
+  guard, the C6 launcher-path guard, the action. Ships `continue-on-error: true` at **job scope only**,
+  the declared M2 exemption, removed at M3.
+- **COREDEV-2780 (M2)** — `scripts/ci/resolve-trunk-range.sh`, the single shared range resolver. Its
+  logic is transcribed from the pinned action's `pull_request.sh` and `push.sh` rather than assumed,
+  and it **fails closed** on an all-zero `github.event.before` — the branch-creation/tag-push shape
+  where the action runs `trunk check --ci --all`.
+- **COREDEV-2780 (M2b)** — `.github/workflows/trunk-check-push.yml`, the non-required push canary. It
+  emits a **different context name** on purpose: required checks match on SHA and expected app, not on
+  the triggering event, so a shared context let a `main`→`alpha` PR be satisfied by the push run on its
+  head SHA — a green required check over a strictly smaller diff.
+- **COREDEV-2780 (M2c)** — `.github/workflows/trunk-parity-harness.yml` and
+  `scripts/ci/parity-recorder.sh`, the non-required sensor for cells 1 and 5, plus
+  `scripts/tests/test_trunk_upstream_parity.py`, its judge. The harness fires on **real** events on the
+  permanent `harness-base` / `harness/**` refs, because the action maps `workflow_dispatch` to
+  `check-mode=all` and `GITHUB_EVENT_NAME` cannot be overridden. Its action inputs are **extracted from
+  the shipped workflow and digest-bound to it** — a harness that invokes its own non-fixing form proves
+  only that _that_ form does not mutate.
+- **COREDEV-2780** — `scripts/tests/test_trunk_check_workflow.py`: cells 4, 9, 14, 15, cell 10's static
+  half and cell 11's generator, which executes **all 81 declared registry cases**, including the C6
+  fixtures and C6a's resolver case by running the **shipped guard bodies** against a temporary tree.
+
+### Changed
+
+- `CLAUDE.md` — the local gate's `shellcheck` line now covers `scripts/ci/*.sh`, and `harness-base` /
+  `harness/**` are documented as permanent repository refs that a Dependabot pin bump needs.
+
+## [2.8.5] — 2026-09-01
+
+### Added
+
+- **COREDEV-2780 (M0a)** — `docs/planning/COREDEV-2780-contract.yaml`, the structured contract registry
+  §1's C0–C9 and C6a prose is rendered from and cell 11's mutants are generated from: 26 obligations,
+  each with a stable id, a typed target kind and one or more mutation **cases** declaring operator,
+  side, target, payload-or-fixture, a validity check and its own expected diagnostic. 81 direct cases
+  plus a `(side, form)` resolver family (2 sides × 6 forms) referenced by both workflow entries = **105
+  generated mutants**. The kinds exist because a flat `(id, path, value)` schema could not express C6's
+  repository fixtures, C2's live-remote relation or C8's digest semantics — under-coverage by
+  construction. Cases are first-class because one mutant per _entry_ still under-covers any obligation
+  needing several.
+- **COREDEV-2780 (M0a)** — `docs/planning/COREDEV-2780-survivors.yaml`, the survivor corpus: the **14
+  mutants that have survived** a formulation of this gate across rounds 5–38, each recorded with the
+  formulation that let it through, what it would have shipped, and why it must now fail. Maintained
+  **independently of the registry** and self-contained by design — an entry that resolved through a
+  registry id would vanish with the obligation it exists to outlive, which is the failure it detects.
+
+## [2.8.4] — 2026-09-01
+
+### Fixed
+
+- **COREDEV-2798** — the COREDEV-2619 transcript-path inventory pinned line numbers in files that are
+  _prepended to_, so every release shifted them and reddened `test_transcript_path_inventory.py` for a
+  release rather than for a defect. Sites in `CHANGELOG.md` and `README.md` are now content-addressed:
+  a `quote-keep` payload must hash to its frozen `sourceSha256` **exactly once**, and a `rewrite`
+  destination block must occur **exactly once**; `line`, `destination.line`, `precedingAnchorLine` and
+  `followingAnchorLine` are re-derived hints there. The demotion is **scoped** — every other file keeps
+  its line assertion, and a test proves it. Regenerating the manifest each release was rejected as the
+  repair: it would make the tree authoritative over the assertion meant to detect the tree changing.
+
+## [2.8.3] — 2026-08-28
+
+### Fixed
+
+- **Review harness: Python bytecode is no longer mistaken for reviewer tampering** (COREDEV-2650).
+  The isolated review wrappers fingerprint their disposable checkout afterwards and void the round
+  if it changed — the COREDEV-2607 defence. A reviewer that imported a repo module to _reproduce a
+  measured claim_ made CPython write `__pycache__/*.pyc` beside the source, and that bytecode read
+  as tampering. It voided three rounds on COREDEV-2711 (kimi at r1; agy and kimi at r8, leaving that
+  round resting on a single arm). `PYTHONDONTWRITEBYTECODE=1` is now exported in the reviewed
+  process, and — after the PR #81 review — at the top of each wrapper so the harness's own Python
+  helpers stop writing bytecode into the live checkout too. The fingerprint itself is deliberately
+  unchanged: excluding `__pycache__` would be a blacklist in exactly the directory a real mutation
+  would hide in.
+
+### Added
+
+- **Trunk lint configuration — 20 linters across security, correctness, docs and formatting** (COREDEV-2771).
+  Config only; wiring it into CI and deciding required-vs-advisory is tracked separately
+  (COREDEV-2780), as is remediating the findings it exposes (COREDEV-2787).
+
+### Documentation
+
+- **COREDEV-2711 §2 plan gated** — the agent-spawn-guard design, with its §3a measurement and
+  fixture evidence committed under `docs/planning/evidence/`. `review-verdict.py verify` returns
+  GATE OK (codex + gemini APPROVE) bound to the plan's digest. The guard itself is **not**
+  implemented; this records the approved design and the payloads it rests on.
+
+## [2.8.2] — 2026-08-24
+
+### Fixed
+
+- **Seven shipped writers leaked the operator's expanded filesystem path to stderr
+  (`COREDEV-2691`).** A simple command applies every redirection left to right, so
+  `cmd > "$path" 2>/dev/null` opens `$path` **before** stderr is suppressed; a failed open then
+  prints the expanded path to the real stderr. Reordered in `scripts/lib/marker.sh:311` (the hook
+  write path), `scripts/stop-quality-marker-gate.sh`, `scripts/ci-load-check.sh`,
+  `scripts/test-runner.sh`, `scripts/test-hooks.sh`, `scripts/review/isolated-agy-review.sh` and
+  `scripts/review/isolated-codex-review.sh`.
+
+  Four were **input** redirects inside command substitutions (`wc -c < "$OUT" 2>/dev/null`), a
+  shape the existing sweep could not see: it matched output redirects only and skipped quoted
+  regions wholesale, so it could not enforce its own rule on them. `scripts/lib/log.sh:216-218`
+  had stated the rule in prose since PR #63 while these seven violated it — a rule that lives
+  only in a comment is not enforced.
+
+- **COREDEV-2711 — the `Agent(...)` spawn allowlist is a DECLARATION, not a runtime control.** The
+  2.8.1 entry below states that the scoped grant keeps PR #63's P1 closed. Measured on 2.8.1 it does
+  not: `swift-reviewer` spawned `unleashed-mail:ui-engineer` — a writing agent, absent from its own
+  specifier — with no refusal, no error and no prompt, because the runtime grants the `Agent` tool
+  from the specifier and then DISCARDS the type list for a sub-agent. This is by design; enforcement
+  of `Agent(type)` is scoped to a main-thread agent, and no frontmatter shape restores per-type
+  control for a sub-agent. What 2.8.1 actually bought is a CI check that fails when a writing agent
+  is added to a declared spawn list — the declaration stays honest, the runtime is unconstrained.
+  PR #63's P1 is **reopened**; COREDEV-2711 owns the mechanism. Corrected alongside it: the same
+  claim in `README.md`, `AGENT_CONTRACTS.md` §9.1's "what bounds it" list (two of whose bullets named
+  a deny-list COREDEV-2703 had already deleted), the spawner check's docstring and its remedy text
+  (which instructed maintainers to add `Agent(<name>)` to `disallowedTools` — the exact change that
+  disabled the review panel), and five assertion messages in the validator's test suite.
+- **COREDEV-2711 — `disallowedTools` does not stop direct checkout writes.** `swift-reviewer` holds
+  bare `Bash`, which this repo's own `_WRITE_VECTORS` counts as a write vector and `AGENT_CONTRACTS`
+  §9.1 records as an accepted residual. Documentation claiming otherwise is corrected.
+
+### Changed
+
+- **The inverted-redirect sweep derives its scope instead of enumerating it (`COREDEV-2691`).**
+  It was a regex over five hand-listed files, narrowed on two independent axes — the pattern
+  required a temp-ish name in the target, and the file list was hand-kept. A live leak sat at
+  `:145` of the very file whose `:130` the sweep was written for. It is now a hand-rolled,
+  linear, 3.9-compatible shell scanner over every tracked `*.sh` under `scripts/` plus
+  `.githooks/pre-commit`, modelling single/double/ANSI-C quoting, `$( … )` and legacy backtick
+  substitutions (including inside double quotes, and honouring escaped delimiters), `[[ … ]]`
+  comparison context, comments after any control operator, fd duplication, `exec` persistence and
+  same-command stderr state.
+
+  The suppression allowlist is checked by **executing its criterion** against real bash — an
+  operator qualifies only if bash is quiet with it written first and leaks with it written last —
+  rather than by curation. That cell caught, on its first CI run, two operators (`2>&-` and
+  `2</dev/null`) that suppress on Linux but not on macOS bash 3.2 and had been declined here on a
+  macOS-only measurement.
+
+### Added
+
+- **A guard that no hook writes under an unresolved plugin base (`COREDEV-2691`).** The `D′`
+  sentinel layer had no hook-level coverage: the library guards were pinned, the hooks that call
+  them were not. The new cells drive the shipped hooks with a `PATH` shim over `mkdir`, `rm`, `mv`
+  and `python3`, force every derived kill switch on so a cell cannot pass having exercised
+  nothing, and **verify** each exemption — the named primitive must really appear in the hook, and
+  a hook that composes a base root without an exiting guard before it cannot be exempted at all.
+
+- **A guard that no test definition follows a suite's entrypoint (`COREDEV-2691`).** A class,
+  test function or `load_tests` hook written after `unittest.main()` is silently dropped on direct
+  execution while the run still prints `OK`. The check is structural (AST, not lexical): it
+  recurses into module-level control flow but not into function or class bodies, distinguishes an
+  exiting guard from an innocuous one, ignores statically dead branches, models mutually exclusive
+  `if`/`else` branches, and treats `pytest.main()` correctly — it re-imports the file, so it drops
+  nothing.
+
+## [2.8.1] — 2026-08-23
+
+### Fixed
+
+- **COREDEV-2703 — `swift-reviewer` could not spawn a single one of its five specialists.**
+  Measured on Claude Code 2.1.241 / plugin 2.8.0 by spawning the agent and asking it to enumerate its
+  tools: it received only `Read`, `Bash` and `mcp__…__synthesize_review`. `Grep`, `Glob` and `Agent`
+  were all declared in its `tools:` line and all absent from the function schema; asked to call them
+  it reported `AGENT: NO_SUCH_TOOL` / `GREP: NO_SUCH_TOOL`. This is **not** the documented spawn-depth
+  floor (`AGENT_CONTRACTS.md` §5, needs ≥ 2.1.219) — the reproduction is on 2.1.241 with
+  `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` unset. Consequence was contained but total: every panel round
+  recorded `UNATTRIBUTED` for all five reviewers, which `reviewer-roster.sh` treats as "could not
+  review" and never as "clean", so the verdict failed closed to NEEDS DISCUSSION rather than
+  publishing an unreviewed APPROVE. The regression window is v2.7.0–v2.8.0; v2.5.3, whose
+  `swift-reviewer` carried a bare `Agent` grant and no `disallowedTools`, was unaffected.
+  - **Root cause, isolated by three throwaway probe agents differing in exactly one field.** A bare
+    `Agent` grant with a bare-name deny-list keeps the tool; adding a single
+    `Agent(unleashed-mail:ui-engineer)` entry to `disallowedTools` removes `Agent` entirely; and an
+    `Agent(<type>)` entry in `tools:` **is** honoured. So the trigger is the specifier syntax inside
+    the deny-list — not the deny-list, and not the specifier form as such. `swift-reviewer` was the
+    only agent in the plugin using that form, with 26 such entries.
+  - **The fix moves the constraint to the documented allowlist form** — a scoped `Agent(...)` grant
+    in `tools:`, naming the five reviewers plus `jira-manager` in both the bare and the
+    `unleashed-mail:` spelling — and reduces
+    `disallowedTools` to `Write, Edit, NotebookEdit`. An allowlist is also the safer direction: a
+    deny-list re-opens the moment a new writing agent is added. `validate-plugin-assembly.py` now
+    checks a scoped `Agent(...)` grant against the writer roster on disk and fails if the grant
+    admits one, so the PR #63 P1 (a prompt-injected finding steering the reviewer into a file-writing
+    agent while it reads untrusted PR content) stays closed. **[CORRECTED — it does not; see Unreleased / COREDEV-2711.]**
+  - **What is measured and what is not.** The probes covered a _single-type_ specifier; the shipped
+    grant names twelve types inside one set of parentheses, and that form has not yet been observed on
+    a real install — a plugin cannot be reinstalled from within the session that would test it, and
+    v2.8.0's own file was never replaced because the fix carried no version bump. Cutting this release
+    is what makes that measurement possible. It cannot regress v2.8.0, which had no `Agent` tool at
+    all; at worst the panel stays down and the deny-specifier that also ate `Grep`/`Glob` is gone.
+- **COREDEV-2654 second pass — what a full re-review of the remediation found.** Every item below was
+  reproduced before it was fixed; the first two are defects in the remediation's OWN code.
+  - **AF-19's broken-pipe fix did not survive a real client teardown, and the obvious repair does not
+    work either.** The handler re-pointed stdout at devnull and then called `_log`, which writes to
+    **stderr** — and on a genuine teardown both pipe read ends close together, so the diagnostic
+    raises a second `BrokenPipeError`. Measured across four builds: shipped **rc 120** (not 1 — the
+    failure is CPython's exit-time flush, so anyone grepping for rc 1 would not find it); wrapping
+    `_log` in `try/except OSError` **still 120**, because the failed write leaves the text buffered
+    for the exit flush; redirecting stderr unconditionally exits 0 but LOSES the diagnostic even when
+    stderr is healthy. Shipped: log, and only if that raises point stderr at devnull.
+  - **The kimi harness's new plan operand was completely uncontained** while the prompt operand four
+    lines above it goes through `containment.py`. `codex-review/SKILL.md` invokes the stand-in
+    "always passing `<plan>`", so the operand is model-chosen: an absolute path or `..` made the
+    round's printed BASIS digest certify bytes OUTSIDE the reviewed commit. Now the spelling is
+    refused at parse time (absolute, `..`, empty) and the staged object is refused if it is a symlink
+    — `-L` tested independently of `-f`, which follows links. `..hidden/` and `a..b/` still resolve.
+  - **AF-10 was fixed in the agy and codex harnesses and missed in kimi** — the one this PR promotes
+    to the documented codex-quota stand-in. `isolated-kimi-review.sh` still ended `>/dev/null 2>&1`,
+    so a non-numeric `--timeout` refusal died as an unexplained exit 4.
+  - **AF-16's `MultiEdit` sweep left the two validators disagreeing.** `validate-hooks.py` still
+    listed it in `KNOWN_TOOLS`, and merely dropping it is a NO-OP: an unrecognised token only becomes
+    an error when difflib finds a close match, and `MultiEdit` scores ~0.62 against `Edit`, under the
+    0.7 cutoff. It now hard-rejects via `STALE_TOOLS`, mirroring `validate-plugin-assembly.py`
+    (verified discriminating: a `MultiEdit` matcher fails, an `Edit` matcher passes).
+  - **AF-1's own failure shape survived in §9's Planner row** — it listed `Agent` in the inherited
+    floor and described the scoping as `disallowedTools: mcp__github`, while the shipped agent denies
+    `Agent, mcp__github`. A maintainer obeying the source of truth would have re-granted subagent
+    dispatch to the one agent that ingests untrusted web/Context7 content.
+  - **AF-4's uncontained `review-verdict.py snapshot` was still the documented procedure** at §2 step
+    0, the §9 Planner row, and both `modern-standards-planner` sites — which additionally claimed the
+    preloaded skill "carries the exact `snapshot` command" when it carries the contained wrapper.
+  - **AF-27's re-prompting is only half closed**: both review skills mandate reading the allocated
+    transcript back into context, and neither granted `Read` (`review-synthesis` grants it for the
+    same files). Granted. The kimi stand-in flow was likewise ungranted — no
+    `isolated-kimi-review.sh`, no `Edit(.kimi-prompt-*.md)` — so every stand-in round re-prompted.
+  - **AF-6's bare canonical names survived in the third gate skill** (`review-synthesis`, including an
+    actionable "re-run `/gemini-review` + `/codex-review`") and in `codex-review`'s description.
+  - **Doc drift a reviewer would flag**: §2 still taught the inline `mktemp`+`pty-capture` agy ping
+    that `preflight-agy.sh` was extracted to replace (cwd pollution can now VOID a round under AF-5);
+    `.gitignore` and `pre-commit-checks.sh` still described the pre-COREDEV-2617 world, the latter
+    claiming marker writes reach the Stop gate only if you export `CLAUDE_PLUGIN_DATA` — denying the
+    store-discovery capability that IS v2.8.0's headline feature; and `SECURITY.md` /
+    `plugin-ci.yml` called `alpha` "the integration branch releases are cut from" while `CLAUDE.md`
+    and `AGENT_CONTRACTS.md` name `main` the trunk.
+  - **Both open review threads on PR #69 addressed** (gemini-code-assist): the `result is not None`
+    reply-guard was dead code AND a latent hang — AF-21 made the last `None`-returning handler return
+    `{}`, so a Request now always replies and `_handle`'s stale "or None for notifications" docstring
+    is corrected; and the devnull descriptor is closed after `dup2` at BOTH sites, including the one
+    this pass added.
+- **COREDEV-2654 — the 2026-08-17 audit's remediation batch** (details per finding in the report's
+  addendum). Highlights:
+  - **AF-1 (HIGH):** `AGENT_CONTRACTS.md` §9's reviewer capability-floor row granted reviewers Bash —
+    the exact inverse of §9.1 and of all five shipped reviewer frontmatters; obeying it as the
+    source of truth would have re-granted shell to four read-only reviewers (the PR #63 P1). The row
+    now states `Read, Grep, Glob`, and the Orchestrator/Diagnostic rows are restated in full instead
+    of `+`-inheriting.
+  - **AF-27 (MEDIUM, found during remediation):** since Claude Code 2.1.210 a `Write(path)`
+    permission rule is accepted but **never consulted** (docs: "Use `Edit(docs/**)` in place of
+    `Write(docs/**)`"), so three shipped grants were dead on the CLI this plugin targets and every
+    gate round re-prompted for the prompt-file/plan writes — the exact MIN-27 problem they existed to
+    fix. `brainstorm`, `gemini-review` and `codex-review` now carry Edit-form grants, and
+    (AF-8) `brainstorm`/`create-feature-plan` carve `docs/planning/.verdicts/**` back out via
+    `disallowed-tools`, so gitignore-`**` dot-directory matching cannot pre-approve direct edits of
+    the gate's verdict artifacts.
+  - **AF-2:** `test_plugin_state_store.py`'s dual-shell tests now SKIP (not ERROR) when a shell is
+    absent — a zsh-less Linux box no longer gets a false-red from the CLAUDE.md validation list; CI
+    still asserts zsh presence so the arm cannot silently skip there.
+  - **AF-3/4/5/9:** the review skills now state the wrapper contract they enforce — plan-only
+    binding with the debug-review paths spelled out, write-both-prompts-then-freeze-the-tree round
+    hygiene (with the consumer-repo gitignore globs in README Installation), and the 1000-byte
+    assembled-prompt floor (whose refusal message now says what to do about it).
+    `create-feature-plan` routes its snapshot through the contained `snapshot-plan.sh` wrapper.
+  - **AF-12:** `isolated-kimi-review.sh` takes the plan as an operand (default unchanged) and
+    prints the basis-checked plan per round — usable as the codex-quota stand-in; the codex-review
+    skill documents that flow (the scripted quorum still records `codex=MISSING` by design).
+  - **AF-19/20/21 (MCP, each with a new regression test):** clean exit 0 on a client-teardown broken
+    pipe; JSON-RPC `-32700` (id null) for malformed lines instead of a silent drop; a reply for a
+    buggy request-shaped `notifications/initialized`.
+  - Plus the LOW batch: harness stderr no longer discarded (AF-10), `--` before codex's positional
+    prompt (AF-11), TTY-stdin refusals in `resolve-plan-gate.sh`/`reviewer-roster.sh` (AF-13),
+    stale `MultiEdit` dropped from both hook matchers (AF-16), §9.1's script citation corrected
+    (AF-14), README hook-table/kill-switch corrections (AF-15/18), CHANGELOG provenance note
+    (AF-17), MCP `import re`/README `content[]` cleanups (AF-22/23). The callers-scan exemptions
+    manifest is regenerated (line-pinned records shifted with the edits).
+
+### Added
+
+- **`docs/audits/PLUGIN_AUDIT_2026-08-17.md` — full plugin soundness audit at v2.8.0.** All shipped
+  validators/suites green; the plan-review gate exercised end-to-end and attacked (7 forgery/staleness
+  attacks, all refused); the MCP server driven through a live 35-check JSON-RPC handshake; every claim
+  re-verified against the live Claude Code docs; **all 10 majors from the 2026-07-19 audit verified
+  remediated**. New findings: 1 HIGH (AGENT_CONTRACTS §9 floor row contradicts §9.1 + the shipped
+  reviewer frontmatter), 7 MEDIUM (zsh-absent test errors-not-skips; debug reviews unreachable through
+  the granted wrappers; create-feature-plan's uncontained snapshot call; the unstated freeze-the-tree
+  round rule; bare-vs-namespaced canonical drift; stale gemini model in CLAUDE.md; the `.verdicts/`
+  write-grant verification task), 15 LOW, 3 INFO — none affecting verdict integrity.
+
+## [2.8.0] — 2026-08-14
+
+### Added
+
+- **COREDEV-2617 §4.2a — the plugin-state base store.** A shell that never receives
+  `CLAUDE_PLUGIN_DATA` — a git hook, an ordinary terminal — can now discover the plugin-data base
+  anyway. Each publisher records its base in `~/.claude/unleashed-mail/bases/` under a name that is
+  an injective encoding of the value, so two publishers holding different bases never write the same
+  file and a disagreement surfaces as a visible `conflict` instead of a silent second directory.
+  Darwin arms only; the Linux arms remain deliberately unbuilt until
+  `scripts/review/linux-primitive-probe.sh` has been run on a Linux host and its output transcribed.
+  - `scripts/lib/plugin-state-store.sh` — the Invariant P key encoder (a single byte walk under
+    `LC_ALL=C`, four disjoint markers, zero forks), the nearest-existing-ancestor walk, the
+    `NAME_MAX` budget, and store creation in the order that validates the existing prefix _before_
+    creating anything.
+  - `scripts/lib/plugin-state-auth.sh` — the one authentication predicate both the reader and the
+    publisher call, the chain walk with its trust-anchor ownership rule, and the Darwin ACL arm.
+  - `scripts/lib/plugin-state-reader.sh` — the ordered reader rules −1 through 4.
+  - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
+  - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
+    in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 137 rows
+    executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
+    shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
+
+### Changed
+
+- `scripts/lib/paths.sh` resolves in three steps: the environment variable wins and is the only
+  branch a publish is reachable from; otherwise the store is consulted; otherwise the pre-existing
+  unresolved envelope, unchanged.
+- `scripts/test-hooks.sh` disables publication (`_UNLEASHED_PUBLISH_OK=0`). It tests hooks, not
+  publication, and its temporary plugin-data directory lands under `/tmp`, which on Darwin is a
+  symlink to a world-writable directory — so the publisher correctly declines to publish there and
+  said so on stderr, inside assertions that require it to be empty.
+- **The three review-isolation harnesses (`isolated-agy-review.sh`, `isolated-codex-review.sh`,
+  `isolated-kimi-review.sh`) review a PRIVATE clone and compare it by CONTENT.** The disposable
+  checkout was a `git worktree add` — a linked worktree whose `.git` points into the maintainer's
+  real repository, so a shell-capable reviewer's `git config core.hooksPath`, `git commit` or
+  `git stash` landed in the live `.git` — and the "did the reviewer write anything" probe was
+  `git status`, which is metadata the reviewer controls (commit it, `--assume-unchanged` it, drop
+  a nested self-ignoring `.gitignore`, repoint `.git`); every one of those passed. The checkout is
+  now `git init` + a fetch of the one commit (no remote, no alternates, no hardlinks — the
+  reviewer's git is usable and fully private), and both harness probes hash every path's bytes
+  through the shared `disposable_fingerprint`, failing closed when the tree cannot be read. The
+  live-checkout fingerprint additionally covers the gate-bearing, git-ignored
+  `docs/planning/.verdicts/`. (PR #67 review pass 6, and its adversarial verification.)
+
+### Fixed
+
+- **Three more pieces of inherited shell state, the same class as the `noglob` defect (rows 186-188b).**
+  Found by codex on the pushed head; each reproduced in both shells before it was fixed, and each is an
+  ORDINARY setting a user or a wrapper script can leave switched on, with no attacker anywhere:
+  (1) `shopt -s failglob` made the store scan **abort the sourcing shell** when the store was empty —
+  `failglob` is a separate option from `noglob` and the round that fixed `noglob` did not cover it, so
+  the scan now saves, clears and restores it beside the `set -f` handling it already had;
+  (2) `shopt -s nocasematch` made the key encoder's `case` arms case-insensitive, so `/A` encoded to
+  `_sa` — the SAME key as `/a` — which is an Invariant P injectivity violation reached without any
+  attacker: two different bases, one file. The encoder now forces case-sensitive matching for the byte
+  walk and restores the caller's setting (`/a` → `_sa`, `/A` → `_s_ca`, matching zsh and the control);
+  (3) a **readonly `LC_ALL`** killed the sourcing shell outright in both shells, because the encoder
+  pins `LC_ALL=C` for its byte walk and an assignment to a readonly is fatal under `set -e`. The
+  encoder now detects the attribute **without forking** — ENC-2 requires the whole key derivation to
+  fork zero times and row 045 pins that with `ulimit -u 1`, which the obvious `declare -p` probe
+  breaks — and accepts a readonly `C` or `POSIX` unchanged while refusing anything else. `C.UTF-8` is
+  refused deliberately: it is a UTF-8 locale, and under it the two shells produced DIFFERENT keys for
+  the same base (`_scaf_xc3` vs `_scaf_xe9`, against the correct `_scaf_xc3_xa9`).
+  A regression inside that third fix is worth recording because tests caught it and re-reading did
+  not: bash's only fork-free readonly probe is `unset -v`, and a _successful_ unset destroys the
+  variable's EXPORT attribute, so a caller that had exported `LC_ALL` got it back unexported and
+  child processes silently ran in a different locale. The restore now re-exports (row 188b asserts the
+  ENVIRONMENT, not the value). STATED DEVIATION: a caller whose `LC_ALL` was set but deliberately NOT
+  exported gets it back exported.
+- **E2b's fold runs before E2a creates anything.** A `CLAUDE_PLUGIN_DATA` spelling with `..` ahead of
+  an existing symlink had its components created THROUGH that link and outside the authenticated
+  chain, and only then was refused: `<h>/new/../link/created` left `<h>/new` and `<d>/outside/created`
+  on disk while the publish reported `failed`. The fold is purely lexical and needs no path to exist,
+  so it now runs first and the creation authenticates the nearest existing ancestor of the FOLDED
+  path — here the symlink itself, which ST-4 refuses — leaving nothing behind. A refusal that leaves
+  damage is not a refusal; this is the second instance of that shape found on this branch, and both
+  are now guarded by row 180.
+- **The publisher applies ST-3 to an existing store (row 185).** Found by an independent pre-merge
+  review of the unreviewed head. `_unleashed_create_store` authenticates the CHAIN — which refuses
+  group- or other-WRITABLE components — and never applied ST-3's exact-0700 test to `bases/` itself,
+  so a store at 0750, 0755 or 0701 was ACCEPTED and written into while the reader, which does apply
+  that rule, refused the same store: measured in both shells, publish `created` with zero diagnostics
+  and one entry on disk, then `ok=0 state=stale` for every later reader — permanently, and with
+  nothing said. The publisher now uses the READER'S OWN predicate rather than a second copy of the
+  rule, so the two cannot disagree. A fresh install is unaffected (the store is created `mkdir -m
+700`); the state this fixes arises when a store's mode is changed by something else — a `chmod -R`,
+  an unarchiver applying umask, a sync tool that drops modes.
+- **The hook cost: 783 ms to ~250 ms per hook, in two verified steps.** `swift-lint-check.sh`
+  (PostToolUse Write|Edit|MultiEdit) and `swift-build-verify.sh` (PostToolUse Bash) both source the
+  state family, so this was paid on every file edit and every shell command. PF-1 batches the auth
+  chain's syscalls behind the two existing accessors — one `stat` and one `ls -lde` for a whole chain
+  instead of two forks per component — and PF-2 removes the two subshells `_u_acl_ok` spent per
+  component, parsing the enumeration by parameter expansion instead of a pipeline. Measured on the
+  same machine and store: publish 783 → 248 ms (bash) and → 200 ms (zsh), reader 282 → 106 ms.
+  Neither step changes a verdict: PF-1 was proved by 27 fixtures × 2 shells and PF-2 by 18, both at
+  zero divergence, each with negative controls that flip the expected cells, plus a 38-shape
+  differential fuzz of the ACL answer machine matching exact exit codes. RESIDUAL, stated: ~89 ms of
+  what remains is the command substitution in `_u_acl_ok`; removing it requires migrating the ACL
+  seam's contract from stdout to a variable and with it every fixture in the obligation suite — a
+  change to what the obligations test, not plumbing, and deliberately not done here. A cache-served
+  fast path was built, measured at a further 1.33x, and REJECTED: the prefetch fills from the real
+  `/bin/ls` whether or not a fixture redefined the enumerator, so it served the machine's answer past
+  three seams the shipped build refuses and would have silently disarmed some fifteen mutant rows.
+- **Seventeenth review pass (codex) and the honest-run battery — the five category-1 defects that
+  made this store unusable in ordinary conditions.** Every one is triggered by a normal environment
+  with no attacker: (1) the store scan forces globbing on and restores the caller's setting — with
+  `set -f`, `setopt noglob` or an inherited `SHELLOPTS=noglob` a HEALTHY store reported zero entries
+  in both shells; (2) a plugin-data base that does not exist yet is CREATED rather than refused, so a
+  first session seeds instead of printing a publication failure from every hook — the parent chain is
+  authenticated before anything is created and the directory is made at 0700, because the first
+  version wrote before authenticating and inherited the ambient umask (0775 at `umask 002`, which its
+  own chain then refused forever); (3) the published base is folded LEXICALLY so one directory yields
+  one key — `.`, `..` and repeated slashes had produced one entry each and a permanent `conflict` —
+  and, when folding changes the string, both spellings must name the same inode, because a lexical
+  `..` pops a symlinked component the kernel would have followed and the entry then advertised a
+  different directory than the writers used; (4) the publisher rescans once before reporting a repair
+  state, so two hooks publishing the SAME base no longer report a false `stale` (measured 3 of 8
+  before, 0-3 per 64 after, against a mutant's 11-38); (5) PUB-9 E1's HOME precondition states that it
+  cannot detect an absent `HOME` under zsh, which fills it from the passwd database before any sourced
+  line runs — the reliable opt-out is `_UNLEASHED_PUBLISH_OK=0`, verified in both shells.
+  A physical `cd -P`/`pwd -P` fold was tried first and rejected by measurement: bash returns the
+  spelling asked for and zsh the on-disk case, so it introduced a cross-shell divergence worse than
+  the defect. Mutant rows 179-183 pin all five, each measured against a mutant that restores the old
+  behaviour.
+- **Fifteenth review pass (codex) — six findings, each reproduced.** Config-referenced paths are read
+  the way Git reads them: `core.hooksPath` with `--path`, so the supported `~/hooks` form is no longer
+  fingerprinted as a nonexistent `<root>/~/hooks` while Git executes `$HOME/hooks/pre-commit`. The
+  files config POINTS AT are recorded, not just the text naming them — `core.excludesFile`,
+  `core.attributesFile`, and every `file:` origin reported by `--show-origin`, which also covers
+  `include.path` / `includeIf` and the global and system config and closes the "a file outside the
+  repository is not covered" residual. The tracked half records STAGED OBJECT IDS (`ls-files --stage`):
+  `update-index --cacheinfo` swapped the staged blob while `status` printed the same `MM` and the
+  fingerprint did not move. `tree_fingerprint_report` runs its probes through the safe git wrapper, so
+  a planted `core.fsmonitor` is not executed by the report that runs after a mutation is detected. The
+  reader re-tests the entry PATHNAME after the read (ENT-2c): an equal inode proved the bytes, not that
+  `base.<key>` is still the bare file ENT-1 validated — a rename-aside plus a symlink at the entry name
+  was accepted (row 178). And the kimi harness now labels its effort token `(self-reported)` with the
+  digest of the bytes it read: that log lives inside the reviewed process's own writable session tree,
+  so it attests to an honest run's tier and to nothing about an adversarial one.
+- **Pre-push sweep of the fourteenth pass — eight more findings, each reproduced, five of them in the
+  state libraries.** The library directory every resolver copy sources from is derived without any
+  external command (`dirname` is PATH-resolved, and dropping `/usr/bin` from PATH made the four
+  libraries "unreadable" beside the file, so the presence fallback trusted an imported reader — row
+  174). Discarding an inherited instance stamp is errexit-safe: zsh's `unset -f` returns 1 for an
+  undefined function and killed the sourcing of every copy under `set -e` (row 175). The readonly-
+  attribute test reads the flag letters only — the attacker-supplied VALUE could furnish both the `r`
+  and the variable name and pass as readonly (row 176). `$EUID` is never consulted: bash 3.2 imports
+  it from the environment, so `EUID=4242` turned a healthy store `stale` and a publish `failed`; the
+  effective uid is now a seam-probed, per-resolution value (row 177). In the review harness: the
+  transcript operand's reconstructed path collapses a leading `//` (POSIX keeps it, so `//tmp/x` and
+  `//<repo>/tracked` passed both refusals and a tracked file was overwritten) and its physical prefix
+  is now tested on its own (the old `|| exit 1` sat on an assignment whose last substitution was
+  `basename`, and was inert). The live-tree fingerprint resolves the real git directories instead of
+  assuming `$root/.git` is one — in a linked worktree, which is where this campaign's own reviews run,
+  `.git` is a FILE and `config`/`info/exclude` were recorded ABSENT, so `core.hooksPath` tampering
+  passed every gate — and it now records `HEAD`, `config.worktree`, `info/attributes`,
+  `objects/info/alternates`, every entry of the hooks directories, and macOS ACLs (`chmod +a` left
+  every record byte-identical). Probes run with `--no-optional-locks -c core.fsmonitor=false` so the
+  gate never writes the live index or executes a planted fsmonitor hook.
+- **Fourteenth review pass (codex) — six findings, each reproduced.** The state-machinery loader
+  re-sources its four libraries whenever they are readable beside it instead of trusting a present
+  namespace: bash `set -a` exports functions, so a parent's tampered `_unleashed_read_store` beside
+  genuine names was trusted and resolved `/attacker` (row 172; all five resolver copies). The instance
+  stamp is set once, only when absent, and globally — bash treats a repeated `readonly X=1` under
+  `set -e` as fatal even behind `|| :`, so the bridge's legitimate re-resolution exited the sourcing
+  shell; and zsh's `readonly` inside a function was function-local, so the zsh arm never held the
+  attribute (row 173). The live fingerprint records the checkout root's own lstat (`chmod 777
+<checkout>` was invisible), every record's identity (`dev:inode:nlink` — a hard-link swap with
+  identical bytes was invisible), and `.git/config` / `.git/info/exclude` by lstat before content (a
+  symlink to an identical external copy hashed the same). The kimi harness normalises the reconstructed
+  transcript path lexically before the refusals (`/x/missing/../repo/tracked` passed the prefix check
+  and overwrote a tracked file before the void).
+- **Thirteenth review pass (codex) — four findings, each reproduced.** Store creation (E4 step ii)
+  authenticates a component that is present but was absent at step (i) before creating anything
+  beneath it — a symlink planted in between had the next `mkdir` create a directory outside the store
+  (row 171). The live fingerprint records the lstat of every tracked path's ancestor directories
+  (`chmod 777 scripts` was invisible). The kimi harness computes the transcript's physical path
+  without creating anything and applies every refusal before its first `mkdir` (a refused operand
+  used to leave its parents behind, even through a symlink into `.git`). The plan-citation linter's
+  negation exemption is asymmetric — post-position negations belong to the citation they follow,
+  pre-position forms must sit immediately before it — so one negation no longer exempts two
+  references in one sentence; codex's example is a self-test seed.
+- **Twelfth review pass (codex) — four findings, each reproduced.** `paths.sh`'s definitions are
+  now unconditional (bash `set -a` exports every function, so "the complete API is present" was
+  satisfied by an inherited namespace carrying an attacker's resolver — the guard skipped the
+  definitions and the eager call ran it); the family files source `paths.sh` unconditionally when
+  readable and define their fallback state test unconditionally. The agent bridge discards this
+  instance's resolution before resolving (sourced after another resolver it left
+  `_UNLEASHED_BASE_RESOLVED=A` beside `CLAUDE_PLUGIN_DATA=B`). The kimi harness contains its prompt
+  operand through the shared `containment.py` (a `../` traversal or an in-repo symlink sent any
+  readable file to the reviewer) and refuses a transcript inside the live checkout (the harness would
+  void its own round, or overwrite a tracked file). Row 170; rows 158/167 reshaped.
+- **External audit of PR #67 (review 4943022906) — the two findings its five had left open.** The
+  audit was a body-only review with no inline threads, and the remediation loop triaged threads, so
+  findings 1 and 5 were missed until asked about; findings 2, 3 and 4 had been fixed through the
+  overlapping codex threads. (1) The ACL principal is now resolved by NAME and by UUID
+  (`/usr/bin/dsmemberutil getuuid -U <name>`, one fork per resolution, fail-closed to "no self
+  UUID"): on hosts where `ls -lde` renders the effective user's own ACE as a bare UUID, that ACE was
+  refused as foreign and the publisher reported `failed`; a bare UUID equal to the resolved UUID is
+  now self, every other bare UUID stays foreign (row 129 refined, row 169). The Darwin ACL fixture
+  fails loudly if `chmod +a` fails and asserts the ACE landed. (5) A two-process acceptance test:
+  a hook-shaped process publishes through the real `marker_write`, a fresh standalone process
+  reads and writes through the same entry points into ONE file, through `paths.sh` and each
+  fallback copy, both shells; and set-publisher → unset-reader agreement through every resolver
+  copy. The audit's macOS PR-gate recommendation is a billing decision left to the maintainer.
+- **Eleventh review pass (codex) — five findings, each reproduced.** The once-per-process key
+  gains what no environment carries: `exec` keeps `$$` and an `allexport` wrapper carries every
+  variable (in bash, every function) across it, so an exec'd hook kept the wrapper's stale base;
+  resolution now stamps `readonly _UNLEASHED_BASE_INSTANCE`, and each sourcing discards a value that
+  arrived without the attribute (`declare -p`/`typeset -p` show `-r` only in the setting instance).
+  `paths.sh`'s definition guard requires the complete resolver API, not one `export -f`-able
+  function. The reader binds the opened entry to the INODE ENT-1 validated (bash `/dev/fd/N`
+  reports it; zsh `zstat -f`), so a same-uid `0644` copy with valid content is refused without a
+  second mode check that would mask ENT-1's mutants. The live fingerprint hashes the union of
+  HEAD-tracked and index-tracked paths (a staged-deleted, ignored file's edits were invisible). The
+  kimi harness binds its effort evidence to the ONE session directory created during the run — set
+  difference before/after — never to an id read out of reviewer-controlled transcript text. Rows
+  166–168.
+- **Tenth review pass (codex) — four findings, three reproduced, one closed on principle.** The
+  live-checkout fingerprint no longer trusts the live index: `git diff HEAD` (which
+  `update-index --assume-unchanged` / `--skip-worktree` silence) is replaced by a per-tracked-file
+  content probe (type/mode/size/sha256, JSON paths, fail-closed on a failed listing), plus the
+  repo's own `.git/info/exclude` and `.git/config`, and the `.verdicts` root's own lstat (a symlink
+  swap of the directory is recorded even under an ignore rule that would hide it from `status`).
+  The kimi harness snapshots the prompt ONCE (`cp` into its private directory, created before any
+  fingerprint), derives the reviewer's argument from that snapshot alone, reports `PROMPT=` as the
+  digest of the ARGUMENT bytes (the file's digest differs by the trailing newlines command
+  substitution strips), and compares the live file byte-for-byte with the snapshot after the run;
+  and it canonicalises every transcript operand physically (`cd -P`/`pwd -P`) before the `/tmp`
+  refusal — an absolute `/repo/../../tmp/x` or a symlinked parent had slipped past it.
+- **Ninth review pass (codex) — four findings, each reproduced.** `disposable_fingerprint`'s
+  serialisation is injective (path and link-target fields JSON-encoded): a reviewer that deleted
+  `b` and renamed `a` to `a<newline><b's record>` produced a byte-identical fingerprint. The kimi
+  harness binds its prompt: bytes captured before any fingerprint, `PROMPT=<digest>` on the summary
+  line, and a prompt file that changes during the round voids it (the prompt is git-ignored, so no
+  tree fingerprint could see it). The SessionStart store notice is evaluated before the hook's
+  source filter and kill switch, so `conflict`/`stale`/`failed` reach `clear` sessions too.
+  `validate-plan-citations.py --fix-citations` exits non-zero when an anchor is unresolved instead
+  of reporting a repair it did not make. Row 165; a first test file for the kimi harness.
+- **Eighth review pass (codex) — three findings, each reproduced.** The live-checkout fingerprint the
+  three review harnesses compare around a round now includes the resolved HEAD: `status` and
+  `diff HEAD` are both empty before and after a clean commit made mid-round, so an author who edited
+  and committed while the arms ran left the fingerprint identical (rule: an author commit voids the
+  round). The publisher's ST-7 presence test tests `-L` independently of `-f` (which follows a
+  link): a `base.<key>` symlink to a regular file was `mv -f`'d over and reported `created`. The
+  reader's rule 4 ("the store does not exist at all") is decided by a walk from `/`, not by `-e` on
+  the full path: a store hidden behind an unsearchable ancestor was reported `none` (silent) instead
+  of rule −1's `stale` (which fires the SessionStart notice). Rows 163–164; a harness test for the
+  mid-round commit.
+- **Seventh review pass (codex) — five findings, and what executing them uncovered.**
+  - The family's "already resolved / already loaded / already sourced" guards were bare flags
+    (`_UNLEASHED_BASE_OK`, `_UNLEASHED_STATE_LOADED`, `_UNLEASHED_PATHS_SH_LOADED`) that a child
+    process inherits from its environment without inheriting the functions or the meaning: an
+    inherited `_UNLEASHED_BASE_OK=1` alone made `marker_dir` return `/.state` — the root path D′
+    exists to prevent; an inherited `_UNLEASHED_STATE_LOADED=1` produced `command not found` and
+    every protocol variable unset. The keys are now process identity (`_UNLEASHED_BASE_PID = $$`)
+    and function presence, in all five resolver copies; the resolver resets its diagnostic guard
+    on entry.
+  - The publisher's two status captures were bare calls (`cmd; rc=$?`), which under `set -e` abort
+    the sourcing shell before the E5/E6 classification — measured: `set -e; . paths.sh` with the
+    store unwritable exited 2 with no diagnostic. Both are errexit-safe; a 48-scenario `set -eu`
+    sweep across publish/read/family passes in both shells.
+  - The reader opened the entry a SECOND time to read it after validating the pathname; a FIFO or a
+    large file substituted in between was read instead of what was checked. The entry is opened
+    once and validated on the descriptor before a bounded read (zsh: `sysopen -o nonblock` /
+    `zstat -f` / `sysread`; bash: `/dev/fd/N` + `read -n`, with the FIFO window stated as P-5's
+    residual).
+  - `log_append` stamps `base_resolution` on every JSON-object record — the four log producers
+    never did, so `pointer` and `host-env` records were indistinguishable.
+  - The plan-citation linter's negation exemption is scoped to the citing sentence (a 260-char
+    window let a neighbouring "does not exist" launder an unrelated fabricated reference).
+  - **Pre-existing zsh defects the new fixtures exposed:** `log_append`, `marker_write`,
+    `marker_field`, `marker_mtime`, `context_review_round_bind` and `_lookup` declared `path`
+    (zsh's `PATH`-tied array — the function's `PATH` became empty and `mkdir` was not found, so
+    `log_append` had been a silent no-op under zsh since it was written) or `status` (read-only in
+    zsh — `marker_write` aborted); `marker_write`'s sentinel glob aborted under zsh's `nomatch`;
+    `marker_field` read captures from `BASH_REMATCH`, which zsh does not fill. All fixed; the writers
+    now behave identically in both shells. Mutant rows 156–162.
+- `plugin-state-publisher.sh` wrote the transient in TWO opens — an exclusive create, then a plain
+  `>` on the same pathname to write the value — and the second open had none of the first one's
+  protection: a symlink substituted between them was followed and its target overwritten (both
+  shells). The value is now written through the descriptor the exclusive create returned; a
+  refused create with the name present is a lost race (one TMP-1 attempt), with the name absent
+  it is E6; `SIGXFSZ` is ignored inside the subshell so a size limit is `EFBIG` and not a signal
+  death bash reports on the caller's stderr; zsh's `CLOBBER_EMPTY` is pinned off. Mutant rows
+  153–155 execute the three outcomes. (PR #67 review pass 6.)
+- `scripts/lib/context.sh` derived its own directory _inside a function_, where `$0` is the function
+  name in zsh rather than the sourced file. The returned path lost `scripts/lib` — wrong by two
+  levels — on the very path the plugin documents for a zsh Bash tool. It is now captured at source
+  time.
+
+## [2.7.1] — 2026-08-08
+
+Seven successive review passes over the 2.7.0 bytes, newest first. Every fix carries a proof
+that fails when the fix is reverted.
+
+### Fixed
+
+#### seventh pass — the prompt rewriter
+
+- **The prompt rewriter corrupted paths that merely share the checkout's prefix.** Staging replaced the
+  repository root as a raw substring, so with the checkout at `…/Unleashed Mail` a prompt naming
+  `…/Unleashed MailTests/AuthTests.swift` became `<tree>Tests/AuthTests.swift` — a path that does not
+  exist. The reviewer then silently reads nothing while the residue and digest checks pass and the
+  round stays valid. `Unleashed Mail`, `Unleashed MailTests` and `Unleashed Mail.worktrees` are all
+  real sibling directories in this project's own layout, so this was the ordinary case for an app
+  review, not a contrived one. The rewrite (and the residue check with it) now matches only where the
+  root is a COMPLETE path component.
+
+`COREDEV-2642` — remediation of two further PR #63 review passes over the 2.7.0 bytes. Twenty-one
+findings; every fix carries a proof that fails when the fix is reverted. Suite 701 → 731.
+
+#### first recheck pass
+
+- **The reviewer identity is now allocator-ATTESTED, not parsed from the filename.** The `.launch`
+  record carries `<run id> <reviewer>`, and `review-verdict` reads the identity from it. A rename
+  defeated the two-arm quorum in both directions before: a name outside the allocator grammar made the
+  identity check `continue` (it was the only reader), and a canonical name with the reviewer field
+  swapped was satisfied by a record that bound the run id alone. `pty-capture` refuses a record whose
+  reviewer disagrees with the leaf before spawning, so the mismatch costs milliseconds, not a review.
+- **Deleting `<transcript>.planbytes` no longer downgrades either arm to the live plan.** Both
+  isolation harnesses required the bound snapshot only when it happened to exist, so `rm` was the
+  cheapest attack on the strongest binding in the chain. The requirement is now unconditional and the
+  live-plan fallback is deleted, along with `stage-bound-plan.py --live`: both harnesses run
+  `pty-capture --allocated`, which refuses a leaf without a valid `.launch`, so no run that could
+  complete ever reached it. The same fallback existed for the PROMPT binding and is closed the same
+  way; `stage-prompt.py --record` is now required rather than optional-with-a-comment-claiming-otherwise.
+- **Validation and the read are one operation for every contained operand.** `contained_regular_file()`
+  validates a NAME and every consumer re-opened that name with a leaf-only `O_NOFOLLOW`, which says
+  nothing about ancestors — so a same-account process could swap a validated operand's PARENT for a
+  symlink in between. The descriptor walk that closes it moved from `snapshot-operands.py` into
+  `containment.py` beside the validator, and `bind-prompt.py` (which binds the plan) now uses it.
+  `snapshot-plan.sh` and `persist-verdict.sh` pass on the resolved path containment returned instead of
+  discarding it and handing `review-verdict.py` the caller's original spelling.
+- **The grant validator reads every YAML list spelling.** Quoted items (`["Bash"]`, `- "Bash"`) and
+  multi-line flow lists kept their quotes or brackets, so the exact-token comparison every consumer
+  makes matched nothing and a model-invocable `allowed-tools` deny-list was disarmed by two characters.
+  Thirteen spellings of one list are now asserted to reach one verdict.
+- **The COREDEV-2607 reviewer-mutation detector is content-aware in both harnesses.** `git status
+--porcelain` emits one line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the
+  line byte-identical and the gate-bearing before/after comparison saw nothing. The fix existed in
+  `preflight-agy.sh` and had not reached either harness; the rule now lives in `tree-fingerprint.sh`
+  and all three source it.
+- **The allocator's private chain enforces ownership and mode on ancestors it did not create.** The
+  anchor and the `FileExistsError` race branch checked only "is it a directory", so a component raced
+  into place as a mode-0777 directory was adopted and the private subtree built inside it — rename
+  permission comes from the parent, which is what the base candidate's check already knew.
+- **Both `review-verdict` writers refuse a planted target.** The predictable `<dest>.tmp.<pid>` staging
+  path accepted a HARD LINK (a link is a regular file, so `O_NOFOLLOW` allows it) and `O_TRUNC` emptied
+  the victim at open, before any check; and the self-ignoring `.gitignore` used `os.path.exists`, which
+  is FALSE for a DANGLING symlink, so a planted link was written through.
+- **A blank recorded plan identity is refused, not treated as absent.** `.strip()` made a
+  whitespace-only field indistinguishable from no field, which switched off the identity comparison
+  that exists because two distinct plans with identical bytes share a digest.
+- **`callers_scan` treats the whole invisible class as invisible.** General category `Cf` misses the
+  rest of `Default_Ignorable_Code_Point` — including U+3164 HANGUL FILLER, category `Lo` and zero
+  width — any of which splits an ASCII anchor while rendering identically. The residue is a SET with
+  an exact ASCII fast path, not a range scan: the first shipped form put a 13-range linear scan in a
+  per-character predicate and made the scan-heavy tests 4.1x slower, which timed CI's `validate` job
+  out. The current form is 1.3x FASTER than the code before the fix, which called
+  `unicodedata.category` for every ASCII character.
+- **`pty-capture` bounds captured output at 64 MiB (exit 125).** `--timeout` bounded wall-clock and
+  nothing bounded bytes, so a reviewer stuck in an output loop accumulated everything it printed for
+  the whole budget.
+- **`changeset.sh` no longer silently narrows to `HEAD~1`.** Two modes fell back to the last commit
+  when the authoritative diff failed — the exact narrowing `detect_base` dies to prevent — and the
+  third read its diff through a process substitution, where `die` exits only the subshell and the loop
+  reports "no untested files" for a diff that never ran.
+
+#### second recheck pass (10 further findings)
+
+- **A prompt naming `X_PLAN.md.bak` bound cleanly to `X_PLAN.md`.** `_PLAN_REFERENCE` stopped at `.md`
+  and required no boundary, so the reviewer was instructed to read a sibling while the transcript and
+  artifact attested to the plan. Nothing is extracted from `.md.bak` now, so the prompt is refused for
+  naming no plan rather than mis-bound; the sentence-period, comma and bracket spellings still bind.
+- **`<transcript>.planbytes` is read at verdict-write time.** It was written by the binder, staged by
+  both harnesses as the bytes the reviewer actually read, and compared by nothing — so a snapshot
+  rewritten after binding produced an artifact that still validated. Honest scope: this closes the
+  uncoordinated family; a same-account process that replaces BOTH sidecars coherently and restores
+  both is not defended against and cannot be by any file-based binding.
+- **The capture cap held on one of three append paths.** Both drain sweeps called `raw.extend()`
+  without rechecking, so a child emitting just under the limit, spawning a descendant that retains the
+  PTY and exiting drove the wrapper past it — the reviewer measured 70,561,968 bytes captured at exit 0.
+- **The `.launch` preflight could hang forever.** `lstat` then a plain `open()` of the same name is
+  both a check-then-use and a blocking open: a FIFO planted in that window waited for a writer that
+  never came, before the fork and before the timeout clock. One `O_NOFOLLOW|O_NONBLOCK` open now, with
+  the checks made on the descriptor.
+- **The reviewer-mutation detector missed writes inside an untracked directory.** Git collapses one to
+  a single `?? dir/` line. The disposable checkout is compared with `--untracked-files=all`; the LIVE
+  tree deliberately is not, because the allocator writes its own per-run files there between the two
+  snapshots and expanding them voided every honest round (reproduced: six harness tests).
+- **`stage-bound-plan.py` accepted a `.plan` truncated to its digest**, spending a full round on
+  evidence `review-verdict.py` was guaranteed to reject. The complete grammar is checked at staging.
+- **The agy preflight returned before its mutation check**, so an `agy` that modified the checkout and
+  then exited non-zero was reported only as "unavailable". The fingerprint comparison runs first.
+- **`containment.repository_root()` stripped a trailing run of newlines** — the third narrowing of the
+  same mistake (`strip()` ate a space, `rstrip("\n")` ate a legal trailing newline). Exactly one
+  terminating byte is removed now.
+- **The bashless-agent check exempted any line starting with `grep`**, so `grep … | grep -v …`,
+  `grep … | wc -l` and `grep … || echo …` passed as native-Grep-compatible. Four shipped agents carried
+  fifteen such recipes whose audit sections produced nothing; all fifteen are rewritten as single
+  greps with the filtering stated in prose. The new check is quoting-aware, because `"A\|B"` is
+  alternation, not a pipe.
+- **`cleanup --apply` printed attempted counts under the word "removed"** — "removed 39 manifest
+  files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
+  zero-removal run cannot be distinguished from a wrong state root.
+
+#### sixth recheck pass
+
+- **A reviewer that destroyed the LIVE checkout's `.git` passed as a clean tree.** `tree_fingerprint`
+  suppressed both probes, so with the metadata gone the fingerprint became the bare record separator —
+  byte-identical to the one taken before. It returns non-zero now and every caller voids the round.
+  The disposable-checkout half of this was fixed one commit earlier; the live half was not.
+- **The legacy-transcript digest was taken by a second, unprotected open.** `_sha256_bytes` blocks and
+  follows symlinks, after the `isfile`/size checks — reachable for non-approving legacy records, where
+  a planted FIFO wedges the persist step and a symlink makes the artifact record another file's digest.
+- **`APPROVE_WITH_NITS` aborted an otherwise valid dual approval.** `agy` emits it, the synthesis
+  normalizes it for the combined verdict, and the skill then required the reviewer argument to be
+  passed byte-for-byte — handing `persist-verdict.sh` a token it rejects. The skill now says to rebuild
+  the spec with the canonical status and the path remainder unchanged.
+- The relocated-plugin fixture copies the whole review directory rather than a hand-kept list. It had
+  learned about a new shared sibling three times; `tree-fingerprint.sh` was the fourth, and only the
+  fail-closed change above made it visible instead of silently degrading.
+
+#### fifth recheck pass
+
+- **A plan over 64 KiB could never be persisted.** The `.planbytes` check added earlier in this release
+  hashed the snapshot through `_read_regular_file_bytes`, whose cap bounds untrusted PARSING of small
+  sidecars — so any plan above it hashed a truncated prefix, disagreed with its own record, and every
+  approving persist was rejected as a modified snapshot. Five plans in this checkout are over the cap
+  (largest 204 KB). Streamed now, exactly as the prompt-snapshot check beside it already was.
+- **A `]` inside a YAML comment ended the flow-list fold early**, so `allowed-tools: [ # tool list ]`
+  recorded `[ Bash` and the bare-grant deny-list matched nothing while Claude's parser granted
+  unrestricted shell. Comments are stripped per folded line, quote-aware — stripping only after joining
+  discards every item past the first comment, which is the same bypass one step along.
+- **A prompt naming the plan through a symlink ALIAS defeated the isolation.** `prompt_disagreement`
+  resolved it and accepted, but `stage-prompt.py` rewrites by literal-byte substitution of the
+  canonical path — so a prompt with no canonical bytes was not rewritten at all and both "isolated"
+  reviewers were left pointed at the live plan. Alias spellings are refused; the canonical form the
+  gemini skill generates still binds.
+- **`git status` failing in the disposable checkout counted as a clean tree.** `|| true` turned the
+  failure into an empty string, so a reviewer that removed the checkout's `.git` broke the detector
+  meant to catch it and the round returned 0 with `VERDICT: APPROVE`. Any non-zero status voids it.
+- **`containment.repository_root()` raised on a path byte the filesystem allows.** `text=True` decodes
+  strictly, so a repository named with a non-UTF-8 byte killed every wrapper with a traceback before
+  containment could run. Captured as bytes and `os.fsdecode`d.
+
+#### fourth recheck pass
+
+- **`pr-review` could approve a PR having inspected nothing.** `changeset.sh`'s base detection used
+  `git merge-base`, which succeeds on ANY shared ancestor — so a local `1.0X.0000` that had advanced
+  past the feature branch (after a local test merge, say) satisfied it, the remote fetch was skipped
+  as unnecessary, and `git diff BASE...HEAD` then took HEAD itself as the merge base and reported an
+  EMPTY changeset. Reproduced on a two-commit branch: the heading printed and no files. A usable base
+  must now be a PROPER ancestor of HEAD (`--is-ancestor`, plus not equal to it — a base
+  fast-forwarded to exactly HEAD is an ancestor and still yields an empty range), and the fetched
+  remote is preferred over the local ref rather than shadowed by it.
+- **`verify` read the artifact by pathname**, so the ancestor swap the write path had just been pinned
+  against still produced `GATE OK` — against a different plan and ITS matching artifact, with the
+  ancestor restored afterwards leaving `implement` proceeding on a plan nothing had verified. Both
+  verification reads go through the same descriptor walk now. The third member of that family —
+  `write`'s own read of the snapshot sidecar — was found by sweeping rather than by a report.
+
+#### third recheck pass
+
+- **The allocator could reserve a leaf no capture or verdict could use.** Both readers read 128 bytes
+  of `<transcript>.launch` and then `fullmatch` the result, so a reviewer name long enough to push
+  `<run id> <reviewer>` past that bound produced a record that can never validate — `--allocate`
+  accepted a 100-character reviewer and `--allocated` immediately refused the leaf it had just
+  reserved. The bound is derived from the grammar and enforced by a named validator at allocation.
+- **`stage-prompt.py` accepted a `.promptsha256` truncated to its digest** — the SIBLING of the
+  `.plan` case fixed one commit earlier, with the same producer, consumer and grammar. Fixing one of
+  the two and not sweeping the other is the "closing half of something" defect this campaign keeps
+  recording; a doc gate now pins all three spellings of that record grammar together.
+
+- **A validated pathname is not a pin across an `exec`.** The granted wrappers hand `review-verdict.py`
+  the path `containment.py` resolved, but resolution happens again in that second process — so a
+  same-account swap of `docs/planning` for a symlink in the window between them sent every state write
+  through the new ancestor. Reproduced: `snapshot-plan.sh` returned 0 having created `.verdicts/` and
+  the digest sidecar in an outside directory. Both state writes now go through one descriptor walk
+  from the repository root, so a symlinked component fails whenever it was planted. (Passing the
+  resolved path, earlier in this release, removed the "validated one string, opened another" half and
+  could not remove this half.)
+- **`TMPDIR` inside the checkout made the prompt rewriter reject its own substitution.** Both harnesses
+  build their scratch worktree with `mktemp -d`, so a `TMPDIR` under the repository puts the tree at
+  `<repo>/tmp.x/tree` — and the replacement value then contains the repository path, which the
+  "no unreplaced references remain" check found and refused, after the transcript had been allocated.
+  The check inspects the residue now. Its reachability is stated honestly in the code: with a total
+  `bytes.replace`, it can no longer fire for its stated cause and is kept as a cheap invariant, with
+  no test claiming to exercise it.
+- **The shell-operator lexer flagged what a trailing `#` comment said** — self-found by cross-checking
+  it against `shlex` over the 398 fenced command lines this repo ships. A comment now ends the line;
+  process substitution (`<(`, `>(`) is counted, since it is not a redirect.
+
+### Removed
+
+- Five scratch probes at the repository root (`test_capture{,2,3,4,5}.py`), committed by accident in
+  `04f906d`. They printed rather than asserted and belonged to no suite. One behaviour they observed
+  was covered nowhere else — a NUMBERED-LIST prefix (`1. Remaining: X`) is prose, so it is not a
+  detail field and it aborts the Output-Contract trailer — and is now an asserting cell in
+  `mcp/review-synthesizer/tests/test_capture.py`, proven by widening the leading-marker class.
+
+### Changed
+
+- `parse_frontmatter` normalizes every list-valued key to one comma form, whatever its YAML spelling.
+- `review-verdict.py` parses the launch record in exactly one place (it briefly had a copy per field),
+  and the allocated-evidence rule runs before the identity check so a legacy transcript is diagnosed
+  as legacy rather than as unattestable.
+- Both `py_compile` CI invocations are identical and cover every tracked non-test script; a doc gate
+  derives that set rather than restating it (`stage-prompt.py` had been missing).
+- The unanchored `.agy-*`/`.codex-*`/`.kimi-*` gitignore globs are documented as a reviewed, declined
+  narrowing: narrowing is what failed here twice, at a cost of 33 accidentally committed files.
+
+## [2.7.0] — 2026-08-06
+
+`COREDEV-2642` — remediation of four independent reviews (a deep review, a 34-commit audit, and two
+PR #63 bot passes) run over the permission surface and transcript-handling code that shipped in
+2.6.7 (`COREDEV-2619`/`COREDEV-2639`/`COREDEV-2497`). **Minor bump, not patch:** the entrypoint-only
+grant policy is a new, enforced capability (`validate-plugin-assembly.py` now rejects a whole class
+of grant it previously allowed), and three of the changes below are caller-visible breaks in existing
+usage, not just internal hardening.
+
+**Gate disclosure.** This release is **not** gated by the mandatory pre-implementation plan-review
+process — it is post-implementation review of already-shipped code, which is evidence but not a
+substitute for the "before implementation" gate CLAUDE.md mandates.
+
+**Correction (PR #63 recheck).** An earlier version of this paragraph called `COREDEV-2619`,
+`COREDEV-2639` and `COREDEV-2497` "the three tickets 2.6.7 shipped under a passing gate". None of the
+three supports that, and for 2619 it contradicted **this PR's own banner**, which states plainly that
+it shipped under an explicit maintainer exception with no Combined-verdict artifact. This is
+merge-decision evidence, so it is restated per ticket:
+
+| ticket         | actual gate status on the shipped bytes                                                                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COREDEV-2619` | **maintainer exception, not a passing gate.** Its plan's status line reads `NOT GATED`; the approving rounds never landed simultaneously and there is no artifact under `docs/planning/.verdicts/`.                                                           |
+| `COREDEV-2639` | **no plan-gate evidence exists.** There is no `COREDEV-2639` plan in `docs/planning/`, so there was nothing to gate. The "full gate green" recorded in Jira was a validator/test sweep, later relabelled a Plan Review Gate pass without supporting evidence. |
+| `COREDEV-2497` | **re-gate required**, by its own plan's status line. Earlier rounds gated earlier bytes; the current ones have not been re-gated, and its implementation has not landed.                                                                                      |
+
+See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full per-ticket table.
+
+### Security
+
+- **Every model-invocable skill's grants replaced wildcards with exact entrypoints.** A
+  model-invocable skill can be entered by the model's own decision — one that content in a reviewed
+  file can steer — so everything a skill lists is pre-approved with **no user gesture**. Four
+  wildcards were broad enough to matter:
+  - `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)` had pre-approved the destructive cleanup tool's
+    `--apply` flag and `pty-capture.py <any path> -- <any command>` — arbitrary child execution
+    writing anywhere. Removed from `codex-review`, `gemini-review` and `review-synthesis`.
+  - `Bash(codex *)` allowed any codex invocation, including `-s danger-full-access`, outside every
+    wrapper. Replaced by `scripts/review/audit-codex.sh`, which hard-codes `-s read-only` and
+    `xhigh` and takes the reviewer from a closed allowlist.
+  - `Bash(agy *)` let `agy` run outside its isolation harness — `agy` has no read-only mode and has
+    already once implemented a plan instead of reviewing it (2.6.4, `COREDEV-2607`). Replaced by
+    `scripts/review/preflight-agy.sh`, which takes no caller input at all.
+  - `Bash(git *)` on `pr-review` was every git command, including `reset`/`clean`/`push`, on a skill
+    that reads untrusted PR content. Replaced by `scripts/review/changeset.sh`.
+
+  Bare `Write` became `Write(docs/planning/**)`, and bare `Agent` became the enumerated agent types
+  each skill body actually spawns (both the bare and the `unleashed-mail:`-namespaced spellings, since
+  a consumer install resolves either), in `brainstorm`, `implement` and `pr-review`.
+
+  **Supersedes the 2.6.7 record for `implement` and `pr-review`.** The 2.6.7 entry above is an
+  unedited historical record of what 2.6.7 shipped (`Bash(python3 …/review-verdict.py *)` on
+  `implement`, `Bash(git *)` on `pr-review`) — read this entry, not that one, for their current
+  grants: both now hold `Read, Grep, Glob, Agent(<enumerated types>)` plus one scoped `Bash` grant
+  onto `scripts/review/*` (`resolve-plan-gate.sh` for `implement`, `changeset.sh` for `pr-review`).
+  `implement` also dropped a dead `review-verdict.py *` grant left over after its verify moved into
+  `resolve-plan-gate.sh` — pre-approving the artifact writer inside the gate skill whose own prose
+  forbids running the gate there.
+
+- **`validate-plugin-assembly.py` now enforces the entrypoint-only policy** rather than merely
+  modeling it: hard failure for bare `Write`/`Edit`/`Agent`/`Bash`, VCS and reviewer-CLI wildcards, and
+  a wildcard in the _script path_ of a `bash`/`python3` grant; advisory warning for toolchain
+  trampolines (`xcrun`, `swift`, `xcodebuild`), which are the real build tools the knowledge skills
+  describe rather than a reviewer-CLI escape hatch. The reviewer that opened this work named three
+  skills; the validator found **17 further instances across 8 knowledge skills** — this repo's own
+  rule ("don't grant unscoped `Bash`/`Write`/`Edit` on a pure-knowledge skill") being broken in the
+  tree that states it. All are reference skills, so the grants are simply gone.
+
+- **The seven advisory toolchain grants are gone too, after measuring what they bought.**
+  `macos-debugging`, `spm-management` and `swift-tdd` held `Bash(xcodebuild *)` / `Bash(xcrun *)` /
+  `Bash(swift *)`. **Three were dead** — the command appears nowhere in the skill body, and
+  `spm-management` granted `Bash(swift *)` while its own prose says the `swift` CLI does not apply to
+  this project. **Every live one sits inside a compound block** (`set -o pipefail` … `| tail`), which
+  Claude Code decomposes per subcommand, so `set -o pipefail`, `tee` and `tail` being ungranted meant
+  the block prompted regardless: the grant never pre-approved the thing it existed for. The skills
+  keep working and cost nothing measurable; the advisory tier stays as a tripwire for _new_ grants
+  rather than a standing exception list, and a test now asserts the shipped tree carries zero
+  advisories — counting the skills it walked, so an empty walk cannot pass for a clean one.
+
+- **`spm-management` no longer documents an unbounded derived-data wipe.**
+  `rm -rf ~/Library/Developer/Xcode/DerivedData/*` deletes the build state of every Xcode project on
+  the machine, unrecoverably, as the remedy for one project's packages failing to resolve. Scoped to
+  `DerivedData/Unleashed_Mail-*`, with Xcode's own Clean Build Folder named as the route that needs no
+  shell at all. The command was never granted — this is about what a model-reachable skill _teaches_.
+
+- **The prompt/plan binding now binds the bytes the reviewer actually consumed.** The first version
+  hashed the prompt and the plan _independently_, which is two correct digests of the wrong pairing: a
+  prompt reading `REVIEW TARGET: PLAN_B.md` bound cleanly against `--plan PLAN_A.md`, and
+  `review-verdict.py write` produced an `APPROVE` artifact for Plan A off a review of Plan B. Three
+  mechanisms, closed together because each one's failure is the others' silent success:
+  - **Agreement.** The prompt must name the plan it is bound to, and must not name a different
+    `*_PLAN.md`. The rule is symmetric on purpose — requiring only "does it name the right plan"
+    accepts a prompt that names both and asks about the other.
+  - **A per-run snapshot.** `bind-prompt.py` copies the validated bytes to `<transcript>.prompt` under
+    `O_EXCL`, and both capture arms feed _that_ to the reviewer. Previously the wrapper re-`cat`ed the
+    caller's path **after** the binder had blessed it, so a swap in between changed what the reviewer
+    read while both sidecars still described the old bytes.
+  - **Per-run, not per-round.** The prompt _filename_ derives from ticket and round only, so two
+    invocations sharing both shared one file — which the existing concurrency test could not see,
+    because it compares round 7 against round 8. The snapshot is keyed by the transcript's unique run
+    identity instead.
+
+  `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
+  ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
+
+- **A NUL byte in the prompt made the validated bytes differ from the delivered ones.** The capture
+  helpers hand the snapshot to the reviewer through `$(cat …)`, and Bash command substitution _silently
+  deletes_ NULs — so a prompt naming `A_PLAN.md` normally while spelling its instruction as
+  `B_PL\0AN.md` bound cleanly against A (the agreement check saw a token that is not a plan name) and
+  Codex then received the joined `B_PLAN.md`. A review of B could support A's approval. Refused at the
+  source: a review prompt containing a NUL is never legitimate, and escaping it per call site would
+  leave every transport added later needing its own defence.
+
+- **`changeset.sh` accepted a version ref that shared no history.** A stale or orphaned
+  `${prefix}.0000` resolves as a commit — passing the existence check added earlier the same day — while
+  having no common ancestor, so the diff fell through to `HEAD~1` and reviewed only the last commit of a
+  multi-commit branch. It now requires a merge base, which is what a base actually is. Reproduced
+  against a genuine orphan branch.
+
+- **One review arm could satisfy the mandatory two-arm gate.** Two separately allocated **Gemini**
+  runs supplied as `gemini=` and `codex=` passed everything — freshness, the plan binding, and the
+  distinct path/digest/captureId rules — because every one of those asks whether the two entries
+  _differ_, and two real Gemini runs do. Nothing asked what either transcript **was**. The allocator
+  encodes the reviewer in the filename it reserves, so the evidence already carried the answer; it was
+  never read. Now compared, for approving verdicts only — a non-approving record blocks `implement`
+  whatever its labels say, so refusing one would discard a legitimate `REQUEST_CHANGES`.
+
+- **Three defects in the Gemini harness, all created by this release's own fixes:**
+  - **A failed review reported success.** The capture status was saved in `RC` and then discarded by a
+    successful diagnostic `echo`, so an `agy` exiting 23 printed `EXIT=23 … FAILED REVIEW` while the
+    helper returned 0 — leaving the caller unable to distinguish a completed review from an auth,
+    model or timeout failure.
+  - **The mutation detector cried wolf on the harness's own input.** Staging the bound plan
+    deliberately dirties the disposable checkout — that _is_ the detached-HEAD fix — but the check
+    still compared against `HEAD`, so a reviewer that wrote nothing was reported as having written,
+    with the plan listed. It now baselines the tree after staging. This is the `COREDEV-2607` detector;
+    one that fires on its own inputs is one nobody reads.
+  - **The plan copy re-opened a mutable path.** A plan edited after binding and restored before
+    synthesis could reach the reviewer while both the sidecar and the final digest described the
+    restored bytes; the `cmp` beside it re-read that same path, so it only confirmed two reads agreed.
+    `bind-prompt.py` now retains the exact bytes it hashed in `<transcript>.planbytes` and the harness
+    stages those, falling back to the path with a warning rather than silently accepting less.
+
+- **Containment resolved the working directory, not the repository.** `repository_root()` was
+  `realpath(getcwd())`, so a wrapper launched from `scripts/` treated _that_ as the repository and
+  refused every plan in the tree — breaking the capture, audit, snapshot and persistence entrypoints at
+  once, since all four share the helper. It resolves `git rev-parse --show-toplevel` now, and **fails
+  closed outside a worktree**: with no repository there is no boundary to enforce, and falling back to
+  the working directory would restore exactly this bug. This is the fourth false refusal this recheck
+  surfaced — each one a guard right about the danger and wrong about the boundary.
+
+- **Shell operators after an allowlisted wrapper went unexamined.** Reaching an in-root entrypoint was
+  treated as the whole answer, so `&& rm *`, `; rm -rf *`, `$(rm *)`, a redirection and a pipe all
+  passed while strict CI reported the tree clean — the policy promises one exact reviewed entrypoint,
+  and that promise only holds if nothing can be appended to it. **Stated residual:** a compound grant
+  with _no_ wildcard is still exempt, because the analysis is scoped to wildcards by an explicit
+  decision recorded in the module; a test now pins that boundary so it cannot be mistaken for covered.
+
+- **An allocation base owned by another user was accepted.** `os.access` answers "may I write here",
+  never "is this mine" — so an attacker-created mode-0777 directory under `/tmp` passed, and the
+  allocator then placed its 0700 subtree beneath a parent whose owner could rename or replace it
+  between allocation and capture. The nearest existing ancestor must now be owned by this user or by
+  root; root-owned ancestors like `/tmp` are the normal case and are not attacker-controlled.
+
+- **A digest-suffixed legacy transcript was mistaken for an allocation.** Classification keyed on any
+  basename ending `-<32 hex>.txt` — and the classifier's own docstring names the realistic collision,
+  `review-<md5>.txt`, MD5 hex being exactly 32 characters. Such a file was then required to carry a
+  `.launch` and rejected without one, making a legitimate custom or historical transcript unusable.
+  Narrowed to the whole allocator shape, `<ticket>r<round>-<reviewer>-<32 hex>.txt`. This keeps the
+  property that docstring refuses to give up — the basename travels with the file, so an allocated
+  transcript that was copied or moved still classifies as per-run, which conditioning on the
+  _directory_ would have lost.
+
+- **Four hardening gaps in the allocated-capture path.** All reproduced:
+  - **A hard link at the reserved leaf rewrote whatever shared the inode.** A hard link _is_ a regular
+    file, so `O_NOFOLLOW` and the `S_ISREG` check both accepted one; the `fchmod`/write/`ftruncate`
+    then operated on the linked target. Reproduced by linking an 18-byte file at the reserved path and
+    watching it become the capture at mode 0600. The allocator creates its leaf with exactly one link,
+    so a second is never legitimate — now refused, with the victim's bytes asserted intact.
+  - **A missing or empty launch record wasted a whole review.** `review-verdict.py` already rejected
+    such a transcript, but only at _write_ time — so a 20–30 minute review ran to completion, exited 0,
+    and was then discarded. The same precondition is now checked before the reviewer launches, asserted
+    on the child never running.
+  - **A case-mangled protected root slipped past containment.** `commonpath` is case-sensitive and APFS
+    is not, so `$HOME/.CLAUDE/…` compared unequal while opening the same directory; `realpath` doesn't
+    help because it preserves the caller's spelling. Containment is now answered by **inode** where the
+    paths exist, with a casefolded lexical fallback where they don't.
+  - **The allocated leaf was `realpath`'d after its symlink check.** `islink()` then `realpath()` is a
+    lookup-then-lookup pair, so a symlink planted between them was followed and every check ran against
+    the attacker's target. The leaf name is now kept and opened `O_NOFOLLOW` — the same discipline the
+    freshness TOCTOU fix established. The _ancestry_ is still resolved; that is a different question.
+
+- **The plan binding compared digests only, and hashed a truncated snapshot.** Two more defects in
+  the write path:
+  - **Byte-identical plans crossed.** Two distinct plans with the same contents share a digest, so a
+    transcript captured for plan A satisfied an approval for plan B while the binding _recorded_ — and
+    ignored — the repo-relative identity that tells them apart. The identity is now compared **when it
+    carries a directory**, which is what `bind-prompt.py` always writes; a bare basename cannot
+    discriminate either way and is left alone, preserving the documented reason the check was
+    digest-only (it must not depend on the directory each step ran from).
+  - **A prompt over 64 KiB could never be approved.** The snapshot was hashed through the capped
+    trusted-read helper, so an oversized-but-valid prompt hashed only its prefix and the write reported
+    the snapshot as modified. The cap bounds untrusted _parsing_; a digest reads every byte and keeps
+    none, so it is not what the cap protects. Now streamed. A guard that refuses correct work is a
+    guard someone switches off.
+
+- **Three narrowing side-effects of this release's own grant tightening.** Scoping the review skills'
+  permissions made two documented flows _less_ usable, and a base-resolution fallback hid a narrowed
+  review:
+  - **`changeset.sh` invented a base.** When neither `origin/main` nor a local `main` resolved, it
+    returned the literal string `main` as though resolution had succeeded; `files`/`stat` then fell
+    through to `HEAD~1` and reviewed only the last commit of a multi-commit branch, while `untested`
+    emitted nothing and exited 0. Reproduced on a two-commit branch with no remote. It now fails
+    explicitly — silently narrowing a review's scope is worse than refusing it, because the reviewer
+    reports a clean pass over work it never saw.
+  - **The documented Gemini model fallback did not match its own grant.**
+    `MODEL=gemini-2.5-pro bash …` is an assignment-prefixed command shape, which
+    `Bash(bash …/capture-gemini-review.sh *)` does not cover — so the fallback reintroduced the very
+    prompt the narrowed grants removed. The model is now operand 6.
+  - **Neither review skill could write the prompt file it requires.** Both bodies mandate creating
+    `.codex-prompt-*` / `.agy-prompt-*` before invoking the capture helper, and neither granted a
+    `Write`. The mandatory first step therefore prompted or was denied _before_ the pre-approved
+    capture command could run. Added narrowly, as the exact per-round filename shape.
+
+- **Absolute paths defeated two fixes from earlier the same day, and broke a third flow.** All three
+  are the same omission: a fix written for the relative spelling of an operand that is also accepted
+  absolute.
+  - `bind-prompt.py`'s plan-agreement check compared an absolute reference against a repo-relative
+    identity, so it **refused the repository's own plan** when the prompt named it absolutely — which
+    is exactly what `skills/gemini-review/SKILL.md` requires the generated prompt to do. That aborted
+    the documented capture flow before the reviewer launched. A false refusal is not the safe
+    direction: it breaks the gate for correct input, which is how guards get switched off.
+  - `isolated-agy-review.sh` pasted the operand into `"$TREE/$PLAN_REL"`, so an absolute path built a
+    nested destination like `$TREE/Users/…/docs/planning/X.md` while the rewritten prompt still pointed
+    `agy` at `$TREE/docs/planning/X.md`. The copy landed where the reviewer never looks and it read the
+    committed plan again — the defect the copy was added to fix, alive for one spelling.
+  - The CI whitespace gate hard-coded `origin/main`. This repo has an `alpha` integration branch, so an
+    alpha-targeting PR would have diffed the whole `main..alpha` history and failed every unrelated
+    alpha change on one pre-existing issue — the re-litigation its own comment disclaimed. It now uses
+    the workflow's real base ref.
+
+- **Three holes in fixes shipped earlier in this same release.** Each was found by the PR's own
+  recheck, reproduced, and closed:
+  - **The prompt binding was skipped when its sidecar was absent**, so deleting `.promptsha256` turned
+    the check off — the identical "absent means unchecked" fail-open the plan binding beside it exists
+    to close, reintroduced one field over. It is now required for a per-run transcript; both sidecars
+    are written together by `bind-prompt.py`, so a transcript carrying only `.plan` was never produced
+    by the capture helper.
+  - **The entrypoint allowlist matched `${CLAUDE_PLUGIN_ROOT}/` as a substring**, so
+    `${CLAUDE_PLUGIN_ROOT}/../evil.sh`, a `..` chain deeper in the path, and even
+    `/tmp/x/${CLAUDE_PLUGIN_ROOT}/evil.sh` all passed. The allowlist's justification is that these
+    scripts ship in this repo and are reviewed with it; a path leaving the plugin root has neither
+    property. Now anchored at the start and `..`-free.
+  - **The writer-agent deny-list required only the bare spelling.** A consumer install resolves
+    `unleashed-mail:<name>` too, so denying one left the other reachable — the same both-spellings
+    rule the skills' own `Agent(...)` grants already follow.
+
+- **The `agy` preflight ran a mutation-capable agent in the reviewed checkout.** It launched
+  `agy -p "ping"` in the caller's working directory — the tree under review — while the same skill
+  documents that `agy` has no read-only mode and has already once implemented a plan instead of
+  reviewing it (2.6.4, `COREDEV-2607`). A stub touching a file in its working directory left that file
+  in the checkout and the preflight still printed `healthy`. Two fixes, because they fail separately:
+  the ping now runs in a fresh empty scratch directory (it needs no repository at all), **and** the
+  checkout is fingerprinted with `git status --porcelain` around the capture, so a build that writes by
+  absolute path is _detected_ rather than merely made unlikely — isolation alone would have left that
+  case silent. The failure report names only what changed, since the whole status buries one new entry
+  in whatever was already dirty.
+
+- **The cleanup tool opened each parent 39 times while claiming it opened them once.**
+  `held_manifest_parents` looped over the 39 manifest entries, so the nine directories were opened up
+  to six times each at different instants — and a swap landing between two of those opens split the
+  run across two generations: five validated originals survived while five same-named files in the
+  replacement directory were deleted, and the function reported success. The docstring asserted the
+  property the loop did not implement. It now opens the nine unique parents once each, and the
+  occupant scan runs **through those held descriptors**, immediately before the first unlink, inside
+  one session that also spans the directory removal.
+
+  **Stated ceiling, because narrowing is not closing.** An occupant arriving _after_ the final check
+  is unobservable at that check, by construction: the run still refuses, but the 39 files are already
+  gone, so the refusal reports rather than prevents. Eliminating that would require the whole
+  sequence to be atomic, which it cannot be. What is guaranteed — and proved — is that an occupant
+  present _before_ the run costs nothing: 39 of 39 files survive the refusal. The ceiling is recorded
+  as an executable test so a reader cannot mistake it for covered.
+
+  The occupant refusal deliberately lives in the orchestrator, **not** in `delete_leak_files`, whose
+  contract is narrower on purpose: it deletes exactly the literal manifest and nothing of the same
+  filename family, and that is only provable on a tree that _has_ such a neighbour.
+
+- **The prompt/plan agreement check compared basenames, and short sidecar writes went unnoticed.**
+  Two defects in the binding shipped earlier the same day:
+  - **Basename collision.** A prompt explicitly targeting `docs/planning/b/SAME_PLAN.md` was accepted
+    while `--plan` named `docs/planning/a/SAME_PLAN.md`, because both acceptance and conflict detection
+    reduced references to the basename — the same shortcut the _artifact's_ plan identity was fixed for
+    in PR #41, repeated one layer up. References are now compared as full normalized repo-relative
+    paths, and a basename-only reference is refused as ambiguous when more than one plan answers to it
+    rather than guessed.
+  - **Short writes.** `os.write` can return a partial count without raising, and a file-size limit
+    raises `EFBIG` on macOS. Either way a truncated `.prompt` snapshot was left on disk while
+    `bind-prompt.py` exited 0 — and a truncated snapshot still clears the Gemini arm's 1,000-byte
+    floor, so a reviewer would consume a cut-off prompt and only the digest check would notice, a full
+    round later. Both shapes now refuse **and unlink the partial**, reproduced under a 2 KiB
+    `RLIMIT_FSIZE`.
+
+- **Removing `Bash` from two reviewers broke audit steps their bodies still needed.** The tool-list
+  change was right; the justification was not. The note added beside it claimed every command in those
+  bodies "was a `grep -rn`" — measured against the dominant pattern, not the whole set.
+  `security-reviewer` still called `cat .gitignore | grep …` and `cat *.entitlements || find …`;
+  `concurrency-reviewer` still called `plutil`. `Grep` executes none of those, so **those audit
+  sections would have produced nothing while the reviewer reported a complete review** — a silent gap,
+  which is worse than the escalation path the removal closed, because nothing announces it. All three
+  are now explicit `Glob`/`Read`/`Grep` steps, the notes carry the correction, and
+  `validate-plugin-assembly.py` fails if any agent without `Bash` documents a command only a shell
+  could run.
+
+- **The Gemini arm reviewed the committed plan while its binding named the working-tree one.**
+  `isolated-agy-review.sh` builds its review tree with `git worktree add --detach … $(git rev-parse
+HEAD)`, so `agy` read the **committed** plan; `bind-prompt.py` hashed the **working-tree** plan into
+  `<transcript>.plan`. With uncommitted edits — the normal state during the documented review
+  iteration — the transcript approved one version while the artifact recorded it as evidence for
+  another. Two correct digests describing different bytes, the same pairing failure as the prompt/plan
+  binding one layer down. The bound plan is now copied into the review checkout and verified with
+  `cmp`, so the reviewer reads exactly what the sidecar attests to. Copying rather than refusing keeps
+  the iterate-then-review loop working, and makes the binding _true_ rather than merely checkable.
+
+- **The `implement` recipe substituted the user's argument into shell syntax.** It bound the argument
+  through a quoted heredoc, which correctly kept metacharacters (`"`, `$( )`, backticks) as literal
+  data. What that could not defend was the **delimiter**: the placeholder is substituted _textually
+  across the whole fence before the shell runs_, so an argument containing a line equal to the heredoc
+  delimiter closed the body early and every following line was parsed as a shell command — and with the
+  skill model-invocable, that needed no user gesture. No quoting fixes it, because the fault sits one
+  level above the quoting. The recipe no longer substitutes the argument at all: the model resolves the
+  plan with `Glob`/`Read` and passes the concrete path as one operand, which `resolve-plan-gate.sh` now
+  accepts (STDIN is kept for callers already binding a heredoc, and both paths were verified to produce
+  identical output on four inputs). A test asserts no shell fence in the skill contains the placeholder,
+  and that no fence contains `<<` at all — a differently-named delimiter would be just as matchable.
+
+- **`swift-reviewer` could spawn every file-writing agent.** Its `tools:` lists bare `Agent`, because a
+  sub-agent tool list takes bare names — `Agent(type)` is silently ignored there — so it reached all
+  twelve agents holding `Write`/`Edit` or inheriting everything. Spawned from `pr-review` while that
+  skill processes untrusted PR content, a prompt-injected finding could have steered it into
+  `ui-engineer` or `db-engineer` and written to the tree with no user gesture. All twelve are now denied
+  by name.
+
+  That is a deny-list, and a deny-list re-opens the moment someone adds a writer agent. So
+  `validate-plugin-assembly.py` **recomputes** the writer set from the agents on disk and fails if any
+  is missing from the deny list — proved by adding a thirteenth writer and watching CI reject it. The
+  five read-only reviewers this agent actually spawns stay reachable.
+
+- **The gate's plan-state entrypoints wrote wherever they were pointed.** `brainstorm` is
+  model-invocable and pre-approves both the snapshot and the persistence command, so the _model_ picks
+  `--plan`. Neither enforced containment: any existing file on disk was accepted, the snapshot sidecar
+  landed beside it, and even a **non-approving** persist created and chmod'd a `.verdicts` directory
+  there — reproduced against `/tmp`, walking past the skill's apparent `Write(docs/planning/**)`
+  boundary with no user gesture. Both now require a non-symlink regular plan under `docs/planning` in
+  this repository, via the shared `containment.py` (which grew an `--under` subtree check), and the
+  snapshot step moved behind a new exact entrypoint, `scripts/review/snapshot-plan.sh`.
+
+  The containment is in the entrypoints, **not** in `review-verdict.py`: that tool has a designed and
+  tested behaviour for a plan outside any git repo, and it is also the maintainer's own CLI. What has
+  to be bounded is the pre-approved path the model can enter. This is the fourth entrypoint to need
+  the same rule, which is why it lives in one module.
+
+- **An approving verdict could rest on legacy transcripts that nothing checked.**
+  `_is_per_run_transcript` is the switch deciding whether the freshness check **and** the plan binding
+  run at all, so a transcript failing it was exempt from both — and the shapes it exempts are the fixed
+  shared-`/tmp` reviewer outputs an older plugin version left behind. Two stale files could therefore be
+  labelled `APPROVE`, combined with a fresh snapshot of the current plan, and produce a gate-passing
+  artifact for a plan nobody reviewed. An approving write now requires allocator-shaped evidence for
+  every reviewer. Legacy paths remain readable for **non-approving** records, which block `implement`
+  regardless and would otherwise be discarded for no security benefit.
+
+  The check runs **after** the quorum and identity rules, which own "no transcript for this reviewer",
+  "duplicate capture ID" and "empty transcript". Placed before them it answered all three with "not
+  allocator-shaped" — true, but it tells the operator to re-capture when the real fault was a missing
+  operand; two existing tests caught that regression.
+
+  Every fixture in `test_review_verdict.py` used bare `transcript.txt`-style names, which is precisely
+  why no test caught the hole: the suite only ever exercised the exempt path. They now build allocated
+  transcripts through one shared helper, with launch records and plan bindings.
+
+- **`audit-codex.sh` accepted arbitrary model-controlled operands.** It allowlisted the reviewer name
+  and then folded everything after it into the external prompt with `$*`. Reproduced with an exact
+  stub: `/etc/passwd` was accepted, exit 0, and so was a plain `ignore prior instructions …` operand,
+  which is prompt injection rather than a filename. `-s read-only` prevents writes; it is not a
+  repository-read boundary and does nothing about disclosure to a third-party service. Operands must
+  now be non-symlink regular files beneath the physical repository root, and the prompt is built from
+  the _validated_ output one path per line, so boundaries survive.
+
+  The containment rule moved into `scripts/review/containment.py`, shared with `bind-prompt.py`. That
+  sharing **is** the fix: the identical hole was closed on the prompt operand a day earlier and this
+  sibling — written in the same batch — did not inherit it, because the rule lived inside one script.
+
+- **The entrypoint-only grant policy was fail-open, and is now default-deny.** It deny-listed a fixed
+  set of command names and passed everything else. Measured probes producing zero problems _and_ zero
+  warnings: `Bash(python3 -c *)`, `Bash(sh -c *)`, `Bash(cp *)`, `Bash(mv *)`, `Bash(tee *)`,
+  `Bash(find *)`, `Bash(curl *)`, `Bash(chmod *)`. `python3 -c *` is arbitrary code execution; the
+  interpreter branch only looked for a wildcard in the _script path_, and `-c` is not a path. A
+  wildcard `Bash` grant on a model-reachable skill is now refused unless it invokes an **exact** script
+  beneath `${CLAUDE_PLUGIN_ROOT}` — those wrappers ship in this repo, are reviewed with it, and bound
+  their own operands, which is the property that makes a trailing wildcard acceptable there and
+  nowhere else. Interpreter code/module/stdin modes are named explicitly. The trampoline advisory tier
+  became a hard refusal in the same change; nothing shipped depends on it. **This supersedes the
+  "advisory warning for toolchain trampolines" sentence above.**
+
+  One shipped grant this rejects: `swiftlint-config`'s `Bash(swiftlint *)` — its own body runs
+  `swiftlint --fix`, a source mutator, pre-approved on a model-invocable skill. Removed.
+
+- **The review prompt operand is contained to the repository.** The capture helpers are the exact
+  entrypoints the bullets above introduced — and both are reached from model-invocable skills that
+  pre-approve `capture-*-review.sh *`, so the _model_ picks the operand. The helpers checked only
+  that the file was readable, then fed `$(cat "$PROMPT")` to the reviewer CLI verbatim: `../secret`,
+  or a symlink to one, was exfiltrated to a third-party service by a skill the model can enter on its
+  own. `scripts/review/bind-prompt.py` now refuses any operand that is a symlink, is not a regular
+  file, is empty, or resolves outside the repository — **before** the CLI is launched, which is the
+  only point at which refusing still means anything.
+
+- **The reviewer sub-agents no longer inherit `Bash`.** `security-reviewer`, `concurrency-reviewer`,
+  `ux-perf-reviewer` and `accessibility-auditor` are read-only by contract and by prose, and all four
+  only ever ran `grep -rn` — but `tools:` listed `Bash`, which is unscoped by construction: a sub-agent
+  tool list takes bare names, so `Bash` there is _every_ command. Since `swift-reviewer` spawns all
+  four, a prompt-injected finding in a reviewed file reached arbitrary execution through an agent whose
+  own description says it audits for exactly that. The four now list `Read, Grep, Glob`;
+  `swift-reviewer` keeps `Bash` (it genuinely needs it) and gained `disallowedTools: Write, Edit,
+NotebookEdit`.
+
+- **The binding sidecars are written with `O_NOFOLLOW | O_EXCL`.** The shell wrote
+  `<transcript>.promptsha256` with a plain `>` redirect, in a file whose neighbours use `O_NOFOLLOW`
+  against precisely this threat: a same-account process that plants a symlink there first has the
+  target truncated with the gate's privileges. `O_EXCL` as well, because a sidecar that already exists
+  belongs to another run and silently overwriting it destroys that run's binding.
+
+### Fixed
+
+- **Prompt staging is shared, authenticated, and no longer built from a `sed` expression.** Both
+  isolation harnesses rewrote the prompt with `sed "s#$REPO#$TREE#g"` plus an inline guard-prepend, and
+  that carried two defects: the snapshot was re-read by NAME and never compared against
+  `<transcript>.promptsha256` (so a snapshot rewritten after binding and restored before synthesis had
+  the reviewer read substituted instructions while the verdict writer hashed the restored bytes), and
+  the expression was assembled from a path — a checkout containing the `#` delimiter made it invalid
+  and **every capture aborted with an empty prompt** (reproduced from `repo#x`). New shared
+  `stage-prompt.py` authenticates the snapshot against its digest, substitutes the repository path as
+  literal bytes, prepends the guard, enforces the size floor, and writes through a no-follow descriptor
+  walk — one implementation, so the two arms cannot drift again.
+- **`audit-codex.sh` re-verifies its operand snapshots immediately before launching the reviewer.**
+  Snapshotting into a private directory closed the validate-then-open race against the live tree, but
+  left a narrower one of the same shape: codex still opens the snapshot by name, and a same-UID process
+  could overwrite it between the helper exiting and that open. Each snapshot's digest is now re-checked
+  in the instruction before `exec`. **Scope stated rather than overclaimed:** that narrows the window to
+  microseconds, it does not eliminate it, and a same-UID writer who wins the race is not defended
+  against here — the same attacker can rewrite the wrapper. Inlining the bytes to remove the pathname
+  entirely _was_ implemented and then reverted: Linux caps a single argv string at 128 KiB
+  (`MAX_ARG_STRLEN`) regardless of the much larger `ARG_MAX`, and macOS does not — so the local suite
+  passed while CI failed with exit 126 on an ordinary two-file audit (`README.md` + `CHANGELOG.md` =
+  175 KB). Embedding would have capped audits at roughly one medium file, a worse regression than the
+  narrow race it closed.
+- **The allocator refuses a non-numeric round before spending a review.** The generic component grammar
+  accepted `round-1`, so a leaf named `…rround-1-…` was allocated, a full 12–28 minute review ran, and
+  `review-verdict.py` then refused the transcript because its grammar requires `r[0-9]+`. Now a named
+  shared validator (`is_valid_round_component`) rejects it in milliseconds.
+- **`pty-capture.py` validates the launch record's grammar and run identity before spawning.**
+  "Regular and nonempty" accepted a `not-a-run-id` record, ran the reviewer to completion and returned
+  0 — the verdict writer then discarded the transcript, so the round was lost anyway. The canonical
+  32-hex record is now required, and it must name the same run as the filename. A doc gate asserts the
+  copied grammars stay identical to `review-verdict.py`'s.
+- **The allocation chain no longer follows a symlink planted mid-race.** `os.path.exists` is true for a
+  symlink, so a pre-planted link stopped the ancestor walk and `os.path.isdir` followed it — the whole
+  private transcript hierarchy was created inside an attacker-controlled directory (reproduced). Now
+  `lexists`/`lstat` throughout, on both the walk and the `FileExistsError` branch.
+- **`containment.py`'s subtree boundary is the physical path.** Resolving `--under` with `realpath`
+  MOVED the boundary: with `docs/planning -> ../src`, a regular file reached through the link was
+  accepted as a plan, so the model-invocable wrappers could create `.verdicts` state under `src` while
+  promising to operate only under `docs/planning`. The operand is still fully resolved; only the base
+  is left physical.
+- **`callers_scan.py` normalizes the whole format-character class, not a list of fourteen sequences.**
+  An invocation split by any unlisted invisible character — U+2060 WORD JOINER, U+00AD SOFT HYPHEN —
+  rendered like the documented command while neither the raw nor normalized bytes contained an anchor,
+  so the line never became a candidate and default-reject was skipped entirely. Now general category
+  `Cf` plus the default-ignorable variation selectors, with undecodable bytes preserved via
+  `surrogateescape`.
+- **The cleanup tool refuses an unbound state root instead of reporting a vacuous success.**
+  Resumability (`allow_absent=True`) made "everything already removed" indistinguishable from "wrong
+  directory": a mistyped `--state-root` satisfied all 39 files and nine directories vacuously and
+  `--apply` exited 0 while the real transcripts sat untouched. The root must now either be the
+  canonical `unleashed-mail/review-transcripts` or contain at least one manifest entry.
+- **`brainstorm` grants the two agents its own body requires.** Step 1 launches `jira-manager` and
+  Step 5 `modern-standards-planner`, but the enumeration listed only the two stakeholder personas — so
+  the documented autonomous flow stopped on a permission prompt at both mandatory steps.
+- **Permission-surface and CI hygiene (PR #63 recheck).** The `gemini-review` prompt-file recipe was a
+  `cat > … <<EOF` heredoc matching no Bash grant, so the mandatory first step prompted every round
+  despite the `Write(.agy-prompt-*.md)` grant — it now instructs the Write tool, mirroring
+  `codex-review`. The `implement` skill dropped its dead `Agent(tester)` grant (the body never spawns
+  `tester`, and it is a full-write agent). The whitespace CI gate is now event-aware: it selected its
+  base from `GITHUB_BASE_REF`, which is empty on a push, so a `main` push checked an empty range and an
+  `alpha` push re-checked the whole `main..alpha` divergence — it now picks the base per event
+  (PR base / `github.event.before` / merge-base) and fails closed when the base is unresolvable, and its
+  outcome is added to the job-summary table. `bind-prompt.py` gains a py3.9 EXECUTION smoke (a real bind
+  plus a refusal, not compile-only), and `generate-callers-exemptions.py`, `stage-bound-plan.py` and
+  `snapshot-operands.py` are added to CI coverage. Two tests were strengthened past assertions that
+  could pass on broken code: the audit never-reaches test now proves the reviewer did not run via a
+  run-marker, and the cleanup open-count test pins the constant two-pass-per-parent count against the
+  fixture's differing entry counts instead of a loose `< 39`.
+- **`audit-codex.sh` snapshots its operands, closing a validate-then-open disclosure race.** It
+  validated each operand with `containment.py` (non-symlink, regular, in-repo) and then handed codex the
+  live repo-relative PATH, which codex opened later. A same-account process that replaced an accepted
+  file with a symlink to an outside secret between the check and the open had `codex exec -s read-only`
+  follow it and disclose the outside file (PR #63 recheck, P1, reproduced). New `snapshot-operands.py`
+  validates AND reads each operand through one `O_NOFOLLOW` descriptor into a private disposable tree,
+  and codex is pointed at those immutable copies — no later swap can change what it reads, and a swap
+  landing during the read is refused rather than followed. Because the snapshot paths are absolute, this
+  also fixes the separate report that a relative operand did not resolve when the wrapper ran from a
+  subdirectory. The fixture that reproduced it no longer writes a stray symlink into the repo root — it
+  builds a throwaway git repo instead.
+- **The codex review arm now reviews an isolated checkout, so a plan swap cannot forge its verdict.**
+  `capture-codex-review.sh` ran `codex exec … -s read-only` in the LIVE working tree, so the plan file
+  codex opened was the mutable one. An A→B→A swap during codex's read window let it review substituted
+  bytes while `.plan` and the live plan both still hashed A, and `review-verdict` authenticates only
+  the live plan — so the artifact attested a plan the reviewer never read (PR #63 recheck, P1,
+  reproduced end to end). The gemini arm already isolated its review into a detached checkout with the
+  authenticated `.planbytes` staged; the codex arm never inherited it — the exact "a rule that lives in
+  one script is a rule the next entrypoint will not have" failure. New `isolated-codex-review.sh` runs
+  codex against a disposable detached checkout, and the plan staging both arms use is now the shared
+  `stage-bound-plan.py` (authenticate `.planbytes` against `.plan`, read once through `O_NOFOLLOW`,
+  write through a no-follow descriptor walk) — so the fix cannot diverge between the arms again. The M5
+  transcript-path contract and the threading fixtures now assert both arms symmetrically, and a
+  cross-arm test drives the same substitution attack through each.
+- **The model-reachable grant validator closed three fail-open spellings.** (PR #63 recheck, P2, all
+  measured passing.) (1) A shell operator glued to the entrypoint with no space —
+  `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /)` — rode inside a single word that the post-target
+  operand scan never inspected; the scan now runs over _every_ Bash specifier, wildcard or not,
+  rejecting `;`, `|`, backtick, redirection, `&`, and `$(` (which never appear in a legitimate
+  one-command grant, while `${CLAUDE_PLUGIN_ROOT}` and a trailing `*` still do). (2) `_bash_specifiers`
+  extracted with `Bash\(([^)]*)\)`, stopping at the first `)`, so `Bash(… $(rm) *)` dropped its
+  trailing `*` and skipped analysis as "bounded"; extraction now walks balanced parens. (3) The
+  bare-name refusal was exact-string, so `Write(**)`, `Write(/**)`, `Edit(**)`, `NotebookEdit(**)` and
+  `Agent(*)` slipped past it despite pre-approving the same surface as the bare grant — a full-breadth
+  scope is now refused explicitly. The previously-documented "no-wildcard compound is exempt" boundary
+  was itself the first fail-open and is now closed; a genuinely bounded _single_ command
+  (`Bash(command -v codex)`) stays exempt.
+- **Gemini plan staging can no longer be tricked into writing outside its disposable checkout.**
+  `git worktree add --detach` materializes committed tree entries, so a plan path recorded in HEAD as a
+  **symlink** (or under a symlinked parent) was recreated in the throwaway checkout, and the staging
+  `open(destination, "wb")` wrote _through_ it — a same-account attacker whose HEAD carried
+  `docs/planning/X_PLAN.md -> /outside/victim` had the victim overwritten with the staged bytes
+  (PR #63 recheck, P1, reproduced). Staging is now a descriptor walk: every directory component is
+  opened `O_DIRECTORY|O_NOFOLLOW` (a symlinked parent fails `ELOOP`), and the leaf is
+  unlink-without-following then created `O_CREAT|O_EXCL|O_NOFOLLOW`, so a materialized symlink is
+  removed as a link and never traversed. Both the authenticated-snapshot and live-plan fallback paths
+  go through it.
+- **`pty-capture.py` no longer rewrites a hard-linked victim on the non-allocated path.** The fresh
+  path opened `O_CREAT|O_TRUNC` while the `nlink != 1` guard was gated on `allocated` — and `O_TRUNC`
+  empties a pre-existing file at `open()`, before any `fstat`, so a hard link planted at the
+  predictable capture/`.captureid` path was truncated to zero on the way in and the guard never ran
+  (PR #63 recheck, P2, reproduced: `PRECIOUS OUTSIDE DATA` became the capture). The path now opens
+  without `O_TRUNC`, the `nlink != 1` refusal is unconditional and runs before any write, and the
+  existing `ftruncate` bounds an honest single-linked overwrite — closing the hole while keeping the
+  legitimate stale-file overwrite behaviour that `O_EXCL` would have broken.
+- **A reviewer that mutates its disposable checkout VOIDS the round — including the invisible case.**
+  `isolated-agy-review.sh` printed an informational note when the reviewer wrote inside the disposable
+  copy and returned success; worse, the note's baseline diff is _status-line_ based, so a reviewer that
+  rewrote the already-`M` **staged plan** and then emitted `VERDICT: APPROVE` produced a valid-looking
+  capture with **no note at all** — a review of substituted bytes approving the original plan, which
+  synthesis cannot catch because it validates the `.plan` record against the untouched live plan
+  (PR #63 recheck, P1; both shapes reproduced). Now the round's **basis is content-verified**: the
+  staged plan must still hash to the digest its `.plan` record attests to, the assembled prompt must
+  still hash to what the harness wrote (the old diff _excluded_ the prompt's basename, hiding prompt
+  tampering by construction), and **any** other post-baseline write voids the round with exit 3 —
+  writing files is the COREDEV-2607 agent-mode signature, and a review produced that way is
+  untrustworthy whether or not the copy is discarded. The harness's own staged inputs stay exempt via
+  the post-staging baseline, so clean rounds are unaffected. Revert-proof: the pre-fix harness fails
+  exactly the three new tests.
+- **Plan references survive a space in the repository's own path.** `bind-prompt.py`'s token regex
+  matched a character allowlist without the space, so an absolute reference under
+  `/Users/me/My Projects/repo/…` was captured from AFTER the space and the disagreement check refused
+  the documented capture flow — the gemini skill _requires_ absolute plan paths in generated prompts —
+  before either reviewer launched. Absolute references under the repository are now matched WHOLE,
+  anchored on the known root (the one string that makes an embedded space unambiguous), and masked
+  before the conservative token sweep handles relative and prose references. The refusal for a
+  genuinely different plan now names its full identity instead of a truncated fragment. Ships with a
+  permanent revert-proof: the suite runs the old extraction against the spaced fixture and asserts it
+  still fails.
+- **The Plan Review Gate anchors at the worktree root and honors the caller's spelling.**
+  `resolve-plan-gate.sh` evaluated everything — the direct file test, the name-branch glob, the `ls`
+  diagnostic, and the `verify` exec — against the caller's working directory, so from a repository
+  subdirectory the documented root-relative operand fell through to name resolution and a valid,
+  gated plan was reported as "No plan matches". Now: `cd` to `git rev-parse --show-toplevel`
+  (fail-closed outside a worktree), with the operand interpreted against the caller's directory
+  first, the root second, and refused as AMBIGUOUS (exit 2) when the two name different files. An
+  absolute in-repo operand — previously refused as "not a tracked plan" purely for its spelling — now
+  resolves, and a `..`-wearing spelling is collapsed physically first, so it is classified by its
+  true identity rather than caught wearing the prefix. The symlinked-planning-root proof became a
+  double-mutant: two independent mechanisms now refuse it, so single mutants are asserted as defence
+  in depth and the pair is proved by the double admitting.
+- **The spawner check's writer predicate now means "can modify the checkout".** It tested only
+  `Write`/`Edit` — by substring, so a `NotebookEdit` deny satisfied an `Edit` probe — and its spawner
+  detection skipped omitted-`tools:` agents entirely. Three shapes escaped: `jira-manager` (denies the
+  file editors, inherits unrestricted `Bash`), any `memory:` agent (auto-enabled Write never appears
+  in `tools:`), and `modern-standards-planner` as an undetected inherit-all _spawner_. The predicate
+  is now token-exact over live tools (grants-or-everything minus denies) against
+  `{Write, Edit, NotebookEdit, Bash}`; `memory:` counts as Write; inherit-all agents count as holding
+  `Agent`. Agent changes to match the honest policy: `jira-manager` **denies `Bash`** (the caller now
+  passes the PR URL; its Atlassian-MCP mutation of Jira is unchanged and by design),
+  `modern-standards-planner` denies the `Agent` tool it never used, and `swift-reviewer` denies
+  spawning itself. `check_bashless_agents_run_no_shell` now scopes by live Bash too, so a
+  bashless-BY-DENIAL agent's shell recipes are swept like any other — which is what caught
+  `jira-manager`'s own `gh pr view` instruction. `AGENT_CONTRACTS.md`'s capability row is updated,
+  dropping a `MultiEdit` deny it claimed while the agent file never carried it (Claude Code removed
+  that tool; the stale-name rule rejects denying it).
+- **The staged plan snapshot is authenticated against its own record before the reviewer sees it.**
+  `isolated-agy-review.sh` copied `<transcript>.planbytes` into the review checkout and then `cmp`'d
+  the copy against its source — a comparison between two reads of the same mutable file. A same-account
+  process rewriting `.planbytes` between `bind-prompt.py` returning and the staging copy was read by
+  both, so they agreed and `agy` reviewed substituted bytes; nothing downstream noticed, because
+  `review-verdict.py` validates the `.plan` RECORD against the live plan and never hashes `.planbytes`.
+  The resulting transcript could approve the ORIGINAL plan. The record held the honest digest the whole
+  time and nothing read it — the fifth "recorded and never compared" in this release. Now one
+  `O_NOFOLLOW` descriptor is read once, hashed, compared to `.plan`, and those same bytes are written,
+  so there is no second open to race.
+- **A plan path relative to the CALLER's directory no longer refuses the round.** `bind-prompt.py`
+  resolves the plan operand against the caller's working directory; `isolated-agy-review.sh` had already
+  `cd`'d to the repository root and reinterpreted the same string there, so
+  `../docs/planning/X_PLAN.md` passed from a subdirectory bound successfully and then died with
+  `plan not readable` before the reviewer launched. Resolved against the caller first, the root second,
+  and refused only when the two name genuinely different files. **A guard that rejects correct work is
+  one an operator switches off** — the fifth false refusal this recheck surfaced.
+- **`gemini-review` no longer documents running a script it does not grant.** Four executable lines told
+  the model to invoke `scripts/review/isolated-agy-review.sh` directly, which the skill's
+  `allowed-tools` does not cover, so the documented flow prompted or was denied; and the
+  three-argument shape they used omitted the plan operand, which skips snapshot staging and makes `agy`
+  review the COMMITTED plan instead of the uncommitted edits under review. All now route through the
+  granted `capture-gemini-review.sh`. A new sweep asserts the property for **every** skill: the previous
+  check enumerated specific recipes, and an enumeration cannot fail on the entry nobody added.
+- **Transcript-freshness gate no longer depends on how a path is spelled.** The layout comparison was
+  lexical, so `…/HASH/./f.txt`, `…/HASH/../HASH/f.txt`, and a symlinked _ancestor_ directory each
+  opened the identical file while comparing unequal — the same bytes accepted or refused by
+  punctuation. Closed by `dirname`-only `realpath` resolution: the ancestry is resolved, the leaf
+  never is, so a symlinked _leaf_ is still refused.
+- **A case-mangled path bypassed the same check.** The layout comparison was case-SENSITIVE while
+  this gate runs on default-case-insensitive APFS, so `…/Unleashed-Mail/…` opened the identical file
+  and classified as legacy. Closed separately, by comparing casefolded — not by the resolution change
+  above.
+- **TOCTOU: the gate validated one file and recorded another's digest.** Freshness opened the
+  transcript, validated it and closed it; the caller then hashed the PATH again. Between those two the
+  leaf can be re-pointed, so the artifact could record as reviewed evidence the digest of a file that
+  never passed the check. The digest is now read from the SAME `O_NOFOLLOW` descriptor the check
+  `fstat`'d, and freshness hands the caller back that path and digest rather than letting it re-resolve
+  the name.
+- **A symlinked allocator _parent_ let a reserved leaf resolve outside its layout.** Separate fix,
+  separate mechanism: the allocator now checks the parent with `lstat`, not `stat`.
+- **`cleanup --check` reported green for a state `--apply` refuses only after deleting 39 files.**
+  `--check` never ran the emptiness scan that `--apply` used to decide whether to proceed, so a file
+  dropped between the two calls meant a green check followed by a destructive partial apply. Both
+  paths now share one predicate, and the orchestrator refuses **before** the unlink phase.
+- **A reused allocated transcript leaf could resurrect the previous round's verdict.** The allocator's
+  reservation mode preserved the file (no `O_CREAT`) but also left it untruncated (no `O_TRUNC`), so a
+  round that wrote fewer bytes than a prior one left the earlier tail in place — a failed review could
+  read back as `VERDICT: APPROVE`. Fixed with `ftruncate` after the write (preserving the reservation
+  invariant `O_TRUNC` would have broken), plus a wrapper-level refusal of any non-empty reserved leaf.
+- **Two concurrent review rounds could cross-wire prompt and transcript.** Both recipes wrote to a
+  fixed `.agy-prompt.md` / `.codex-prompt.md`; a second round overwriting the shared prompt before the
+  first wrapper read it made the first round's transcript describe the _other_ plan under its own
+  ticket and round. Both recipes now derive the prompt filename from the round identity (see Changed,
+  below) and bind the run to its plan before capture starts: `<transcript>.plan` records the plan's
+  digest, and `review-verdict.py write` **refuses** an approving verdict whose per-run transcript is
+  bound to a different plan. The `.promptsha256` sidecar alone did not do this — nothing ever read it,
+  so transcripts captured against an unrelated ticket still produced `GATE OK — APPROVE`. "Detectable"
+  is only true if something looks; the plan sidecar is the half that looks.
+- **The cleanup tool removed files by name after validating them by descriptor.** `_preflight_files`
+  resolves each of the 39 targets, proves each is a regular file and proves each is beneath the state
+  root — and the removal loop then re-walked the resolved _string_, so every component was looked up
+  again. Renaming one parent directory between the two walks retargets all 39 unlinks, and the state
+  root lives under `~/.local/state`, which needs no privilege to write. Both phases now open the
+  parent chain once with `O_DIRECTORY | O_NOFOLLOW`, hold those descriptors for the whole phase, and
+  remove through `dir_fd` — so the object inspected is the object removed. The proof runs the swap
+  against the fixed code and against the pre-fix primitive in the same instant: the old one deletes 39
+  bystander files and reports success.
+- **The `agy` preflight graded the CLI on its output without checking its exit status.** An `agy` that
+  printed text containing `pong` and then exited non-zero — or a wrapper that timed out after emitting
+  it — was reported `healthy`. The preflight is what decides whether the mandatory gate may run at
+  all, so it fails closed on a non-zero capture regardless of what landed in the file.
+- **The grant validator's command normalization could be walked around with a wrapper.** It reduced a
+  `Bash(...)` specifier to a basename to catch `env git push` and friends, but unwrapped only a fixed
+  list — so `sudo -u nobody git *` normalized to `sudo` and passed. Any wrapper outside the known list
+  now rejects rather than normalizes, and the check is scoped to specifiers containing `*`, since the
+  policy is about unbounded breadth (`Bash(codex --version)` is exact and fine).
+- **`codex-review`'s audit recipe failed outright on Linux.** `mktemp -t codex-audit` is a BSD
+  shorthand GNU `mktemp` rejects; fixed with the portable full-path template form (the commonly
+  suggested `-t name.XXXXXX` only half-works — BSD treats the `X`s as literal and appends its own
+  suffix — so the proof checks the produced name, not just the exit code).
+
+### Changed
+
+- **Breaking: `pty-capture.py` requires an out-path.** The `/tmp/pty-out.txt` default is removed — a
+  run that died before writing left the _previous_ run's bytes at that shared path for the next reader
+  to trust, and two concurrent captures overwrote each other. Every caller in the tree already passed
+  an explicit path; callers outside the tree must now do the same.
+- **Breaking: both review recipes require a per-round prompt file**, `.codex-prompt-${TICKET}r${ROUND}.md`
+  / `.agy-prompt-${TICKET}r${ROUND}.md`, in place of the shared `.codex-prompt.md` / `.agy-prompt.md`.
+  337 of 339 prompt files on disk were already per-round names before this change; the shared spelling
+  was the anomaly and is no longer accepted.
+- **Breaking: the gemini arm's default model is now `gemini-3.6-flash-high`**, replacing
+  `gemini-3.1-pro-high` — the model `isolated-agy-review.sh`'s own comment already claimed to run,
+  and the arm that `isolated-agy-review.sh`'s own comment records as failing to emit a parseable
+  verdict in 5 of 6 rounds — a rationale that had sat directly above the line still defaulting to
+  the model it rejected. A
+  fallback still reaches the old model via the wrapper's `MODEL` override (editing `settings.json` is
+  now inert, since the wrapper always passes `--model`).
+- **Five inline skill recipes extracted to granted helper scripts** — `capture-codex-review.sh`,
+  `capture-gemini-review.sh`, `resolve-plan-gate.sh` (`implement`'s Design Gate), and
+  `persist-verdict.sh` (shared by `review-synthesis` and `brainstorm`). Each inline recipe was a
+  _compound_ shell command (functions, branches, loops), which Claude Code decomposes and wants a
+  grant per subcommand — so none of them matched a scoped `allowed-tools` shape and every gate round
+  re-prompted. As a side effect, `capture-codex-review.sh`'s new prompt-readable check caught a real
+  bug: `$(cat .codex-prompt.md)` expands empty on a missing file, so every codex capture proof had
+  been running against an empty prompt.
+- **The Plan Review Gate now has an end-to-end suite** (`scripts/tests/test_end_to_end_gate.py`, 10
+  scenarios). Every other suite here tests one script; nothing spanned snapshot → allocate → bind →
+  capture → write → verify → resolve, which is where the gate's guarantees actually live. It runs the
+  real allocator, `bind-prompt.py`, `pty-capture.py`, `review-verdict.py` and `resolve-plan-gate.sh`
+  against a real git repository, stubbing only `codex` and `agy` — the two things that leave the
+  machine — by putting them earlier on `PATH` rather than patching the helpers, so the helpers run
+  their real argv. Each scenario gets its own repository, because the hand run that produced the file
+  reported a FALSE failure when one scenario inherited another's tampering.
+
+  It **independently reproduced `COREDEV-2497` §4.1** — `verify` re-reads the plan and nothing else, so
+  an approved transcript can be rewritten and the gate still prints `GATE OK`. That defect was already
+  known and planned; the suite did not discover it. It is **not fixed here**: that plan has not passed
+  its gate (last round: both arms `REQUEST_CHANGES`), and it specifies behaviour an ad-hoc fix would
+  get wrong — a missing transcript must fail with a distinct `MISSING` cause, and the recorded path
+  must be resolved exactly once, behind named seams. An ad-hoc fix was written during this work and
+  **reverted** for exactly those reasons. The defect is pinned by
+  `test_the_gate_still_accepts_altered_evidence_COREDEV_2497`, which asserts the current, defective
+  behaviour and fails — deliberately — the day `COREDEV-2497` lands.
+
+- **The callers-scan exemption manifest now ships, and CI runs the scan that needs it.**
+  `scripts/review/callers-scan-exemptions.tsv` was previously unshipped, so
+  `callers_scan.py --root .` exited 2 before scanning a single line — and CI only ever invoked
+  `--help`, which loads no manifest, so nothing caught this. The manifest is generated by a separate
+  maintainer tool (`generate-callers-exemptions.py`, deliberately outside the scanned module: a
+  scanner that can derive or widen its own exemptions cannot fail closed) and validated against the
+  production parser before writing.
+- `mktemp` invocations made GNU/BSD-portable across the affected recipes (see Fixed).
+
+### Notes
+
+- Asset counts are unchanged: **21 agents · 21 skills · 0 commands · 1 MCP server**. No agent or
+  skill was added or removed in this release.
+
+## [2.6.7] — 2026-08-03
+
+### Fixed
+
+- **Review transcripts are allocated per run and freshness-bound** (`COREDEV-2619`): both recipes reserve distinct leaves, carry each path unchanged through capture, synthesis and artifact recording, and validate its capture identity and nanosecond mtime against its own pre-dispatch launch record on both digest paths. The explicitly armed release tool deletes only the closed 39-file manifest, then its nine empty parents; its assertion/mutation suite covers set equality, forbidden primitives, containment, types, preservation, directory pruning and release metadata.
+
+  Per-run paths prevent accidental transcript collisions and stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host where an attacker controls a state-directory ancestor.
+  The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because Claude Code 2.1.0 and later expand that placeholder.
+
+### Changed
+
+- **Effort is inherited, not pinned; three workflow skills became model-invocable** (`COREDEV-2639`): every agent and skill now **omits `effort:`** and follows the session level, and CI accepts exactly `absent | xhigh | max` — a blanket `effort: xhigh` had been silently _capping_ `max` sessions, because frontmatter effort overrides the session in both directions. Separately, `disable-model-invocation` was removed from `brainstorm`, `implement` and `pr-review`, so those three workflows can now be opened by the model rather than only by an explicit human invocation.
+
+  **Permission consequence, and what was done about it.** Making those three skills model-invocable means their pre-approval grants can activate with no user gesture — a window the model can open by deciding a task "is an implementation". The grants were therefore SCOPED in the same release (`COREDEV-2642`): `implement` now holds `Read, Grep, Glob, Agent, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)` and `pr-review` holds `Read, Grep, Glob, Agent, Bash(git *)`. Blanket `Write`/`Edit`/`Bash` are gone; `implement` never used them itself, because it delegates every file write to `db-engineer`/`logic-engineer`/`ui-engineer` via `Agent`. `allowed-tools` is a pre-approval grant rather than a restriction, so narrowing it disables nothing — those calls simply need the normal user gesture. Note also what the effort "floor" is **not**: it constrains what may be written into an asset, not runtime effort — no in-plugin mechanism raises a `low` session, and `CLAUDE_CODE_EFFORT_LEVEL` outranks frontmatter regardless (AGENT_CONTRACTS §11).
+
+- **Plan-review verification hardening plan** (`COREDEV-2497`): documentation only — the plan and its review record. No shipped behaviour change; recorded here because the 2.6.7 entry previously omitted it entirely.
+
+## [2.6.6] — 2026-07-31
+
+### Changed
+
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan reviewed over 19 rounds — but **it shipped without an approving round**: round 19's verdict on these bytes was codex `REQUEST_CHANGES` (3 High + 1 Medium), with the gemini arm emitting no parseable verdict line. The earlier wording, "plan gated over 19 review rounds", claimed a pass the plan's own status line does not record). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers' machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
+
+  §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as _"out of scope"_ and the five reviewers as _"in scope"_ would have passed every gate while asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id | scope | anchor` — that is the only scope statement:
+  exclusive and normative, with exactly nine approved triples, every field from a finite allowlist, and any unknown key or catch-all row a hard failure.
+
+  Each row carries a repository **anchor** (`path:line`), because binding a token to a token still left every `surface_id` free to be defined elsewhere: `verdict-report` could be redefined as the JSON passed to the synthesizer while every check passed.
+  The anchor's **path is pinned** to a canonical map; only its **line** is resolution-driven, and the gate walks up from the surface's fingerprint to its nearest enclosing real heading, fence-aware.
+
+- **The payload-region invariant moved verbatim to §5 (Code Review Pipeline)**, where the contract it
+  protects lives, together with the precedence rule and the six machine contracts it enumerates. §13
+  keeps a one-sentence pointer.
+
+### Added
+
+- **§14 Blocked Subagent Handoff Contract** — the `BLOCKED — <reason>` prefix now has its own section
+  rather than living inside a style section. It is used for diagnostic confirmation and Jira-tool
+  failure: a subagent pausing to hand control back for external action.
+- Gates in `scripts/tests/test_doc_gates.py`: a **fail-closed** `_scope_rows` parser (the previous
+  `_rows` matched numbered rule rows only and, given a scope table, silently returned the rules), an
+  `in`-set/`VALID_AGENTS` **disjointness** gate read from `capture.py` rather than restated, and the
+  anchor-resolution gate.
+- `mcp/review-synthesizer/tests/test_capture.py`: **isolated** payload-region regressions, one per
+  independent rejection cause plus a positive control. `extract_status` stops on _either_ prose or
+  fenced content, so a single combined fixture passes against a parser that handles only one.
+
+### Verification
+
+Each rule is asserted to carry **exactly one** classifier from `{Adapted, Adopted, Restated
+positively}` — membership, not a fixed token per rule, because §4.4 expressly permits the narrowing to
+change any of them. Proved by mutation against the live gate: repointing an anchor to a non-nearest
+heading, to a file's sole H1, or off its canonical path all **fail**; re-pairing a producer fails;
+stripping a classifier fails; removing a rule row fails; adding `swift-reviewer` to `VALID_AGENTS`
+fails. The two **positive** cases pass: changing a rule's classifier within the vocabulary, and adding
+an unrelated captured specialist to `VALID_AGENTS`.
+
+> The disjointness choice is load-bearing and was caught by that second positive case. The gate first
+> asserted the `out` set **equals** `VALID_AGENTS`; the plan had explicitly rejected equality because it
+> couples §13 to every future captured specialist. The positive mutant failed, and the gate was
+> corrected to disjointness.
+
+## [2.6.5] — 2026-07-31
+
+### Fixed
+
+- **Plugin state split across two base directories** (`COREDEV-2617`, plan reviewed over **18** rounds, not the 19 previously claimed here — and **it shipped without a reproducing approval**: round 18's double approval failed re-run at the byte-identical digest, and the re-run found a real fail-open→fail-closed regression in the agent fence).
+  `CLAUDE_PLUGIN_DATA` is exported to hook and MCP subprocesses but **not** to an ordinary shell. Every
+  library fell back to `${HOME}/.claude/unleashed-mail`, so a marker, log or snapshot written outside a
+  hook went to a _different_ directory than the one the hooks read — and neither could see the other.
+  Quality markers set by a hook were invisible to a manual run, and vice versa.
+
+  **The fix is D′: an unresolved base persists nothing.** The base resolves _only_ from
+  `CLAUDE_PLUGIN_DATA`; when that is unset or empty the libraries return a **poisoned sentinel**,
+  `/dev/null/unresolved-plugin-base`. `/dev/null` is a character device, so every path beneath it is
+  `ENOTDIR` — `mkdir`, `mktemp`, redirects and opens all fail harmlessly at a fixed, greppable location,
+  and an _unguarded_ caller can never compose a root path such as `/logs`. Returning the empty string
+  would have done exactly that. Writers (`marker_write`, `log_append`, the round-binding mutators)
+  become no-ops and return success, so no consumer's primary behaviour changes.
+
+  Resolution is **eager and process-stable** — once, at source time, into shell variables
+  (`_UNLEASHED_BASE_RESOLVED` / `_UNLEASHED_BASE_OK`), because a value first assigned inside
+  `$(marker_dir)` lives in that subshell and is gone on return. Consumers whose behaviour differs when
+  unresolved branch on `_UNLEASHED_BASE_OK`, never on a string comparison against the sentinel.
+  Exactly **one** diagnostic is emitted per process, whether or not `scripts/lib/paths.sh` is present.
+
+  **⚠️ State written before this fix may live in a second directory.** To find it:
+
+  ```bash
+  ls -la ~/.claude/unleashed-mail/          # the legacy fallback store
+  ls -la ~/.claude/plugins/data/unleashed-mail-*/   # where hooks actually wrote
+  ```
+
+  Nothing is migrated automatically — the two stores can disagree, and picking a winner silently is
+  what this ticket exists to stop. Inspect both and delete or merge deliberately.
+
+### Added
+
+- `scripts/lib/agent-env-bridge.sh` — one documented bridge for carrying `CLAUDE_PLUGIN_DATA` into an
+  agent's Bash-tool shell, replacing per-agent copy-pasted exports. The fence passes both the data value
+  and the plugin root as positional arguments, because only the exact `${…}` tokens are substituted and
+  only in agent content.
+- `scripts/tests/test_plugin_state_base.py` — 12 proofs: the six-cell resolution matrix
+  (`paths.sh` present/absent × variable set/empty/unset, in Bash **and** zsh), no-persistence, nothing
+  created at `/`, every path primitive returning the sentinel, and a lexical drift check with an
+  enumerated allowlist. The drift check is proved to discriminate: it fails on a planted bypass.
+
+### Changed
+
+- `scripts/tests/test_shell_primitive_drift.py` — the base-path matrix now expects the sentinel for
+  unset and set-but-empty. The legacy `${HOME}`-based expansion is asserted **present in `paths.sh`**
+  (where its `:-` and `${HOME:-}` guarantees stay locked) and **absent from the three libraries**, since
+  that fallback _was_ the second store.
+
+### Known limitation
+
+- The drift check is a **lexical** detector, not a proof of accessor-only provenance. Path provenance is
+  not statically decidable in Bash — a runtime-assembled variable name evades any static scan. It
+  catches the failure this ticket is about: a copy-pasted resolver in a new primitive.
 
 ## [2.6.4] — 2026-07-30
 
@@ -21,11 +2964,11 @@ the plan-review gate on itself rather than by a planned audit.
 ### Fixed
 
 - **The gemini reviewer could write to the tree it was reviewing, and did** (`COREDEV-2607`). On
-  2026-07-29 a plan review *implemented* the plan instead of reviewing it: 6 shipped scripts modified,
+  2026-07-29 a plan review _implemented_ the plan instead of reviewing it: 6 shipped scripts modified,
   5 files created, including a stray `marketplace.json` at the repo root. It emitted no `VERDICT:` line
   so the gate failed closed — the fortunate failure mode — but the edits persisted and were reverted by
   hand. The concurrent `codex` review recorded that it had re-anchored its citations against committed
-  HEAD; nothing in the gate design *required* that.
+  HEAD; nothing in the gate design _required_ that.
   New `scripts/review/isolated-agy-review.sh` points the reviewer at a **disposable detached checkout**
   of the reviewed commit and asserts the real working tree is unchanged afterwards — a tree mutation
   **fails the round** rather than being cleaned up silently, which is `AGENT_CONTRACTS.md` §2 step 0b
@@ -35,9 +2978,9 @@ the plan-review gate on itself rather than by a planned audit.
   has no read-only mode — the asymmetry with `codex`, which the gate already runs `-s read-only`.
 - **Secret redaction let four Unicode fold codepoints into an ASCII value class** (`COREDEV-2609`),
   the residual the 2.6.2 entry recorded as still open. U+0130, U+0131, U+017F and U+212A now ride in the
-  secret **payload** class in both the shell and Python redactors. The **anchor** is deliberately *not*
+  secret **payload** class in both the shell and Python redactors. The **anchor** is deliberately _not_
   widened: widening an unanchored prefix is what corrupted ordinary prose in the first place, whereas
-  widening an *anchored* rule's payload cannot. Held by the `redactor_model.py` equivalence gate on both
+  widening an _anchored_ rule's payload cannot. Held by the `redactor_model.py` equivalence gate on both
   `sed` engines.
 
 ### Changed
@@ -85,7 +3028,7 @@ passed gate.
 - **`load-check` CI job** + `scripts/ci-load-check.sh` (COREDEV-2598). Installs the checkout's own
   bytes via a scratch marketplace, proves byte identity with a per-run sentinel, drives the MCP server
   from its **own installed declaration**, and asserts the hook-manifest shape. Four mutants, each
-  mapped to the assertion it fails; the mapping records one assertion that is *not* provable and is
+  mapped to the assertion it fails; the mapping records one assertion that is _not_ provable and is
   labelled defence-in-depth rather than claimed.
 - Drift guards (`scripts/tests/test_shell_primitive_drift.py`): no `uname == Darwin` mtime branch
   anywhere under `scripts/`, the base expansion identical across all three libs with its `${HOME:-}`
@@ -108,7 +3051,7 @@ recorded as a workflow exception, not a passed gate.
   `~40/60 split`) plus Swift's `~Copyable`/`~Escapable`.
 - **Five leak classes**, each reproduced before being fixed: `api<U+00A0>key: <secret>` and
   `bearer<U+00A0><token>` (Python's `\s` accepts 23 codepoints POSIX `[[:space:]]` under `LC_ALL=C`
-  does not); `api key:\n<value>` (`sed` is line-oriented and the newline fold ran *after* the rules);
+  does not); `api key:\n<value>` (`sed` is line-oriented and the newline fold ran _after_ the rules);
   the compound `/Users/nick<U+00A0>api key: <secret>` (the shell over-consumed and ate the `api`
   anchor, so the rule never fired); `user@2x.png.example.com` — a **routable address** preserved
   entirely because the retina-exemption lookahead's `\b` was satisfied by the following dot; and
@@ -123,22 +3066,22 @@ recorded as a workflow exception, not a passed gate.
   cannot contain `-`, so `OPENAI_KEY_sk-proj-…` redacts) and is not before `pk_` (the SQL/GRDB
   primary-key convention, so `orders_pk_customer_id_idx` survives). Keeps both properties rather than
   trading one for the other.
-- The `~` rule requires a home-*path* shape (`[A-Za-z_]` + `/`), matching the definition
+- The `~` rule requires a home-_path_ shape (`[A-Za-z_]` + `/`), matching the definition
   `schema.py` already shipped. **Accepted residual:** a bare `~alice` with no path is no longer
   redacted — it is regex-indistinguishable from `~ten`/`~Copyable`, and both are pinned by tests so a
   future widening trips a gate.
-- Whitespace is canonicalised on **both** sides *before* any rule runs. Not a widening: no pattern
+- Whitespace is canonicalised on **both** sides _before_ any rule runs. Not a widening: no pattern
   changes, only the input domain.
-- `re.IGNORECASE` removed from Python's `_APIKEY`/`_BEARER` — it did *Unicode* case-folding, matching
+- `re.IGNORECASE` removed from Python's `_APIKEY`/`_BEARER` — it did _Unicode_ case-folding, matching
   U+0130/U+0131/U+212A in the literals and admitting four codepoints into an ASCII value class, which
-  emitted `[redacted-key]` immediately *before* live secret material. Residual shared miss: COREDEV-2609.
+  emitted `[redacted-key]` immediately _before_ live secret material. Residual shared miss: COREDEV-2609.
 - Python's secret rule uses two sequential passes, not one combined alternation, which matched
   greedily from the leading prefix and disagreed with the shell.
 
 ### Added
 
 - `mcp/review-synthesizer/redactor_fixture.py` — the single canonical parity vector list, with
-  *generators* for the unbounded classes, since three root causes cannot be closed by any list.
+  _generators_ for the unbounded classes, since three root causes cannot be closed by any list.
 - `mcp/review-synthesizer/redactor_model.py` — the mechanical closure: over a seeded corpus the only
   divergence must be the one documented exemption, `UNEXPLAINED == 0`. 40,000 inputs clean.
 - `redactor-equivalence` CI job on **`ubuntu-latest` and `macos-latest`**. Both, deliberately: the
@@ -153,6 +3096,7 @@ Agent output style (COREDEV-2602) — plan `docs/planning/AGENT_OUTPUT_STYLE_PLA
 the dual gate (gemini APPROVE + codex APPROVE_WITH_NOTES) after eleven rounds.
 
 ### Added
+
 - `AGENT_CONTRACTS.md` **§13 Agent Output Style** — ten rules adapted from `ayghri/i-have-adhd` (MIT,
   pinned at `07684c4a`). Two adopted, seven adapted, one restated positively. Adapted rather than
   migrated: four upstream rules would have damaged machine-consumed output.
@@ -164,6 +3108,7 @@ the dual gate (gemini APPROVE + codex APPROVE_WITH_NOTES) after eleven rounds.
   tests (per-rule **row-scoped**, per-contract **section-scoped**), each mutation-proved.
 
 ### Notes
+
 - Enforcement is documentary. `COREDEV-2604` covers the mechanical guard (report the cause, route it,
   feed it to the retry); `COREDEV-2599` covers measuring whether agents actually comply.
 
@@ -173,6 +3118,7 @@ Opus 5 alignment (COREDEV-2583) — plan `docs/planning/OPUS5_ALIGNMENT_PLAN.md`
 dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five rounds.
 
 ### Added
+
 - `effort: xhigh` on all 21 agents and all 21 skills, with a hard CI assertion on both axes and on the
   §11 policy sentence. Nothing set `effort` before, so every asset ran at the session's level.
 - A `warnings` channel in `validate-plugin-assembly.py`: prints, never affects the exit code. Used to
@@ -183,6 +3129,7 @@ dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five 
 - AGENT_CONTRACTS §5 now declares the subagent spawn-depth dependency and the ≥ 2.1.219 floor.
 
 ### Changed
+
 - **Model tiering is three tiers**, set by consequence of being wrong rather than cost:
   `security-reviewer`, `prompt-review`, `concurrency-reviewer` → `opus` (3); orchestrator and
   implementation/diagnostic engineers → `inherit` (11); first-pass reviewers, personas and fixed-scope
@@ -195,6 +3142,7 @@ dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five 
 - CI pins Claude Code 2.1.220 (was 2.1.209, eleven releases below the Opus 5 floor).
 
 ### Fixed
+
 - `TaskOutput` and `EnterPlanMode` were **false-rejected** as typos of `BashOutput`/`ExitPlanMode`.
 - `MultiEdit` is removed from `KNOWN_TOOLS` **and** hard-rejected — dropping it alone is a no-op because
   unknown tools are accepted, which had left `agents/jira-manager.md`'s deny-list entry a silent no-op.
@@ -211,6 +3159,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 (10 major, 29 minor, 10 info), none caught by the shipped validators. No agents/skills added (21/21/0/1).
 
 ### Fixed
+
 - **Review-synthesizer gate fail-opens** (MAJ-4/5): `is_abs_or_traversal` now rejects tilde/home paths
   (`~/…`, `~user/…`), and the `synthesize.py` CLI refuses to scope explicit findings against the bundled
   demo changeset (and exits 2 on unknown flags) instead of silently printing APPROVE.
@@ -232,6 +3181,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
   fixes (MIN-1/3/4/5/6/7/8/9/10/11/13/15/17/25/26/29; INF-1/3/4/5/6/7/10).
 
 ### Added
+
 - Validator coverage for what previously drifted silently: §11 model-tier alignment, the six-copy
   reviewer roster, hook `matcher`-key typos, agent `skills:` and `.mcp.json` path resolution, and
   manifest-description + CHANGELOG-entry counts. 15 new regression tests across the MCP and scripts suites.
@@ -239,6 +3189,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 ## [2.5.2] — 2026-07-17
 
 ### Fixed
+
 - **Plugin scripts unreachable in consumer installs** (COREDEV-2504): the plan-gate script references in
   agent/skill bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does
   **not** substitute (only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in agent/skill
@@ -254,6 +3205,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 ## [2.5.1] — 2026-07-16
 
 ### Fixed
+
 - **Quality/review-gate fail-open remediation** (COREDEV-2503): a v2.5.0 audit surfaced fail-opens in the
   gates this plugin ships (the repo's own validators don't cover gate logic). All 14 confirmed findings are
   closed, each with a regression test that fails when the fix is reverted; two audit items were excluded
@@ -282,8 +3234,9 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 ## [2.5.0] — 2026-07-16
 
 ### Added
+
 - **Plan Review Gate made usable end-to-end and hardened** (COREDEV-2492): `/implement` now resolves a
-  feature name or path to *the* tracked plan (exact-stem match; a pure substring must be named
+  feature name or path to _the_ tracked plan (exact-stem match; a pure substring must be named
   explicitly), refuses anything outside `docs/planning/` (realpath containment — closes the
   `..`/symlink/symlinked-root and same-basename bypasses), and deterministically verifies a
   plan-digest-bound Combined-verdict artifact via [`scripts/review-verdict.py`](scripts/review-verdict.py)
@@ -298,6 +3251,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
   gitleaks secret-scanning (checksum-pinned) + `SECURITY.md`, and the org rename to UnleashedServices.
 
 ### Changed
+
 - **Dropped the unimplementable scripted `WAIVED` path** (COREDEV-2493): `AGENT_CONTRACTS.md` §2 had
   promised a user-authorized `WAIVED:` marker that nothing implemented and nothing could — "only the
   user may waive" is unenforceable when the agent is the process running the script. Removed rather than
@@ -324,7 +3278,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 - **The 3 orchestration commands are now skills** (COREDEV-2489 / P2-16): `brainstorm`, `implement`,
   and `pr-review` moved from `commands/*.md` to `skills/<name>/SKILL.md` as `disable-model-invocation`
   skills (custom commands have merged into skills). The `/unleashed-mail:brainstorm | implement |
-  pr-review` invocations are unchanged. Asset counts are now **21 agents · 21 skills · 0 commands · 1 MCP**.
+pr-review` invocations are unchanged. Asset counts are now **21 agents · 21 skills · 0 commands · 1 MCP**.
 - **Enforcement hooks now default to their active modes** (COREDEV-2489 / audit hooks-scripts.5).
   `sensitive-file-guard.sh` defaults to `ask` (was `warn`) — editing a sensitive file
   (Keychain/OAuth/entitlements/DB/WebView) now surfaces a permission prompt; in non-interactive /
@@ -335,6 +3289,7 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
   `UNLEASHED_STOP_GATE_MODE=warn|off`.
 
 ### Fixed
+
 - **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
   only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
   reported "no checks". `claude plugin validate` (added in #36) and actionlint (#31) had therefore never
@@ -354,12 +3309,13 @@ Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/P
 
 Hook-manifest integrity gate (COREDEV-2338). Surfaced while auditing whether the plugin's hooks
 actually "hold": the behavioral harness (`scripts/test-hooks.sh`) and `validate-plugin-assembly.py`
-gate hook *scripts* and JSON-parse the manifest, but nothing checked that `hooks/hooks.json` can
+gate hook _scripts_ and JSON-parse the manifest, but nothing checked that `hooks/hooks.json` can
 actually fire — a renamed/missing hook script, an invalid event name, or a typo'd tool matcher all
 passed CI. Reviewed with Codex (converged REQUEST_CHANGES → APPROVE over three rounds). No
 agents/skills/commands added (counts stay 21 · 18 · 3 · 1).
 
 ### Added
+
 - **`scripts/validate-hooks.py`** (stdlib-only) — static integrity check of `hooks/hooks.json`:
   every event key must be in a `KNOWN_EVENTS` allowlist (hard-fail on unknown/typo'd events, which
   would never fire); tool matchers of the simple `Tool|Tool` form must reference known tools
@@ -368,11 +3324,12 @@ agents/skills/commands added (counts stay 21 · 18 · 3 · 1).
   `bash -n` parses each referenced script; `--require-manifest` fails when a hooks-shipping plugin's
   manifest is missing.
 - **CI gate** in `.github/workflows/plugin-ci.yml` — runs `validate-hooks.py --root . --strict
-  --require-manifest` before the existing `test-hooks.sh` harness.
+--require-manifest` before the existing `test-hooks.sh` harness.
 - **Pre-commit wiring** in `scripts/pre-commit-checks.sh` — runs the validator in warn mode
   alongside the other plugin validators.
 
 ### Changed
+
 - **`scripts/test-hooks.sh`** — documented its coverage boundary: it hardcodes hook-script paths, so
   the manifest↔script linkage, event names, and matcher tokens are gated by `validate-hooks.py`; the
   PostToolUse `swift-lint-check.sh` hook is not behaviorally simulated on the Linux CI runner.
@@ -388,6 +3345,7 @@ finding — the reviewer Output-Contract capture claim — was already resolved 
 and needed no change.)
 
 ### Changed
+
 - **Review-command invocation model** — bare workspace names (`/gemini-review`, `/codex-review`,
   `/create-feature-plan`) are documented as **canonical** across the plugin's docs, agents, and
   skills; the plugin's `/unleashed-mail:*` forms remain as the bundled alias (`review-synthesis`
@@ -399,9 +3357,10 @@ and needed no change.)
 - **Plugin bumped to 2.4.1.** `README.md` H1 + What's-New updated; asset counts unchanged.
 
 ### Fixed
+
 - **SwiftLint merge gate** — replaced bare `swiftlint --strict` with the app's two-pronged gate
   (changed-file `swiftlint --strict <files>` + whole-repo `swiftlint lint --strict --baseline
-  swiftlint-baseline.json`; the committed baseline suppresses the pre-existing `NSRegularExpression`
+swiftlint-baseline.json`; the committed baseline suppresses the pre-existing `NSRegularExpression`
   backlog — COREDEV-2290) across 11 references; running the bare whole-repo form would have failed
   every gate.
 - **Stale build number** `1.02.260501` → `1.02.260601`; `Config/Base.xcconfig` flagged authoritative
@@ -424,6 +3383,7 @@ and needed no change.)
 ## [2.4.0] — 2026-06-27
 
 ### Added
+
 - **`prompt-review` — static AI-prompt / call-site reviewer, fully wired into the review pipeline**
   (COREDEV-2330 agent + COREDEV-2329 wiring; under Epic COREDEV-2126 GARI safety). A read-only 5th
   specialist reviewer that statically audits AI prompts and provider call sites (jailbreak/injection
@@ -441,11 +3401,11 @@ and needed no change.)
   category↔schema **exact-equality** invariant (guards the silent-drop trap), and `ai-safety`
   routing/render. Plan-review gate: codex `APPROVE_WITH_NOTES` + gemini `APPROVE_WITH_NITS`.
 - **Reviewer-capture round binding — a stable per-cycle signal from `SubagentStart`** (COREDEV-2326,
-  closes Epic COREDEV-2321). The SubagentStop reviewer capture's round was previously only *inferred*
+  closes Epic COREDEV-2321). The SubagentStop reviewer capture's round was previously only _inferred_
   (`capture.py:select_round`), which cannot perfectly group cycles under interleaved timing — a late
   reviewer from an earlier cycle could mis-bucket into a later round. A new **`SubagentStart` producer
   hook** (`scripts/capture-reviewer-round-start.sh` + a `SubagentStart` entry in `hooks/hooks.json`)
-  now *freezes* the round for each of the four specialist reviewers **at spawn**, keyed by its unique
+  now _freezes_ the round for each of the four specialist reviewers **at spawn**, keyed by its unique
   `agent_id`, in a per-checkout binding file under `.state/`; the SubagentStop capture
   (`scripts/capture-reviewer-verdict.sh`) looks it up by the **same** `agent_id` and exports
   `UNLEASHED_REVIEW_ROUND`, so each capture lands in its **originating** round regardless of
@@ -466,6 +3426,7 @@ and needed no change.)
   are not counted by the version-sync validator).
 
 ### Changed
+
 - **review-synthesizer now consolidates overlapping AI-safety ↔ security findings into one
   `prompt-review`-owned row** (`mcp/review-synthesizer/synthesize.py`, COREDEV-2332; follow-up to
   COREDEV-2329, parent COREDEV-2126). When `prompt-review` and another reviewer flag the **same
@@ -479,7 +3440,7 @@ and needed no change.)
   blocker still leads the row text and still gates the verdict**. Tests: `test_synthesize.py`
   151 → **159** (per-pair positive, `network`/unrelated negatives, non-overlap, mixed-severity
   blocker-survives). No version or asset-count change (synthesizer-internal). Plan-review gate: codex
-  + gemini both `APPROVE`.
+  - gemini both `APPROVE`.
 - **Reviewer Output-Contract status is now persisted through the SubagentStop capture path**
   (`mcp/review-synthesizer/capture.py`, COREDEV-2328). Each captured reviewer's `Status:`
   (`COMPLETE | BLOCKED | PARTIAL` + BLOCKED/PARTIAL detail fields) is written to a self-describing
@@ -496,6 +3457,7 @@ and needed no change.)
   SubagentStop hook contract are untouched).
 
 ### Fixed
+
 - **`ai-engineer` doc drift — removed two non-existent Swift symbols from the agent docs**
   (COREDEV-2331, parent COREDEV-1834; surfaced during the `prompt-review` plan-review). `agents/ai-engineer.md`
   documented the GARI provider/tool API using `HTTPBasedAIProvider` and `AIToolDefinition`, **neither of
@@ -527,11 +3489,12 @@ and needed no change.)
 ## [2.3.1] — 2026-06-26
 
 ### Added
+
 - **Plan-review synthesis skill** (`/unleashed-mail:review-synthesis`,
   `skills/review-synthesis/SKILL.md`) — a read-only skill that combines the two captured
   plan-review transcripts (gemini → `/tmp/agy-out.txt`, codex → `/tmp/codex-out.txt`) into one
   auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES |
-  DISAGREEMENT`; normalizes the CLI's `NITS → NOTES`; references findings by location/topic, never
+DISAGREEMENT`; normalizes the CLI's `NITS → NOTES`; references findings by location/topic, never
   echoing PII; surfaces a one-approve / one-reject split as `DISAGREEMENT` rather than averaging; a
   missing/empty transcript can never claim `APPROVE`). Kept **distinct** from the code-review
   `synthesize_review` MCP enum (`APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`). Wired into
@@ -540,7 +3503,7 @@ and needed no change.)
 - **Reviewer Output-Contract status enum** — the four specialist reviewers (`security`,
   `concurrency`, `ux-perf`, `accessibility`) now emit a `Status: COMPLETE | BLOCKED | PARTIAL` line
   (immediately before their JSON findings array, which stays the final block) that is **orthogonal**
-  to the findings, so a reviewer that *couldn't run* returns `BLOCKED` + `[]` instead of an empty
+  to the findings, so a reviewer that _couldn't run_ returns `BLOCKED` + `[]` instead of an empty
   `[]` that reads as a clean pass.
 - **Decision-support option tables** in `/unleashed-mail:brainstorm` — a design-phase **Step 4b**
   that, only on a genuine architectural fork, presents 2–4 options in a comparison table (with a
@@ -549,6 +3512,7 @@ and needed no change.)
   command's `allowed-tools`.
 
 ### Changed
+
 - **`swift-reviewer` Step 5 consumes the reviewer status.** `BLOCKED` routes to NEEDS DISCUSSION as a
   Needs-Confirmation uncertainty — **not** a `category: verification` blocker (which is
   confirmed-by-construction → REQUEST CHANGES); `PARTIAL` keeps the completed-scope findings and
@@ -556,12 +3520,13 @@ and needed no change.)
   structural). No synthesizer (Python) change. `skills/agent-orchestration/SKILL.md` handoff and
   `AGENT_CONTRACTS.md §5` updated to match.
 - **Plugin bumped to 2.3.1.** `README.md` (H1, the `20 agents · 18 skills · 3 commands · 1 MCP
-  server` counts, What's-New, architecture skill list, and Skills table) and
+server` counts, What's-New, architecture skill list, and Skills table) and
   `.claude-plugin/marketplace.json` reflect the new `review-synthesis` skill (skills 17 → 18).
 
 ## [2.3.0] — 2026-06-25
 
 ### Added
+
 - **Deterministic review synthesizer (MCP).** A local, zero-dependency stdio MCP
   server at `mcp/review-synthesizer/` that performs the orchestrator's Step-5
   synthesis in code instead of LLM prose: schema validation/quarantine, scope filter
@@ -582,6 +3547,7 @@ and needed no change.)
   server↔agent division of labour, and the authoritative dedup rules.
 
 ### Changed
+
 - **`swift-reviewer` Step 5 now delegates synthesis to the MCP tool.** The agent
   passes the reviewers' JSON findings to the synthesizer (which dedups/merges in
   code), then owns the **verify gate** (open each `blockersToVerify` `file:line`,
@@ -591,7 +3557,7 @@ and needed no change.)
 - **Review-agent system overhaul.** Reviewers (`security`, `concurrency`, `ux-perf`,
   `accessibility`) now end with a structured JSON findings array
   (`severity · confidence · sourceAgent · category · file · line · lineEnd · scope ·
-  finding · evidence · fix`) instead of a prose/markdown table; `swift-reviewer`
+finding · evidence · fix`) instead of a prose/markdown table; `swift-reviewer`
   cross-references and deduplicates across them. `concurrency-reviewer` broadened to
   the **correctness owner** (logic/error-handling). Provider-parity, test-coverage,
   and build/lint/test now emit gating `verification` rows. Added a **verify gate**
@@ -605,6 +3571,7 @@ and needed no change.)
   bundled stdlib MCP server.
 
 ### Fixed (PR review — Codex / Gemini / Copilot)
+
 - **`synthesize_review` validates its inputs and fails closed.** `findings` and
   `changed_files` are required and type-checked; a missing, non-array `findings` or a
   missing/non-`list[str]` `changed_files` is rejected with JSON-RPC `-32602` instead of
@@ -670,7 +3637,11 @@ and needed no change.)
 
 ## [2.2.4] — 2026-06-25
 
+> **History starts here.** This changelog was adopted at v2.2.4; releases v2.2.0–v2.2.3 predate it
+> and are summarized only in the README's What's-New section (2026-08-17 audit, AF-17).
+
 ### Added
+
 - Shared PTY capture wrapper (`scripts/pty-capture.py`) so the `codex-review` and
   `gemini-review` CLIs render reliably from non-TTY contexts; surfaced in the README
   skills table.

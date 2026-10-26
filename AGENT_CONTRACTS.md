@@ -23,6 +23,7 @@ Authoritative source: `<consumer-root>/docs/VERSIONING.md` and `Config/Base.xcco
 - `YYMMBB` = year + month (UTC) + build counter within the month (e.g., `260501`)
 
 Two xcconfig fields:
+
 - `MARKETING_VERSION` = `MAJOR.MINORRELEASE` (manual, e.g., `1.02`)
 - `CURRENT_PROJECT_VERSION` = full `MARKETING_VERSION.YYMMBB` (e.g., `1.02.260501`)
 
@@ -42,7 +43,8 @@ Current state: `1.02.260601` (Beta) — `Config/Base.xcconfig` is authoritative 
 - **Feature branches**: `1.0X/feature-name` off the matching version branch (`1.0X.0000`)
   where `X` is the RELEASE stage digit (e.g., `1.02/coredev-1899-foo` for Beta features)
 - **Hotfix branches**: off the version branch, merged to BOTH the version branch AND `main`
-- **Trunk**: `main` is the integration trunk
+- **Integration branch**: the version branch (`1.0X.0000`). All work lands there before `main`;
+  `main` receives only version-branch promotions and hotfixes (COREDEV-2884)
 
 > ❌ Never use `feature/desc`, `fix/desc`, or `claude/desc-sessionId` patterns. Those don't carry
 > the version-stage signal needed for release routing.
@@ -59,6 +61,7 @@ time; `jira-manager` provides ticket summaries.
 ### Mandatory release gates
 
 A PR cannot merge to `main` (or to the version branch) without:
+
 1. Build green (xcodebuild)
 2. SwiftLint green — changed files via `swiftlint --strict <changed files>`; whole repo via `swiftlint lint --strict --baseline swiftlint-baseline.json` (the committed baseline suppresses the pre-existing NSRegularExpression backlog so only NEW violations fail — COREDEV-2290)
 3. Tests green (xcodebuild test)
@@ -81,6 +84,7 @@ Use `/unleashed-mail:create-feature-plan` to scaffold (a bare `/create-feature-p
 
 Before any implementation begins:
 
+<!-- prettier-ignore -->
 00. **Create the feature worktree FIRST**, and do everything below inside it — plan creation, snapshot,
     both reviews, synthesis and implementation. The Combined-verdict artifact is per-directory session
     state under `<plan-dir>/.verdicts/`; it is git-ignored at the repo root **and** self-ignored by a
@@ -89,37 +93,45 @@ Before any implementation begins:
     contains only the plan. Gating in one checkout and implementing in another fails the gate on a
     genuine approval — hit on COREDEV-2583 with byte-identical plan content and a five-round approval.
     CI and a second developer cannot verify an approval at all, by design; do not expect them to.
-0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
-   --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
+0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**, through the CONTAINED
+   entrypoint: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh" <PLAN>`. The raw
+   `review-verdict.py snapshot --plan` call this replaces accepted ANY path on disk and wrote the
+   snapshot sidecar beside it (PR #63 recheck, P1 — reproduced against a file under `/tmp`). This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
    fails closed without it. Re-run it on any plan revision.
 0b. **Freeze the plan for the duration of a review round.** No edits between dispatching a review and
     recording its verdict. A reviewer that re-reads the target mid-run will refuse — *"a mandatory
     digest-bound review cannot approve a moving target"* — and the round is void. This applies to the
     author exactly as §2's read-only expectation applies to the reviewer.
-1. Plan author runs `/unleashed-mail:gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
-2. Plan author runs `/unleashed-mail:codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
+1. /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+2. /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
 
 ### Preflight & unavailable-reviewer recovery
 
-The gate depends on the `agy` (gemini) and `codex` CLIs being installed and authenticated. On a fresh
+The gate depends on the `gemini` and `codex` CLIs being installed and authenticated. On a fresh
 machine or in CI they may be absent — the gate must NOT silently pass, and must NOT hard-wedge the dev
 loop with no escape.
 
-- **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
-  isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
-  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
-  only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
-  unavailable and sends you down the recovery path for no reason (bare
-  `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
-  codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
-  is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
-  A **healthy ping but a failed review is an invocation problem, not an unavailable CLI** — `agy -p`
-  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 18m`; a tiny transcript
-  (e.g. `Error: timeout waiting for response`) is a *failure*, never a verdict. Fix the invocation and
-  re-run; that is not a reviewer-unavailable situation.
+- **Preflight (run first):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh"` — the one
+  granted form. It allocates the ping path PER RUN (a shared one lets a preflight that died before writing
+  leave the previous `pong` for the next reader, so a dead CLI reads as healthy), pings through the SAME
+  adapter a review runs through — so the answering model is asserted — from a scratch directory with the
+  checkout fingerprinted before and after, and is healthy only on a WHOLE-answer `pong` from the gate's
+  model. Every failure line names the model. Do not hand-roll an inline ping: the earlier inline recipe
+  polluted the caller's cwd — which under AF-5's freeze rule can VOID a round — and checked no exit status.
+  For codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that
+  it is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
+  A **healthy ping but a failed review** needs its reason read before anything else: the harness prints
+  the adapter's refusal (`gemini arm (<model>): GEMINI ARM FAILED [...] — <reason>`), and the CLI's own
+  stderr is in `<transcript>.diag`. A capacity error (`429`, exit 173) is not an unavailable CLI — retry
+  later as a new round.
+- **A non-zero capture is `MISSING` for that reviewer**, whatever its transcript holds: 3 is a VOID (the
+  reviewer changed the tree or the staged basis), 4 a refused run, anything else the CLI's own failure.
+  Nothing downstream reads the capture status — `review-synthesis` reads only the transcript and
+  `persist-verdict.sh` refuses only an empty or absent one — so never pass a non-zero capture's transcript
+  to synthesis. (Persistence requiring proof of a clean round is COREDEV-2888.)
 - **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
   `REQUEST_CHANGES` — a missing/empty transcript is never `APPROVE` (see 3a); implementation does not start.
 - **Recovery — the user chooses; there is no scripted waiver (COREDEV-2493).** If either reviewer is
@@ -137,11 +149,11 @@ loop with no escape.
   > supply unprompted (a TTY proves terminal attachment, not human presence — this repo's own
   > `pty-capture.py` creates one). A mechanical control documented as user-authorized but forgeable would
   > misdescribe the system. Note this does **not** make the rest of the gate cryptographically
-  > trustworthy — it is a cooperative attestation too — but it declines to add a *sanctioned* bypass to
+  > trustworthy — it is a cooperative attestation too — but it declines to add a _sanctioned_ bypass to
   > it. The audit record and the bypass are separable: record the exception in the plan
   > **without** claiming the gate passed. (This used to cite `docs/planning/OCTO_ADOPTION_PLAN.md` as the
   > exemplar. It is the opposite: that plan excluded gemini and then declared **"GATE SATISFIED"** on
-  > codex alone — a reviewer exclusion *plus* a gate-passed claim, i.e. precisely what COREDEV-2493
+  > codex alone — a reviewer exclusion _plus_ a gate-passed claim, i.e. precisely what COREDEV-2493
   > forbids. An agent copying the cited precedent would do the wrong thing and believe the contract
   > endorsed it. No exemplar is cited now because none exists.) A genuinely
   > unforgeable waiver would need new trust infrastructure (an external signer holding a key outside the
@@ -155,16 +167,16 @@ Diagnostic agents do have `Write` and `Edit` tools — they apply **mechanical, 
 (e.g., correcting a typo'd import, adjusting a Bash invocation, generating a missing log
 helper). They do NOT auto-fix changes that cross the project's "Ask before" boundaries:
 
-| Edit | Diagnostic auto-applies | Diagnostic must Ask first |
-|------|-------------------------|---------------------------|
-| Local Bash command tweak | ✅ | — |
-| Adding/changing Swift Package dependency | — | ✅ (xcode-build-fixer) |
-| Editing `.entitlements` file | — | ✅ (graph-api-debugger, xcode-build-fixer) |
-| Editing `Info.plist` / xcconfig | — | ✅ (xcode-build-fixer) |
-| Editing auth/token-handling code | — | ✅ (graph-api-debugger) |
-| Editing menus, toolbar, keyboard shortcuts | — | ✅ (any) |
-| Disabling sandbox or weakening security | ❌ NEVER | ❌ NEVER |
-| Generating a debug logger or diagnostic script | ✅ | — |
+| Edit                                           | Diagnostic auto-applies | Diagnostic must Ask first                  |
+| ---------------------------------------------- | ----------------------- | ------------------------------------------ |
+| Local Bash command tweak                       | ✅                      | —                                          |
+| Adding/changing Swift Package dependency       | —                       | ✅ (xcode-build-fixer)                     |
+| Editing `.entitlements` file                   | —                       | ✅ (graph-api-debugger, xcode-build-fixer) |
+| Editing `Info.plist` / xcconfig                | —                       | ✅ (xcode-build-fixer)                     |
+| Editing auth/token-handling code               | —                       | ✅ (graph-api-debugger)                    |
+| Editing menus, toolbar, keyboard shortcuts     | —                       | ✅ (any)                                   |
+| Disabling sandbox or weakening security        | ❌ NEVER                | ❌ NEVER                                   |
+| Generating a debug logger or diagnostic script | ✅                      | —                                          |
 
 When in doubt, propose and wait. The user is always in the loop for diagnostic work — if the
 fix is non-trivial, surface it.
@@ -251,7 +263,7 @@ log as they go. `jira-manager` mirrors plan state to Jira ticket status.
 ### Order of operations
 
 1. `code-simplifier` runs first (clean before review)
-2. `swift-reviewer` orchestrates: spawns 5 sub-reviewers in parallel + `jira-manager`. Each sub-reviewer returns a structured **JSON findings array** (not prose) **plus an Output Contract status** — `COMPLETE | BLOCKED | PARTIAL` — read **before** the findings (a `BLOCKED` reviewer returning `[]` means "could not review," not "clean"). On the **pre-collected (SubagentStop capture) path**, that status is persisted as a self-describing sibling `<agent>.status` JSON beside the findings (`mcp/review-synthesizer/capture.py`, COREDEV-2328). **A persisted capture may only RATCHET a review toward caution — it can NEVER certify completion (COREDEV-2490 roster redesign).** So on that path: a *valid* `BLOCKED` sidecar is the only on-disk state honored (→ Needs Confirmation → **NEEDS DISCUSSION**); a `COMPLETE`, `PARTIAL`, absent, corrupt, or unrecognized sidecar is **UNATTRIBUTED** and forces an in-session **re-dispatch** of that reviewer — a captured `COMPLETE` never reads as a clean pass, and there is no on-disk artifact that certifies "reviewer ran clean." (The earlier "degrades to face value / never a false fail-closed" wording described the pre-2490 fail-OPEN and is wrong.) The normative procedure is `scripts/review/reviewer-roster.sh` (which "NEVER prints TRUST") and `swift-reviewer` Step 2
+2. `swift-reviewer` orchestrates: spawns 5 sub-reviewers in parallel + `jira-manager`. Each sub-reviewer returns a structured **JSON findings array** (not prose) **plus an Output Contract status** — `COMPLETE | BLOCKED | PARTIAL` — read **before** the findings (a `BLOCKED` reviewer returning `[]` means "could not review," not "clean"). On the **pre-collected (SubagentStop capture) path**, that status is persisted as a self-describing sibling `<agent>.status` JSON beside the findings (`mcp/review-synthesizer/capture.py`, COREDEV-2328). **A persisted capture may only RATCHET a review toward caution — it can NEVER certify completion (COREDEV-2490 roster redesign).** So on that path: a _valid_ `BLOCKED` sidecar is the only on-disk state honored (→ Needs Confirmation → **NEEDS DISCUSSION**); a `COMPLETE`, `PARTIAL`, absent, corrupt, or unrecognized sidecar is **UNATTRIBUTED** and forces an in-session **re-dispatch** of that reviewer — a captured `COMPLETE` never reads as a clean pass, and there is no on-disk artifact that certifies "reviewer ran clean." (The earlier "degrades to face value / never a false fail-closed" wording described the pre-2490 fail-OPEN and is wrong.) The normative procedure is `scripts/review/reviewer-roster.sh` (which "NEVER prints TRUST") and `swift-reviewer` Step 2
 3. `swift-reviewer` runs provider parity audit itself
 4. `swift-reviewer` calls the **`synthesize_review` MCP tool** (bundled `review-synthesizer` server) to dedup / scope-filter / ownership-merge the collected JSON findings in code — pure compute, no repo access
 5. `swift-reviewer` owns the **verify gate**: it opens each `blockersToVerify` `file:line`, confirms the blocker against the code, and only then decides the final verdict (unconfirmed blockers → NEEDS DISCUSSION, not REQUEST CHANGES). A sub-reviewer that returned **BLOCKED** is the explicit form of a did-not-run uncertainty → a Needs-Confirmation item → **NEEDS DISCUSSION** (**not** a `verification` blocker, which is confirmed-by-construction and gates REQUEST CHANGES); a **PARTIAL** reviewer's findings are kept for its completed scope plus a non-gating `verification` warning naming the files it did not reach. If the tool is unavailable it applies the documented rules in `mcp/review-synthesizer/README.md` manually
@@ -285,10 +297,32 @@ null-delimited (`-print0` / `-0`) or quoted paths.
 ### Required checks
 
 `swift-reviewer` must verify:
+
 - Build green (`xcodebuild build`)
 - SwiftLint green — `swiftlint --strict <changed files>` on touched files plus whole-repo `swiftlint lint --strict --baseline swiftlint-baseline.json` (the committed baseline suppresses the existing backlog — COREDEV-2290)
 - Tests green (`xcodebuild test`)
 - All sub-reviewer JSON findings collected, run through the `synthesize_review` MCP tool (or the documented fallback rules), and every gating blocker confirmed via the verify gate before REQUEST CHANGES
+
+### The payload-region invariant
+
+> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
+> **Within it, nothing but detail fields and blank lines.**
+
+Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
+payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
+agent emits goes **before** `Status:`.
+
+This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
+behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
+a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent. The regression
+that owns this evidence is `mcp/review-synthesizer/tests/test_capture.py`.
+
+Where a rule of §13 would conflict with a machine-readable contract — the completeness of a JSON
+findings array, the `Status:` line that precedes it, the Output Contract detail trailer that follows it
+(`Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence`), the `VERDICT:`
+line that must end a review transcript, the final fenced JSON block, or a `BLOCKED — …` result prefix —
+**the contract wins and the rule yields.** Completeness and position of a machine-consumed payload are
+never traded for brevity. In particular `Remaining:` is **safety information, never a list to shorten**.
 
 ## 6. CI / GitHub Actions Pinning
 
@@ -324,16 +358,16 @@ match. Agents that edit Swift files should be aware:
 > Rule paths in `.claude/rules/*.md` use the project-rooted form `"Unleashed Mail/Sources/..."`.
 > Globs match relative to the project root.
 
-| Rule | Trigger paths (summary, relative to project root) |
-|------|------------------------|
-| `ai-architecture.md` | `Unleashed Mail/Sources/Services/AI/**`, `AIAgent*`, `ServiceContainer+Wiring*` |
-| `api-endpoints.md` | `APIEndpoints*`, `*Service*`, `RateLimiter*`, `RetryPolicy*` |
-| `code-style.md` | `**/*.swift` (always loaded) |
-| `database.md` | `Unleashed Mail/Sources/Services/Database/**`, `*Migration*`, `*Repository*` |
-| `provider-isolation.md` | `Gmail*`, `MicrosoftGraph*`, `AccountScoped*`, sync workers |
-| `swift-regex-sendable.md` | `*Regex*`, `*Pattern*`, `PIIRedactor*` |
-| `swiftui-views.md` | `Unleashed Mail/Sources/Views/**`, `Unleashed Mail/Sources/ViewModels/**`, `Unleashed Mail/Sources/Components/**` |
-| `webview-editor.md` | `*WebView*`, `*EmailWeb*`, `HTML*` |
+| Rule                      | Trigger paths (summary, relative to project root)                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ai-architecture.md`      | `Unleashed Mail/Sources/Services/AI/**`, `AIAgent*`, `ServiceContainer+Wiring*`                                   |
+| `api-endpoints.md`        | `APIEndpoints*`, `*Service*`, `RateLimiter*`, `RetryPolicy*`                                                      |
+| `code-style.md`           | `**/*.swift` (always loaded)                                                                                      |
+| `database.md`             | `Unleashed Mail/Sources/Services/Database/**`, `*Migration*`, `*Repository*`                                      |
+| `provider-isolation.md`   | `Gmail*`, `MicrosoftGraph*`, `AccountScoped*`, sync workers                                                       |
+| `swift-regex-sendable.md` | `*Regex*`, `*Pattern*`, `PIIRedactor*`                                                                            |
+| `swiftui-views.md`        | `Unleashed Mail/Sources/Views/**`, `Unleashed Mail/Sources/ViewModels/**`, `Unleashed Mail/Sources/Components/**` |
+| `webview-editor.md`       | `*WebView*`, `*EmailWeb*`, `HTML*`                                                                                |
 
 **Naming convention matters:** rule auto-load matches by filename, not content. When `code-simplifier`
 extracts a `+Feature.swift` extension, it must preserve the parent type's naming convention so the
@@ -343,18 +377,57 @@ correct rules continue to load.
 
 Each agent type has minimum tool requirements:
 
-| Agent kind | Required tools |
-|------------|---------------|
-| Reviewers (read-only) | Read, Bash, Grep, Glob — **exception:** `prompt-review` is `Read, Grep, Glob` (Bash deliberately dropped; it inspects AI call sites, not shell state) |
-| Implementation | Read, Write, Edit, Bash, Grep, Glob |
-| Orchestrator (swift-reviewer) | + Agent (subagent dispatch) |
-| Diagnostic | + WebFetch (look up vendor docs mid-debug) |
-| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: mcp__github`, which denies repo mutation from an agent that fetches UNTRUSTED web/Context7 content. Bash is deliberately retained (the preloaded `create-feature-plan` skill runs `review-verdict.py snapshot` as part of the gate) |
-| Personas (read+search) | Read, Grep, Glob |
-| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent, mcp__github` blocks file edits, subagent dispatch, and the github MCP write surface. It is **not** fully non-mutating: Bash is retained for `gh pr view` (and can run other commands), and it mutates Jira via the Atlassian MCP by design |
+| Agent kind                         | Required tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reviewers (read-only)              | Read, Grep, Glob — **no `Bash` on any of the five spawned reviewers** (PR #63 P1: they are reachable from model-invocable `pr-review` while processing untrusted PR content; §9.1 records the residual). Their bodies are written shell-free, and `check_bashless_agents_run_no_shell` in `validate-plugin-assembly.py` fails CI if a Bash-less agent's body still invokes shell. (An earlier revision of this row granted reviewers Bash with `prompt-review` as the exception — that described the pre-PR-#63 fleet and was exactly backwards against the shipped frontmatter; obeying it would have re-granted shell to four reviewers. Found by the 2026-08-17 audit, AF-1.)                                                                                  |
+| Implementation                     | Read, Write, Edit, Bash, Grep, Glob                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Orchestrator (swift-reviewer)      | Read, Bash, Grep, Glob, Agent (subagent dispatch), plus the bundled synthesizer MCP tool (`mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`) — stated in full because a `+`-row inherits whichever row sits above it, and this row must not silently absorb an edit to that row                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Diagnostic                         | Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch (look up vendor docs mid-debug)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: Agent, mcp__github`, which denies repo mutation AND subagent dispatch from an agent that fetches UNTRUSTED web/Context7 content — **`Agent` is denied on the shipped agent and this row omitted it, so a maintainer obeying this table would have re-granted subagent dispatch to the one agent that ingests untrusted content.** Bash is deliberately retained (the preloaded `create-feature-plan` skill runs the contained `snapshot-plan.sh` as part of the gate)                                                                                                          |
+| Personas (read+search)             | Read, Grep, Glob                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Project (jira-manager)             | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github` blocks every checkout-write vector — file editors, shell, subagent dispatch — and the github MCP write surface. `Bash` is denied (PR #63 recheck, P1): `swift-reviewer` spawns this agent while processing untrusted review content, and a sub-agent `Bash` cannot be scoped to one command — so the caller passes the PR URL instead of the agent running `gh pr view`. It mutates JIRA via the Atlassian MCP by design, and nothing else. (This row previously listed a `MultiEdit` deny the agent file never carried — Claude Code removed that tool, and the stale-name rule rejects denying it.) |
 
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
+
+### 9.1 Accepted residual — `swift-reviewer`'s shell is reachable from model-invoked `pr-review`
+
+**This is a documented decision, not an oversight** (PR #63, raised four times; decided 2026-08-07).
+
+`pr-review` is model-invocable and grants `Agent(swift-reviewer)`. `swift-reviewer` holds bare `Bash`,
+so a prompt-injected finding in untrusted PR content could in principle steer it into an arbitrary
+shell command with no user gesture.
+
+**Why it is not simply removed.** A sub-agent's `tools:` list takes BARE NAMES — `Bash(...)` scoping is
+silently ignored there — so a sub-agent either has arbitrary shell or none. `swift-reviewer` needs it
+for its inline git scope-detection program in Step 1 (`detect_base()` + `git merge-base`/`git diff
+--name-only` — `changeset.sh` belongs to the `pr-review` skill, not this agent), for
+`reviewer-roster.sh` (Step 2), and for `build-verify.sh` (Step 4). Dropping `Bash` would not make
+those steps safe; it would make them silently produce nothing, which is precisely the worse failure
+mode the `check_bashless_agents_run_no_shell` validator exists to catch — it is what happened to
+`security-reviewer`, `concurrency-reviewer` and `ux-perf-reviewer` when their `Bash` was removed while
+their bodies still ran `cat`/`find`/`plutil`.
+
+**WHAT DOES NOT BOUND THE SPAWN SET** (COREDEV-2703/2711; measured, and this list used to claim the
+opposite). ~~`disallowedTools` denies every checkout-writing agent by name~~ **LAPSED**: it is now
+`Write, Edit, NotebookEdit` — it denies no agent, and no self-spawn. COREDEV-2703 removed those
+`Agent(x)` entries because that specifier form inside a deny-list strips `Agent` outright; **never
+put one back.** The scoped grant replacing them is a DECLARATION that CI checks against the writer
+roster; the runtime DISCARDS the type list for a sub-agent. So no declared list bounds which agent
+this one reaches — assume every agent in `agents/`, the file-writing ones included.
+
+**What the surviving items actually are** — the roster this workflow INTENDS, not a bound on it:
+
+- the five spawned reviewers are `Read, Grep, Glob` — **no `Bash` on any of them**; that constrains
+  those five, not which agents `swift-reviewer` can reach instead;
+- `jira-manager` — the one non-reviewer on its DECLARED list — **denies `Bash`** outright;
+- the skill boundary grants only `changeset.sh`, never bare `git`. This one IS a real bound, but on
+  the MAIN THREAD's pre-approved surface (COREDEV-2642) — not on this sub-agent's spawn set.
+
+**The alternative, if this residual is ever judged unacceptable:** set
+`disable-model-invocation: true` on `skills/pr-review/SKILL.md`. That closes the path completely and
+costs only the model's ability to _enter_ the workflow autonomously — a user typing `/pr-review` is
+unaffected. It was not taken because autonomous review is the workflow's purpose.
 
 ## 10. MCP Tool Prefixes
 
@@ -387,11 +460,11 @@ Agent names below are listed in full (no `/` shorthand) so this table stays mach
 (defaulting to `inherit` when the key is omitted) equals its tier here, and that every `agents/*.md`
 appears in exactly one row — so this policy can no longer silently drift from the shipped frontmatter.
 
-| Tier | `model:` | Agents |
-|------|----------|--------|
-| Deep-review specialists | `opus` | security-reviewer, prompt-review, concurrency-reviewer |
-| Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, ai-engineer, ci-engineer, code-simplifier, db-engineer, graph-api-debugger, logic-engineer, modern-standards-planner, tester, ui-engineer, xcode-build-fixer |
-| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet` | accessibility-auditor, docs-engineer, enterprise-stakeholder, jira-manager, release-manager, smb-entrepreneur, ux-perf-reviewer |
+| Tier                                                            | `model:`                              | Agents                                                                                                                                                                       |
+| --------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deep-review specialists                                         | `opus`                                | security-reviewer, prompt-review, concurrency-reviewer                                                                                                                       |
+| Orchestrator + implementation/diagnostic engineers              | `inherit` (follows the session model) | swift-reviewer, ai-engineer, ci-engineer, code-simplifier, db-engineer, graph-api-debugger, logic-engineer, modern-standards-planner, tester, ui-engineer, xcode-build-fixer |
+| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet`                              | accessibility-auditor, docs-engineer, enterprise-stakeholder, jira-manager, release-manager, smb-entrepreneur, ux-perf-reviewer                                              |
 
 Rationale (rewritten for COREDEV-2583; the previous version argued from **cost**, which is no longer a
 constraint the maintainer accepts): the tier is now set by **consequence of being wrong**.
@@ -409,14 +482,41 @@ constraint the maintainer accepts): the tier is now set by **consequence of bein
 A maintainer who wants any agent to scale with the session flips its frontmatter and moves it between
 rows **in the same edit** — the validator keeps the two in sync and fails otherwise.
 
-**Effort policy: every agent and every skill pins `effort: xhigh`. There is no effort tiering.** The
-floor is unconditional, so tier selection is a *capability* decision only. Note frontmatter `effort` is
-an override in both directions — it pulls a `low` session up and a `max` session down — and
-`CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor cannot be guaranteed from inside the plugin.
+**Effort policy: assets INHERIT the session effort. The "floor" constrains permitted PINS, not runtime
+effort.** Omit `effort:` so a `max` session runs its subagents at `max`. Frontmatter effort overrides the
+session in **both** directions, so a hard `effort: xhigh` pin silently _capped_ a `max` session — which is
+why the policy is omit-to-inherit rather than pin-everywhere. CI accepts exactly `absent | xhigh | max`;
+any lower pin fails, so **no agent or skill pins an effort below `xhigh`**.
+
+**What this does NOT do — state it plainly, because the previous wording claimed the opposite in
+consecutive sentences.** There is **no in-plugin mechanism that raises a low session.** With `effort:`
+omitted, a `low` session runs its subagents at `low`; nothing pulls it up. `CLAUDE_CODE_EFFORT_LEVEL`
+outranks frontmatter regardless. So the floor is a **CI rule about what may be written into an asset**,
+not a runtime guarantee — it prevents the repo from shipping a cap, and that is all it can do. The
+earlier text asserted "the floor is unconditional" and then, three lines later, that it "cannot be
+guaranteed from inside the plugin"; §11 is the designated source of truth for disputes, so the
+contradiction is resolved here in favour of the mechanism that actually exists (PR #63 review, gap 20).
+
+Consequence for tier selection: it is a _capability_ decision, made on the assumption that the session
+is run at an appropriate effort. If a maintainer needs a guaranteed minimum, it must be set on the
+session (or via `CLAUDE_CODE_EFFORT_LEVEL`), not requested from the plugin.
+
+**What an unset session runs at (Claude Code docs, model-config, re-read 2026-10-08; COREDEV-2872).**
+With nothing set, **Opus 5.5, Sonnet 5.5 and Haiku 5.5 default to `medium`**; for any other model, see
+the model-config page (code.claude.com/docs/en/model-config). An organization's default level replaces
+that default for the organization's default model. The plugin's agents and skills omit `effort:`, so a 5.5
+session that sets no level runs them at `medium`, review agents and gate included. Resolution order:
+
+1. an explicit choice: `CLAUDE_CODE_EFFORT_LEVEL`, launching with `--effort`, or `/effort`;
+2. saved settings: the per-model level or `effortLevel`;
+3. the model's default.
+
+**Set a level explicitly for any review or gate session.**
 
 Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current Opus generation and
-updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this
-replaces ("prefer `inherit`/`sonnet` over hard-pinning `opus`") conflated the two.
+updates with the CLI; `claude-opus-5` would be a hard version pin, which the validator rejects in shipped
+frontmatter (COREDEV-2875). Prefer the alias — the guidance this replaces ("prefer `inherit`/`sonnet`
+over hard-pinning `opus`") conflated the two.
 
 ---
 
@@ -440,11 +540,11 @@ labeled; the metric is only as good as the labeling discipline.
   receives a named candidate and returns the verdict.
 - **`jira-manager` owns all Jira mechanics** — adds `change-failure` (**additive** to type / priority /
   component) at creation only when causation is confirmed at intake; otherwise it runs a **two-label queue**,
-  *both* uncounted (only `change-failure` counts): **`cfr-triage-pending`** (fresh, awaiting attribution)
+  _both_ uncounted (only `change-failure` counts): **`cfr-triage-pending`** (fresh, awaiting attribution)
   and **`cfr-needs-human`** (escalated, awaiting human), at most one per issue. It **enumerates each queue**
   by JQL — `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter) and the parallel
   `… labels = cfr-needs-human` — and surfaces candidates so the invoking session dispatches `release-manager`
-  for the *dispatch* queue only. Every label change is `editJiraIssue` read-modify-write (the `labels` field
+  for the _dispatch_ queue only. Every label change is `editJiraIssue` read-modify-write (the `labels` field
   replaces the whole array). On `release-manager`'s verdict: **confirmed** → add `change-failure`, clear the
   marker; **proven pre-existing** → clear the marker, withhold; **unconfirmed** (neither corroboration nor
   pre-existence evidence) → **swap `cfr-triage-pending` → `cfr-needs-human`**, leaving the issue UNLABELLED
@@ -465,52 +565,75 @@ attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) an
 ## 13. Agent Output Style
 
 Rules adapted from [`ayghri/i-have-adhd`](https://github.com/ayghri/i-have-adhd) (MIT), pinned at commit
-`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — this plugin's output is mostly
-consumed by *software*, so four of the ten upstream rules carry carve-outs and one is restated. See
-`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence.
+`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — see
+`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence, and
+`docs/planning/COREDEV-2605_SECTION13_NARROWING_PLAN.md` for this narrowing.
 
-**Scope:** human-facing prose written by agents, and by workflow skills while producing reader-facing
-output. It does **not** govern skill-body documentation (that is injected context, not output).
+### Scope
 
-### The payload-region invariant
+This is a **narrowing, not a relaxation.** The five capture-roster reviewers are _out_ of scope here
+because their output is machine-consumed and governed by their own contracts — those contracts are
+unchanged and still mandatory.
 
-> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
-> **Within it, nothing but detail fields and blank lines.**
+| `surface_id`             | `producer_id`           | `scope` | `anchor`                              |
+| ------------------------ | ----------------------- | ------- | ------------------------------------- |
+| `verdict-report`         | `swift-reviewer`        | `in`    | `agents/swift-reviewer.md:613`        |
+| `brainstorm-summary`     | `brainstorm`            | `in`    | `skills/brainstorm/SKILL.md:150`      |
+| `implement-wrapup`       | `implement`             | `in`    | `skills/implement/SKILL.md:236`       |
+| `pr-review-report`       | `pr-review`             | `in`    | `skills/pr-review/SKILL.md:68`        |
+| `security-findings`      | `security-reviewer`     | `out`   | `agents/security-reviewer.md:208`     |
+| `concurrency-findings`   | `concurrency-reviewer`  | `out`   | `agents/concurrency-reviewer.md:287`  |
+| `ux-perf-findings`       | `ux-perf-reviewer`      | `out`   | `agents/ux-perf-reviewer.md:205`      |
+| `accessibility-findings` | `accessibility-auditor` | `out`   | `agents/accessibility-auditor.md:211` |
+| `prompt-safety-findings` | `prompt-review`         | `out`   | `agents/prompt-review.md:95`          |
 
-Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
-payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
-agent emits goes **before** `Status:`.
+This table is the **only** scope statement and it is **exclusive and normative**. Every row is exactly
+one of `in`/`out`; rows are duplicate-free; every `surface_id`, `producer_id` and `scope` is drawn from a
+finite allowlist, and any unknown key, catch-all, alias or semantically overlapping row is a **failure**,
+not a skip. The four `in` `producer_id`s are an exact positive allowlist and are **disjoint** from
+`capture.VALID_AGENTS`; each `out` `producer_id` is one of that roster. The binding is disjointness, not
+equality — a future captured specialist is already out of scope by virtue of the positive allowlist and
+must not force churn here. Prose descriptions are not row content; the `anchor` identifies
+the surface in the repository and is validated by resolution, not by prose.
 
-This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
-behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
-a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent.
+It does **not** govern skill-body documentation (that is injected context, not output).
 
 ### The rules
 
-| # | Rule | Disposition |
-|---|------|-------------|
-| 1 | Lead with the next action | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it. The lead goes before `Status:`, per the payload-region invariant. |
-| 2 | Number multi-step tasks | **Adapted** — number human-facing prose only, and only before `Status:`, per the payload-region invariant. Machine trailer fields and JSON values keep their mandated single-line/schema shape. |
-| 3 | End with one concrete next action | **Adapted** — the next action goes before `Status:`, per the payload-region invariant; not merely before the fence. |
-| 4 | Suppress tangents | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array. |
-| 5 | Restate state every turn | **Adapted** — restate state in prose; never before a mandated result prefix, and never inside the payload region, per the payload-region invariant. |
-| 6 | Give specific time estimates | **Adapted** — estimates address whoever runs the steps; these agents advise, they rarely execute. |
-| 7 | Make completed work visible | **Adopted** — state what now works, concretely. |
-| 8 | Matter-of-fact tone for errors | **Adopted** — state cause and fix. No "Uh oh." |
-| 9 | Cap lists at 5 items | **Restated positively** — rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings. Prose only. |
-| 10 | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; per the payload-region invariant the cure for an unwanted opener is to delete it, never to move it below `Status:`. |
+| #   | Rule                                           | Disposition                                                                                                                                                                                   |
+| --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Lead with the next action                      | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it.                                                                                            |
+| 2   | Number multi-step tasks                        | **Adapted** — number human-facing prose only.                                                                                                                                                 |
+| 3   | End with one concrete next action              | **Adapted** — end the prose with the next action.                                                                                                                                             |
+| 4   | Suppress tangents                              | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array, and never drop a row from `swift-reviewer`'s **All Issues (Consolidated)** table. |
+| 5   | Restate state every turn                       | **Adapted** — restate state in prose, never before a mandated result prefix.                                                                                                                  |
+| 6   | Give specific time estimates                   | **Adapted** — estimates address whoever runs the steps; these agents advise, they rarely execute.                                                                                             |
+| 7   | Make completed work visible                    | **Adopted** — state what now works, concretely.                                                                                                                                               |
+| 8   | Matter-of-fact tone for errors                 | **Adopted** — state cause and fix. No "Uh oh."                                                                                                                                                |
+| 9   | Cap lists at 5 items                           | **Restated positively** — rank prose for readability; **never** cap, split, omit or defer a machine-consumed finding, and never shorten the **All Issues (Consolidated)** table. Prose only.  |
+| 10  | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; the cure for an unwanted opener is to delete it, never to move it below `Status:`.                                   |
 
-### Precedence — the contract wins
+Each disposition carries **exactly one** classifier from `{Adapted, Adopted, Restated positively}`.
 
-These rules govern **prose written for a human reader**. Where a rule conflicts with a machine-readable
-contract — the completeness of a JSON findings array, the `Status:` line that precedes it, the Output
-Contract detail trailer that follows it (`Blocker Description`, `What Was Attempted`, `Completed`,
-`Remaining`, `Confidence`), the `VERDICT:` line that must end a review transcript, the final fenced JSON
-block, or a `BLOCKED — …` result prefix — **the contract wins and the rule yields**. Completeness and
-position of a machine-consumed payload are never traded for brevity. In particular `Remaining:` is
-**safety information, never a list to shorten**.
+### Precedence
 
-`Status:`, the trailer, and `BLOCKED — …` are payload, not preamble.
+Surfaces outside the four-item `in` allowlist above remain governed by their existing contracts, which
+take precedence over every rule in this section — see §5 for the payload-region invariant and §14 for the
+blocked-handoff prefix.
+
+---
+
+## 14. Blocked Subagent Handoff Contract
+
+A subagent that cannot proceed hands control back with a **`BLOCKED — <reason>`** prefix as the first
+line of its reply. This is **payload, not preamble**: §13 rule 10's carve-out exists so it is never moved
+below `Status:` or deleted as an opener.
+
+The handoff states, in this order: the **diagnosis**, what was **attempted**, the **user action
+required**, and what remains. It is used for diagnostic confirmation
+(`agents/graph-api-debugger.md`) and for Jira-tool failure (`agents/jira-manager.md`) — a subagent
+pausing to hand control back for external action, which is why it belongs here and not in §2's
+Plan → Implement contract.
 
 ---
 

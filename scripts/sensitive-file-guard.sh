@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse sensitive-file guard (Item 3, COREDEV-2324).
 #
-# On Edit/Write/MultiEdit (and Bash commands that WRITE to a target), checks whether
+# On Edit/Write (and Bash commands that WRITE to a target), checks whether
 # the target's BASENAME matches a CLAUDE.md "Ask Before Modifying" / Security-table
 # asset and, if so, asks the user to confirm. Basename matching sidesteps the space
 # in "Unleashed Mail/Sources/".
@@ -98,7 +98,7 @@ TOOL="$(hook_tool_name)"
 
 TARGET=""
 case "$TOOL" in
-    Edit|Write|MultiEdit)
+    Edit|Write)
         FP="$(hook_file_path)"
         [ -n "$FP" ] && TARGET="${FP##*/}"
         ;;

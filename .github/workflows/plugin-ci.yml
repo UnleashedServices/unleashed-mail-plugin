@@ -9,13 +9,20 @@ name: plugin-ci
 
 on:
   push:
-    # `alpha` is the integration branch releases are cut from — it MUST be gated. Until COREDEV-2494
+    # Feature/fix PRs land on `alpha`; `main` takes only alpha -> main promotions (COREDEV-2883). BOTH are
+    # gated, which is the point of this filter. Until COREDEV-2494
     # this triggered on `main` only, so 56 of alpha's 57 commits merged with ZERO checks: every audit
     # PR targeted alpha and reported "no checks". Worse, PR #36 ADDED `claude plugin validate` and #31
     # added actionlint — neither ever executed on the branch they were added to.
     branches: [main, alpha]
   pull_request:
     branches: [main, alpha]
+    # THE SAME ACTIVITY SET AS trunk-check.yml (COREDEV-2879). The default omits `edited`, the event a
+    # RETARGET fires, so after a retarget these five REQUIRED contexts kept their OLD-base results while
+    # trunk-check re-ran — and a later title edit turned trunk-check green over them. With matching sets,
+    # every event re-runs all six on ONE merge commit, which trunk-check's resolver certifies is on the
+    # PR's current base. A title/body edit now re-runs this workflow too (and cancels the in-flight run).
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 permissions:
@@ -28,19 +35,39 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from 10: measured 3m00s, but this PR added an `apt-get install zsh` step whose duration
+    # depends on the package mirror, so the headroom is less predictable than the median suggests.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the whitespace gate resolves origin/main to compute a merge base.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+
+      - name: Install zsh (the shell the agent fence runs)
+        # WITHOUT THIS NO CI JOB CAN EXECUTE ANY ZSH TEST. ubuntu-latest ships no zsh, so
+        # test_plugin_state_base.py::test_zsh_agrees_with_bash self-skips here -- and the macOS leg
+        # ran only the redactor suite. The exact regression that test exists to catch (a Bash-only
+        # construct failing silently under zsh) could therefore land green (PR #63 review, gap 15).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+
+      - name: Assert zsh is present so the agreement test cannot silently skip
+        # A skip reads identically to a pass in the summary. Fail loudly if the install regressed.
+        run: |
+          command -v zsh || {
+            echo "zsh missing - the zsh-agreement test would SKIP, not fail"
+            exit 1
+          }
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/gemini-review-run.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -60,9 +87,159 @@ jobs:
         id: mcp_tests
         run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
 
+      # COREDEV-2780: the ONLY third-party Python dependency this repository has. Cells 4, 9, 11, 14,
+      # 15 and 16 parse `.github/workflows/*.yml`, `.trunk/trunk.yaml` and the contract registry, and
+      # there is no YAML parser in the standard library. A hand-rolled one was rejected: the contract
+      # checker is the thing that decides whether the gate is sound, and a parser that quietly
+      # mis-reads a mapping would weaken every cell that depends on it while still reporting green.
+      #
+      # VERSION-PINNED, matching AGENT_CONTRACTS §6's posture on SHA-pinned actions — an unpinned
+      # `pip install` is a supply-chain surface this repo otherwise refuses.
+      - name: Install PyYAML (COREDEV-2780 contract cells parse YAML)
+        # `--break-system-packages` is the fallback, not the default: the macOS runner's system
+        # python is PEP 668 externally-managed and refuses the plain form, while the
+        # setup-python interpreters accept it. Try the clean install first so the flag is only
+        # used where it is actually required.
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
+
+      # The 3.9-floor cell interrogates the PINNED mypy, and it used to skipTest when the binary
+      # was absent — which is every run of this job, since nothing here materialises trunk's tools.
+      # The only guard on the mypy half of that floor therefore gated nothing exactly where it was
+      # supposed to gate (codex, PR #85). The cell now FAILS rather than skips when CI is set, so
+      # the pin has to be present: installed here, and READ FROM .trunk/trunk.yaml so the two
+      # cannot drift apart.
+      - name: Install the pinned mypy (the 3.9-floor cell refuses to skip on CI)
+        id: pinned_mypy
+        # A VENV, NOT A pip INSTALL INTO THE INTERPRETER. `darwin-suite` has no setup-python
+        # step, so its `python3` is the runner's system interpreter: PEP 668 externally-managed,
+        # which REFUSES a plain `pip install` outright. That is exactly why the PyYAML step above
+        # carries `--break-system-packages` (codex, PR #85). That flag is still the wrong
+        # instrument here: PyYAML only has to be IMPORTABLE, whereas the 3.9-floor cell resolves
+        # the mypy BINARY through `shutil.which`, and a fallback install can land the console
+        # script in a directory that is not on PATH. A venv is externally-managed on no platform
+        # and puts the script at a path we compute, so both halves stop depending on the runner.
+        run: |
+          set -euo pipefail
+          version="$(python3 -c '
+          import yaml
+          config = yaml.safe_load(open(".trunk/trunk.yaml", encoding="utf-8"))
+          print(next(str(e).partition("@")[2] for e in config["lint"]["enabled"] if str(e).startswith("mypy@")))
+          ')"
+          echo "pinned mypy: ${version}"
+          python3 -m venv "${RUNNER_TEMP}/pinned-mypy"
+          "${RUNNER_TEMP}/pinned-mypy/bin/python" -m pip install --disable-pip-version-check "mypy==${version}"
+          # PUBLISH THE BINARY, NEVER THE INTERPRETER. `$GITHUB_PATH` PREPENDS, so putting the
+          # venv's whole `bin` on it makes the NEXT step's `python3` the venv's python — which has
+          # mypy and NOT PyYAML, while every module in the suite opens with `import yaml`. Both
+          # jobs would have gone red; reproduced as ModuleNotFoundError (codex, PR #85). A
+          # directory holding only a `mypy` symlink gives `shutil.which` the pin and leaves the
+          # suite's interpreter exactly as the steps above set it up.
+          mkdir -p "${RUNNER_TEMP}/pinned-mypy-bin"
+          ln -sf "${RUNNER_TEMP}/pinned-mypy/bin/mypy" "${RUNNER_TEMP}/pinned-mypy-bin/mypy"
+          # $GITHUB_PATH takes effect in LATER steps, so verify through the absolute path here.
+          "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
+          echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
+
+      # BEFORE the scripts suite (COREDEV-2869): cell 11's validity rule runs INSIDE it, and it refuses
+      # to skip in `validate`. Unpacked in RUNNER_TEMP, so the suite's view of the checkout is
+      # unchanged by the download.
+      - name: Install actionlint (pinned + checksum-verified)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint --version
+
       - name: Run the scripts test suite (review-verdict gate artifact)
         id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Assert the ungated plugin-state classes RAN here (COREDEV-2691 §7.4)
+        id: seam_ungated
+        # WHAT THESE CLASSES PROVE, precisely, because the difference is easy to overstate and was
+        # overstated here. On this leg `_unleashed_auth_chain` is REPLACED by a recording,
+        # fail-closed stub, and in the reader and publisher cells `_u_stat` and `_u_euid` -- the
+        # sole producers of every mode, size, inode and ownership value those cells compare -- are
+        # stubbed too. So what is verified here is that each production caller CALLS the guard, with
+        # the operand it is specified to pass, in the specified order and multiplicity; that a
+        # refusal short-circuits the caller; and that the refusal path writes nothing anywhere.
+        #
+        # THE GUARD'S OWN DECISION CLAUSES DO NOT RUN HERE. Component symlink refusal, ancestor mode
+        # and ownership, principal handling and ACL evaluation are all inside the replaced function.
+        # Measured: thirteen line-count-preserving fail-open mutations of those clauses -- including
+        # relaxing the reader's twelve-bit mode compare, which this ticket names as its own
+        # motivation -- are GREEN across every cell listed below. They are covered only by
+        # @skipUnless(DARWIN) classes on the non-required macOS leg, which is COREDEV-2767.
+        #
+        # Before COREDEV-2691 neither half was covered on this leg: there are three production
+        # callers (`_unleashed_create_store`, `_unleashed_store_ok`, `_unleashed_publish`) and
+        # covering only the first left reader:282 and publisher:230/:252 unguarded (codex, r7).
+        # (Other ungated classes in the file -- EncoderInvariantP, NameLengthBudget -- do run here;
+        # they cover the encoder and the name budget, not the guard. Revision 1's comment called
+        # those two the ONLY ungated classes, which was simply false.)
+        #
+        # Counts are DERIVED from the loader and checked PER CLASS: an aggregate check passes when
+        # one whole class contributes zero cells and the other makes up the number. What this
+        # actually guards against is a SKIP, which reads identically to a pass in the job summary --
+        # including the skip that a missing zsh would produce.
+        #
+        # No bare `assert`: python3 -O / PYTHONOPTIMIZE strips those and the step would exit 0 over
+        # a red suite.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys, unittest
+
+          # name -> the MINIMUM cell count that class must contribute. A derived-only expectation
+          # cannot see DELETION: remove ten cells and `expected` simply drops to match `ran`, and
+          # the gate stays green having verified almost nothing (agy). Raise a floor when cells are
+          # added; lowering one has to be a deliberate edit here.
+          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 16,
+                      "scripts.tests.test_plugin_state_store.ForkClassification": 15,
+                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 12,
+                      "scripts.tests.test_plugin_state_store.SeamedReader": 7,
+                      "scripts.tests.test_plugin_state_store.SeamedPublisher": 5,
+                      "scripts.tests.test_plugin_state_store.PrefetchCacheContract": 14,
+                      "scripts.tests.test_plugin_state_store.UnauthenticatedEffectCensus": 4,
+                      "scripts.tests.test_plugin_state_store.AmbientStateContract": 6,
+                      "scripts.tests.test_plugin_state_store.PortablePathIdentity": 3}
+          NAMES = list(MINIMUMS)
+          problems = []
+          for name in NAMES:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              expected = suite.countTestCases()
+              flat = list(unittest.TestSuite(suite))
+              bogus = [t for t in flat if type(t).__name__ == "_FailedTest"]
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              print(f"{name}: expected={expected} ran={result.testsRun} "
+                    f"skipped={len(result.skipped)} errors={len(result.errors)}")
+              if bogus:
+                  problems.append(f"{name}: loader produced {len(bogus)} placeholder(s) -- renamed?")
+              if expected == 0:
+                  problems.append(f"{name}: loader found NO cells -- a rename emptied this gate")
+              if expected < MINIMUMS[name]:
+                  problems.append(f"{name}: {expected} cells, floor is {MINIMUMS[name]} -- cells were deleted")
+              if result.testsRun != expected:
+                  problems.append(f"{name}: only {result.testsRun}/{expected} cells ran")
+              if result.skipped:
+                  problems.append(f"{name}: cells SKIPPED on this platform: {result.skipped}")
+              if not result.wasSuccessful():
+                  problems.append(f"{name}: RED here")
+          if problems:
+              print("SEAM GATE FAILED:")
+              for p in problems:
+                  print("  - " + p)
+              sys.exit(1)
+          print(f"seam gate: all {len(NAMES)} classes ran fully, nothing skipped")
+          PY
 
       - name: Validate version sync (strict)
         id: version_sync
@@ -73,9 +250,9 @@ jobs:
         run: python3 scripts/validate-plugin-assembly.py --root . --strict
 
       - name: Set up Node (for the Claude Code CLI)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'   # @anthropic-ai/claude-code requires Node >=22
+          node-version: "22" # @anthropic-ai/claude-code requires Node >=22
 
       - name: Validate plugin with the Claude Code CLI (authoritative schema)
         id: claude_validate
@@ -84,16 +261,22 @@ jobs:
           # cover this. Bump it alongside the actionlint/gitleaks version pins below.
           # Opus 5 requires >= 2.1.219 (COREDEV-2583 §4.8). This pin drives
           # `claude plugin validate`, so the schema authority must not sit below the
-          # floor the plugin targets. 2.1.220 is the `latest` dist-tag; pinning ahead of
-          # `stable` is deliberate because stable is below the Opus 5 floor.
-          CLAUDE_CODE_VERSION: 2.1.220
+          # floor the plugin targets. 2.1.294 is the `latest` dist-tag (2026-10-08); pinning ahead of
+          # `stable` is deliberate because stable is below the Opus 5 floor, and Haiku 5.5's `haiku`
+          # alias needs 2.1.293 or later (COREDEV-2875). On every bump, re-check the three sets the
+          # validators transcribe from the CLI: MODEL_ALIASES, KNOWN_SKILL_KEYS, KNOWN_EVENTS.
+          CLAUDE_CODE_VERSION: 2.1.294
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude --version
           # Marketplace manifest schema (top-level entry point). --strict promotes warnings to
           # failures; verified green on the pinned CLI above before enabling (COREDEV-2494).
-          claude plugin validate --strict .
+          # NAMED EXPLICITLY (COREDEV-2873): 2.1.220 validated a bare `.` as the marketplace manifest,
+          # but from 2.1.289 a bare `.` is validated as the PLUGIN root, whose contributor CLAUDE.md
+          # warning --strict promotes to a failure. Naming the manifest keeps --strict on the object this
+          # step exists for, on both versions; a corrupted manifest still fails (verified on 2.1.289).
+          claude plugin validate --strict .claude-plugin/marketplace.json
           # Deep plugin validation — agents/skills/hooks schemas. Exits 0 on the expected
           # "root CLAUDE.md is a contributor doc, not shipped context" warning, non-zero on a
           # real schema error. House conventions (missing name/description, agent-key hygiene,
@@ -103,21 +286,64 @@ jobs:
           # the pinned @anthropic-ai/claude-code tarball (npm pack + sha512) like actionlint/gitleaks.
           claude plugin validate .claude-plugin/plugin.json
 
-      - name: ShellCheck plugin scripts
-        id: shellcheck_gate
-        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
-
-      - name: Install actionlint (pinned + checksum-verified)
+      - name: Whitespace check (git diff --check)
+        # `git diff --check` exits 2 on trailing whitespace and new blank lines at EOF. Five had
+        # accumulated across this PR and nothing caught them: the pre-commit hook does not run it and
+        # neither did CI. Checked against the merge base rather than the whole tree so history is not
+        # re-litigated (PR #63 recheck, P3).
+        id: whitespace
         env:
-          ACTIONLINT_VERSION: 1.7.12
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
-          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
-          tar -xzf actionlint.tar.gz actionlint
-          install -m 0755 actionlint /usr/local/bin/actionlint
-          actionlint --version
+          # THE BASE IS EVENT-DEPENDENT (PR #63 recheck, P2). `GITHUB_BASE_REF` is populated on a
+          # pull_request run and EMPTY on a push, so the old `${GITHUB_BASE_REF:-main}` made a main push
+          # compute `merge-base(origin/main, HEAD) == HEAD` and check an EMPTY range — the gate did
+          # nothing — while an alpha push re-checked the whole `main..alpha` divergence. Select the base
+          # from the event, and FAIL CLOSED whenever the base cannot be resolved (which needs
+          # `fetch-depth: 0`) rather than silently skipping.
+          ZERO="0000000000000000000000000000000000000000"
+          case "$EVENT_NAME" in
+            pull_request)
+              # The PR's real base branch — not a hard-coded `main` — so an alpha-targeting PR is diffed
+              # against alpha and its accumulated history is not re-litigated.
+              base_ref="${PR_BASE:?pull_request run carried no base ref}"
+              git rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1 \
+                || { echo "origin/${base_ref} unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+              base="$(git merge-base "origin/${base_ref}" HEAD)"
+              ;;
+            push)
+              # The previous tip of the branch. All-zeros = a new branch with no ancestor, and an
+              # unresolvable value = a shallow fetch; both fall back to the merge base with the default
+              # branch so only THIS push's changes are checked, and fail closed if even that is absent.
+              if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ] \
+                   && git rev-parse --verify "$PUSH_BEFORE" >/dev/null 2>&1; then
+                base="$PUSH_BEFORE"
+              else
+                git rev-parse --verify origin/main >/dev/null 2>&1 \
+                  || { echo "no usable push ancestor and origin/main unavailable — needs fetch-depth: 0" >&2; exit 1; }
+                base="$(git merge-base origin/main HEAD)"
+              fi
+              ;;
+            *)
+              # workflow_dispatch (and any future trigger): an explicit, documented base — the merge
+              # base with the default branch.
+              git rev-parse --verify origin/main >/dev/null 2>&1 \
+                || { echo "origin/main unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+              base="$(git merge-base origin/main HEAD)"
+              ;;
+          esac
+          git diff --check "$base" HEAD
+
+      - name: ShellCheck plugin scripts
+        id: shellcheck_gate
+        # `scripts/ci/*.sh` WAS MISSING and CLAUDE.md's gate list already claimed it was here.
+        # Those two files are the shared range resolver — the one the required check's guard
+        # pins by digest and executes — and the parity recorder. The documented gate and the
+        # enforced gate disagreed, and the enforced one is the only one that runs.
+        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
 
       - name: Lint GitHub Actions workflows (actionlint)
         id: actionlint_gate
@@ -126,6 +352,16 @@ jobs:
       - name: Validate hooks manifest (strict)
         id: hooks_manifest
         run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
+
+      # COREDEV-2617: the plan-citation linter was only BYTE-COMPILED here, so a stale `:N`, an
+      # undeclared enum value or an inconsistent phrase family stayed green as long as the Python
+      # parsed — defeating the reason the validator exists (codex, PR #67). Both modes run: the
+      # self-test proves the linter can fail, then it lints the plan it guards.
+      - name: Plan-citation linter (self-test + the COREDEV-2617 plan)
+        id: plan_lint
+        run: |
+          python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+          python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
 
       - name: Hook stdin-simulation tests (COREDEV-2324)
         id: hook_tests
@@ -146,9 +382,11 @@ jobs:
             echo "| pty-capture smoke (--timeout) | ${{ steps.pty_smoke.outcome || 'did not run' }} |"
             echo "| unittest discover (synthesizer suite) | ${{ steps.mcp_tests.outcome || 'did not run' }} |"
             echo "| unittest discover (scripts suite) | ${{ steps.scripts_tests.outcome || 'did not run' }} |"
+            echo "| ungated plugin-state entry guard (COREDEV-2691) | ${{ steps.seam_ungated.outcome || 'did not run' }} |"
             echo "| version-sync (strict) | ${{ steps.version_sync.outcome || 'did not run' }} |"
             echo "| plugin-assembly (strict) | ${{ steps.plugin_assembly.outcome || 'did not run' }} |"
             echo "| claude plugin validate (marketplace + deep) | ${{ steps.claude_validate.outcome || 'did not run' }} |"
+            echo "| whitespace (git diff --check) | ${{ steps.whitespace.outcome || 'did not run' }} |"
             echo "| shellcheck (-S warning) | ${{ steps.shellcheck_gate.outcome || 'did not run' }} |"
             echo "| actionlint | ${{ steps.actionlint_gate.outcome || 'did not run' }} |"
             echo "| hooks-manifest (strict) | ${{ steps.hooks_manifest.outcome || 'did not run' }} |"
@@ -169,9 +407,73 @@ jobs:
       - name: Set up Python 3.9 (the macOS stock runtime)
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.9'
+          python-version: "3.9"
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/gemini-review-run.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
+      - name: bind-prompt.py real invocation on 3.9
+        # bind-prompt.py runs inside the BLOCKING plan-review gate on macOS stock 3.9, and byte-compile
+        # cannot catch a runtime-evaluated union or an fd-API mismatch (PR #63 recheck, P3 — the same
+        # reasoning that earned bash-write-scan its 3.9 exec smoke). Drive a REAL bind (a git repo, a
+        # prompt naming the plan, a transcript) plus a refusal, so a 3.9 regression surfaces here.
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+          cd "$work"
+          git init -q .; git config user.email c@i; git config user.name ci
+          mkdir -p docs/planning
+          printf '# Plan\ncontent\n' > docs/planning/X_PLAN.md
+          printf 'Review the plan for correctness and completeness.\n%.0s' {1..40} > .prompt.md
+          printf 'REVIEW TARGET: docs/planning/X_PLAN.md\n' >> .prompt.md
+          git add -A; git commit -qm init
+          t="$work/t.txt"
+          python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
+            --prompt .prompt.md --transcript "$t" --plan docs/planning/X_PLAN.md
+          # `if`, not `A && B || C`: shellcheck flags that as SC2015 (info) and actionlint promotes
+          # any shellcheck finding to a failure, so the chained form failed CI while passing a local
+          # `actionlint` whose shellcheck did not report info-level issues.
+          if [ ! -s "$t.plan" ] || [ ! -s "$t.planbytes" ] || [ ! -s "$t.prompt" ]; then
+            echo "bind-prompt did not write its sidecars on 3.9" >&2
+            exit 1
+          fi
+          # And a prompt naming a DIFFERENT plan must be refused (the binding is enforced, not cosmetic).
+          printf 'Review it.\n%.0s' {1..40} > .bad.md
+          printf 'REVIEW TARGET: docs/planning/OTHER_PLAN.md\n' >> .bad.md
+          status=0
+          python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
+            --prompt .bad.md --transcript "$work/t2.txt" --plan docs/planning/X_PLAN.md >/dev/null 2>&1 || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "bind-prompt accepted a prompt naming a different plan on 3.9" >&2
+            exit 1
+          fi
+      - name: generate-callers-exemptions.py produces the shipped manifest on 3.9
+        # Added this PR and previously uncovered by CI (PR #63 recheck, P3). It regenerates the
+        # exemption manifest the callers scan depends on, and it runs on macOS stock 3.9 — run it and
+        # assert it leaves the committed manifest unchanged, so a drift or a 3.9 regression fails here.
+        run: |
+          set -euo pipefail
+          python3 scripts/review/generate-callers-exemptions.py
+          if ! git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv; then
+            echo "generate-callers-exemptions.py output drifted from the committed manifest" >&2
+            exit 1
+          fi
+      - name: callers_scan.py execution smoke on 3.9
+        run: python3 scripts/review/callers_scan.py --help >/dev/null
+      - name: callers_scan.py real invocation on 3.9
+        # `--help` never loads the manifest or reads the tree, so it stayed green for the whole of
+        # PR #63 while the production invocation exited 2 on an ABSENT exemption manifest — the
+        # scanner could not scan at all and nothing said so (PR #63 review, thread 5). Run the real
+        # thing: this is the only step that would have caught it.
+        run: python3 scripts/review/callers_scan.py --root .
+      - name: cleanup tool refuses without --apply on 3.9
+        # Its ONLY real execution is destructive and happens on macOS stock 3.9, so 3.9 must at least
+        # prove it parses and still fail-closes without the acknowledgement (PR #63 review, gap 29).
+        run: |
+          # GitHub Actions runs `run:` under `bash -eo pipefail`, so a bare non-zero command ABORTS
+          # the step before the next line executes. Capturing an EXPECTED failure therefore needs
+          # `|| status=$?`, which suppresses -e; `status=$?` on the following line never runs.
+          status=0
+          python3 scripts/review/cleanup_coredev_2619_leaks.py --state-root /nonexistent-state-root >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 2 ] || { echo "expected refusal exit 2 without --apply, got $status"; exit 1; }
       - name: bash-write-scan.py execution smoke on 3.9 (byte-compile can't catch a runtime-evaluated union)
         # MIN-2: bash-write-scan.py runs inside the BLOCKING PreToolUse sensitive-file guard on macOS's
         # stock 3.9. A PEP-604 `X | None` in a def signature byte-compiles fine on 3.9 and only raises
@@ -196,6 +498,27 @@ jobs:
           test ! -s "$victim" || { echo "capture wrote THROUGH a symlink"; exit 1; }
           echo "pty-capture on 3.9: capture + capture-id + 0600 + symlink-refusal OK"
 
+  linux-primitive-probe:
+    # COREDEV-2617 — MEASURE §4.2a-P's Linux arms rather than writing them from documentation.
+    # Two independent plan reviewers concurrently found that §4.2a-S plus §4.2a-P cannot be
+    # implemented on Linux: P-2's Linux format, ACL-3's `getfacl` grammar and P-4's behaviour under a
+    # POSIX default ACL are all unexecuted, because the development machine is Darwin. Every defect
+    # P-2 has had came from a format written from documentation — decimal where the other arm gave
+    # octal, then a stripped setuid bit, then the symlink measured instead of the target. This job
+    # prints what the primitives actually return so the plan can record measurements. It asserts
+    # nothing and gates nothing: `continue-on-error` keeps a missing tool from turning CI red, since
+    # its output is read by a human, not by an oracle.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install acl tooling
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq acl zsh
+      - name: Probe the Linux primitives
+        run: bash scripts/review/linux-primitive-probe.sh
+
   load-check:
     # COREDEV-2598 — prove the plugin LOADS, not merely that it validates. `claude plugin validate
     # --strict .` is schema validation and cannot see load-layer breakage. The whole recipe, the
@@ -207,16 +530,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node (for the pinned Claude Code CLI)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version: "22"
       - name: Install the PINNED Claude Code CLI
         env:
           # MUST match the `validate` job's pin — a load check on a different CLI than the one that
           # validates proves less than it appears to. That job scopes CLAUDE_CODE_VERSION to a single
           # STEP, so `${{ env.CLAUDE_CODE_VERSION }}` is EMPTY here; the value is repeated instead and
           # `scripts/tests/test_shell_primitive_drift.py` asserts the two pins agree.
-          CLAUDE_CODE_VERSION: 2.1.220
+          CLAUDE_CODE_VERSION: 2.1.294
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
@@ -238,12 +561,45 @@ jobs:
     # (Ubuntu), and one root cause — `tr` aborting on invalid UTF-8 outside `LC_ALL=C`, which
     # TRUNCATES the message — literally inverts by platform: green on GNU, red on BSD. A
     # single-platform run is half a result, and the half that passes is the half that hides it.
+    # macOS RUNS ON PULL REQUESTS AND ON PUSH TO `main`/`alpha` (COREDEV-2767).
+    #
+    # THE REASON IT WAS RESTRICTED WAS VOID. The comment here read: "a macOS runner bills at 10x the
+    # Linux rate … ~105 Linux-equivalent minutes on EVERY push". The 10x multiplier applies to
+    # PRIVATE repositories. This one is public, so standard GitHub-hosted runners are free.
+    # Measured, not recalled — run 32819402531, a push to main that included this leg:
+    #     gh api repos/.../actions/runs/32819402531/timing
+    #     → "MACOS":{"total_ms":0,"jobs":1}   "UBUNTU":{"total_ms":0,"jobs":6}
+    # Zero billable milliseconds, both platforms.
+    #
+    # WHAT IT ACTUALLY COSTS is wall clock: 16m45s on that run against `validate`'s 8m26s, and it
+    # finishes ~8 minutes after every other job, so a PR looks stuck while it runs. That is a real
+    # price and it is the one to argue about; it is not the price that was recorded here.
+    #
+    # WHAT THE RESTRICTION COST, and why it is being undone: this is the ONLY job that runs
+    # `unittest discover -s scripts/tests` on Darwin (see the step below), so every
+    # @skipUnless(DARWIN) class ran after a merge and never on the pull request that introduced it —
+    # 165 cells skipped on the ubuntu leg, and `test_plugin_state_mutants.py` is 137/137 gated, so
+    # its whole obligation table gated nothing. COREDEV-2691 built ~3,000 lines of test seam to
+    # recover part of what this one expression gave away.
+    #
+    # The matrix is still COMPUTED rather than filtered with a step-level `if:` — an `if:` still
+    # provisions the runner — and `alpha` is included because every change integrates there before
+    # `main` (COREDEV-2883), and it had never run this leg at all.
+    #
+    # `redactor-equivalence (macos-latest)` is deliberately still NOT a required check. Requiring it
+    # is a separate, ordered step: this change must land and be observed green on real pull requests
+    # FIRST, because a required context that commits do not yet produce makes every PR unmergeable,
+    # and ruleset `Control` (16082567) has `bypass_actors: []` — no escape hatch but editing it back.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON((github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha'))) && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # Raised from 10. This PR added the scripts suite + hook harness to the macOS leg, and the
+    # measured run is 7m49s — 78% of a 10-minute cap, on the most variable runner GitHub offers.
+    # A cap that close to the observed time turns a slow runner into a red build that says
+    # nothing about the code (PR #63 second-round review).
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,6 +617,108 @@ jobs:
         run: python3 mcp/review-synthesizer/redactor_model.py --count 40000 --seed 20260729
       - name: Second seed (the same invariant, a disjoint corpus)
         run: python3 mcp/review-synthesizer/redactor_model.py --count 20000 --seed 31337
+
+      # macOS ONLY. The `validate` job already runs these on ubuntu; duplicating them here would just
+      # burn minutes. What macOS adds is the PLATFORM: the agent fence runs zsh on developer macOS,
+      # `sed`/`tr` are BSD rather than GNU, and the filesystem is case-INSENSITIVE by default -- so a
+      # shell or path-classification defect can be green on ubuntu and red here. Before this the macOS
+      # leg ran only the redactor suite, so nothing platform-specific in the scripts suite or the hook
+      # harness was ever exercised on the platform it targets (PR #63 review, gap 15).
+
+  # ── The Darwin half of the suite, in a job of its own (COREDEV-2767) ───────────────────────────
+  # THIS USED TO BE TWO STEPS INSIDE `redactor-equivalence`, AND THAT IS WHY IT FAILED. That job caps
+  # at `timeout-minutes: 20` — right for redactor parity, which takes about two minutes — and the
+  # scripts suite shares the budget. Measured: the suite step ran 706s (11m46s) on run 33004523074
+  # and was CANCELLED mid-run on 33008633852 for exceeding the job's 20 minutes. Same commit range,
+  # same tests, ~4 minutes of macOS runner variance. A required check that flakes on capacity is the
+  # defect COREDEV-2765 was about, reintroduced at the job level.
+  #
+  # Separating them gives each the budget it needs, keeps the redactor legs fast on BOTH platforms,
+  # and gives the Darwin coverage a context name that says what it is — which matters, because this
+  # is the context that should eventually be REQUIRED, not `redactor-equivalence (macos-latest)`.
+  #
+  # No `if:` guard is needed: `on:` already restricts this workflow to pull requests and pushes to
+  # main/alpha, so the job runs exactly when it should. A job-level `if:` would skip without
+  # provisioning anyway — unlike the STEP-level `if:` the redactor matrix comment warns about.
+  #
+  # 35 minutes, against a measured 12-16: macOS runners are free on this public repo (measured,
+  # `MACOS.total_ms = 0`), so a generous cap costs nothing and a tight one costs a false red.
+  darwin-suite:
+    name: darwin-suite
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report the interpreters under test
+        run: |
+          sw_vers || true
+          /bin/bash --version | head -1
+          /bin/zsh --version
+
+      # THE WHOLE SUITE, not a subset: on Darwin the @skipUnless(DARWIN) classes are exactly what
+      # this job exists to run, and they are 165 cells the required ubuntu leg skips.
+      # COREDEV-2780: the ONLY third-party Python dependency this repository has. Cells 4, 9, 11, 14,
+      # 15 and 16 parse `.github/workflows/*.yml`, `.trunk/trunk.yaml` and the contract registry, and
+      # there is no YAML parser in the standard library. A hand-rolled one was rejected: the contract
+      # checker is the thing that decides whether the gate is sound, and a parser that quietly
+      # mis-reads a mapping would weaken every cell that depends on it while still reporting green.
+      #
+      # VERSION-PINNED, matching AGENT_CONTRACTS §6's posture on SHA-pinned actions — an unpinned
+      # `pip install` is a supply-chain surface this repo otherwise refuses.
+      - name: Install PyYAML (COREDEV-2780 contract cells parse YAML)
+        # `--break-system-packages` is the fallback, not the default: the macOS runner's system
+        # python is PEP 668 externally-managed and refuses the plain form, while the
+        # setup-python interpreters accept it. Try the clean install first so the flag is only
+        # used where it is actually required.
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml==6.0.2 ||
+            python3 -m pip install --disable-pip-version-check --break-system-packages pyyaml==6.0.2
+
+      # The 3.9-floor cell interrogates the PINNED mypy, and it used to skipTest when the binary
+      # was absent — which is every run of this job, since nothing here materialises trunk's tools.
+      # The only guard on the mypy half of that floor therefore gated nothing exactly where it was
+      # supposed to gate (codex, PR #85). The cell now FAILS rather than skips when CI is set, so
+      # the pin has to be present: installed here, and READ FROM .trunk/trunk.yaml so the two
+      # cannot drift apart.
+      - name: Install the pinned mypy (the 3.9-floor cell refuses to skip on CI)
+        id: pinned_mypy
+        # A VENV, NOT A pip INSTALL INTO THE INTERPRETER. `darwin-suite` has no setup-python
+        # step, so its `python3` is the runner's system interpreter: PEP 668 externally-managed,
+        # which REFUSES a plain `pip install` outright. That is exactly why the PyYAML step above
+        # carries `--break-system-packages` (codex, PR #85). That flag is still the wrong
+        # instrument here: PyYAML only has to be IMPORTABLE, whereas the 3.9-floor cell resolves
+        # the mypy BINARY through `shutil.which`, and a fallback install can land the console
+        # script in a directory that is not on PATH. A venv is externally-managed on no platform
+        # and puts the script at a path we compute, so both halves stop depending on the runner.
+        run: |
+          set -euo pipefail
+          version="$(python3 -c '
+          import yaml
+          config = yaml.safe_load(open(".trunk/trunk.yaml", encoding="utf-8"))
+          print(next(str(e).partition("@")[2] for e in config["lint"]["enabled"] if str(e).startswith("mypy@")))
+          ')"
+          echo "pinned mypy: ${version}"
+          python3 -m venv "${RUNNER_TEMP}/pinned-mypy"
+          "${RUNNER_TEMP}/pinned-mypy/bin/python" -m pip install --disable-pip-version-check "mypy==${version}"
+          # PUBLISH THE BINARY, NEVER THE INTERPRETER. `$GITHUB_PATH` PREPENDS, so putting the
+          # venv's whole `bin` on it makes the NEXT step's `python3` the venv's python — which has
+          # mypy and NOT PyYAML, while every module in the suite opens with `import yaml`. Both
+          # jobs would have gone red; reproduced as ModuleNotFoundError (codex, PR #85). A
+          # directory holding only a `mypy` symlink gives `shutil.which` the pin and leaves the
+          # suite's interpreter exactly as the steps above set it up.
+          mkdir -p "${RUNNER_TEMP}/pinned-mypy-bin"
+          ln -sf "${RUNNER_TEMP}/pinned-mypy/bin/mypy" "${RUNNER_TEMP}/pinned-mypy-bin/mypy"
+          # $GITHUB_PATH takes effect in LATER steps, so verify through the absolute path here.
+          "${RUNNER_TEMP}/pinned-mypy-bin/mypy" --version
+          echo "${RUNNER_TEMP}/pinned-mypy-bin" >> "${GITHUB_PATH}"
+
+      - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Run the hook stdin-contract harness
+        run: bash scripts/test-hooks.sh
 
   secret-scan:
     # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the

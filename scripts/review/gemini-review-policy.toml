@@ -1,0 +1,48 @@
+# Deny policy for the plan gate's Gemini arm (COREDEV-2887), loaded per run with `--policy`.
+#
+# A REVIEW WRITES NOTHING. Headless plan mode auto-approves `exit_plan_mode` and then switches to YOLO,
+# which auto-approves every tool (plan §1 F4) — so `--approval-mode plan` alone would let a reviewer that
+# decides to implement the plan do exactly that (the COREDEV-2607 failure). These rules close that path at
+# the policy layer. They are a SECOND layer: the guarantee remains the calling harness's isolation (a
+# disposable checkout, fingerprinted before and after, the round voided on any change).
+#
+# Priority 999 is the schema's maximum, so no default or user rule outranks these. `modes` is omitted so
+# the rules apply in EVERY approval mode, including the YOLO a successful `exit_plan_mode` would reach.
+
+[[rule]]
+toolName = "exit_plan_mode"
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Do not leave plan mode; review the plan and end with the VERDICT line."
+
+[[rule]]
+toolName = ["write_file", "replace"]
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Do not create or modify files; report findings in your answer."
+
+[[rule]]
+toolName = "run_shell_command"
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Shell commands are not available; read the files instead."
+
+# SUB-AGENT DELEGATION (observed, plan §1 F12). With the write and shell tools withheld in YOLO mode, the model
+# tried to hand the task to a `generalist` sub-agent via `invoke_agent`. The rules above applied to the
+# sub-agent too, so nothing changed — but a reviewer has no need to delegate, and the surface is closed here
+# rather than relying on every future sub-agent inheriting the denials.
+[[rule]]
+toolName = "invoke_agent"
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. Do not delegate; review the plan yourself."
+
+# MCP TOOLS. An MCP server's side effects (a GitHub write, a ticket, a message) happen OUTSIDE the
+# disposable checkout, where the harness's fingerprints cannot see them. None are configured today
+# (2026-10-14), so this is closed in advance, not after the first one is added.
+[[rule]]
+toolName = "*"
+mcpName = "*"
+decision = "deny"
+priority = 999
+denyMessage = "This is a read-only plan review. External tools are not available."

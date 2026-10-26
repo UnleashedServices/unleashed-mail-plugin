@@ -9,9 +9,8 @@ description: >
   touches list rendering, database queries in ViewModels, network fetch patterns,
   image loading, large data set handling, or when the user mentions slow UI,
   scroll performance, or memory issues.
-effort: xhigh
 model: sonnet
-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
 
@@ -27,6 +26,7 @@ correctness + threading safety to `concurrency-reviewer` (the correctness & conc
 > direct callers and callees (one hop), including files outside the diff. A structural
 > change can degrade perf far from the changed lines (N+1s, unbounded fan-out, stalls).
 > Tag any finding you surface outside the diff with `scope: "structural-pipeline"`.
+
 
 ## Performance Audit
 
@@ -58,10 +58,12 @@ grep -rn "try.*await" --include='*.swift' "Unleashed Mail/Sources/Views/"
 grep -rn "@Observable\|@ObservedObject\|@StateObject" --include='*.swift' "Unleashed Mail/Sources/Views/"
 
 # Find views that might cause excessive redraws
-grep -rn "\.onChange\|\.onReceive\|\.task" --include='*.swift' "Unleashed Mail/Sources/Views/" | wc -l
+grep -rn "\.onChange\|\.onReceive\|\.task" --include='*.swift' "Unleashed Mail/Sources/Views/"
+# Count the hits: a high count in one view is the signal, not any single hit.
 
 # Find expensive body computations
-grep -B5 "var body: some View" --include='*.swift' "Unleashed Mail/Sources/Views/" | grep "\.filter\|\.map\|\.sorted\|\.reduce\|DateFormatter\|NumberFormatter"
+grep -rn "\.filter\|\.map\|\.sorted\|\.reduce\|DateFormatter\|NumberFormatter" --include='*.swift' "Unleashed Mail/Sources/Views/"
+# Then read each hit in place: what matters is whether it sits inside a `var body: some View`.
 ```
 
 **Check for:**
@@ -80,7 +82,8 @@ grep -B5 "var body: some View" --include='*.swift' "Unleashed Mail/Sources/Views
 grep -rn "\.filter\|\.order\|WHERE\|ORDER BY" --include='*.swift' "Unleashed Mail/Sources/"
 
 # Find potential N+1 patterns
-grep -B5 -A5 "for.*in.*\{" --include='*.swift' "Unleashed Mail/Sources/" | grep -A3 "fetchOne\|fetchAll\|dbQueue"
+grep -rn "fetchOne\|fetchAll\|dbQueue" --include='*.swift' "Unleashed Mail/Sources/"
+# Then read each hit in place and check whether it sits inside a `for … in` loop — that is the N+1.
 
 # Check migration files for index creation
 grep -rn "\.indexed\|createIndex\|CREATE INDEX" --include='*.swift' "Unleashed Mail/Sources/"
@@ -119,7 +122,8 @@ The tracker returns `min(perImageMaxWhenBudgetAllows, remainingBudget, absoluteM
 
 ```bash
 # Find non-batched API calls
-grep -rn "fetchMessage\|getMessage" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "batch\|Batch\|TaskGroup\|taskGroup"
+grep -rn "fetchMessage\|getMessage" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard hits also naming `batch`, `Batch`, `TaskGroup` or `taskGroup` — those already fetch in bulk.
 
 # Check pagination implementation
 grep -rn "pageToken\|nextLink\|nextPage" --include='*.swift' "Unleashed Mail/Sources/"
@@ -138,8 +142,10 @@ grep -rn "pageToken\|nextLink\|nextPage" --include='*.swift' "Unleashed Mail/Sou
 
 ```bash
 # Find potential memory issues
-grep -rn "\[weak self\]\|\[unowned self\]" --include='*.swift' "Unleashed Mail/Sources/" | wc -l
-grep -rn "\.sink\|\.observe\|addObserver\|NotificationCenter" --include='*.swift' "Unleashed Mail/Sources/" | wc -l
+grep -rn "\[weak self\]\|\[unowned self\]" --include='*.swift' "Unleashed Mail/Sources/"
+# Count the hits and compare against the closure count below; a large gap is the retain-cycle signal.
+grep -rn "\.sink\|\.observe\|addObserver\|NotificationCenter" --include='*.swift' "Unleashed Mail/Sources/"
+# Count the hits: every one needs a matching cancel/remove somewhere.
 
 # Find large data structures that might grow unbounded
 grep -rn "var.*:\s*\[.*\]\s*=\s*\[\]" --include='*.swift' "Unleashed Mail/Sources/ViewModels/"
@@ -287,3 +293,22 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
   - `Completed: <files/scope reviewed>`
   - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
   - `Confidence: <0-100>`
+
+## Tooling note
+
+> **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
+> longer holds `Bash`, because `pr-review` is model-invocable and injected PR content could otherwise
+> steer a spawned reviewer to arbitrary shell one level below the skill's own scoped grant (deep
+> review, P1).
+>
+> **Correction (PR #63 recheck).** The first version of this note claimed every command in this body
+> "was a `grep -rn`". That was false, and the claim is what made it dangerous: `security-reviewer`
+> still called `cat .gitignore | grep …` and `cat *.entitlements || find …`, and
+> `concurrency-reviewer` still called `plutil`. `Grep` cannot execute `cat`, `find`, `plutil` or
+> pipeline semantics, so those audit sections would have silently produced nothing while this note
+> asserted they were covered — a reviewer that cannot run its own step is worse than one holding
+> Bash, because the gap is invisible. Those steps are now written as explicit `Glob`/`Read`/`Grep`
+> operations. I had checked the dominant pattern rather than the whole set.
+>
+> A CI check (`validate-plugin-assembly.py`) now fails if any agent without `Bash` carries a shell
+> fence line that is not a bare `grep`, so this cannot drift back.

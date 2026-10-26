@@ -4,7 +4,6 @@ description: >
   WKWebView-based rich text email composer patterns. Activates when working on
   the email composition UI, contenteditable integration, formatting commands,
   image handling, or Swift↔JavaScript bridge code.
-effort: xhigh
 allowed-tools: Read, Grep, Glob
 ---
 

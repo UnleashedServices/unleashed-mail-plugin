@@ -55,7 +55,7 @@ if [ $TEST_EXIT -eq 0 ]; then
 
     if [ -d "$RESULT_BUNDLE" ]; then
         echo "📊 Generating coverage report..."
-        if xcrun xccov view --report "$RESULT_BUNDLE" > "$COVERAGE_OUT" 2>/dev/null; then
+        if xcrun xccov view --report "$RESULT_BUNDLE" 2>/dev/null > "$COVERAGE_OUT"; then
             if [ -s "$COVERAGE_OUT" ]; then
                 echo "Coverage summary (first 20 lines):"
                 head -20 "$COVERAGE_OUT"

@@ -8,9 +8,8 @@ description: >
   modifying async/await code, actor definitions, Task/TaskGroup usage, Combine
   publishers, ValueObservation callbacks, DispatchQueue usage, token refresh logic,
   WKWebView calls from background threads, or any code crossing isolation boundaries.
-effort: xhigh
 model: opus
-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
 
@@ -24,7 +23,7 @@ owner**, the home for any compiling-but-wrong bug the other three reviewers expl
 punt. Leave security, performance, and pure presentation/style to the other reviewers.
 
 > **Review scope.** Default to the changed files you're given. But when `swift-reviewer`
-> flags a change as *structural* in your domain (a shared protocol, pipeline stage,
+> flags a change as _structural_ in your domain (a shared protocol, pipeline stage,
 > sync/AI orchestrator, coordinator, or schema), review the **whole pipeline** — trace
 > its direct callers and callees (one hop), including files outside the diff. A structural
 > change can break correctness or threading invariants far from the changed lines. Tag
@@ -42,13 +41,15 @@ grep -rn "@MainActor" --include='*.swift' "Unleashed Mail/Sources/"
 grep -rn "class.*:.*ObservableObject" --include='*.swift' "Unleashed Mail/Sources/"
 
 # Find mutable shared state without actor protection
-grep -rn "var.*=.*\[\|var.*=.*\[:\]" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "struct\|actor\|@MainActor"
+grep -rn "var.*=.*\[\|var.*=.*\[:\]" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard hits on lines also naming `struct`, `actor` or `@MainActor` — those are already isolated.
 
 # Find nonisolated access to actor properties
 grep -rn "nonisolated" --include='*.swift' "Unleashed Mail/Sources/"
 ```
 
 **Check for:**
+
 - [ ] All ViewModels with `@Observable` or `ObservableObject` are marked `@MainActor` (or their published properties are updated on main)
 - [ ] Mutable shared state is protected by an `actor`, `@MainActor`, or explicit serialization
 - [ ] No `nonisolated` escape hatches that bypass isolation without justification
@@ -58,7 +59,8 @@ grep -rn "nonisolated" --include='*.swift' "Unleashed Mail/Sources/"
 
 ```bash
 # Find Task {} without structured concurrency
-grep -rn "Task\s*{" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "TaskGroup\|withThrowingTaskGroup\|withTaskGroup"
+grep -rn "Task\s*{" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard `TaskGroup`, `withTaskGroup` and `withThrowingTaskGroup` hits — structured concurrency, not a detached Task.
 
 # Find detached tasks (almost always wrong)
 grep -rn "Task\.detached" --include='*.swift' "Unleashed Mail/Sources/"
@@ -68,6 +70,7 @@ grep -rn "\.task\s*{" --include='*.swift' "Unleashed Mail/Sources/"
 ```
 
 **Check for:**
+
 - [ ] Unstructured `Task { }` blocks have clear justification — prefer structured concurrency
 - [ ] `Task.detached` is not used (it breaks actor isolation inheritance)
 - [ ] Long-running tasks check `Task.isCancelled` or use `Task.checkCancellation()`
@@ -81,10 +84,12 @@ grep -rn "\.task\s*{" --include='*.swift' "Unleashed Mail/Sources/"
 grep -rn "dbQueue\.\|dbPool\." --include='*.swift' "Unleashed Mail/Sources/"
 
 # Find raw database access outside read/write blocks
-grep -rn "\.execute\|\.fetch" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "\.read\|\.write\|db\."
+grep -rn "\.execute\|\.fetch" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard hits also naming `.read`, `.write` or `db.` — those already go through a GRDB accessor.
 ```
 
 **Check for:**
+
 - [ ] All database access goes through `dbQueue.read { }` or `dbQueue.write { }` — never direct execution
 - [ ] `ValueObservation` is started with proper cancellation (cancellable stored, cancelled on deinit)
 - [ ] No database writes from inside a `read` block
@@ -99,6 +104,7 @@ grep -rn "webView\.\|evaluateJavaScript\|WKWebView" --include='*.swift' "Unleash
 ```
 
 **Check for:**
+
 - [ ] All `WKWebView` API calls are on the main thread (WKWebView is main-thread-only)
 - [ ] `WKScriptMessageHandler.userContentController(_:didReceive:)` dispatches to main if updating UI
 - [ ] `evaluateJavaScript` completion handlers account for potential deallocation (weak self)
@@ -127,6 +133,7 @@ grep -rn "ValueObservation\|\.start(in:" --include='*.swift' "Unleashed Mail/Sou
 ```
 
 **Check for:**
+
 - [ ] All `AnyCancellable` instances are stored and cleaned up on deinit
 - [ ] No `.sink` without storing the cancellable (fire-and-forget leak)
 - [ ] Observation callbacks that update `@Observable` / `@Published` properties dispatch to main
@@ -136,14 +143,14 @@ grep -rn "ValueObservation\|\.start(in:" --include='*.swift' "Unleashed Mail/Sou
 
 The COREDEV-1578 audit established this matrix on macOS 15 SDK / Swift 6.3:
 
-| Type | Sendable on macOS 15+ | `nonisolated(unsafe)` needed? |
-|------|----------------------|-------------------------------|
-| `NSRegularExpression`, `[NSRegularExpression]` | Yes | No (use `nonisolated` plain) |
-| `DateFormatter` | Yes | No |
-| `Regex<Output>` (any `Output`, including `Substring`) | **No** | **Yes** |
-| `RegexBuilder.Reference<Capture>` | **No** | **Yes** |
-| `ISO8601DateFormatter`, `RelativeDateTimeFormatter` | No | Yes |
-| `NSFont`, `NSParagraphStyle` | No (mutable AppKit) | keep on `@MainActor` |
+| Type                                                  | Sendable on macOS 15+ | `nonisolated(unsafe)` needed? |
+| ----------------------------------------------------- | --------------------- | ----------------------------- |
+| `NSRegularExpression`, `[NSRegularExpression]`        | Yes                   | No (use `nonisolated` plain)  |
+| `DateFormatter`                                       | Yes                   | No                            |
+| `Regex<Output>` (any `Output`, including `Substring`) | **No**                | **Yes**                       |
+| `RegexBuilder.Reference<Capture>`                     | **No**                | **Yes**                       |
+| `ISO8601DateFormatter`, `RelativeDateTimeFormatter`   | No                    | Yes                           |
+| `NSFont`, `NSParagraphStyle`                          | No (mutable AppKit)   | keep on `@MainActor`          |
 
 **Common false-positive flags to suppress:**
 
@@ -159,6 +166,7 @@ grep -rn "Regex<\|RegexBuilder\.Reference" --include='*.swift' "Unleashed Mail/S
 ```
 
 **Flag as 🟡 WARNING:**
+
 - `nonisolated(unsafe)` on a `static let` of a Sendable Foundation type (drop `(unsafe)`)
 - `nonisolated` (without `unsafe`) on a `Regex<Output>` constant (won't compile)
 
@@ -174,6 +182,7 @@ grep -rn "Hashable.*func hash(into\|var hashValue" --include='*.swift' "Unleashe
 ```
 
 **Flag as 🟡 WARNING:**
+
 - `DispatchQueue.main.async` — use `@MainActor` or `MainActor.run { }` in new code
 - `DispatchQueue.global()` — use structured concurrency (`Task`, `TaskGroup`)
 - Raw locks (`NSLock`, `os_unfair_lock`) — use `actor` isolation instead
@@ -188,12 +197,14 @@ grep -rn "@unchecked Sendable" --include='*.swift' "Unleashed Mail/Sources/"
 ```
 
 **Check for:**
+
 - [ ] Every `@unchecked Sendable` conformance has a comment explaining why it's safe
 - [ ] The type doesn't have mutable stored properties accessible without synchronization
 - [ ] Consider replacing with `actor` or proper `Sendable` conformance
 - [ ] If used for protocol conformance bridging (e.g., delegate types), verify thread safety
 
 **Flag as 🟡 WARNING:**
+
 - `@unchecked Sendable` without justification comment
 - `@unchecked Sendable` on a type with `var` stored properties
 
@@ -202,10 +213,12 @@ grep -rn "@unchecked Sendable" --include='*.swift' "Unleashed Mail/Sources/"
 ```bash
 # Deprecated APIs (app targets macOS 15+)
 grep -rn "NSColor\.\(selectedTextBackgroundColor\)\|NSWorkspace.*launchApplication\|NSAlert()\.beginSheet" --include='*.swift' "Unleashed Mail/Sources/"
-grep -rn "URLSession\.shared\.dataTask\|completionHandler:" --include='*.swift' "Unleashed Mail/Sources/" | head -20
+grep -rn "URLSession\.shared\.dataTask\|completionHandler:" --include='*.swift' "Unleashed Mail/Sources/"
+# Read the first ~20 hits; the pattern repeats and the rest add nothing.
 ```
 
 **Flag as 🟡 WARNING:**
+
 - Callback-based `URLSession` — use `async` variants (`data(for:)`, `bytes(for:)`)
 - `ObservableObject` + `@Published` — use `@Observable` macro (available since macOS 14, baseline for our macOS 15+ target)
 - `NavigationView` — use `NavigationSplitView` or `NavigationStack`
@@ -218,11 +231,12 @@ grep -rn "URLSession\.shared\.dataTask\|completionHandler:" --include='*.swift' 
 > `Package.swift` or `Package.resolved` at the root. Package dependencies are
 > managed inside Xcode (`.xcodeproj`). Inspect via:
 
-```bash
-# Resolved package versions live in the xcodeproj
-plutil -p "Unleashed Mail.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" 2>/dev/null \
-    | grep -B1 "version" || echo "(swiftpm/Package.resolved not present — open Xcode for resolved versions)"
-```
+Read it directly — `plutil` needs `Bash`, which this agent does not have, and `Package.resolved` is
+JSON, so `Read` shows the pinned versions without it:
+
+- `Read` `Unleashed Mail.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+- If that path is absent, say so and stop: the versions are only resolvable by opening Xcode, and
+  guessing them would be a fabricated finding.
 
 `concurrency-reviewer` does not have WebFetch / Context7 — it cannot independently
 verify that a pinned version is the "latest" without external lookup. Either
@@ -231,6 +245,7 @@ has Context7 + WebSearch + WebFetch) or surface the pinned versions as fact
 without a "should upgrade" recommendation. Do **not** invent version comparisons.
 
 **Surface (don't recommend) when relevant:**
+
 - GRDB version pinned (project requires 7+)
 - MSAL version pinned
 - Any SPM dependency that hasn't been updated in this PR's diff
@@ -243,19 +258,27 @@ pass SwiftLint and may have no test exercising them, so they reach production un
 caught here.
 
 **Check for:**
+
 - [ ] **Control flow**: inverted conditionals, wrong comparison operators, off-by-one
-  in ranges/indices, unreachable branches, a `guard`/`if` that takes the wrong path
+      in ranges/indices, unreachable branches, a `guard`/`if` that takes the wrong path
 - [ ] **Error handling**: `try?` that silently swallows a recoverable error (CLAUDE.md
-  forbids it), `catch` blocks that drop context, errors mapped to the wrong typed case
+      forbids it), `catch` blocks that drop context, errors mapped to the wrong typed case
 - [ ] **Account scoping**: a query missing the `account_email` filter (returns another
-  account's rows — a correctness *and* data-leak bug)
+      account's rows — a correctness _and_ data-leak bug)
 - [ ] **Optionals & casts**: force-unwraps (`!`) or `as!` on values that can be nil /
-  fail at runtime, default values that mask a real miss
+      fail at runtime, default values that mask a real miss
 - [ ] **API semantics**: a call that compiles but uses the wrong overload/parameter
-  order, a discarded async result, pagination (`nextPageToken` / `deltaLink`) not
-  advanced, a Boolean flag passed inverted
+      order, a discarded async result, pagination (`nextPageToken` / `deltaLink`) not
+      advanced, a Boolean flag passed inverted
+- [ ] **Claude 5.5 request shapes**: a request to `claude-opus-5-5` or `claude-sonnet-5-5` that sets
+      any of the five settings they reject with a 400 — a thinking budget (`budget_tokens`),
+      `thinking: {"type": "disabled"}`, non-default `temperature`/`top_p`/`top_k`, a prefilled final
+      assistant turn, or a forced `tool_choice` (`any`/`tool`); a request to `claude-haiku-5-5` with a
+      thinking budget, non-default sampling or a prefill (it accepts the other two); or
+      `output_config.effort` sent to a model without effort support (Haiku 4.5). Each fails on EVERY
+      call: `category: "logic"`, severity `blocker`. Replacements: `ai-engineer`'s "Claude 5.5 request rules"
 - [ ] **State**: a field mutated but never read, an early `return` that skips required
-  cleanup, a cache written but never invalidated
+      cleanup, a cache written but never invalidated
 
 Emit these as `category: "logic"` (wrong behavior) or `category: "error-handling"`
 (swallowed / mis-mapped errors). A logic bug that could corrupt data or crash is a
@@ -330,9 +353,9 @@ finding; emit `[]` if clean. JSON escaping handles pipes, backticks, and newline
 Emit **one** of these values on a `Status:` line **immediately before** your JSON findings array (an
 actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template), with only blank
 or detail-field lines between it and the final fenced `json` array. Keep the fenced
-`json` array the **final block** of your report (per *Structured Findings* above), so it stays trivially
+`json` array the **final block** of your report (per _Structured Findings_ above), so it stays trivially
 parseable and matches the handoff template in `skills/agent-orchestration/SKILL.md`. The orchestrator
-reads the status **first, then** the array — so a reviewer that *couldn't run* returns `BLOCKED` + `[]`
+reads the status **first, then** the array — so a reviewer that _couldn't run_ returns `BLOCKED` + `[]`
 instead of an empty `[]` that reads as a clean pass. Status (did-the-review-finish) is orthogonal to the
 findings verdict (is-the-code-OK). Use these exact `key: value` fields:
 
@@ -347,3 +370,22 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
   - `Completed: <files/scope reviewed>`
   - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
   - `Confidence: <0-100>`
+
+## Tooling note
+
+> **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
+> longer holds `Bash`, because `pr-review` is model-invocable and injected PR content could otherwise
+> steer a spawned reviewer to arbitrary shell one level below the skill's own scoped grant (deep
+> review, P1).
+>
+> **Correction (PR #63 recheck).** The first version of this note claimed every command in this body
+> "was a `grep -rn`". That was false, and the claim is what made it dangerous: `security-reviewer`
+> still called `cat .gitignore | grep …` and `cat *.entitlements || find …`, and
+> `concurrency-reviewer` still called `plutil`. `Grep` cannot execute `cat`, `find`, `plutil` or
+> pipeline semantics, so those audit sections would have silently produced nothing while this note
+> asserted they were covered — a reviewer that cannot run its own step is worse than one holding
+> Bash, because the gap is invisible. Those steps are now written as explicit `Glob`/`Read`/`Grep`
+> operations. I had checked the dominant pattern rather than the whole set.
+>
+> A CI check (`validate-plugin-assembly.py`) now fails if any agent without `Bash` carries a shell
+> fence line that is not a bare `grep`, so this cannot drift back.

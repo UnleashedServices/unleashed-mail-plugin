@@ -9,9 +9,22 @@ description: >
   automatically after completing any feature implementation, before creating
   a pull request, when the user says "review", "check my code", "is this ready
   to merge", or after any significant code change is complete.
-effort: xhigh
 model: inherit
-tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
+tools: Read, Bash, Grep, Glob, Agent(security-reviewer, unleashed-mail:security-reviewer, concurrency-reviewer, unleashed-mail:concurrency-reviewer, ux-perf-reviewer, unleashed-mail:ux-perf-reviewer, accessibility-auditor, unleashed-mail:accessibility-auditor, prompt-review, unleashed-mail:prompt-review, jira-manager, unleashed-mail:jira-manager), mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
+# COREDEV-2703 / COREDEV-2711 — A DECLARATION OF INTENT, NOT AN ENFORCED CONTROL. The runtime grants
+# the Agent tool from this specifier but DISCARDS the type list for a sub-agent: measured on 2.8.1,
+# this agent spawned `unleashed-mail:ui-engineer` — a writer, absent from the list — with no refusal
+# and no prompt; a probe sees its own `Agent` entry BARE, so nothing exists to enforce against.
+# BY DESIGN: the sub-agents reference scopes `Agent(type)` enforcement to a MAIN-THREAD agent; for a
+# sub-agent the only levers are omitting `Agent` or denying it, both all-or-nothing. NO FRONTMATTER
+# SHAPE RESTORES PER-TYPE CONTROL — do not hunt for one, and do not read this as a security boundary.
+# STILL BOUGHT: `validate-plugin-assembly.py` checks this declared set against the writer roster on
+# disk, so adding a writing agent here fails CI. That keeps the DECLARATION honest, nothing more.
+# STILL MISSING, BOTH PATHS: PR #63's P1 (a prompt-injected finding steering this reviewer into a
+# writing agent while it reads untrusted PR content) AND DIRECT mutation — `disallowedTools` removes
+# only the EDITOR tools; line 13's bare `Bash` is arbitrary shell, which this repo's `_WRITE_VECTORS`
+# counts a writer (AGENT_CONTRACTS §9.1, accepted residual). COREDEV-2711 owns both. FILE=688 LINES.
+disallowedTools: Write, Edit, NotebookEdit
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client
@@ -171,9 +184,13 @@ session.** The fence below is **empty by default on purpose**: run it verbatim a
 # context.sh) falls back to ~/.claude/unleashed-mail while the hooks wrote under ~/.claude/plugins/data/{id},
 # and every persisted capture/.status/ratchet is invisible. The `${CLAUDE_PLUGIN_DATA}` placeholder IS
 # substituted inline in agent content (plugins-reference: "Skill and agent content — anywhere the
-# placeholder appears"), so this resolves to the real data dir; if unset it expands empty and context.sh's
-# `:-` fallback keeps today's behaviour (no regression).
-export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"
+# placeholder appears"), so this resolves to the real data dir.
+# COREDEV-2617: ONE documented bridge instead of a copy-pasted export. It also establishes
+# _UNLEASHED_BASE_OK, which is how this fence detects an unresolved base (see Step 2's roster block).
+# Both placeholders must be the EXACT braced tokens and must live HERE, in agent content -- a
+# ${CLAUDE_PLUGIN_DATA} written inside the sourced file would never be substituted.
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent-env-bridge.sh" \
+       "${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}"
 # UNCOMMENT a line ONLY for a reviewer whose report + readable `Status:` you HOLD from this session.
 # Every line left commented is a reviewer you are NOT vouching for -> it gets classified.
 # Type names literally; do NOT reference a shell variable — every Bash block is a fresh shell, so a
@@ -239,9 +256,11 @@ reading — they cannot certify, but they can contribute findings:
 # MAJ-6: bridge CLAUDE_PLUGIN_DATA (exported only to hooks/MCP, not the Bash tool) so this collection loop
 # reads the SAME reviews dir the capture hooks wrote — otherwise context.sh falls back to
 # ~/.claude/unleashed-mail while the captures live under ~/.claude/plugins/data/{id} and every array is
-# invisible. The placeholder is substituted inline in agent content; unset -> empty -> context.sh `:-`
-# fallback (no regression). Must precede the context.sh source.
-export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"
+# invisible. COREDEV-2617: the bridge exports the value AND establishes _UNLEASHED_BASE_OK, so an
+# unresolved base yields the poisoned sentinel and this fence reports NO CAPTURE instead of silently
+# reading a second store. Must precede the context.sh source.
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent-env-bridge.sh" \
+       "${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}"
 CTX="${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
 . "$CTX"
 BASE="$(context_reviews_dir)/$(context_branch_slug "$(context_branch)")"
@@ -300,6 +319,10 @@ changed files and a brief summary.
 **Agent 6: `jira-manager`** (parallel with all reviewers)
 > Log the review in progress on the corresponding Jira ticket. Note which
 > review agents are running and update when the review concludes.
+> **Pass it everything it needs from git/GitHub in the spawn prompt** — the ticket key,
+> the branch, and the PR URL when one exists (`gh pr view --json url -q .url`).
+> `jira-manager` has no shell (PR #63 recheck: `Bash` is denied so a spawned logger
+> cannot modify the checkout), so context you do not pass, it cannot fetch.
 
 > **Handoff format:** every reviewer ends its report with a fenced ```json findings
 > array (schema in Step 5). JSON — not the prose — is what you collect and pass to the

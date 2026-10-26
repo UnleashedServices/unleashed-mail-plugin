@@ -1,0 +1,34 @@
+# Aggressive markdownlint config.
+#
+# Still extends the prettier-compatible preset -- VERIFIED not to be a compromise: running
+# prettier over a file with 12 MD060 findings leaves 0, so the formatter and the linter
+# agree and the ~580 table-style findings in this repo are genuinely `trunk fmt`-able.
+# The preset only silences rules prettier already enforces; every CONTENT rule below is on.
+extends: markdownlint/style/prettier
+
+# Long prose lines are deliberate in this repo's planning docs and agent assets.
+MD013: false
+
+# Structural / correctness rules -- the high-value half for a repo whose product IS markdown.
+MD024:
+  siblings_only: true # duplicate headings under different parents are fine
+MD034: true # bare URLs should be links
+MD036: true # emphasis used instead of a heading
+MD040: true # fenced code blocks must declare a language
+MD041: true # file starts with a top-level heading
+MD042: true # no empty links
+MD045: true # images need alt text (this repo ships an accessibility-auditor agent)
+MD047: true # single trailing newline
+
+# The cross-reference family. This repo's documented recurring defect is a reference whose
+# target was deleted -- "absences never appear in a diff". These three are the automated
+# half of that check: MD051 catches `#anchor` links to headings that do not exist, MD052
+# catches [ref] links with no definition, MD053 catches definitions nothing points at.
+MD051: true
+MD052: true
+MD053: true
+MD059: true # link text must be descriptive, not "click here"
+
+# Inline HTML is allowed but enumerated, so a new tag is a deliberate decision.
+MD033:
+  allowed_elements: [br, details, summary, sub, sup, img, kbd, a]

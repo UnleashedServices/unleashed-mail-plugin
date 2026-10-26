@@ -32,7 +32,10 @@ The server returns `blockersToVerify` precisely because it cannot read the repo.
 
 `synthesize_review({ findings: Finding[], changed_files: string[] })` →
 
-- `content[0].text` — the consolidated markdown report (Findings sections + table).
+- `content[0].text` — the consolidated markdown report: the "All Issues (Consolidated)" table plus
+  the Pre-existing and Quarantined sections. (The per-domain **Findings** sections are written by the
+  orchestrating agent, not by this tool — see `agents/swift-reviewer.md` Step 5.)
+- `content[1].text` — the verify-data JSON (a mirror of `structuredContent`) for text-only clients.
 - `structuredContent`:
   - `provisionalVerdict` — `REQUEST_CHANGES | NEEDS_DISCUSSION | APPROVE_WITH_SUGGESTIONS | APPROVE`, computed **assuming every blocker is real**.
   - `blockersToVerify[]` — one entry per gating **blocker finding** (the actual

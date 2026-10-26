@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.4
+# UnleashedMail — Claude Code Plugin v2.8.36
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -8,15 +8,525 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ## What's New
 
+### v2.8.36
+
+**The plan gate's Gemini arm runs again, on Gemini 3.1 Pro.** Google retired 3.1 Pro from the Antigravity
+CLI (`agy`), and `agy`'s Flash arm stopped answering, so the arm now runs Google's `gemini` CLI with
+`gemini-3.1-pro-preview`, inside the same isolation harness. Re-login once with `gemini` (OAuth), then
+run `/unleashed-mail:gemini-review` as before.
+
+- **The answering model is checked.** The CLI can fall back to another model mid-session; an adapter
+  reads the CLI's own JSON stats and refuses the round unless the requested model, and only it, answered.
+- **Plan mode is not trusted.** Headless, the CLI's plan mode can switch itself to YOLO and write (we
+  watched it do so). Each run loads a deny policy that withholds every write, shell, delegation and MCP
+  tool; the disposable checkout and its before/after fingerprints remain the guarantee.
+- **A refused run leaves an empty transcript,** which every gate layer already treats as MISSING, and the
+  harness prints the reason. Any non-zero capture is MISSING for that round.
+- **Your Gemini `.env` may hold only credentials.** The CLI loads `~/.gemini/.env` (or `~/.env`) after
+  the arm's checks. That file may set only `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`
+  and `GOOGLE_CLOUD_LOCATION`, the CLI's own list for untrusted folders. Any other key refuses the round
+  and is named. Export other variables in your shell instead.
+- **The reviewed branch cannot run its own code as the arm's.** PATH keeps only entries outside the
+  checkout. Every `python3` the arm starts ignores the working directory and `PYTHONPATH`, so a
+  committed `json.py` can't replace the standard library. The `gemini` that runs is a real file
+  outside the checkout.
+- **Removed:** `isolated-agy-review.sh`, `preflight-agy.sh` and `agy-newest-model.sh`. The per-round
+  prompt keeps its `.agy-prompt-<T>r<N>.md` name.
+
+### v2.8.35
+
+**Agents now treat UnleashedMail's version branch, not `main`, as the place work lands.**
+
+- **The branch convention says where work integrates.** `AGENT_CONTRACTS.md` called `main` "the
+  integration trunk". In UnleashedMail, all work lands on the version branch (`1.0X.0000`, now
+  `1.02.0000`), and `main` receives only promotions and hotfixes. The base-branch detection that
+  `swift-reviewer` and `changeset.sh` use already worked this way; the contract line now agrees.
+- **`release-manager` builds the changelog from the version branch.** It listed PRs merged into
+  `main`, which holds only promotions, so it missed every feature PR. It now derives the branch from
+  `MARKETING_VERSION`, and stops rather than run the query with an empty base.
+- **`codex-review` reviews against the PR's own base.** Its full-diff example used `--base main`,
+  which would review a feature branch against `main` and pull in the version branch's unreleased
+  work. `main` remains the right base for a promotion, and for a hotfix's PR into `main` (its PR into
+  the version branch uses the version branch).
+
+### v2.8.34
+
+**You can install `alpha` from the store.** Add the marketplace as
+`UnleashedServices/unleashed-mail-plugin#alpha` (see "Release channels").
+
+- **The marketplace's ref now decides the plugin's ref.** The plugin's marketplace entry pointed at
+  GitHub with no branch, so it always installed `main`, even from a marketplace added at `#alpha`. It
+  now uses the relative source `"./"`, which installs the marketplace's own tree.
+- **Existing installs carry on.** Measured on throwaway branches: an install updates in place across
+  the change, under its own key, including one still keyed `npranson-unleashed-mail-plugin`. As
+  always, the version bump is what moves it.
+- **CI checks the shipped manifest.** The load check used to rewrite the source before installing,
+  so CI never tested the shipped value. It now asserts the source is `"./"` and fails otherwise, and
+  the assembly validator enforces the same rule.
+
+### v2.8.32
+
+**A retargeted PR can no longer pass the required gate on checks run against its old base.**
+
+- **`trunk-check` checks which base it ran against.** Before linting, it confirms that the commit
+  it compares against was a tip of the PR's current base branch. It checks two references: the
+  branch itself, and the PR's current merge commit. If either says otherwise, the check fails and
+  says why. This catches a merge commit GitHub had not yet updated after a retarget, and a re-run
+  of a check from before the retarget. A base that simply moved forward still passes.
+- **`plugin-ci` re-runs when a PR is edited,** retargets included, just as `trunk-check` does. All
+  six required checks then run together on the same commit. A title or body edit now restarts
+  `plugin-ci`.
+- Remaining gaps, each ticketed: manual re-runs of old runs (COREDEV-2881), and a manual
+  `workflow_dispatch` of `plugin-ci` on a PR's branch (COREDEV-2880).
+
+### v2.8.31
+
+**Every model caller the plugin ships now uses the newest model.**
+
+- **Gemini review arm:** picks the newest flash-high model `agy models` lists, at run time. It was
+  pinned to `gemini-3.6-flash-high` while 3.7 and 3.8 were available. Every agy launch the plugin
+  ships resolves its model first: the review wrapper, the preflight ping, the skill recipes and the
+  `pty-capture.py` example. An odd listing fails the round rather than picking an older model.
+- **The model a round ran is recorded** in `<transcript>.model`. The transcript stays the reviewer's
+  bytes alone.
+- **Codex:** the skill no longer pins a model. Leave `review_model` unset and keep `model` current in
+  `~/.codex/config.toml`.
+- **CI rejects a concrete model id** in agent or skill frontmatter. Use an alias (`opus`, `sonnet`,
+  `haiku`, `fable`, …) or `inherit`.
+- **App guidance:** `ai-engineer` defaults to `claude-opus-5-5`, with `claude-haiku-5-5` for cheap
+  routes and its request rules. `concurrency-reviewer` flags Haiku 5.5's three 400s.
+- CI validates with Claude Code 2.1.294.
+
+### v2.8.30
+
+**Cell 11's contract mutants are now generated from the registry, so the two cannot drift.** The
+registry said cell 11 generated one mutant per case, but 138 hand-written recipes built them instead.
+11 asserted diagnostics, 28 mutants and 19 operators no longer matched the case they claimed to run.
+A grammar-strict generator now builds all 222 structural mutants from each case's `op`, `target`
+and `payload`, and proves each one: the declared value is there, and nothing else changed, placement
+included. The 8 raw-text mutants are written verbatim over their pinned spans. actionlint accepts
+every mutant, raw text included. The resolver family runs as its 24 executions through the real
+boundary. Two `local-divergence` cases that had never run their declared op now run it.
+
+### v2.8.29
+
+**The agents' guidance is corrected against primary sources (COREDEV-2873).**
+
+- **Claude 5.5:** `ai-engineer` now recommends `claude-sonnet-5-5`, sets effort explicitly, and lists the five
+  request settings that Claude Opus 5.5 and Sonnet 5.5 reject with a 400, each with the replacement the
+  migration guides give. `concurrency-reviewer` flags those shapes at review time.
+- **Foundation Models:** `ai-engineer` documents the app's existing gating pattern (`@available(macOS 26.0, *)`,
+  `canImport`, the availability mapping) and requires an availability check before every call.
+- **Toolchain:** the build and CI agents now match the app's real CI: `macos-26` runners and the newest
+  installed Xcode, with a macOS 15.0 deployment target and Swift 6 language mode.
+- **Smaller fixes:**
+  - the Graph subscription example no longer hard-codes a past date;
+  - the hooks validator knows `DirectoryAdded`, `PreModelSwitch` and `PostModelSwitch`;
+  - CI validates with Claude Code 2.1.289.
+
+### v2.8.28
+
+**The review gate's CLI documentation matches what actually runs (COREDEV-2872).**
+
+- **Gemini:** the documented one-run fallback model, `gemini-2.5-pro`, is no longer offered by `agy`.
+  The skill now tells you how to pick a fallback from `agy models`, and warns off `gemini-3.1-pro-high`.
+- **Codex:** the skill pinned `gpt-6-astra` inline on `codex review` after the configured model had
+  moved to `gpt-6.1-sol`. That is now corrected. The skill also shows how to read the model and effort
+  a run actually used from its session record.
+- **Effort:** `AGENT_CONTRACTS.md` §11 now records that Opus, Sonnet and Haiku 5.5 default to `medium`
+  effort, so set a level explicitly for any review or gate session.
+
+### v2.8.27
+
+**The required `trunk-check` gate no longer fails clean edits to already-unformatted files.** Trunk
+evaluates its five formatters (black, isort, prettier, shfmt, taplo) whole-file, so any edit to one
+of the ~73% of tracked files with pre-existing formatting debt went red for debt the author did not
+introduce. The required job now filters them; the push canary still runs them, so their findings are
+observed rather than lost. New lint defects are still caught.
+
+**The secret-scanning configs are now frozen, and a blanket allowlist is refused outright.** gitleaks
+and zizmor read configs outside the frozen tree, so a blanket `.*` allowlist in `.gitleaks.toml`
+disarmed both `trunk-check` and the separate `secret-scan` required check with the suite green. The
+freeze now covers every config a security linter reads — including `.gitleaksignore`, which nothing
+caught — and content checks reject any blanket suppression rather than only noticing it changed.
+
+### v2.8.26
+
+**The `keychain-security` skill described only one of two Keychain write paths, and an agent nearly
+changed credential code because of it.** It stated flatly that `KeychainManager` does
+delete-then-add. True of the `.legacy` path — still the shipped default — but the app also ships a
+flag-gated `.primitive` path that never deletes a live credential. An agent found the second path,
+concluded the skill contradicted the code, and was about to "resolve it at source".
+
+The rewrite was verified against the app source by an adversarial pass, which returned 16 edits and
+caught a factual error in the first draft. It also surfaced worse hazards than the original gap: the
+default path can destroy a credential if its add fails after its delete, `isProtectionTransition:`
+is caller-supplied and defaults unsafe, and `refreshToken` never takes the safe path. All are now
+documented, with an explicit instruction not to unify the paths.
+
+### v2.8.25
+
+**M3 — the trunk-check gate is STRICT on `main`.** `continue-on-error` is removed, so a Trunk
+finding now fails the job instead of being advisory. The context is still NOT required by ruleset
+`Control` — making it required is M4, and it needs strict green _and_ deliberately red evidence on
+both bases first.
+
+### v2.8.24
+
+- **Review tooling moved to Codex GPT-6 "Astra" at the `ultra` tier.** The wrappers pinned
+  `gpt-5.6-sol` @ `xhigh`; `xhigh` turned out to be **fifth of seven** on the current ladder
+  (`minimal < low < medium < high < xhigh < max < ultra`), so the gate had been quietly running two
+  tiers below the ceiling since Astra shipped.
+- **The CLI does not validate the reasoning tier — so the wrappers now do.** Measured: an unknown
+  value is echoed back and the run proceeds at the backend default, with no error. A stale or
+  mistyped tier was therefore an invisible downgrade; the wrappers assert against the seven known
+  tiers and exit 2. The pty cap moved 1200s → 2400s with the tier.
+
+### v2.8.23
+
+- **Found and fixed the cause of the recurring 2.7.0 reversion.** `marketplace.json` declared no
+  `version`, and without one Claude Code resolves the installed version by taking the FIRST entry of
+  a raw directory read of the plugin cache — no sort, no semver comparison. On the maintainer's
+  machine index 0 was `2.7.0`, so every registry rebuild reinstated it while `main` was many releases
+  ahead. The version is now declared, and version-sync enforces it against `plugin.json` so it cannot
+  drift back.
+- **Five more review findings closed**, three of them counterexamples to the previous round's fixes:
+  signal handlers that left `trunk` running, a placeholder collision closed on only one of two
+  channels, a 3.9 checker blind to user-defined types, an ambient mypy standing in for the pinned
+  one, and a survivor binding that permitted the exact regression it claimed to detect.
+
+### v2.8.22
+
+- **Review remediation, and a repair round that needed repairing.** Seven findings closed: a symlink
+  truncation on the timeout marker's path, a freeze carve-out that laundered mutable branch refs, a
+  3.9 floor checker that inspected 0 of 20 files, a census reading the wrong CI job, and an evidence
+  artifact claiming more than it showed. An adversarial pass over those fixes then found three more
+  defects **in the fixes themselves** — a cleanup with no working check behind it, a directory leaked
+  on every interrupted commit, and a placeholder that could be forged verbatim.
+
+### v2.8.21
+
+- **The drift detector's "I could not run" message was unreachable where it mattered.** Its guard sat
+  after the `origin/main` read, whose `|| exit 0` fires whenever that ref is absent — the normal state
+  of a CI checkout. A machine with no `python3` went silent for the other reason. Capability check now
+  precedes the data check.
+
+### v2.8.20
+
+- **The linters' own configuration was an unfrozen lever on the required check.** `.trunk/configs/**`
+  decides what every linter tolerates, and nothing froze it — a permissive `ruff.toml` would take the
+  gate green having enforced almost nothing. It is now digest-frozen, including untracked files
+  planted in the directory, because trunk reads those identically.
+- **Two suites could not see what they claimed to.** The drift fixture pointed `origin/main` at `HEAD`,
+  so a detector reading the checkout passed every test; and the mutation survivor corpus recorded
+  fourteen findings that nothing executed. Both are now bound to something that fails.
+
+### v2.8.19
+
+- **A reusable workflow could have produced the required check unseen.** The producer census skipped
+  `uses:` jobs entirely; it now refuses them, because their check names come from another file. And
+  the gate's argument test matched `--index` as a substring, which `--index-only` also satisfies — it
+  now asserts tokens, and freezes the whole vector.
+- **The Python 3.9 floor was advertised but not enforced.** The pinned mypy refuses `python_version =
+3.9` and silently falls back to its default, so a PEP-604 union — a runtime error on 3.9 — checked
+  clean. The floor is now enforced by a check derived from the files CI actually compiles on 3.9.
+
+### v2.8.18
+
+- **The pre-commit gate could finish green having run nothing.** Four paths reached `exit 0` without
+  linting: a failed `cd` yielding an empty command substitution, a missing helper that ended the whole
+  hook rather than itself, an absent `trunk` that printed nothing at all, and a checkout with no
+  `.trunk/` where `trunk check` exits 1 and the gate reported it as findings in your diff. Each is now
+  either fatal or stated out loud.
+- **The drift detector went silent when it could not run.** With no `python3` the heredoc failed, its
+  diagnostic was discarded, and the result was indistinguishable from a healthy up-to-date install.
+  The SessionStart observation this repo's own tests defer to is also now committed as evidence.
+
+### v2.8.17
+
+- **The `.trunk/trunk.yaml` freeze covered the linters but not where they come from.** Repointing
+  `plugins.sources[].uri` at another repository left the frozen digest byte-identical and all 1384
+  tests green — the required check would have reported success having run somebody else's linter
+  definitions, or none. The digest now covers the whole document, with the `trunk upgrade` carve-out
+  named explicitly rather than implied by scope.
+- **The timeout deadline is no longer inferred from an integer clock.** The `timeout` branch resolved
+  its ambiguous statuses by comparing `${SECONDS}` sampled before the fork, which read up to a second
+  high: a command exiting 124 on its own inside that second was published as our timeout, and a
+  timeout does not block the commit. Measured 10 runs out of 10. The deadline now belongs to a
+  watchdog that records it before acting, on both branches, and the marker directory is probed by
+  writing instead of assumed — an unwritable `TMPDIR` used to turn a real timeout into "signal 15".
+
+### v2.8.16
+
+- **The timeout gate stopped inferring a fact from an exit status.** 124, 137 and 143 are each
+  producible by the child as well as by the wrapper, and each was fixed only after a reviewer
+  pointed at it — three members of one family, found one at a time. `run_with_timeout` now publishes
+  whether it stopped the command, and the caller reads that instead of guessing from a code.
+  Alongside: the drift detector honours `CLAUDE_CONFIG_DIR`, and the committed rollout evidence is
+  finally read by the tests that named it as their owner.
+
+### v2.8.15
+
+- **A pre-deadline SIGTERM was reported as a timeout and let the commit through.** `timeout` passes
+  a 143 straight through when no timeout occurred, and the hook's timeout arm accepted it — so a
+  lint killed after two seconds announced "exceeded 180s" and allowed the commit, while the
+  identical death by SIGKILL blocked it. 143 must now prove the deadline elapsed, exactly as 137
+  already did. Also: the drift detector aborted with "unbound variable" when `HOME` was unset,
+  from the one file whose header promises it always exits 0.
+
+### v2.8.14
+
+- **Three more review findings, all against the current head rather than stale.** The pre-commit
+  watchdog orphaned its own `sleep` on every fast commit — signalling the subshell left the sleeper
+  running to PPID 1 for the full deadline. The version grammar still trimmed `" 2.8.5 "` into
+  validity, and Python's `$` accepted a trailing newline even after that. And the transcript
+  inventory keyed duplicate detection on a hint line it had already decided to ignore, so two
+  rewrites could name one README block and both pass.
+
+### v2.8.13
+
+- **The C6 launcher guard was blind to symlinks.** `find -type f` matches regular files only, while
+  the pinned action's own `locate_trunk.sh` tests `[[ -f && -x ]]` — and bash's file tests FOLLOW
+  symlinks. A committed `.trunk/bin/trunk` symlink therefore passed the guard and was then selected
+  as TRUNK_PATH: the required context reporting success having linted nothing. Yesterday's allowlist
+  rewrite fixed the NAME axis and left the TYPE axis untouched. Both are closed now, along with five
+  more review findings.
+
+### v2.8.12
+
+- **The drift detector now says WHY you are behind.** A stale record has two causes with one
+  symptom: nobody ran the update, or an update was undone. On 2026-09-02 it was the second — the
+  record selected 2.7.0 while a complete `.../2.8.3/` sat in the install cache, written the same
+  second as the record itself. Those call for different responses, so the warning now names which it
+  is by reading the install cache beside the entry's own `installPath`.
+
+### v2.8.11
+
+- **A required-check bypass, found by reviewing locally instead of waiting for the bots.**
+  The C6 guard that stops the repository supplying its own linter was an enumeration of six paths,
+  and `trunk` merges a seventh it did not name. Measured: a tracked `.trunk/user_trunk.yaml`
+  disabling two linters takes `trunk check --ci --upstream` from `exit 1 / 2 failures` to
+  `exit 0 / Found no applicable linters` — a required context reporting green having linted nothing
+  — while the guard printed PASSED. It is an allowlist now, so an eighth override file fails closed
+  by default. Alongside it: the all-linter ignore was silencing gitleaks and trufflehog on twelve
+  tracked files including `.trunk/trunk.yaml` itself, and a blanket mypy exemption justified by a
+  claim that was simply false was hiding real type defects.
+
+### v2.8.10
+
+- **The timeout the pre-commit hook enforced only on the branch that does not run.**
+  `run_with_timeout` prefers `timeout`/`gtimeout` when installed and falls back to a hand-rolled
+  watchdog otherwise. v2.8.9 gave the escalation, the process-group teardown and the timeout
+  bookkeeping to the fallback alone — the branch taken when neither tool exists, which is neither
+  this repo's CI nor any Mac with Homebrew coreutils. Measured on the coreutils branch, a
+  SIGTERM-ignoring child overran a 2-second deadline by thirtyfold. All three branches now share one
+  shape. Alongside it, three exit statuses stopped lying: `trunk` exits 2 when it cannot run at all,
+  and a signal death is not a lint finding either — both were being reported as "new findings in the
+  staged diff", sending developers to fix a diff that no edit would clear.
+
+### v2.8.9
+
+- **COREDEV-2780 / COREDEV-2801 — five defects found by PR review, each reproduced before it was fixed.**
+  The push canary checked out at `fetch-depth: 2` while `github.event.before` can be many commits
+  back, so `git diff` failed with `bad object` and — because `set -e` is suspended inside an `if`
+  condition — the guard read the empty output as an EMPTY DIFF and reported a cause it had never
+  tested. Cell 5's autofix positive control was specified in the plan and did not exist; the only
+  thing calling itself the control hand-set the value it was supposed to observe, which left equal
+  pre/post hashes unfalsifiable. The parity harness recorded the action pin it read off the shipped
+  workflow rather than the one it ran. The drift detector's marker sweep only ever tidied sessions
+  that came back, so the retention promise in its own comment was not kept. And the pre-commit
+  timeout fallback — the branch that runs on a stock Mac — was SIGTERM-only and returned the child's
+  own status, so a process that traps TERM could exit 0 late and be reported as a clean lint check.
+
+### v2.8.8
+
+- **COREDEV-2780 (M5a) — `trunk check` now gates commits locally too.**
+  `.githooks/pre-commit` runs `trunk check --index --no-fix --filter=-markdown-link-check`: the staged
+  diff only (the commit is made from the index), never `--all` (the 9027-issue backlog would block
+  every commit), and never autofixing. Bounded by a **180-second macOS-portable timeout** — stock
+  macOS ships neither `timeout` nor `gtimeout`, so there is a watchdog fallback — with the constant
+  derived from a recorded measurement rather than asserted. A finding blocks; a **timeout does not**.
+
+### v2.8.7
+
+- **COREDEV-2801 (M6) — the plugin-version drift detector, on both surfaces.**
+  `scripts/detect-plugin-version-drift.sh` warns when the version a session is _running_ lags what
+  `origin/main` serves — the defect as reported, where a version no source served stayed reachable.
+  It lives in the checkout rather than the plugin, so a session bound to a stale install can still run
+  it. `expected` is read from **`origin/main`**, never the worktree: the version-bump rule keeps the
+  tree one bump ahead for a whole feature branch, so reading it would warn on every developer machine
+  permanently. Wired to the project `SessionStart` hook (matchers `startup|resume`, `timeout: 5`) and
+  to `.githooks/pre-commit`. Silent on seven of Table A's eight rows, and it never blocks.
+
+### v2.8.6
+
+- **COREDEV-2780 (M2 + M2b + M2c) — `trunk check` is wired, diff-scoped, as an advisory job.**
+  `.github/workflows/trunk-check.yml` (the future required context, `continue-on-error` at job scope
+  until M3), `.github/workflows/trunk-check-push.yml` (the non-required push canary, deliberately a
+  different context name so a push run can never satisfy a PR's required check), and
+  `.github/workflows/trunk-parity-harness.yml` (the non-required sensor for cells 1 and 5). All three
+  share **one** range resolver, `scripts/ci/resolve-trunk-range.sh`, whose logic is transcribed from
+  the pinned action's own `pull_request.sh` / `push.sh` and which **fails closed** on the zero-`before`
+  push that would otherwise send the action down its `--all` branch.
+  `trunk check --all` is never run: it reports 9027 lint findings on a clean tree, and a gate that is
+  red by default is a gate people learn to ignore.
+
+### v2.8.5
+
+- **COREDEV-2780 (M0a) — the trunk-check contract is a STRUCTURED REGISTRY.**
+  `docs/planning/COREDEV-2780-contract.yaml` carries one entry per atomic obligation with a stable id,
+  a typed target kind (`yaml`, `repo_fixture`, `content_digest`, `remote_relation`) and first-class
+  mutation **cases** — 26 obligations across C0–C9, C6a and the canary, expanding to **105 generated
+  mutants**. §1's clause prose is rendered from it, so there is no prose to parse and nothing to drift
+  from. `COREDEV-2780-survivors.yaml` carries the **14 mutants that have survived** a formulation of
+  this gate, maintained independently so that a registry edit silently dropping an obligation reds
+  something the rendering lint cannot see.
+
+### v2.8.4
+
+- **COREDEV-2798 — the transcript inventory is CONTENT-ADDRESSED in prepend-only files.**
+  `CHANGELOG.md` and `README.md` are prepended to on every release, so every physical line below the
+  insertion point shifts and the COREDEV-2619 inventory's line pins went stale on a schedule — the
+  drift proof reddened for a release rather than for a defect. Identity for sites in those two files
+  is now the payload: a quote-keep line must hash to its frozen `sourceSha256` **exactly once**, and a
+  rewrite's destination block must occur **exactly once**, with `line`, `destination.line` and both
+  anchor lines demoted to re-derived hints. Every other file keeps its line assertion. Exactly-one,
+  never at-least-one — a duplicate leaves the site ambiguous and now reds with its own diagnostic.
+
+### v2.8.3
+
+- **Review harness: Python bytecode is no longer mistaken for reviewer tampering (`COREDEV-2650`).**
+  The isolated review wrappers fingerprint their disposable checkout afterwards and void the round if
+  it changed — the COREDEV-2607 defence against a reviewer that once _implemented_ the plan it was
+  sent to review. But a reviewer that imported a repo module to **reproduce a measured claim** made
+  CPython write `__pycache__/*.pyc` beside the source, and that bytecode read as tampering. It threw
+  away three valid rounds on `COREDEV-2711` — kimi at r1, then both agy and kimi at r8, leaving that
+  round resting on a single arm.
+
+  `PYTHONDONTWRITEBYTECODE=1` is now exported in the reviewed process, and at the top of each wrapper
+  so the harness's own Python helpers stop writing bytecode into the live checkout too. The
+  fingerprint is deliberately **unchanged**: excluding `__pycache__` would be a blacklist in exactly
+  the directory a real mutation would hide in.
+
+- **Trunk lint configuration — 20 linters across security, correctness, docs and formatting (`COREDEV-2771`).**
+  Configuration only. Wiring it into CI and deciding required-vs-advisory is `COREDEV-2780`;
+  remediating the findings it exposes is `COREDEV-2787`.
+
+- **`COREDEV-2711` §2 design gated (documentation only — the guard is NOT implemented).** The
+  agent-spawn-guard plan, its §3a measurement and the fixture payloads are committed under
+  `docs/planning/`. The measurement settled the fact the whole design rested on: a plugin sub-agent
+  reports a **scoped** `agent_type` to `PreToolUse`. The captured evidence also shows the runtime
+  permitting `swift-reviewer` to spawn a type absent from its own declared `Agent(...)` roster —
+  which is what §4 exists to stop, and has not been built yet.
+
+### v2.8.2
+
+- **Seven shipped writers leaked the operator's filesystem path to stderr (`COREDEV-2691`).**
+  `cmd > "$path" 2>/dev/null` applies its redirections left to right, so the target is opened
+  **before** stderr is suppressed — and when the open fails, bash prints the fully expanded path
+  to the real stderr. On a hook that runs in someone else's checkout that path is their home
+  directory. Fixed in `lib/marker.sh` (the hook write path), `stop-quality-marker-gate.sh`,
+  `ci-load-check.sh`, `test-runner.sh`, `test-hooks.sh` and both isolated review harnesses, by
+  moving the suppression ahead of the open.
+
+  Four of the seven were **input** redirects — `wc -c < "$OUT" 2>/dev/null` inside a command
+  substitution — which the previous release's sweep could not see at all: it matched output
+  redirects only, and skipped quoted regions wholesale. `log.sh` had stated the rule in prose
+  since PR #63 while these seven violated it.
+
+- **The sweep that enforces that rule now derives its own scope.** It was a regex over a
+  hand-written five-file list keyed on temp-ish names; it is a shell-aware scanner over every
+  tracked `*.sh` in the tree plus `.githooks/pre-commit`. It understands quoting, command and
+  legacy substitutions, `[[ … ]]` comparisons, comments, here-strings, ANSI-C quoting, fd
+  duplication and nine `/dev/null` suppression spellings — with that allowlist checked by
+  **executing its criterion** against real bash rather than by curation, which is what caught two
+  operators that suppress on Linux but not on macOS bash 3.2. Its remaining blind spots are
+  measured and ticketed (`COREDEV-2760`) rather than described as complete.
+
+- **Two new guard layers.** One pins that no hook writes anything under an unresolved plugin base
+  (the `D′` sentinel), driving the shipped hooks and verifying every exemption instead of trusting
+  it. The other pins that no test class, test function or `load_tests` hook is defined after a
+  suite's entrypoint, where direct execution silently drops it and still prints `OK`.
+
+### v2.8.1
+
+- **`swift-reviewer` gets its review panel back (`COREDEV-2703`)** — on v2.8.0 the orchestrator
+  received only `Read`, `Bash` and the synthesizer MCP tool: `Grep`, `Glob` and `Agent` were all
+  declared in its `tools:` line and all silently absent, so it could not spawn any of the five
+  specialists. Every round came back `UNATTRIBUTED` for all five — which fails closed to NEEDS
+  DISCUSSION, never to "clean", so no unreviewed verdict was ever published. The trigger was the
+  `Agent(<type>)` specifier syntax used inside `disallowedTools`; a sibling reviewer whose deny-list
+  uses bare names keeps every tool it declares. The spawn set is now an **allowlist** —
+  `Agent(<the five reviewers + jira-manager>)` in `tools:` — with `disallowedTools` reduced to
+  `Write, Edit, NotebookEdit`. PR #63's P1 (a prompt-injected finding steering the reviewer into a
+  file-writing agent while it reads untrusted PR content) is **not closed** by this — measured on
+  2.8.1, the runtime discards the type list for a sub-agent. What the scoped grant buys is a CI
+  check: `validate-plugin-assembly.py` fails if a writer is added, keeping the declaration honest.
+
+### v2.8.0
+
+- **The plugin-state base store (`COREDEV-2617`)** — a shell that never receives `CLAUDE_PLUGIN_DATA`
+  (a git hook, an ordinary terminal, a zsh Bash tool) now discovers the plugin-data base from a store
+  each publisher records under `~/.claude/unleashed-mail/bases/`. Entry names are an injective
+  encoding of the base value, so different bases never collide and a disagreement surfaces as a
+  visible `conflict` rather than a silent second state directory. All five resolver copies
+  (`paths.sh`, `marker.sh`, `log.sh`, `context.sh`, `agent-env-bridge.sh`) consult it; the bridge
+  reads and never publishes. Darwin arms only — the Linux arms wait on the CI primitive probe.
+  Proved by **a mutant suite that RUNS the plan's obligation table**: 137 rows executed as
+  spec-vs-mutant tests in both bash 3.2.57 and zsh 5.9, on top of the 32 behavioural tests that
+  demonstrate the capability end to end. Also fixed en route: a pre-existing zsh path-derivation
+  defect in `context.sh` reachable from the swift-reviewer fence.
+
+### v2.7.1
+
+- **Seven review passes over the 2.7.0 permission and transcript surface (`COREDEV-2642`)** — 40+ findings
+  remediated, each with a proof that fails when the fix is reverted. The ones that changed observable
+  behaviour: a prompt naming a path that merely _shares the checkout's prefix_ (`…/Unleashed Mail` vs
+  `…/Unleashed MailTests/…`) was silently rewritten to a path that does not exist, so the reviewer read
+  nothing while the round still validated; a plan over 64 KiB could never be persisted, because the
+  bound-snapshot digest was taken through a cap meant for small sidecars; and `pr-review` could approve
+  a PR having inspected **nothing**, because a stale local base branch made the changeset empty.
+  Reviewer identity is now allocator-attested rather than parsed from the filename, the plan and prompt
+  bindings are mandatory rather than skippable, and gate state is written and read through a
+  descriptor walk so a swapped path component cannot redirect it.
+  **Expect new refusals, not failures:** a stale/advanced base branch, a transcript missing
+  `.planbytes`/`.promptsha256`, or a symlinked path component now stop a round instead of quietly
+  degrading it.
+
+### v2.7.0
+
+- **Model-invocable skill grants narrowed from wildcards to exact entrypoints (`COREDEV-2642`)** — remediation of four independent reviews over the permission surface v2.6.7 shipped. `Bash(python3 …/scripts/*)`, `Bash(codex *)`, `Bash(agy *)` and `Bash(git *)` are gone from every model-invocable skill, replaced by exact wrapper scripts (`audit-codex.sh`, `preflight-agy.sh`, `changeset.sh`, plus five extracted capture/persistence helpers); bare `Write`/`Agent` are now `Write(docs/planning/**)` and enumerated `Agent(<type>)`. `validate-plugin-assembly.py` now rejects broad write/VCS/agent grants on any model-reachable skill — it found 17 further instances across 8 knowledge skills. Several fail-open gaps in the transcript-freshness and cleanup gates were also closed.
+  **Breaking for direct callers:** `pty-capture.py` now requires an out-path (no more shared `/tmp/pty-out.txt` default); both review recipes require a per-round prompt file (`.codex-prompt-${TICKET}r${ROUND}.md` / `.agy-prompt-${TICKET}r${ROUND}.md`) instead of a shared `.codex-prompt.md` / `.agy-prompt.md`; the gemini arm's default model is now `gemini-3.6-flash-high`. See the CHANGELOG for the full breakdown, including which of the underlying tickets did and did not clear the mandatory plan-review gate.
+
+### v2.6.7
+
+- **Per-run transcript paths and freshness (`COREDEV-2619`)** — reviewer captures are atomically allocated, threaded unchanged through review and synthesis, and bound to per-capture launch records so stale output cannot satisfy a later run; a one-shot release tool cleans only the closed 39-file leak manifest and its nine empty parents.
+
+### v2.6.6
+
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`) — a **scope narrowing, not a relaxation.** §13's scope is now a parseable four-column table binding each surface to its producer and to a repository **anchor**; the five capture-roster reviewers are `out` because their output is machine-consumed and governed by their own contracts, which are unchanged and still mandatory.
+  The payload-region invariant moves verbatim to **§5**, and the blocked-handoff prefix gets its own **§14**.
+
+### v2.6.5
+
+- **Plugin state no longer splits across two directories** (`COREDEV-2617`) — `CLAUDE_PLUGIN_DATA` is
+  exported to hooks and MCP subprocesses but **not** to an ordinary shell, so anything written outside a
+  hook landed in a _second_ store (`~/.claude/unleashed-mail`) that the hooks' store never saw. An
+  unresolved base now **persists nothing**: path primitives return a poisoned, non-root sentinel
+  (`/dev/null/unresolved-plugin-base` — every path beneath a character device is `ENOTDIR`, so an
+  unguarded caller fails harmlessly instead of composing `/logs`), writers become no-ops, and one
+  diagnostic per process says so. **State written before this fix may still live in the second
+  directory** — see the CHANGELOG for how to find it.
+
 ### v2.6.4
 
-- **Reviewer isolation** (`COREDEV-2607`) — a plan review once *implemented* the plan it was reviewing,
-  modifying 6 shipped scripts. [`scripts/review/isolated-agy-review.sh`](scripts/review/isolated-agy-review.sh)
+- **Reviewer isolation** (`COREDEV-2607`) — a plan review once _implemented_ the plan it was reviewing,
+  modifying 6 shipped scripts. `scripts/review/isolated-agy-review.sh` (retired in v2.8.36; now `isolated-gemini-review.sh`)
   now runs the `agy` reviewer against a disposable detached checkout and **fails the round** if the real
   working tree changed. `agy` has no read-only flag — four candidates were tested and all four wrote
   files — so the fix isolates rather than constrains.
 - **Secret redaction closes the Unicode fold residual** (`COREDEV-2609`) — U+0130 / U+0131 / U+017F /
-  U+212A now ride in the secret *payload* class in both redactors. The *anchor* is deliberately left
+  U+212A now ride in the secret _payload_ class in both redactors. The _anchor_ is deliberately left
   narrow: widening an unanchored prefix is what corrupted prose before.
 
 ### v2.6.3
@@ -46,7 +556,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
   `~500ms`, `~40/60 split` and Swift's `~Copyable` all survive intact — and **five leak classes are
   closed**: Unicode whitespace in the api-key/bearer slots, newline-spanning secrets (`sed` is
   line-oriented and the fold ran after the rules), the compound form where `/Users/…` over-consumed
-  and ate the `api` anchor, a *routable* address preserved entirely by the email exemption, and a real
+  and ate the `api` anchor, a _routable_ address preserved entirely by the email exemption, and a real
   username leaked by the tilde exemption. The `sk-`/`pk_` boundary is now asymmetric so
   `OPENAI_KEY_sk-proj-…` redacts while `orders_pk_customer_id_idx` survives. Equivalence between the
   shell and Python redactors is enforced by a new CI job on **both** `ubuntu-latest` and
@@ -66,7 +576,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 - **Opus 5 alignment (COREDEV-2583).** Requires **Claude Code ≥ 2.1.219** (Opus 5's floor); CI now pins
   2.1.220.
 - **`effort: xhigh` is pinned on every agent and every skill** (42 assets) and enforced by CI. Previously
-  *nothing* set `effort`, so every asset ran at whatever the session carried — including `low`. Note the
+  _nothing_ set `effort`, so every asset ran at whatever the session carried — including `low`. Note the
   pin is an override in both directions, and `CLAUDE_CODE_EFFORT_LEVEL` still outranks it.
 - **Model tiering is now three tiers, set by consequence rather than cost.** `security-reviewer`,
   `prompt-review` and `concurrency-reviewer` move to `opus`; the orchestrator and implementation agents
@@ -116,7 +626,7 @@ regression test that fails when reverted.
 The Plan Review Gate hardening release — the gate is now usable end-to-end and cannot be talked out of
 its own guarantees.
 
-- **Plan Review Gate, usable and hardened (COREDEV-2492).** `/implement <feature|path>` resolves to *the*
+- **Plan Review Gate, usable and hardened (COREDEV-2492).** `/implement <feature|path>` resolves to _the_
   tracked plan (exact-stem match; a bare substring must be named), refuses any plan outside
   `docs/planning/` (realpath containment closes the `" "`/`.`/`..`/symlink/symlinked-root/same-basename
   bypasses that let a stray argument or an out-of-tree file satisfy the gate), and verifies a
@@ -157,15 +667,15 @@ its own guarantees.
 ### v2.4.0
 
 - **`prompt-review` — a 5th specialist reviewer (GARI prompt / call-site safety).** A read-only static reviewer of AI prompts and provider call sites (jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress of untrusted email/web content, inline prompts outside `PromptRegistry`, unscoped tools, PII-in-logs), fully wired into the `swift-reviewer` panel and the deterministic `review-synthesizer` pipeline (new **`ai-safety`** category family + `prompt-review` ownership). **Agent count: 21** (was 20). (COREDEV-2329 / COREDEV-2330)
-- **Cross-family AI-safety ↔ security consolidation** — overlapping `prompt-review` and security/correctness findings on the *same lines* now merge into one `prompt-review`-owned row (category-level `_OWNERSHIP_MERGE_PAIRS`), never dropping a fix and never hiding a co-located security blocker. (COREDEV-2332)
-- **Reviewer-capture round binding** — a `SubagentStart` producer hook freezes each reviewer's round at spawn (keyed by `agent_id`) so captures land in their *originating* cycle under interleaved timing; observe-only and fail-open. (COREDEV-2326)
+- **Cross-family AI-safety ↔ security consolidation** — overlapping `prompt-review` and security/correctness findings on the _same lines_ now merge into one `prompt-review`-owned row (category-level `_OWNERSHIP_MERGE_PAIRS`), never dropping a fix and never hiding a co-located security blocker. (COREDEV-2332)
+- **Reviewer-capture round binding** — a `SubagentStart` producer hook freezes each reviewer's round at spawn (keyed by `agent_id`) so captures land in their _originating_ cycle under interleaved timing; observe-only and fail-open. (COREDEV-2326)
 - **Reviewer Output-Contract status persisted through capture** — each reviewer's `COMPLETE | BLOCKED | PARTIAL` status is written to a sibling `<agent>.status` JSON, so a captured `BLOCKED` reviewer can't read as a clean `[]` pass. (COREDEV-2328)
 - **`ai-engineer` doc-drift fix** — removed the non-existent `HTTPBasedAIProvider` / `AIToolDefinition` symbols from the agent docs, `CLAUDE.md`, and contracts; examples now use the real `BaseAIProvider` + `AIProviderProtocol` / `AITool` + `ToolHandlerProtocol` model, with `HTTPBasedAIProvider` relabelled **PLANNED** (COREDEV-1837). (COREDEV-2331)
 
 ### v2.3.1
 
-- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts (gemini → `/tmp/agy-out.txt`, codex → `/tmp/codex-out.txt`) and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Read-only and gates nothing automatically; a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a.
-- **Reviewer Output-Contract status enum** — the four specialist reviewers now end with a `## Output Contract` status (`COMPLETE | BLOCKED | PARTIAL`) that is **orthogonal** to their findings, so a reviewer that *couldn't run* returns `BLOCKED` + `[]` instead of an empty `[]` that reads as a clean pass. `swift-reviewer` Step 5 reads status **first**: `BLOCKED` → NEEDS DISCUSSION (the explicit form of a did-not-run uncertainty — **not** a `verification` blocker); `PARTIAL` → keep completed-scope findings + a non-gating `verification` warning naming the un-reviewed files. No synthesizer (Python) change.
+- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each transcript path is carried as one opaque `--reviewer "<name>=<STATUS>:<path>"` argument (**at this version the two paths were fixed; per-run allocated paths arrived in v2.6.7** — this historical entry had been rewritten to describe the later behaviour, so the file contradicted itself about when per-run paths existed); a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a.
+- **Reviewer Output-Contract status enum** — the four specialist reviewers now end with a `## Output Contract` status (`COMPLETE | BLOCKED | PARTIAL`) that is **orthogonal** to their findings, so a reviewer that _couldn't run_ returns `BLOCKED` + `[]` instead of an empty `[]` that reads as a clean pass. `swift-reviewer` Step 5 reads status **first**: `BLOCKED` → NEEDS DISCUSSION (the explicit form of a did-not-run uncertainty — **not** a `verification` blocker); `PARTIAL` → keep completed-scope findings + a non-gating `verification` warning naming the un-reviewed files. No synthesizer (Python) change.
 - **Decision-support option tables in `/unleashed-mail:brainstorm`** — a new design-phase **Step 4b** presents 2–4 options for a genuine architectural fork in a comparison table (with an unleashed-specific **Parity-Impact** column, S/M/L effort, a `**(Recommended)**` row, no emoji), then calls `AskUserQuestion` to record the chosen fork before the plan document is written. `AskUserQuestion` is added to the command's `allowed-tools` (a command-interface change).
 - **Skill count: 18** (was 17) — adds `review-synthesis`.
 
@@ -186,7 +696,7 @@ its own guarantees.
 ### v2.2.3
 
 - **SwiftLint "fix-when-touched" rule disambiguated** — the rule "fix violations in files you modify" (`CLAUDE.md`, `code-simplifier` Pass 4) read as a conflict with `jira-manager`'s "ticket out-of-scope violations" guidance. "Out-of-scope" now explicitly means **files the change does not modify**; any violation in a modified file is fixed as part of the change and never deferred to a ticket — consistent with the `swiftlint --strict` merge gate.
-- **Legacy-regex migration exception** — the one carve-out from fix-when-touched: legacy `NSRegularExpression` ("old regex") is **not** migrated inline. It's owned by the dedicated Swift `Regex`/`RegexBuilder` migration (`.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If a lint rule flags a site in a touched file, it's suppressed with `// swiftlint:disable:next no_legacy_nsregex - <ticket>` (the ` - ` rationale delimiter keeps `--strict` green; a trailing `//` does not) and tracked under the migration epic. Documented in `CLAUDE.md`, `code-simplifier`, and `jira-manager`.
+- **Legacy-regex migration exception** — the one carve-out from fix-when-touched: legacy `NSRegularExpression` ("old regex") is **not** migrated inline. It's owned by the dedicated Swift `Regex`/`RegexBuilder` migration (`.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If a lint rule flags a site in a touched file, it's suppressed with `// swiftlint:disable:next no_legacy_nsregex - <ticket>` (the `-` rationale delimiter keeps `--strict` green; a trailing `//` does not) and tracked under the migration epic. Documented in `CLAUDE.md`, `code-simplifier`, and `jira-manager`.
 - **`swiftlint-config` skill gains `no_legacy_nsregex`** — a sample custom rule flagging `NSRegularExpression`, with guidance to introduce it alongside a SwiftLint **baseline** (`swiftlint lint --strict --baseline swiftlint-baseline.json`; baselines are native to SwiftLint ≥ 0.55) so the existing backlog (hundreds of sites) doesn't break the strict gate while the migration burns it down.
 
 ### v2.2.2
@@ -233,6 +743,19 @@ claude plugin install unleashed-mail
 # 3. Restart Claude Code so the new agents/skills/commands load
 ```
 
+**Consumer-repo setup (one-time, per repo using the review gate):** add the per-round reviewer
+prompt files to the repo's `.gitignore` — the review harnesses fingerprint the live checkout and
+**void a round on any working-tree change, a new untracked file included**, so an un-ignored prompt
+file written while the other arm's ~28-minute round is still running voids that round at the finish
+line (2026-08-17 audit, AF-5):
+
+```gitignore
+.agy-*.md
+.codex-*.md
+.kimi-*.md
+.gate-*-prompt.md
+```
+
 To pull a newer version after upstream changes:
 
 ```bash
@@ -241,10 +764,20 @@ claude plugin update unleashed-mail
 # Restart Claude Code
 ```
 
-> **Migrating from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was
-> renamed to `UnleashedServices/unleashed-mail-plugin`, and Claude Code's plugin-rename migration
-> does not cover marketplace-name changes — an install keyed as
-> `unleashed-mail@npranson-unleashed-mail-plugin` will stop resolving. Re-point it once:
+> **Installed from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was renamed
+> to `UnleashedServices/unleashed-mail-plugin`, but an install keyed as
+> `unleashed-mail@npranson-unleashed-mail-plugin` keeps resolving and updating. This was measured in
+> COREDEV-2885 (witness W2): after the rename the install stayed listed and enabled, and it then updated in
+> place, under the old key, across the plugin-source change. Update it under that key:
+>
+> ```bash
+> claude plugin marketplace update npranson-unleashed-mail-plugin
+> claude plugin update unleashed-mail@npranson-unleashed-mail-plugin
+> # Restart Claude Code
+> ```
+>
+> Re-pointing is optional, and only renames the key. Removing a marketplace uninstalls its plugins, so
+> reinstall afterwards:
 >
 > ```bash
 > claude plugin marketplace remove npranson-unleashed-mail-plugin
@@ -252,6 +785,33 @@ claude plugin update unleashed-mail
 > claude plugin install unleashed-mail   # reinstall under the new marketplace
 > # Restart Claude Code
 > ```
+
+### Release channels
+
+Work lands on `alpha` and reaches `main` by promotion. The ref you add the marketplace at decides which
+one you install, because the plugin's marketplace entry uses the relative source `"./"`: it installs the
+marketplace's own tree.
+
+| Channel          | Add the marketplace as                          | You get                               |
+| ---------------- | ----------------------------------------------- | ------------------------------------- |
+| stable (default) | `UnleashedServices/unleashed-mail-plugin`       | `main`: promoted, released work       |
+| alpha            | `UnleashedServices/unleashed-mail-plugin#alpha` | `alpha`: merged work not yet promoted |
+
+Both channels share one marketplace name, so a machine follows one channel at a time. To switch, remove
+the marketplace (which uninstalls the plugin), add it at the other ref, and reinstall. Remove it under
+the key it is REGISTERED as, which `claude plugin marketplace list` shows. That is
+`unleashedservices-unleashed-mail-plugin`, or `npranson-unleashed-mail-plugin` for an install added
+before the rename:
+
+```bash
+claude plugin marketplace remove unleashedservices-unleashed-mail-plugin   # or npranson-unleashed-mail-plugin
+claude plugin marketplace add UnleashedServices/unleashed-mail-plugin#alpha   # drop "#alpha" to go back
+claude plugin install unleashed-mail
+# Restart Claude Code
+```
+
+Updates on either channel arrive with each version bump, through the two update commands above. To try
+a single branch or checkout without changing channel, use `--plugin-dir`, below.
 
 For local development against an unpushed clone:
 
@@ -307,78 +867,78 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 
 ### Review Agents (run in parallel via orchestrator)
 
-| Agent | Specialization |
-|---|---|
-| `swift-reviewer` | **Orchestrator** — spawns all 5 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict |
-| `security-reviewer` | Credential exposure, OAuth/MSAL flaws, WKWebView injection (HTMLSanitizer + HTMLRenderPipeline), CI pipeline, entitlements, SQLCipher |
-| `concurrency-reviewer` | Data races, actor isolation, async/await, GRDB threading, COREDEV-1578 Sendable matrix, deprecated APIs (Swift 6 enforced) |
-| `ux-perf-reviewer` | Main-thread responsiveness, SwiftUI rendering, query perf, image budget tiers, perceived speed, error UX |
-| `accessibility-auditor` | VoiceOver, keyboard nav, Dynamic Type, color contrast, focus management, Curator design system, dual-impl a11y parity |
-| `prompt-review` | AI prompt/call-site safety (static, read-only): jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress, inline prompts outside PromptRegistry, unscoped tools, PII-in-logs |
+| Agent                   | Specialization                                                                                                                                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `swift-reviewer`        | **Orchestrator** — spawns all 5 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict            |
+| `security-reviewer`     | Credential exposure, OAuth/MSAL flaws, WKWebView injection (HTMLSanitizer + HTMLRenderPipeline), CI pipeline, entitlements, SQLCipher                                                                             |
+| `concurrency-reviewer`  | Data races, actor isolation, async/await, GRDB threading, COREDEV-1578 Sendable matrix, deprecated APIs (Swift 6 enforced)                                                                                        |
+| `ux-perf-reviewer`      | Main-thread responsiveness, SwiftUI rendering, query perf, image budget tiers, perceived speed, error UX                                                                                                          |
+| `accessibility-auditor` | VoiceOver, keyboard nav, Dynamic Type, color contrast, focus management, Curator design system, dual-impl a11y parity                                                                                             |
+| `prompt-review`         | AI prompt/call-site safety (static, read-only): jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress, inline prompts outside PromptRegistry, unscoped tools, PII-in-logs |
 
 ### Coding & Implementation Agents
 
-| Agent | Domain |
-|---|---|
-| `db-engineer` | GRDB 7+ schema (snake_case columns), SQLCipher, migrations (CRITICAL/DEFERRABLE), Record types, async observation, append-only |
-| `logic-engineer` | Service protocols, Gmail + Graph impls via `AccountScopedServiceProvider`, ViewModels, AI pipeline routing, sync, mocks |
-| `ui-engineer` | SwiftUI views (macOS 15+), AppKit bridging, WKWebView composer, Curator design tokens, `@State`-resolved services, a11y, dual-impl updates |
-| `ai-engineer` | GARI AI pipeline — cloud providers (`BaseAIProvider` + `AIProviderProtocol`) + Apple Intelligence, ToolRegistry, PromptRegistry, inline safety (PIIRedactor + LLMInputSanitizer), AIAgentPipeline (unified `HTTPBasedAIProvider` base PLANNED, COREDEV-1837) |
-| `tester` | Test strategy, MockServices.swift extension, `KeychainManager.resetInMemoryStore()` discipline, account-isolation invariants |
-| `code-simplifier` | 16-pass conservative simplification with deletion guardrails (selectors, IBActions, reflection-loaded code preserved) |
+| Agent             | Domain                                                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `db-engineer`     | GRDB 7+ schema (snake_case columns), SQLCipher, migrations (CRITICAL/DEFERRABLE), Record types, async observation, append-only                                                                                                                               |
+| `logic-engineer`  | Service protocols, Gmail + Graph impls via `AccountScopedServiceProvider`, ViewModels, AI pipeline routing, sync, mocks                                                                                                                                      |
+| `ui-engineer`     | SwiftUI views (macOS 15+), AppKit bridging, WKWebView composer, Curator design tokens, `@State`-resolved services, a11y, dual-impl updates                                                                                                                   |
+| `ai-engineer`     | GARI AI pipeline — cloud providers (`BaseAIProvider` + `AIProviderProtocol`) + Apple Intelligence, ToolRegistry, PromptRegistry, inline safety (PIIRedactor + LLMInputSanitizer), AIAgentPipeline (unified `HTTPBasedAIProvider` base PLANNED, COREDEV-1837) |
+| `tester`          | Test strategy, MockServices.swift extension, `KeychainManager.resetInMemoryStore()` discipline, account-isolation invariants                                                                                                                                 |
+| `code-simplifier` | 16-pass conservative simplification with deletion guardrails (selectors, IBActions, reflection-loaded code preserved)                                                                                                                                        |
 
 ### Stakeholder Persona Agents (used during brainstorming)
 
-| Agent | Perspective |
-|---|---|
-| `smb-entrepreneur` | SMB founder (15-person firm, 150 emails/day) — evaluates speed, workflow, cost, keyboard-first UX |
+| Agent                    | Perspective                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `smb-entrepreneur`       | SMB founder (15-person firm, 150 emails/day) — evaluates speed, workflow, cost, keyboard-first UX |
 | `enterprise-stakeholder` | IT director (500-5000 person org) — evaluates compliance, admin control, scale, SSO/MDM, security |
 
 ### Planning, Tracking & Diagnostic Agents
 
-| Agent | Purpose |
-|---|---|
-| `modern-standards-planner` | Researches current best practices via Context7 + web search; cites `.claude/rules/` as standards source; gates plans on dual review |
-| `jira-manager` | Ticket lifecycle — creation, Epic linking, milestone updates against `https://unleashedservices.atlassian.net/` (project key `COREDEV`) |
-| `docs-engineer` | README, API docs (DocC via xcodebuild), user guides, planning docs, architecture, roadmap |
-| `xcode-build-fixer` | Diagnoses and proposes fixes for Xcode build / package resolution failures (Ask-before for dependency changes) |
-| `graph-api-debugger` | Microsoft Graph / MSAL auth troubleshooting (Ask-before for auth/entitlements edits) |
-| `ci-engineer` | GitHub Actions workflows (SHA-pinned), Xcode Cloud, build automation, coordination with the `bump-build-number.sh` Run Script Build Phase + `post-archive-commit-bump.sh` Post-Action |
-| `release-manager` | `MAJOR.MINORRELEASE.YYMMBB` versioning, App Store / TestFlight submission, defers BB-byte to automation |
+| Agent                      | Purpose                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `modern-standards-planner` | Researches current best practices via Context7 + web search; cites `.claude/rules/` as standards source; gates plans on dual review                                                   |
+| `jira-manager`             | Ticket lifecycle — creation, Epic linking, milestone updates against `https://unleashedservices.atlassian.net/` (project key `COREDEV`)                                               |
+| `docs-engineer`            | README, API docs (DocC via xcodebuild), user guides, planning docs, architecture, roadmap                                                                                             |
+| `xcode-build-fixer`        | Diagnoses and proposes fixes for Xcode build / package resolution failures (Ask-before for dependency changes)                                                                        |
+| `graph-api-debugger`       | Microsoft Graph / MSAL auth troubleshooting (Ask-before for auth/entitlements edits)                                                                                                  |
+| `ci-engineer`              | GitHub Actions workflows (SHA-pinned), Xcode Cloud, build automation, coordination with the `bump-build-number.sh` Run Script Build Phase + `post-archive-commit-bump.sh` Post-Action |
+| `release-manager`          | `MAJOR.MINORRELEASE.YYMMBB` versioning, App Store / TestFlight submission, defers BB-byte to automation                                                                               |
 
 ## Skills (18) — Auto-activate based on context
 
-| Skill | Triggers When |
-|---|---|
-| `swift-tdd` | Implementing features, writing tests, refactoring (uses `xcodebuild test`) |
-| `swiftui-mvvm` | Building views, view models, navigation, state management |
-| `grdb-patterns` | Database models, migrations, queries, observation |
-| `macos-debugging` | Crashes, memory leaks, performance issues, build failures |
-| `webview-composer` | Email composition UI, contenteditable, JS bridge code |
-| `keychain-security` | OAuth tokens, credential storage, encryption |
-| `gmail-api-integration` | Gmail email fetching, sending, labels, Pub/Sub, OAuth flows |
-| `microsoft-graph-integration` | Outlook/M365 email, MSAL auth (added via Xcode UI), Graph webhooks, delta queries |
-| `provider-parity` | Any code touching provider-specific implementations or protocols |
-| `agent-orchestration` | Coordinating multi-agent workflows, determining parallel execution strategy |
-| `error-handling` | Error patterns, do-catch, Result types, error propagation |
-| `accessibility-patterns` | Accessibility implementation patterns for macOS/SwiftUI |
-| `swiftlint-config` | SwiftLint rule configuration, violation remediation |
-| `spm-management` | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit |
-| `gemini-review` | Plan/debug review via Antigravity CLI (`agy`); routes through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py) PTY wrapper for guaranteed non-TTY output capture |
-| `codex-review` | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
-| `create-feature-plan` | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template |
-| `review-synthesis` | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation |
+| Skill                         | Triggers When                                                                                                                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `swift-tdd`                   | Implementing features, writing tests, refactoring (uses `xcodebuild test`)                                                                                                                                             |
+| `swiftui-mvvm`                | Building views, view models, navigation, state management                                                                                                                                                              |
+| `grdb-patterns`               | Database models, migrations, queries, observation                                                                                                                                                                      |
+| `macos-debugging`             | Crashes, memory leaks, performance issues, build failures                                                                                                                                                              |
+| `webview-composer`            | Email composition UI, contenteditable, JS bridge code                                                                                                                                                                  |
+| `keychain-security`           | OAuth tokens, credential storage, encryption                                                                                                                                                                           |
+| `gmail-api-integration`       | Gmail email fetching, sending, labels, Pub/Sub, OAuth flows                                                                                                                                                            |
+| `microsoft-graph-integration` | Outlook/M365 email, MSAL auth (added via Xcode UI), Graph webhooks, delta queries                                                                                                                                      |
+| `provider-parity`             | Any code touching provider-specific implementations or protocols                                                                                                                                                       |
+| `agent-orchestration`         | Coordinating multi-agent workflows, determining parallel execution strategy                                                                                                                                            |
+| `error-handling`              | Error patterns, do-catch, Result types, error propagation                                                                                                                                                              |
+| `accessibility-patterns`      | Accessibility implementation patterns for macOS/SwiftUI                                                                                                                                                                |
+| `swiftlint-config`            | SwiftLint rule configuration, violation remediation                                                                                                                                                                    |
+| `spm-management`              | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit                                                                                                                                 |
+| `gemini-review`               | Plan/debug review via the `gemini` CLI, run isolated (disposable checkout, deny policy, model asserted); captured through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py)                                |
+| `codex-review`                | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
+| `create-feature-plan`         | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template                                                                                                                                   |
+| `review-synthesis`            | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation                                          |
 
 ## Workflow skills (3)
 
-These three orchestration workflows ship as `disable-model-invocation` **skills** (custom commands
-have merged into skills) — you invoke them exactly as before, and Claude won't auto-trigger them:
+These three orchestration workflows ship as **skills** (custom commands have merged into skills) — you
+invoke them exactly as before, and Claude can now also trigger them itself when the task calls for one:
 
-| Skill | Usage |
-|---|---|
-| `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket |
-| `/unleashed-mail:implement` | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates |
-| `/unleashed-mail:pr-review` | All 5 reviewers (incl. prompt-review) + parity in parallel → unified verdict → Jira logged |
+| Skill                        | Usage                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------ |
+| `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket                    |
+| `/unleashed-mail:implement`  | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates                |
+| `/unleashed-mail:pr-review`  | All 5 reviewers (incl. prompt-review) + parity in parallel → unified verdict → Jira logged |
 
 ## Parallel Execution
 
@@ -394,14 +954,14 @@ Agents are designed for **flexible parallel execution** in any combination. The 
 The plugin enforces these non-negotiable processes:
 
 1. **Planning document** — `docs/planning/FEATURE_NAME_PLAN.md` for every feature (no exceptions)
-2. **Plan review gate** — Every plan or debug session must be reviewed by **both** `/gemini-review` (Antigravity CLI `agy`) and `/codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Bare workspace names are canonical; the plugin also bundles them as `/unleashed-mail:gemini-review` / `/unleashed-mail:codex-review`.)
+2. **Plan review gate** — Every plan must be reviewed by **both** `/unleashed-mail:gemini-review` (the `gemini` CLI, run isolated) and `/unleashed-mail:codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Namespaced names are canonical — the plugin registers its skills namespaced, so those invocations always resolve; the bare `/gemini-review` / `/codex-review` forms resolve only where the consumer workspace ships its own local copies. The scripted, digest-bound gate binds `docs/planning/*_PLAN.md` documents; debug/bug-investigation reviews reuse the same reviewers in advisory mode — see the review skills.)
 3. **Context7 usage** — Mandatory for code generation, setup, config, API docs lookup
 4. **Jira ticket hygiene** — Every change tracked at `https://unleashedservices.atlassian.net/` (project key `COREDEV`), updated throughout, with Epic association
 5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types
 6. **Accessibility** — Every UI element gets a11y support (mandatory per CLAUDE.md); use Curator design tokens
 7. **Security invariants** — SQLCipher encryption, Keychain-only tokens, `account_email` filtering, PIIRedactor, two-layer HTML sanitization (`HTMLSanitizer` + `HTMLRenderPipeline`)
-8. **SwiftLint compliance** — Fix violations in any file you modify (functions ≤50 lines, files ≤600 lines); violations in *unmodified* files are ticketed, not fixed in-flight. Lone exception: legacy `NSRegularExpression` is left for the Swift `Regex`/`RegexBuilder` migration (suppressed + ticketed, not converted inline)
-9. **Dual implementations** — Changes applied to both variants (native + WebKit compose, docked + floating AI). *Email detail is no longer dual — `SimpleEmailWebView` is the sole renderer.*
+8. **SwiftLint compliance** — Fix violations in any file you modify (functions ≤50 lines, files ≤600 lines); violations in _unmodified_ files are ticketed, not fixed in-flight. Lone exception: legacy `NSRegularExpression` is left for the Swift `Regex`/`RegexBuilder` migration (suppressed + ticketed, not converted inline)
+9. **Dual implementations** — Changes applied to both variants (native + WebKit compose, docked + floating AI). _Email detail is no longer dual — `SimpleEmailWebView` is the sole renderer._
 10. **Ask-before checkpoints** — Don't auto-edit Xcode project structure, entitlements, Info.plist, app lifecycle, menus, toolbar, keyboard shortcuts, auth/token handling, or framework/SwiftPM dependencies. Surface for user approval first.
 
 See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) for the cross-agent boundaries that operationalize these processes.
@@ -410,28 +970,28 @@ See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) for the cross-agent boundaries th
 
 The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch — including `swift-lint-check.sh`, which emits `decision:block` and arms the Stop gate, so it is the one that most needs an escape (`UNLEASHED_LINT_CHECK=off`). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
 
-| Event | Script | Behavior | Default | Kill switch |
-|---|---|---|---|---|
-| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` |
-| PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | `UNLEASHED_LINT_CHECK=off` |
-| PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
-| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` |
-| StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
-| PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_DENY_LOG=off` |
-| PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
-| PreCompact | `precompact-snapshot.sh` | Snapshots work context before compaction | on | `UNLEASHED_COMPACT_SNAPSHOT=off` |
-| SessionStart | `sessionstart-restore.sh` | Restores the pre-compaction context as `additionalContext` | on | `UNLEASHED_COMPACT_RESTORE=off` |
-| SubagentStart | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer | on | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off` |
-| SubagentStop | `capture-reviewer-verdict.sh` | Captures each reviewer's findings for the synthesizer | on | `UNLEASHED_CAPTURE_REVIEWERS=off` |
+| Event                        | Script                            | Behavior                                                                                                                                                                                        | Default   | Kill switch                                                                                |
+| ---------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------ |
+| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh`         | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask`     | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` (or `UNLEASHED_SENSITIVE_GUARD=off`) |
+| PostToolUse (Write/Edit)     | `swift-lint-check.sh`             | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`)                    | on        | `UNLEASHED_LINT_CHECK=off`                                                                 |
+| PostToolUse (Bash)           | `swift-build-verify.sh`           | Build/test-command advisories via `additionalContext`                                                                                                                                           | on        | `UNLEASHED_FAILURE_LOG=off` (telemetry only)                                               |
+| Stop                         | `stop-quality-marker-gate.sh`     | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log                                       | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` (or `UNLEASHED_STOP_GATE=off`)         |
+| StopFailure                  | `stop-failure-log.sh`             | Observe-only failure telemetry (class only, no PII)                                                                                                                                             | on        | `UNLEASHED_FAILURE_LOG=off`                                                                |
+| PermissionDenied             | `permission-denied-log.sh`        | Observe-only denial telemetry                                                                                                                                                                   | on        | `UNLEASHED_DENY_LOG=off`                                                                   |
+| PostToolUseFailure (Bash)    | `build-failure-log.sh`            | Observe-only build-failure telemetry                                                                                                                                                            | on        | `UNLEASHED_FAILURE_LOG=off`                                                                |
+| PreCompact                   | `precompact-snapshot.sh`          | Snapshots work context before compaction                                                                                                                                                        | on        | `UNLEASHED_COMPACT_SNAPSHOT=off`                                                           |
+| SessionStart                 | `sessionstart-restore.sh`         | Restores the pre-compaction context as `additionalContext`                                                                                                                                      | on        | `UNLEASHED_COMPACT_RESTORE=off`                                                            |
+| SubagentStart                | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer                                                                                                                                                   | on        | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off`                     |
+| SubagentStop                 | `capture-reviewer-verdict.sh`     | Captures each reviewer's findings for the synthesizer                                                                                                                                           | on        | `UNLEASHED_CAPTURE_REVIEWERS=off`                                                          |
 
-> **PostToolUse hooks run *after* the tool call**, so they cannot undo a write — they feed findings back to the model (a top-level `{"decision":"block","reason":…}` or `additionalContext`). The Stop gate in `enforce` mode is the only hook that blocks a turn.
+> **PostToolUse hooks run _after_ the tool call**, so they cannot undo a write — they feed findings back to the model (a top-level `{"decision":"block","reason":…}` or `additionalContext`). The Stop gate in `enforce` mode is the only hook that blocks a turn.
 
 ## MCP Servers (1)
 
 The plugin bundles one local, zero-dependency **stdio MCP server**, declared in [`.mcp.json`](.mcp.json) and launched by Claude Code as a subprocess:
 
-| Server | Tool | Purpose |
-|---|---|---|
+| Server               | Tool                | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `review-synthesizer` | `synthesize_review` | Deterministic Step-5 synthesis for the [code-review pipeline](AGENT_CONTRACTS.md). Validates the sub-reviewers' JSON findings, filters to changed + `structural-pipeline` scope, dedups via category-family + line-overlap with cross-family ownership routing (**cluster-and-cross-link — never silently drops a fix**), and returns a provisional verdict + `blockersToVerify`. `swift-reviewer` then confirms each blocker against the code (the verify gate) and issues the final verdict. |
 
 - **Pure compute** — no repo access, no network, no secrets. The repo-reading half (the verify gate) stays in `swift-reviewer`, which is the only side that can open `file:line`.

@@ -25,6 +25,7 @@ Usage:
     default   warn  — print problems, exit 0  (pre-commit)
     --strict        — print problems, exit 1  (CI)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,33 +36,60 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
-# Supported Claude Code hook events — the COMPLETE documented set (30). Source:
+# Supported Claude Code hook events — the COMPLETE documented set (33). Source:
 # https://code.claude.com/docs/en/hooks.md and https://code.claude.com/docs/en/plugins-reference.md
-# § "Hooks" (re-verified against the docs 2026-06-27, Claude Code 2.1.x). An event NOT in this
+# § "Hooks" (re-verified against the docs 2026-10-03, Claude Code 2.1.289; COREDEV-2873 added
+# DirectoryAdded, PreModelSwitch and PostModelSwitch). Re-verified against the 2.1.294 binary's
+# hook-event array, 2026-10-08 (COREDEV-2875): the 33 events are unchanged. An event NOT in this
 # set will silently never fire. If CI fails here on an event you intend to use, confirm it
 # against the docs above and add it in the SAME PR.
 KNOWN_EVENTS = {
-    "SessionStart", "SessionEnd", "Setup",
-    "UserPromptSubmit", "UserPromptExpansion",
-    "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
-    "PermissionRequest", "PermissionDenied",
-    "Notification", "MessageDisplay",
-    "SubagentStart", "SubagentStop",
-    "TaskCreated", "TaskCompleted", "TeammateIdle",
-    "Stop", "StopFailure",
-    "InstructionsLoaded", "ConfigChange",
-    "CwdChanged", "FileChanged",
-    "WorktreeCreate", "WorktreeRemove",
-    "PreCompact", "PostCompact",
-    "Elicitation", "ElicitationResult",
+    "SessionStart",
+    "SessionEnd",
+    "Setup",
+    "UserPromptSubmit",
+    "UserPromptExpansion",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PostToolBatch",
+    "PermissionRequest",
+    "PermissionDenied",
+    "Notification",
+    "MessageDisplay",
+    "SubagentStart",
+    "SubagentStop",
+    "TaskCreated",
+    "TaskCompleted",
+    "TeammateIdle",
+    "Stop",
+    "StopFailure",
+    "InstructionsLoaded",
+    "ConfigChange",
+    "CwdChanged",
+    "DirectoryAdded",
+    "FileChanged",
+    "WorktreeCreate",
+    "WorktreeRemove",
+    "PreCompact",
+    "PostCompact",
+    "PreModelSwitch",
+    "PostModelSwitch",
+    "Elicitation",
+    "ElicitationResult",
 }
 
 # Events whose `matcher` selects a TOOL by name (per the hooks-reference matcher table) — a
 # typo'd tool name = a dead hook. The permission events filter on tool name too.
 TOOL_MATCHER_EVENTS = {
-    "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "PermissionDenied",
 }
 
 # Known Claude Code tool names, used to WARN (never hard-fail) on a likely-typo'd tool matcher.
@@ -70,10 +98,59 @@ TOOL_MATCHER_EVENTS = {
 # contributed tools), so an unrecognized tool token is a non-blocking warning — a real typo and
 # a valid-but-unlisted tool are indistinguishable here. The subagent dispatcher is `Agent`, not
 # `Task` (AGENT_CONTRACTS.md §9). MCP tools (`mcp__server__tool`) are allowed through implicitly.
+# Stale/invalid tool names to HARD-reject, mirroring validate-plugin-assembly.py's STALE_TOOLS.
+# Merely dropping a name from KNOWN_TOOLS is NOT enough: an unrecognised token only lands in
+# `warnings` unless difflib finds a close match, and "MultiEdit" scores ~0.62 against "Edit" —
+# under the 0.7 cutoff. So the two validators disagreed: assembly hard-rejected `MultiEdit` while a
+# hooks matcher reintroducing it validated clean (2026-08-17 audit remediation, AF-16 sweep).
+STALE_TOOLS = {"Task", "MultiEdit"}
+# Mirrors validate-plugin-assembly.py exactly, and for the same two reasons (codex, PR #69):
+# the membership test is CASE-INSENSITIVE, because `multiedit` sailed past a case-sensitive set
+# here while assembly rejected it; and the reason is PER TOOL, because one shared message is FALSE
+# for the other name — this file used to tell you `Task` should be `Edit`, when the sub-agent
+# dispatcher is `Agent`. Keyed lowercase to match the folded check.
+_STALE_TOOL_REASONS = {
+    "task": "the sub-agent dispatcher is `Agent`, not `Task` (AGENT_CONTRACTS §9)",
+    "multiedit": "`MultiEdit` was removed from Claude Code; use `Edit` (COREDEV-2583 §4.5)",
+}
+_STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}
+
 KNOWN_TOOLS = {
-    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit", "Write",
-    "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", "Monitor",
-    "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronList", "CronDelete",
+    # Kept in step with validate-plugin-assembly.py's KNOWN_TOOLS — it had drifted 13 entries
+    # ahead, so a hook matcher naming a REAL current tool was reported as unrecognised while the
+    # assembly validator accepted the same name (codex, PR #69 round 2).
+    "Agent",
+    "Artifact",
+    "AskUserQuestion",
+    "Bash",
+    "BashOutput",
+    "EnterWorktree",
+    "ExitWorktree",
+    "Glob",
+    "Grep",
+    "KillShell",
+    "PowerShell",
+    "Read",
+    "Edit",
+    "ScheduleWakeup",
+    "SendMessage",
+    "SlashCommand",
+    "TaskOutput",
+    "TaskStop",
+    "ToolSearch",
+    "Workflow",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "Skill",
+    "Monitor",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "CronCreate",
+    "CronList",
+    "CronDelete",
 }
 
 # Per the hooks reference "Matcher value" table: a matcher of ONLY [A-Za-z0-9_ ,|] is an exact
@@ -110,20 +187,93 @@ def _is_shell_script(path: Path) -> bool:
         parts = parts[1:]
         while parts and parts[0].startswith("-"):  # skip env opts like `-S`
             parts = parts[1:]
-        interp = parts[0].rsplit("/", 1)[-1] if parts else ""  # basename even an absolute env arg
+        interp = (
+            parts[0].rsplit("/", 1)[-1] if parts else ""
+        )  # basename even an absolute env arg
     else:
         interp = parts[0].rsplit("/", 1)[-1]
     interp = re.sub(r"[0-9.\-]+$", "", interp)  # strip version suffix: bash3.2 -> bash
     return interp in SHELL_INTERPRETERS
 
 
-def validate_matcher(event: str, matcher: str, where: str,
-                     problems: list[str], warnings: list[str]) -> None:
+def _is_default_ignorable(ch: str) -> bool:
+    """True for codepoints that render as nothing — the class that makes a matcher silently dead.
+
+    Enumerated by RANGE rather than by name: the Unicode Default_Ignorable_Code_Point property is
+    not exposed by `unicodedata`, and a name-based list is outrun by the next codepoint.
+    """
+    o = ord(ch)
+    return (
+        o in (0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0)
+        or 0x180B <= o <= 0x180F
+        or 0x200B <= o <= 0x200F
+        or 0x202A <= o <= 0x202E
+        or 0x2060 <= o <= 0x206F
+        or 0xFE00 <= o <= 0xFE0F
+        or o == 0xFEFF
+        or 0xFFF0 <= o <= 0xFFF8
+        or 0x1BCA0 <= o <= 0x1BCA3
+        or 0x1D173 <= o <= 0x1D17A
+        or 0xE0000 <= o <= 0xE0FFF
+    )
+
+
+def validate_matcher(
+    event: str, matcher: str, where: str, problems: list[str], warnings: list[str]
+) -> None:
     """Validate a hook matcher against the documented grammar (hooks reference "Matcher value"
     table): "" / "*" = match-all; a value of only [A-Za-z0-9_ ,|] is an exact string or a
     `|`/`,`-separated list of exact strings (optional surrounding whitespace); anything else is
     a JavaScript regex."""
     if matcher in ("", "*"):
+        return
+    # CONTROL BYTES AND EXOTIC WHITESPACE ARE REFUSED BEFORE CLASSIFICATION (codex, PR #69 r2).
+    # `\tTask\t`, `Task\u00a0` and `MultiEdit\u00a0` validated CLEAN — neither problem nor warning —
+    # because the padding breaks EXACT_MATCHER's `[A-Za-z0-9_ ,|]` grammar, so each was classified
+    # as a JavaScript REGEX and skipped the tool-name checks entirely. As a regex it then matched
+    # nothing at runtime (verified in node: false for Task, MultiEdit and Edit alike), so a padded
+    # stale name was a silently dead hook. A plain ASCII space is LEGAL here — the grammar allows
+    # it around list items — so only control characters and non-space whitespace are refused.
+    # `str.isspace()` is not the right predicate on its own: ZERO-WIDTH and default-ignorable
+    # format characters are not "space", so U+200B, U+FEFF, U+2060 and U+180E sailed through and
+    # reclassified a stale name as a regex that matches nothing (codex, PR #69 round 3, verified in
+    # node: matches_bare=false for all four). Unicode category Cf (format) and Cc (control) cover
+    # the class; U+180E is Cf in current Unicode but was Zs historically, so category lookup is the
+    # instrument rather than an enumerated blocklist that the next codepoint outruns.
+    _bad = [
+        c
+        for c in matcher
+        if ord(c) < 32
+        or ord(c) == 127
+        or unicodedata.category(c) in ("Cc", "Cf", "Co", "Cs")
+        # DEFAULT-IGNORABLE IS CHECKED REGARDLESS OF CATEGORY. Gating it on `Mn` was itself a
+        # bypass: U+2065 and U+FFF0 are `Cn`, U+3164 HANGUL FILLER is `Lo`, and all three are
+        # default-ignorable and matched nothing (codex, PR #69 round 6). The property is what
+        # makes a matcher silently dead; the category is incidental to it. Ordinary marks are
+        # still fine — and the example must actually CONTAIN one: `café.*` spelled with the
+        # precomposed U+00E9 is all letters (Ll) and demonstrates nothing. The decomposed
+        # `cafe\u0301.*` carries U+0301 COMBINING ACUTE (Mn) and is the case that matters.
+        or _is_default_ignorable(c) or (c.isspace() and c != " ")
+    ]
+    if _bad:
+        problems.append(
+            f"{where}: matcher {matcher!r} contains {_bad[0]!r} — a control character or non-space "
+            f"whitespace. It fails the exact-matcher grammar, is treated as a regex, and matches no "
+            f"tool; remove it (a plain space is fine)"
+        )
+        return
+    # NFKC-EQUIVALENT SPELLINGS ARE REFUSED. Full-width `Ｅｄｉｔ` and `ＭｕｌｔｉＥｄｉｔ` are LETTERS, so
+    # the category guard above does not touch them — they fail the ASCII exact-matcher grammar,
+    # become regexes, skip the known/stale checks, and match nothing at runtime (codex, PR #69
+    # round 4, verified in node: false for the bare name). The test is normalisation: if a matcher
+    # is not already canonical AND its NFKC form would be accepted by the exact grammar, it is a
+    # homoglyph of a tool name rather than a deliberate regex.
+    _nfkc = unicodedata.normalize("NFKC", matcher)
+    if _nfkc != matcher and EXACT_MATCHER.match(_nfkc):
+        problems.append(
+            f"{where}: matcher {matcher!r} is a non-canonical spelling of {_nfkc!r} — it fails the "
+            f"exact-matcher grammar, is treated as a regex, and matches no tool; write it in ASCII"
+        )
         return
     if EXACT_MATCHER.match(matcher):
         # Exact string or exact-string list. Tool-name check, ONLY where matchers select a tool
@@ -137,6 +287,12 @@ def validate_matcher(event: str, matcher: str, where: str,
             return
         for raw in re.split(r"[|,]", matcher):
             token = raw.strip()
+            if token.lower() in _STALE_TOOLS_LOWER:
+                problems.append(
+                    f"{where}: matcher token {token!r} is a stale/invalid tool name — "
+                    f"{_STALE_TOOL_REASONS[token.lower()]}"
+                )
+                continue
             if not token or token in KNOWN_TOOLS:
                 continue
             if token.startswith("mcp__"):
@@ -147,18 +303,21 @@ def validate_matcher(event: str, matcher: str, where: str,
                     problems.append(
                         f"{where}: matcher token {token!r} is a server-only MCP prefix and matches "
                         f"no tool — use an exact 'mcp__server__tool', or the regex 'mcp__server__.*' "
-                        f"to match a whole server")
+                        f"to match a whole server"
+                    )
                 continue
             near = difflib.get_close_matches(token, KNOWN_TOOLS, n=1, cutoff=0.7)
             if near:
                 problems.append(
                     f"{where}: matcher token {token!r} is not a known tool (did you mean "
                     f"{near[0]!r}?) — it will match nothing; if {token!r} is a real new tool, "
-                    f"add it to KNOWN_TOOLS")
+                    f"add it to KNOWN_TOOLS"
+                )
             else:
                 warnings.append(
                     f"{where}: matcher token {token!r} is not a recognized tool — if a typo the "
-                    f"hook will match nothing; if a valid/new tool, add it to KNOWN_TOOLS")
+                    f"hook will match nothing; if a valid/new tool, add it to KNOWN_TOOLS"
+                )
         return
     # Otherwise it is a JavaScript regex (NOT Python `re`). Validate with node when available —
     # Python's engine would both reject valid JS (e.g. `(?<n>…)`) and accept Python-only syntax
@@ -170,7 +329,9 @@ def validate_matcher(event: str, matcher: str, where: str,
     try:
         res = subprocess.run(
             [node, "-e", "new RegExp(process.env.HOOK_MATCHER)"],
-            capture_output=True, text=True, env={**os.environ, "HOOK_MATCHER": matcher},
+            capture_output=True,
+            text=True,
+            env={**os.environ, "HOOK_MATCHER": matcher},
         )
     except OSError:
         return
@@ -179,14 +340,27 @@ def validate_matcher(event: str, matcher: str, where: str,
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Validate hooks/hooks.json manifest integrity.")
-    ap.add_argument("--root", default=None, help="plugin repo root (default: parent of scripts/)")
-    ap.add_argument("--strict", action="store_true", help="exit non-zero on any problem (CI)")
-    ap.add_argument("--require-manifest", action="store_true",
-                    help="treat a missing hooks/hooks.json as a problem (CI for a plugin that ships hooks)")
+    ap = argparse.ArgumentParser(
+        description="Validate hooks/hooks.json manifest integrity."
+    )
+    ap.add_argument(
+        "--root", default=None, help="plugin repo root (default: parent of scripts/)"
+    )
+    ap.add_argument(
+        "--strict", action="store_true", help="exit non-zero on any problem (CI)"
+    )
+    ap.add_argument(
+        "--require-manifest",
+        action="store_true",
+        help="treat a missing hooks/hooks.json as a problem (CI for a plugin that ships hooks)",
+    )
     args = ap.parse_args()
 
-    root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
+    root = (
+        Path(args.root).resolve()
+        if args.root
+        else Path(__file__).resolve().parent.parent
+    )
     manifest = root / "hooks" / "hooks.json"
     problems: list[str] = []
     warnings: list[str] = []
@@ -198,8 +372,10 @@ def main() -> int:
     if not manifest.is_file():
         if args.require_manifest:
             print("hooks: 1 problem(s):")
-            print("  ❌ hooks/hooks.json is MISSING — --require-manifest set; all declared hook "
-                  "events would be disabled.")
+            print(
+                "  ❌ hooks/hooks.json is MISSING — --require-manifest set; all declared hook "
+                "events would be disabled."
+            )
             if args.strict:
                 print("— failing (strict).")
                 return 1
@@ -216,13 +392,17 @@ def main() -> int:
 
     hooks = data.get("hooks") if isinstance(data, dict) else None
     if not isinstance(hooks, dict):
-        problems.append("hooks/hooks.json: top-level `hooks` object missing or not an object")
+        problems.append(
+            "hooks/hooks.json: top-level `hooks` object missing or not an object"
+        )
         hooks = {}
 
     events = 0
     invocations = 0
     referenced: set[Path] = set()
-    shell_targets: set[Path] = set()  # scripts invoked via a shell — always bash -n'd (L294)
+    shell_targets: set[Path] = (
+        set()
+    )  # scripts invoked via a shell — always bash -n'd (L294)
 
     for event, entries in hooks.items():
         events += 1
@@ -231,7 +411,8 @@ def main() -> int:
             problems.append(
                 f"{where_ev}: unknown hook event {event!r} — it will NEVER fire. If this is a "
                 f"newly-supported Claude Code event, verify against the docs URL in this script "
-                f"and add it to KNOWN_EVENTS.")
+                f"and add it to KNOWN_EVENTS."
+            )
         if not isinstance(entries, list):
             problems.append(f"{where_ev}: value must be a list of hook entries")
             continue
@@ -247,10 +428,14 @@ def main() -> int:
                 if key in ("matcher", "hooks"):
                     continue
                 if difflib.get_close_matches(key, ["matcher"], n=1, cutoff=0.6):
-                    problems.append(f"{where}: unknown entry key {key!r} — did you mean 'matcher'? A hook "
-                                    f"entry with no `matcher` silently matches ALL tools.")
+                    problems.append(
+                        f"{where}: unknown entry key {key!r} — did you mean 'matcher'? A hook "
+                        f"entry with no `matcher` silently matches ALL tools."
+                    )
                 else:
-                    warnings.append(f"{where}: unknown entry key {key!r} (expected 'matcher' or 'hooks')")
+                    warnings.append(
+                        f"{where}: unknown entry key {key!r} (expected 'matcher' or 'hooks')"
+                    )
             matcher = entry.get("matcher", "")
             if not isinstance(matcher, str):
                 problems.append(f"{where}: `matcher` must be a string")
@@ -265,17 +450,24 @@ def main() -> int:
                 if not isinstance(hook, dict):
                     problems.append(f"{whereh}: must be an object")
                     continue
-                for key in hook:  # MIN-20: an unknown hook key (typo'd `timeout`/`command`) is silently ignored
+                # MIN-20: an unknown hook key (typo'd `timeout`/`command`) is silently ignored
+                for key in hook:
                     if key not in ("type", "command", "args", "timeout"):
-                        warnings.append(f"{whereh}: unknown hook key {key!r} "
-                                        f"(expected type/command/args/timeout)")
+                        warnings.append(
+                            f"{whereh}: unknown hook key {key!r} "
+                            f"(expected type/command/args/timeout)"
+                        )
                 invocations += 1
                 if hook.get("type") != "command":
                     problems.append(
-                        f"{whereh}: unsupported hook type {hook.get('type')!r} (expected 'command')")
+                        f"{whereh}: unsupported hook type {hook.get('type')!r} (expected 'command')"
+                    )
                 timeout = hook.get("timeout")
-                if "timeout" in hook and not (isinstance(timeout, (int, float))
-                                              and not isinstance(timeout, bool) and timeout > 0):
+                if "timeout" in hook and not (
+                    isinstance(timeout, (int, float))
+                    and not isinstance(timeout, bool)
+                    and timeout > 0
+                ):
                     problems.append(f"{whereh}: `timeout` must be a positive number")
                 cmd = hook.get("command", "")
                 if not isinstance(cmd, str) or not cmd.strip():
@@ -285,15 +477,23 @@ def main() -> int:
                 # args:["${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"]) — in exec form the script path
                 # lives in args, so command alone has no scripts/<file>.
                 hook_args = hook.get("args")
-                if "args" in hook and not (isinstance(hook_args, list)
-                                           and all(isinstance(a, str) for a in hook_args)):
-                    problems.append(f"{whereh}: `args`, when present, must be a list of strings")
+                if "args" in hook and not (
+                    isinstance(hook_args, list)
+                    and all(isinstance(a, str) for a in hook_args)
+                ):
+                    problems.append(
+                        f"{whereh}: `args`, when present, must be a list of strings"
+                    )
                 scan = cmd
                 if isinstance(hook_args, list):
-                    scan = cmd + " " + " ".join(a for a in hook_args if isinstance(a, str))
+                    scan = (
+                        cmd + " " + " ".join(a for a in hook_args if isinstance(a, str))
+                    )
                 matches = list(SCRIPT_REF.finditer(scan))
                 if not matches:
-                    problems.append(f"{whereh}: command/args reference no scripts/<file> ({cmd!r})")
+                    problems.append(
+                        f"{whereh}: command/args reference no scripts/<file> ({cmd!r})"
+                    )
                     continue
                 scripts_dir = str((root / "scripts").resolve())
                 # A simple (non-compound) shell invocation makes its targets shell scripts even
@@ -301,22 +501,30 @@ def main() -> int:
                 # compound command (&&/||/;/|) fall back to per-file detection so a `python3` arm
                 # isn't bash -n'd.
                 first_tok = cmd.strip().split()[0] if cmd.strip() else ""
-                force_shell = (first_tok.rsplit("/", 1)[-1] in SHELL_INTERPRETERS
-                               and not re.search(r"[;&|]", scan))
+                force_shell = first_tok.rsplit("/", 1)[
+                    -1
+                ] in SHELL_INTERPRETERS and not re.search(r"[;&|]", scan)
                 # A command may run more than one script (e.g. `… && …`) — validate each.
                 for m in matches:
                     rel = m.group(1)
                     spath = root / "scripts" / rel
                     # Containment: the ref must resolve to a real file UNDER scripts/, not escape
                     # it via `..`/absolute (codex L84 — `scripts/../README.md` would otherwise pass).
-                    if not (str(spath.resolve()) + os.sep).startswith(scripts_dir + os.sep):
+                    if not (str(spath.resolve()) + os.sep).startswith(
+                        scripts_dir + os.sep
+                    ):
                         problems.append(
-                            f"{whereh}: script ref scripts/{rel} escapes the scripts/ directory")
+                            f"{whereh}: script ref scripts/{rel} escapes the scripts/ directory"
+                        )
                         continue
                     if not spath.is_file():
-                        problems.append(f"{whereh}: references missing script scripts/{rel}")
+                        problems.append(
+                            f"{whereh}: references missing script scripts/{rel}"
+                        )
                     elif spath.stat().st_size == 0:
-                        problems.append(f"{whereh}: references empty script scripts/{rel}")
+                        problems.append(
+                            f"{whereh}: references empty script scripts/{rel}"
+                        )
                     else:
                         referenced.add(spath)
                         if force_shell:
@@ -333,7 +541,9 @@ def main() -> int:
             if not (_is_shell_script(spath) or spath in shell_targets):
                 continue
             try:
-                res = subprocess.run([bash, "-n", str(spath)], capture_output=True, text=True)
+                res = subprocess.run(
+                    [bash, "-n", str(spath)], capture_output=True, text=True
+                )
             except OSError as exc:
                 problems.append(f"{rel}: could not run bash -n ({exc})")
                 continue
@@ -343,8 +553,10 @@ def main() -> int:
     else:
         print("  (note: bash not found — skipped `bash -n` parse checks)")
 
-    summary = (f"{events} events, {invocations} invocations, "
-               f"{len(referenced)} scripts, {parsed} parse-checked")
+    summary = (
+        f"{events} events, {invocations} invocations, "
+        f"{len(referenced)} scripts, {parsed} parse-checked"
+    )
 
     for warning in warnings:
         print(f"  ⚠️  {warning}")

@@ -1,0 +1,28 @@
+# Aggressive yamllint config: the shipped default ruleset, then tightened.
+extends: default
+
+rules:
+  # Formatting that prettier owns -- do not fight it.
+  line-length: disable
+  indentation: disable
+  comments-indentation: disable
+
+  quoted-strings:
+    required: only-when-needed
+    extra-allowed: ["{|}"]
+  key-duplicates: {}
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+  truthy:
+    # GitHub Actions' `on:` key is parsed as the boolean `true` by YAML 1.1; allow it.
+    allowed-values: ["true", "false", "on"]
+    check-keys: true
+  empty-values:
+    forbid-in-block-mappings: true
+    forbid-in-flow-mappings: true
+  key-ordering: disable
+  comments:
+    require-starting-space: true
+    min-spaces-from-content: 1
+  document-start: disable

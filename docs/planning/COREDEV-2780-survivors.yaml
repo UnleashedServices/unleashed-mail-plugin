@@ -1,0 +1,430 @@
+# COREDEV-2780 — THE SURVIVOR CORPUS.
+#
+# Every mutant that has ever SURVIVED a formulation of this gate. Each one must keep failing.
+#
+# WHY THIS EXISTS, AND WHY IT IS SEPARATE. Cell 15 compares §1's rendered prose against
+# COREDEV-2780-contract.yaml, and both derive from the same authority — so that comparison cannot
+# prove the registry is semantically COMPLETE. It cannot know an obligation nobody wrote down. The
+# plan's earlier claim that "nothing mechanical can catch a wrong registry" is overbroad: a SPECIFIC
+# wrong registry is catchable, and this corpus is one of the two things that catch one. If a registry
+# edit silently drops an obligation, the rendering lint stays happy while the corpus REDS.
+#
+# It is therefore maintained INDEPENDENTLY of the registry and describes each survivor
+# self-containedly. Entries deliberately do NOT resolve through a registry id: an entry that pointed
+# at `contract.yaml` would vanish along with the obligation it was meant to outlive, which is exactly
+# the failure it exists to detect.
+#
+# THE OTHER THING THAT CATCHES A WRONG REGISTRY is the end-to-end behaviour cells (1, 2, 3, 5, 12 and
+# 17), which observe real runs and do not take the BEHAVIOUR they assert from the registry (the parity
+# harness and its judge do read the registry's pin and input digest, as the plan's §1 says) — cell 17
+# most of all, since it observes
+# the ruleset's BEHAVIOUR rather than any file's contents. What remains genuinely unmechanisable is
+# ARBITRARY completeness, and what guards that is this file and the registry being small, diffable and
+# reviewed.
+#
+# ADDING TO THIS FILE. A mutant enters the corpus the moment a round finds it survived — with the
+# round that found it, the formulation that let it through, and what it would have shipped. Nothing is
+# ever removed: a survivor whose obligation is later deleted is precisely the case this file exists
+# for. Retiring one is a reviewed change with a stated reason, not tidying.
+
+schemaVersion: 1
+ticket: COREDEV-2780
+independent_of: docs/planning/COREDEV-2780-contract.yaml
+rule: every entry must FAIL; a passing entry means an obligation has been lost
+
+survivors:
+  - id: survivor/workflow-dispatch-if-guard
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C1.single-event/add-workflow-dispatch
+      - C3.nothing-skips-or-masks/job-if
+    found_in_round: r5
+    survived_formulation: >-
+      Revision 4 replaced the job-level `on:` with `if: github.event_name != 'workflow_dispatch'`, and
+      cell 11 asserted the literal `if:`.
+    mutant: a job carrying that exact `if:` guard
+    would_have_shipped: >-
+      A BYPASS the cell would have CERTIFIED. GitHub's own troubleshooting documentation states that
+      when a job is skipped by a conditional, the job reports "Success" — and a required context is
+      satisfied by that success. Dispatching at an internal PR's head branch would attach a
+      successful, skipped `trunk-check` to that SHA with Trunk never running.
+    must_fail_because: C1 permits no `workflow_dispatch` trigger and C3 permits no job-level `if:`.
+
+  - id: survivor/repository-supplied-launcher
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C6.no-repository-supplied-launcher/trunk-bin
+      - C6.no-repository-supplied-launcher/tools-trunk
+      - C6.no-repository-supplied-launcher/dot-trunk
+    found_in_round: r8
+    survived_formulation: >-
+      The r7 allowlist constrained what the CALLER passes, and stopped there.
+    mutant: a checked-out `.trunk/bin/trunk`, `tools/trunk`, `./trunk` or `.trunk/setup-ci`
+    would_have_shipped: >-
+      A pull request supplying the tool that tests it — for a required merge gate, the gate handing
+      its own authority to the thing under test. Verified at the pinned SHA: `setup/locate_trunk.sh`
+      prefers those paths before downloading, and `action.yaml:289` EXECUTES `.trunk/setup-ci`.
+    must_fail_because: C6's guard step, last before the action, fails on any of the six paths.
+
+  - id: survivor/setup-ci-as-bare-executable
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C6.no-repository-supplied-launcher/setup-ci
+    found_in_round: r9
+    survived_formulation: >-
+      The C6 fixture was specified as a no-op executable at `.trunk/setup-ci`.
+    mutant: a bare executable file at that path
+    would_have_shipped: >-
+      Nothing — and that is the defect. `uses: ./.trunk/setup-ci` expects an ACTION DIRECTORY, so the
+      bare file reds because it is MALFORMED. The mutant would have survived DELETION OF C6 while
+      still appearing to be caught: reachability mistaken for discrimination.
+    must_fail_because: the fixture is a VALID composite action that exits green, so only C6 can red it.
+
+  - id: survivor/env-trunk-path-workflow-scope
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C5.no-env-any-scope/workflow
+    found_in_round: r10
+    survived_formulation: Revision 10's C5 named only JOB and STEP scope.
+    mutant: "workflow-level `env: {TRUNK_PATH: /bin/true}`"
+    would_have_shipped: >-
+      Workflow-level `env:` is inherited by every step in every job, so it reached the action
+      untouched and redirected execution to a binary that exits 0 while every input rule passed.
+    must_fail_because: C5 forbids `env:` at ALL THREE scopes.
+
+  - id: survivor/c6-guard-after-empty-diff-step
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C8.step-sequence-allowlist/guard-moved
+    found_in_round: r10
+    survived_formulation: >-
+      C6 required its guard IMMEDIATELY before the action while C8 placed the empty-diff guard between
+      the two — the two clauses contradicted each other.
+    mutant: a permitted step that creates `tools/trunk` AFTER the C6 guard has run
+    would_have_shipped: >-
+      The repository-launcher hole, reopened from inside an ALLOWLISTED step. Neither the "extra step"
+      nor the "moved guard" mutant killed it, because the mutation lives inside a step the sequence
+      allows.
+    must_fail_because: >-
+      C6's guard is LAST before the action, and C8 freezes each permitted run body by its own digest.
+
+  - id: survivor/github-path-write
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C8.run-bodies-frozen/github-path
+    found_in_round: r11
+    survived_formulation: >-
+      C8 PROHIBITED writing to `$GITHUB_PATH` and mutated it NOWHERE for two revisions.
+    mutant: a permitted `run:` body appending a directory to `$GITHUB_PATH`
+    would_have_shipped: >-
+      The action resolving a no-op launcher while every clause passed — the guard checks PATHS, not
+      inherited runner state. A validator that NORMALISES AWAY `$GITHUB_PATH` lines before hashing
+      survives every generic byte edit; only an independently encoded case kills it.
+    must_fail_because: C8 carries a dedicated `$GITHUB_PATH` case per run step, not a generic byte edit.
+
+  - id: survivor/if-false-on-a-guard-step
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C3.nothing-skips-or-masks/job-if
+    found_in_round: r12
+    survived_formulation: >-
+      Revision 12's C3 named only the JOB and the TRUNK STEP.
+    mutant: "`if: false` on a GUARD step"
+    would_have_shipped: >-
+      The guard removed entirely while both the frozen SEQUENCE and the frozen BODY DIGEST were
+      preserved — the step is still there and still hashes correctly; it simply never runs.
+    must_fail_because: C3 forbids `if:` on the job and on ANY of the five steps.
+
+  - id: survivor/checkout-filter-input
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C8.checkout-inputs-allowlist/filter
+    found_in_round: r12
+    survived_formulation: >-
+      `filter` was NAMED in the checkout-input prose and never mutated.
+    mutant: "`filter: blob:none` on `actions/checkout`"
+    would_have_shipped: >-
+      A partial checkout: changed files can be absent from disk while git metadata still yields a
+      non-empty range, so the empty-diff guard passes and Trunk lints files that are not there.
+    must_fail_because: C8's checkout-input allowlist admits only fetch-depth, lfs and persist-credentials.
+
+  - id: survivor/post-annotations-false
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C4.save-annotations-required/false
+    found_in_round: r19
+    survived_formulation: >-
+      The blacklist wording said `post-annotations` must be "absent or false", while cell 11 treated
+      any unlisted key as a violation — the two cells disagreed.
+    mutant: "`post-annotations: false` present in `with:`"
+    would_have_shipped: >-
+      Inherited defect 4. Under an ALLOWLIST it is an unlisted key PRESENT in `with:`, so "or false"
+      is superseded; under the blacklist it passed.
+    must_fail_because: C4 is an allowlist and admits no unlisted key, valued or not.
+
+  - id: survivor/timeout-minutes-360
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C3.runner-and-timeout-pinned/timeout-360
+    found_in_round: r21
+    survived_formulation: >-
+      Cell 15 required only that `timeout-minutes` EXIST.
+    mutant: "`timeout-minutes: 360`"
+    would_have_shipped: >-
+      GitHub's own default six-hour ceiling — a timeout that changes nothing, while the required
+      context sits pending for up to six hours. Covering the line without covering its OPERAND.
+    must_fail_because: C3 pins the concrete value 15, asserted and mutated as an operand.
+
+  - id: survivor/job-level-permissions-write-all
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C3.permissions-pinned-at-job/write-all
+      - C0.permissions-pinned-at-root/write-all
+    found_in_round: r25
+    survived_formulation: >-
+      Revision 24 pinned `permissions` BY VALUE at the root and left the key unconstrained at job scope.
+    mutant: "`permissions: write-all` on the job"
+    would_have_shipped: >-
+      A widened effective token satisfying BOTH allowlists. GitHub calculates the token workflow-level
+      then job-level, and cell 10's runtime evidence is byte-identical either way — only a static
+      value check discriminates it.
+    must_fail_because: C3 pins the value at job scope as C0 does at the root.
+
+  - id: survivor/cross-event-range-substitution
+    # THE CONCRETE CASES, not the clause. Naming only `C6` let the specific case be
+    # deleted while six siblings kept the clause present, so the binding permitted exactly
+    # the regression it claimed to detect (codex, PR #85).
+    covered_by:
+      - C1.single-event/add-push
+    found_in_round: r20
+    survived_formulation: >-
+      One workflow emitted the SAME `trunk-check` context for `pull_request` and `push`.
+    mutant: a `push` run satisfying a PR's required context on the same head SHA
+    would_have_shipped: >-
+      A green required check computed over a STRICTLY SMALLER diff — `before..head` rather than the
+      PR's `base..head`. Required checks match on SHA and expected app, NOT on the triggering event,
+      so cell 1 could prove each range correct and never prove WHICH RUN satisfied the rule.
+    must_fail_because: >-
+      C1 gives the required workflow a single `pull_request` event; the push leg is a separate,
+      deliberately unrequired context named `trunk-check-push`.
+
+  - id: survivor/exclude-blind-target-resolver
+    # NO CONTRACT CLAUSE BACKS THIS ONE: its protection is an executing TEST FAMILY (every
+    # form on both sides), not a clause, so the binding check has no obligation to resolve.
+    # Declared out loud because an absence meaning "deliberately different" and an absence
+    # meaning "nobody ever bound it" look identical, and only one of them is fine.
+    backed_by: test-family
+    found_in_round: r35
+    survived_formulation: >-
+      Revision 32's resolution rule expanded `conditions.ref_name.include` and ignored `exclude`.
+    mutant: "a ruleset observation carrying `exclude: [refs/heads/a*]`"
+    would_have_shipped: >-
+      A comparator measuring a set STRICTLY LARGER than the one in force: GitHub treats an excluded
+      pattern as a VETO, so a base removed from the gate by an exclusion still reads as gated. The
+      single alias case revision 33 added REACHED it — the resolver was only ever exercised on the
+      include side.
+    must_fail_because: >-
+      resolve() is include MINUS exclude, and the (side, form) family runs every form on BOTH sides.
+
+  - id: survivor/two-currently-correct-private-resolvers
+    # NOTHING EXECUTES HERE BY CONSTRUCTION: the shape was REMOVED rather than asserted
+    # about, so the construct is inexpressible and there is no mutant left to run. That is
+    # the strongest form a survivor can take, and precisely why it must be stated.
+    backed_by: shape-removed
+    found_in_round: r38
+    survived_formulation: >-
+      Cell 15 asserted that a spy on `resolve()` was REACHED from both entry points, then that an
+      entry-distinct sentinel GOVERNED each result.
+    mutant: >-
+      one public `resolve()` wrapper dispatching to two private per-entry resolvers, both currently
+      correct
+    would_have_shipped: >-
+      Two resolution paths free to DRIFT on the next edit. It passes the sentinel test — substituting
+      the wrapper's return bypasses both private paths — and passes every family case, because both
+      privates agree today. Each earlier encoding asserted a property ABOUT the implementation, and
+      any such property is satisfiable by an implementation that is currently correct.
+    must_fail_because: >-
+      `resolve(ref_name, default_branch)` is ENTRY-AGNOSTIC — it takes no entry id and no
+      entry-derived argument, so there is nothing to dispatch on and the per-entry private resolver
+      CANNOT BE WRITTEN. The shape is removed rather than asserted about.
+
+  - id: survivor/activity-set-subset
+    covered_by:
+      - C2.types-required/not-the-exact-set
+    found_in_round: r44
+    survived_formulation: >-
+      The checker tested only that `types:` CONTAINED `edited`, while C2 states the exact set.
+    mutant: "`types: [edited]`, or `[opened, reopened, edited]`"
+    would_have_shipped: >-
+      A gate that never re-runs on a new commit, because `synchronize` is gone. A required context then
+      stays pending on every pushed update, or a green result computed for an older head is relied on.
+    must_fail_because: C2 requires exactly `opened, synchronize, reopened, edited`.
+
+  - id: survivor/sibling-step-key
+    covered_by:
+      - C8.step-sequence-allowlist/sibling-key
+    found_in_round: r44
+    survived_formulation: >-
+      Step keys were checked against a six-key BLACKLIST, while C8 freezes the complete step mapping.
+    mutant: "`timeout-minutes: 1` added to `guard-empty-diff`"
+    would_have_shipped: >-
+      Any key nobody thought to forbid, on any of the five steps, with the run body still hashing clean.
+    must_fail_because: C8 freezes the COMPLETE step mapping, an allowlist per step kind.
+
+  - id: survivor/checkout-by-tag
+    covered_by:
+      - C8.checkout-sha-pinned/tag
+    found_in_round: r44
+    survived_formulation: >-
+      Checkout's INPUTS were allowlisted, and its `uses:` was never checked at all.
+    mutant: "`uses: actions/checkout@v4`"
+    would_have_shipped: >-
+      A mutable tag in the one step that decides which tree every later step inspects.
+    must_fail_because: C8 requires `actions/checkout` pinned by a full commit SHA.
+
+  - id: survivor/duplicate-known-step
+    covered_by:
+      - C8.step-sequence-allowlist/duplicate-checkout
+      - C8.step-sequence-allowlist/duplicate-guard-empty-diff
+    found_in_round: r45
+    survived_formulation: >-
+      The sequence check diagnosed missing, unknown and reordered names. A duplicate KNOWN name matched
+      none of the three, and the per-step checks read only the first occurrence.
+    mutant: a second `actions/checkout@v4` with `ref main`, inserted after the guards
+    would_have_shipped: >-
+      A tree replaced AFTER the empty-diff and launcher guards had inspected it, with Trunk then linting
+      a tree no guard had seen.
+    must_fail_because: C8 requires exactly the five declared steps, in order; anything else is a problem.
+
+  - id: survivor/context-named-validate
+    covered_by:
+      - C3.effective-context-pinned-canary/named-validate
+      - C3.effective-context-pinned-required/named-validate
+    found_in_round: r46
+    survived_formulation: >-
+      The canary's job ID was checked, and its `name:` was not. `name:` decides the emitted context.
+    mutant: "the canary's `name: trunk-check-push` changed to `name: validate`"
+    would_have_shipped: >-
+      A passing canary satisfying the REQUIRED `validate` context on its SHA, with the contract suites
+      that `validate` exists to run never run.
+    must_fail_because: each entry's effective context must equal its declared context (C3).
+
+  - id: survivor/sibling-job-named-validate
+    covered_by:
+      - C3.single-job/required-sibling-named-validate
+      - C3.single-job/canary-sibling-named-validate
+    found_in_round: r47
+    survived_formulation: >-
+      Revision 45 pinned the effective context of THE job, but every check read only the first job, and
+      nothing limited how many jobs `jobs:` held. Found by both arms independently.
+    mutant: a second job `context-decoy` with `name validate`, appended after the shipped job
+    would_have_shipped: >-
+      A required `validate` context satisfied on the PR's head SHA by a job that runs `true`, with the
+      contract suites `validate` exists to run never run.
+    must_fail_because: each workflow declares exactly one job (C3).
+
+  - id: survivor/checkout-depth-unpinned
+    covered_by:
+      - C8.checkout-fetch-depth-required/absent
+      - C8.checkout-fetch-depth-canary/two
+    found_in_round: r56
+    survived_formulation: >-
+      `fetch-depth` was allowlisted as OPTIONAL with its value unconstrained, so depth 1, depth 2 and
+      omission (checkout's default, 1) all passed, on both entries.
+    mutant: "the canary's `fetch-depth: 0` changed to `fetch-depth: 2`, or the required job's removed"
+    would_have_shipped: >-
+      On the canary, a multi-commit push whose `before` (HEAD~N) is absent from a depth-2 clone, so
+      the guard reads an EMPTY diff and Trunk never runs. On the required job, a missing `HEAD^1`.
+    must_fail_because: C8 pins `fetch-depth` per entry, 2 on the required job and 0 on the canary.
+
+  - id: survivor/integer-operand-by-value
+    covered_by:
+      - C8.checkout-fetch-depth-canary/boolean-false
+      - C3.runner-and-timeout-pinned/timeout-float
+    found_in_round: r57
+    survived_formulation: >-
+      Both integer operands were compared by VALUE with `==`, and Python's `==` treats `False` as 0
+      and `15.0` as 15.
+    mutant: "the canary's `fetch-depth: 0` as `fetch-depth: false`, or `timeout-minutes: 15.0`"
+    would_have_shipped: >-
+      A checker that certified a value of the wrong TYPE as the pinned operand. The depth-unpinned
+      survivor's cases do not cover this, because a value-only check rejects them correctly.
+    must_fail_because: C3 and C8 pin each integer operand by type as well as value.
+
+  - id: survivor/yaml-11-boolean-synonym
+    covered_by:
+      - C4.save-annotations-required/yaml-11-synonym-yes
+      - C8.checkout-inputs-allowlist/lfs-yaml-11-synonym-yes
+      - C8.checkout-inputs-allowlist/persist-credentials-yaml-11-synonym-no
+    found_in_round: r59
+    survived_formulation: >-
+      Workflows were parsed with PyYAML's YAML 1.1 default, which reads unquoted `yes`/`no` as
+      booleans, while GitHub parses YAML 1.2, where they are strings.
+    mutant: "`save-annotations: yes`, `lfs: yes`, or `persist-credentials: no`, as raw text"
+    would_have_shipped: >-
+      A checker that certified inputs the runner never receives. `save-annotations: yes` reaches the
+      action as the string "yes", not the pinned `true`.
+    must_fail_because: the checker parses workflows as GitHub does (YAML 1.2 booleans), so a synonym is not the pinned value.
+
+  - id: survivor/yaml-11-octal-integer
+    covered_by:
+      - C3.runner-and-timeout-pinned/yaml-11-octal-017
+    found_in_round: r60
+    survived_formulation: >-
+      Revision 56 replaced only PyYAML's BOOLEAN resolver, so integers were still resolved as YAML 1.1,
+      where a leading zero means OCTAL.
+    mutant: "`timeout-minutes: 017`, as raw text"
+    would_have_shipped: >-
+      A checker that read 15 where GitHub's YAML 1.2 parse reads 17.
+    must_fail_because: the checker parses with the WHOLE YAML 1.2 core scalar schema.
+
+  - id: survivor/explicit-yaml-tag
+    covered_by:
+      - C0.raw-text-canonical/tag-bool-yes
+      - C0.raw-text-canonical/tag-int-underscore
+    found_in_round: r61
+    survived_formulation: >-
+      The loader replaced the IMPLICIT resolvers, but an explicit tag bypasses implicit resolution
+      entirely, and the constructors behind it still accepted 1.1 forms.
+    mutant: "`save-annotations: !!bool yes`, or `timeout-minutes: !!int 1_5`, as raw text"
+    would_have_shipped: >-
+      The YAML 1.1 coercions re-admitted through one prefix, accepted by the checker and by actionlint.
+    must_fail_because: C0.raw-text-canonical forbids explicit tags in a workflow.
+
+  - id: survivor/falsey-job-name
+    covered_by:
+      - C3.effective-context-pinned-required/named-false
+      - C3.effective-context-pinned-canary/named-false
+      - C3.effective-context-pinned-required/named-null
+      - C3.effective-context-pinned-canary/named-null
+    found_in_round: r63
+    survived_formulation: >-
+      The effective context was `str(job.get("name") or job_id)`, so a PRESENT but falsey name fell
+      back to the job ID by Python truthiness. Cell 14's census rejects a non-string name at suite
+      level, so this survived the COMPARATOR, not the whole suite.
+    mutant: the job's `name` key set to `false` (or `0`); and, surviving revision 60's `is None` repair, to `null`, `~` or empty (codex, r64)
+    would_have_shipped: >-
+      A comparator that reported the job ID as the context while the job carried a different name.
+    must_fail_because: a present `name` decides the effective context, whatever its value (C3).

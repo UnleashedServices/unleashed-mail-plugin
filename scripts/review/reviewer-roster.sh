@@ -136,6 +136,13 @@ emit_unattributed() {
 # --- Phase 1: read the HELD names off stdin and validate them -------------------------------------
 # A held name must be an exact, known reviewer, named at most once. A typo or a repeat is exit 4 (the
 # caller's "any unexpected outcome is uncertainty" branch), never a silent resolution.
+# An interactive terminal would hang here waiting for EOF — refuse as uncertainty (exit 4) with a
+# usage hint instead; Claude Code's Bash tool and the orchestrator always pipe stdin, so the
+# production path is unchanged (2026-08-17 audit, AF-13).
+if [ -t 0 ]; then
+    echo "reviewer-roster: stdin is a terminal — pipe the held reviewer names, one per line (or : | for none)." >&2
+    exit 4
+fi
 HELD=""
 BAD_HELD=""
 while IFS= read -r held || [ -n "$held" ]; do

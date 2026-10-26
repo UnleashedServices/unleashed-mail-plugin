@@ -48,6 +48,9 @@ PLAN="${PLAN:0:200}"   # bash substring (char-aware, no cut subprocess / BSD `cu
 # context.sh is already sourced above, so this adds no dependency. The field stays a JSON STRING
 # (see the printf below): this normalises the VALUE, not the type.
 ROUND="unknown"
+# COREDEV-2617 / D': skip the snapshot write; emit nothing and exit 0. PreCompact is advisory, so
+# a missing snapshot degrades to "no restore" rather than failing the compaction.
+unleashed_base_ok || exit 0
 _rev="$(context_reviews_dir)/$SLUG"
 if [ -d "$_rev" ]; then
     _max="$(context_highest_round "$_rev")"
@@ -67,8 +70,9 @@ PLAN_JSON="$(json_escape "$PLAN")"
 # `2>/dev/null` BEFORE `> "$TMP"` so an open failure (state dir unwritable) is suppressed too
 # (bash applies redirects left-to-right; a trailing `2>/dev/null` would let the open error —
 # which echoes the full PII-bearing tmp path — reach stderr). EXIT trap removes the tmp.
-printf '{"ticket":"%s","branch_slug":"%s","plan":%s,"round":"%s","snapshot_time":%s}\n' \
-    "$TICKET" "$SLUG" "$PLAN_JSON" "$ROUND" "$SNAPTIME" 2>/dev/null > "$TMP" || exit 0
+# COREDEV-2617 §4.2a: `base_resolution` names the resolution that actually ran (plan row 20).
+printf '{"ticket":"%s","branch_slug":"%s","plan":%s,"round":"%s","snapshot_time":%s,"base_resolution":"%s"}\n' \
+    "$TICKET" "$SLUG" "$PLAN_JSON" "$ROUND" "$SNAPTIME" "${_UNLEASHED_BASE_SOURCE:-unresolved}" 2>/dev/null > "$TMP" || exit 0
 mv "$TMP" "$SNAP" 2>/dev/null || exit 0
 trap - EXIT
 exit 0

@@ -1,0 +1,980 @@
+#!/usr/bin/env python3
+"""COREDEV-2780 cells 1 and 5 — the JUDGE for `trunk-parity-harness.yml`'s evidence.
+
+A Python unittest cannot run a composite action: `uses:` is resolved by the Actions runner. So the
+WORKFLOW is the sensor — it runs the pinned action against per-event fixtures with an instrumented
+launcher and publishes the captured argv and the pre/post tree hashes — and this file is the judge.
+
+WHAT EACH CELL NEEDS FROM THE ARTIFACT
+  cell 1  the `--upstream` the action passed to Trunk must equal, BYTE FOR BYTE, what the shared
+          resolver produced. Two independently correct-looking resolvers drift, and a guard that
+          checks a DIFFERENT range than the one linted asserts nothing about the lint.
+  cell 5  no tracked file's bytes may change, and no autofix may be applied. Narrower than "the job
+          never mutates the tree", which is false — the pinned action itself creates `.trunk/setup-ci`
+          and appends to `.git/info/exclude`.
+
+THE ARTIFACT IS NOT IN THE REPOSITORY UNTIL THE HARNESS HAS RUN. M2c is not complete until a real run
+on `harness-base` / `harness/**` produces one and it is accepted against this schema. Until then the
+schema and discrimination tests below run against synthetic records, and the acceptance test SKIPS
+rather than passing vacuously — a cell that silently passes with no evidence is exactly the sink this
+plan keeps repairing.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+REPO = Path(__file__).resolve().parents[2]
+EVIDENCE_DIR = REPO / "docs/planning/evidence"
+ARGUMENTS_LITERAL = (
+    "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
+)
+
+# READ FROM THE REGISTRY, NOT RESTATED HERE. The pin already appears in three workflows and the
+# contract; a fourth copy in this file is a fourth thing to forget on a bump, and two stale copies
+# agree with each other. `test_trunk_check_workflow.py` binds its own constant to this same key, so
+# the registry is the one authority and a bump that misses a file is caught rather than tolerated.
+_CONTRACT = yaml.safe_load(
+    (REPO / "docs/planning/COREDEV-2780-contract.yaml").read_text(encoding="utf-8")
+)
+ACTION_PIN = _CONTRACT["action_pin"]
+# The canonicalised inputs the shipped workflow passes. A recorded artifact must carry THIS, or it
+# was generated for a different invocation and cannot certify the current one — the pin alone does
+# not settle it, because `arguments` and `save-annotations` can change while the pin stays fixed.
+EXPECTED_INPUTS_DIGEST = _CONTRACT["action_inputs_digest"]
+# The canonical form that hashes to it — derived from the shipped workflow rather than restated, so a
+# fixture cannot quietly describe inputs the gate does not actually pass.
+SHIPPED_CANONICAL = json.dumps(
+    next(
+        step
+        for step in next(
+            iter(
+                yaml.safe_load(
+                    (REPO / ".github/workflows/trunk-check.yml").read_text(
+                        encoding="utf-8"
+                    )
+                )["jobs"].values()
+            )
+        )["steps"]
+        if "trunk-io/trunk-action" in str(step.get("uses", ""))
+    )["with"],
+    sort_keys=True,
+    separators=(",", ":"),
+)
+
+
+def parity_problems(record: dict) -> list[str]:
+    """Cells 1 and 5 against one harness record. Diagnostics, so each case dies for its own reason."""
+    problems: list[str] = []
+
+    if record.get("schemaVersion") != 1:
+        problems.append("schema: unexpected schemaVersion")
+    event = record.get("event")
+    if event not in ("pull_request", "push"):
+        problems.append(f"schema: unsupported event {event!r}")
+
+    raw = (record.get("resolver") or {}).get("raw", "")
+    if not raw.startswith("upstream="):
+        problems.append("resolver: did not emit an `upstream=` line")
+        resolved = None
+    else:
+        resolved = raw[len("upstream=") :].strip()
+        if not resolved:
+            problems.append("resolver: emitted an empty upstream")
+
+    invocations = record.get("invocations") or []
+    if not invocations:
+        problems.append("argv: the launcher recorded no invocation at all")
+    # `locate_trunk.sh` calls the launcher once as `<launcher> version` before the check, so the check
+    # is selected by its argv rather than by assuming a single invocation.
+    checks = [argv for argv in invocations if argv and argv[0] == "check"]
+    if len(checks) != 1:
+        problems.append(
+            f"argv: expected exactly one `check` invocation, found {len(checks)}"
+        )
+    else:
+        argv = checks[0]
+        if "--all" in argv:
+            # push.sh's zero-`before` branch. A whole-tree run is the 9027-finding gate §1 forbids.
+            problems.append("argv: the action ran `--all`")
+        if "--fix" in argv:
+            problems.append("argv: the action ran `--fix`")
+        if "--upstream" not in argv:
+            problems.append("argv: the action passed no `--upstream`")
+        elif resolved is not None:
+            passed = argv[argv.index("--upstream") + 1]
+            if passed != resolved:
+                # THE PARITY ASSERTION. Byte-for-byte, not "both look like a SHA".
+                problems.append(
+                    f"parity: the action linted {passed!r} while the guard resolved {resolved!r}"
+                )
+        if ARGUMENTS_LITERAL not in argv:
+            problems.append(
+                "argv: §6.4's declared exclusion did not reach the command line"
+            )
+
+    tree = record.get("tree") or {}
+    problems.extend(
+        f"tree: `{key}` is missing"
+        for key in ("pre", "post", "fixturePre", "fixturePost")
+        if not tree.get(key)
+    )
+    if tree.get("pre") and tree.get("post") and tree["pre"] != tree["post"]:
+        problems.append("cell 5: a tracked file's bytes changed during the run")
+    if (
+        tree.get("fixturePre")
+        and tree.get("fixturePost")
+        and tree["fixturePre"] != tree["fixturePost"]
+    ):
+        problems.append(
+            "cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled"
+        )
+
+    # ---- cell 5's POSITIVE CONTROL, and the conclusion it requires recorded separately ----------
+    #
+    # Equal pre/post hashes are consistent with two different worlds: autofix is off (what cell 5
+    # claims), or the fixture was never in the linted range (a sensor watching nothing). Neither the
+    # hashes nor the argv can tell them apart, so the harness now supplies two independent
+    # discriminators and this judge requires both.
+    action = record.get("action") or {}
+    outcome = action.get("outcome")
+    if not outcome:
+        problems.append("cell 5: the action's conclusion was not recorded")
+    elif outcome != "failure":
+        problems.append(
+            f"cell 5: the deliberately-fixable fixture did not make the pinned action fail "
+            f"(outcome {outcome!r}) — it was never in the linted range, so the pre/post hashes "
+            f"are blind"
+        )
+    # `outcome == "failure"` is STILL consistent with two worlds. Trunk reaches its `check` argv,
+    # then aborts — a linter download, a cache fetch — and the step concludes `failure` having linted
+    # nothing, while the `if: always()` control succeeds and rewrites the fixture. Both discriminators
+    # above are satisfied in that world. Only a diagnostic NAMING THE FIXTURE with a position can be
+    # produced by lint evaluation alone, so the harness records one and this judge requires it.
+    diagnostic = action.get("primaryDiagnostic")
+    if not diagnostic:
+        problems.append(
+            "cell 5: the primary run named no diagnostic on the fixture — `failure` alone cannot "
+            "distinguish a lint finding from an abort after the `check` argv was emitted"
+        )
+    else:
+        fixture = tree.get("fixture")
+        if diagnostic.get("path") != fixture:
+            problems.append(
+                f"cell 5: the primary diagnostic names {diagnostic.get('path')!r}, not the fixture "
+                f"{fixture!r} — a finding elsewhere does not show the fixture was linted"
+            )
+        if not diagnostic.get("linter"):
+            problems.append(
+                "cell 5: the primary diagnostic names no linter — the file being mentioned is not "
+                "the same claim as a linter having judged it"
+            )
+        # The POSITION IS OPTIONAL, and that is measured rather than lenient. A whole-file finding —
+        # a formatter's `fmt`, printed as `-:-` — carries no line or column; the ORIGINAL fixture was
+        # mis-indented and produced exactly that, and requiring integers made the field unsatisfiable,
+        # so the first re-run returned null on a run that HAD linted the file. COREDEV-2850's fixture is
+        # positional (`shellcheck/SC2250` at 3:7), but trunk emits both shapes, so both stay valid. When a position is present it must still be a genuine
+        # integer — `isinstance(True, int)` is True, so booleans are excluded explicitly, or a JSON
+        # `true` would forge one.
+        for axis in ("line", "column"):
+            value = diagnostic.get(axis)
+            if value is None:
+                continue
+            if not isinstance(value, int) or isinstance(value, bool):
+                problems.append(
+                    f"cell 5: the primary diagnostic's `{axis}` is present but is not an integer "
+                    "position"
+                )
+
+    control_post = tree.get("controlPost")
+    if not control_post:
+        problems.append("cell 5: the autofix positive control did not run")
+    elif tree.get("fixturePre") and control_post == tree["fixturePre"]:
+        problems.append(
+            "cell 5: enabling autofix did NOT change the fixture — the pre/post comparison cannot "
+            "register what it watches for"
+        )
+
+    inputs = record.get("actionInputs") or {}
+    if not inputs.get("digest"):
+        problems.append("inputs: the harness recorded no action-input digest")
+    else:
+        # SELF-CONSISTENT AND CURRENT are different questions, and only the second one matters here.
+        # Recomputing sha256(canonical) catches a corrupted record; it happily accepts a record that
+        # is internally perfect and describes inputs the shipped workflow no longer passes. Both are
+        # checked, and the diagnostics name which failed (codex, PR #84).
+        recomputed = hashlib.sha256(
+            (inputs.get("canonical") or "").encode("utf-8")
+        ).hexdigest()
+        if recomputed != inputs["digest"]:
+            problems.append(
+                "inputs: the recorded digest does not match the recorded canonical form"
+            )
+        elif inputs["digest"] != EXPECTED_INPUTS_DIGEST:
+            problems.append(
+                f"inputs: evidence was recorded for {inputs.get('canonical')!r}, which is not what "
+                "the shipped workflow now passes — re-run the harness"
+            )
+    # EQUALITY, NOT A SUBSTRING. `trunk-io/trunk-action@<anything>` satisfied the old check, so an
+    # artifact recorded under a bumped or unpinned ref was ACCEPTED as parity evidence for the pin
+    # this gate actually ships — the one thing the record exists to establish about itself.
+    if inputs.get("uses") != ACTION_PIN:
+        problems.append(
+            f"inputs: the harness ran {inputs.get('uses')!r}, not the pinned {ACTION_PIN!r}"
+        )
+
+    return problems
+
+
+def _clean_record(event: str = "pull_request") -> dict:
+    upstream = "a" * 40
+    return {
+        "schemaVersion": 1,
+        "event": event,
+        "ref": "harness-base",
+        "sha": "b" * 40,
+        "resolver": {"raw": f"upstream={upstream}"},
+        "invocations": [
+            ["version"],
+            [
+                "check",
+                "--ci",
+                "--upstream",
+                upstream,
+                "--github-commit",
+                "c" * 40,
+                "--github-annotate-file=/tmp/x",
+                ARGUMENTS_LITERAL,
+            ],
+        ],
+        "tree": {
+            "pre": "t1",
+            "post": "t1",
+            "fixture": "harness-fixtures/fixable.sh",
+            "fixturePre": "f1",
+            "fixturePost": "f1",
+            # The control ran with `--fix` and DID rewrite the fixture — which is what makes the
+            # equal `fixturePre`/`fixturePost` above meaningful rather than vacuous.
+            "controlPost": "f-autofixed",
+        },
+        "action": {
+            "outcome": "failure",
+            "controlOutcome": "success",
+            # THE SHAPE A REAL RUN PRODUCES — measured, never imagined. COREDEV-2850 replaced the
+            # mis-indented fixture (shfmt's whole-file `fmt`, no position; run 34073353787) because the
+            # required job now filters shfmt out. This shape was MEASURED by running the harness's own
+            # `primary_diagnostic()` over a `trunk check --ci --upstream` of the staged fixture under the
+            # six-name filter: `shellcheck/SC2250` at line 3, column 7 — and CONFIRMED by CI: the
+            # harness runs 37064766555 (push) and 37064772381 (pull_request) on `e71b0bf` recorded
+            # exactly this diagnostic, and both artifacts are what `parity-*.json` now hold.
+            "primaryDiagnostic": {
+                "path": "harness-fixtures/fixable.sh",
+                "linter": "shellcheck/SC2250",
+                "line": 3,
+                "column": 7,
+            },
+        },
+        "actionInputs": {
+            # THE REAL RECORDED SHAPE. This was `{"canonical": "{}", "digest": "d"*64}` — internally
+            # inconsistent by construction, which no genuine artifact ever is, and which meant the
+            # positive control was asserting that the judge accepts an impossible record. The judge
+            # now recomputes the digest, and caught it immediately.
+            "canonical": SHIPPED_CANONICAL,
+            "digest": EXPECTED_INPUTS_DIGEST,
+            "uses": ACTION_PIN,
+        },
+    }
+
+
+class TheJudgeDiscriminates(unittest.TestCase):
+    """Every wrong implementation the harness exists to catch, and its own diagnostic."""
+
+    def test_a_clean_record_is_a_passing_positive_control(self):
+        self.assertEqual([], parity_problems(_clean_record()))
+
+    def test_an_aborted_primary_is_rejected_despite_a_failure_outcome(self):
+        """THE WORLD THIS FIELD EXISTS FOR. Outcome `failure`, control rewrote the fixture, hashes
+        equal — every other discriminator satisfied — yet Trunk never linted the fixture.
+        """
+        record = _clean_record()
+        del record["action"]["primaryDiagnostic"]
+        problems = parity_problems(record)
+        self.assertIn(
+            "cell 5: the primary run named no diagnostic on the fixture — `failure` alone cannot "
+            "distinguish a lint finding from an abort after the `check` argv was emitted",
+            problems,
+        )
+
+    def test_a_diagnostic_naming_another_file_is_rejected(self):
+        record = _clean_record()
+        record["action"]["primaryDiagnostic"]["path"] = "scripts/ci/parity-recorder.sh"
+        self.assertTrue(
+            any("not the fixture" in problem for problem in parity_problems(record)),
+            "a finding on a different file must not certify that the fixture was linted",
+        )
+
+    def test_a_boolean_position_cannot_forge_a_diagnostic(self):
+        """`isinstance(True, int)` is True, so this is the mutant a naive int check survives."""
+        record = _clean_record()
+        record["action"]["primaryDiagnostic"]["line"] = True
+        self.assertIn(
+            "cell 5: the primary diagnostic's `line` is present but is not an integer position",
+            parity_problems(record),
+        )
+
+    def test_a_diagnostic_without_a_linter_is_rejected(self):
+        """Mentioning the file is not the same claim as a linter having judged it."""
+        record = _clean_record()
+        del record["action"]["primaryDiagnostic"]["linter"]
+        self.assertTrue(
+            any("names no linter" in problem for problem in parity_problems(record)),
+            "a diagnostic with no linter must not certify that the fixture was linted",
+        )
+
+    def test_an_absent_position_is_still_accepted_for_a_whole_file_finding(self):
+        """The POSITIVE control for the optionality — asserted, so nobody 'tightens' it back.
+
+        COREDEV-2850 made the shipped fixture positional, which made this test stale in the OPPOSITE
+        direction: it used to read the null position straight off the clean record. A whole-file
+        finding (`-:-`) is still a shape trunk emits, so the optionality is kept and exercised
+        explicitly here rather than inherited from whatever the fixture happens to produce.
+        """
+        record = _clean_record()
+        record["action"]["primaryDiagnostic"].update(line=None, column=None)
+        self.assertEqual([], parity_problems(record))
+
+    def test_the_shipped_fixture_s_position_is_a_genuine_integer_pair(self):
+        """The positional half: the measured 3:7 must be accepted AS integers, not merely tolerated."""
+        diagnostic = _clean_record()["action"]["primaryDiagnostic"]
+        self.assertEqual((3, 7), (diagnostic["line"], diagnostic["column"]))
+        self.assertEqual([], parity_problems(_clean_record()))
+
+    def test_a_range_mismatch_is_the_cell_1_failure(self):
+        """The guard checking a different range than the action lints is the whole point."""
+        record = _clean_record()
+        record["invocations"][1][3] = "9" * 40
+        problems = parity_problems(record)
+        self.assertTrue(any(p.startswith("parity:") for p in problems), problems)
+
+    def test_evidence_recorded_under_a_DIFFERENT_action_ref_is_refused(self):
+        """The record's job is to attest what the pinned action did. Recorded under another ref it
+        attests something else entirely, and the substring check this replaced accepted it.
+        """
+        record = _clean_record()
+        record["actionInputs"]["uses"] = "trunk-io/trunk-action@" + "9" * 40
+        self.assertTrue(
+            any(
+                p.startswith("inputs: the harness ran") for p in parity_problems(record)
+            ),
+            parity_problems(record),
+        )
+
+    def test_a_CORRUPTED_record_whose_digest_does_not_match_its_canonical_is_refused(
+        self,
+    ):
+        record = _clean_record()
+        record["actionInputs"]["digest"] = "0" * 64
+        self.assertIn(
+            "inputs: the recorded digest does not match the recorded canonical form",
+            parity_problems(record),
+        )
+
+    def test_a_SELF_CONSISTENT_but_STALE_record_is_refused(self):
+        """The one that matters, and the one recomputing the digest alone would miss.
+
+        An artifact recorded before `arguments` or `save-annotations` changed is internally perfect —
+        its digest hashes its own canonical form exactly — and describes an invocation the gate no
+        longer makes. Self-consistency is not currency, so the digest is compared against the
+        registry's frozen value as well.
+        """
+        import hashlib as _h
+
+        record = _clean_record()
+        stale = '{"arguments":"--filter=-markdown-link-check --fix","save-annotations":true}'
+        record["actionInputs"]["canonical"] = stale
+        record["actionInputs"]["digest"] = _h.sha256(stale.encode()).hexdigest()
+        problems = parity_problems(record)
+        self.assertNotIn(
+            "inputs: the recorded digest does not match the recorded canonical form",
+            problems,
+            "the fixture must be internally CONSISTENT, or it tests the wrong check",
+        )
+        self.assertTrue(
+            any(p.startswith("inputs: evidence was recorded for") for p in problems),
+            problems,
+        )
+
+    def test_an_unpinned_action_ref_is_refused(self):
+        record = _clean_record()
+        record["actionInputs"]["uses"] = "trunk-io/trunk-action@v2.0.0"
+        self.assertTrue(
+            any(
+                p.startswith("inputs: the harness ran") for p in parity_problems(record)
+            ),
+            parity_problems(record),
+        )
+
+    def test_a_control_that_changed_nothing_is_the_blind_sensor(self):
+        """The finding this control exists for: if `--fix` leaves the fixture byte-identical, then
+        equal pre/post hashes on the primary run establish nothing about autofix at all.
+        """
+        record = _clean_record()
+        record["tree"]["controlPost"] = record["tree"]["fixturePre"]
+        self.assertIn(
+            "cell 5: enabling autofix did NOT change the fixture — the pre/post comparison cannot "
+            "register what it watches for",
+            parity_problems(record),
+        )
+
+    def test_a_missing_control_is_not_silently_accepted(self):
+        record = _clean_record()
+        del record["tree"]["controlPost"]
+        self.assertIn(
+            "cell 5: the autofix positive control did not run", parity_problems(record)
+        )
+
+    def test_a_primary_run_that_SUCCEEDED_means_the_fixture_was_out_of_range(self):
+        """A staged, mis-indented shell script that Trunk actually looked at must yield a finding. A
+        green primary run says the range never contained it."""
+        record = _clean_record()
+        record["action"]["outcome"] = "success"
+        self.assertTrue(
+            any(
+                p.startswith("cell 5: the deliberately-fixable fixture did not make")
+                for p in parity_problems(record)
+            ),
+            parity_problems(record),
+        )
+
+    def test_an_unrecorded_conclusion_is_refused(self):
+        """Cell 5 requires the action's conclusion recorded SEPARATELY from the hash comparison."""
+        record = _clean_record()
+        record["action"]["outcome"] = ""
+        self.assertIn(
+            "cell 5: the action's conclusion was not recorded", parity_problems(record)
+        )
+
+    def test_an_all_run_is_caught(self):
+        record = _clean_record("push")
+        record["invocations"][1].append("--all")
+        self.assertIn("argv: the action ran `--all`", parity_problems(record))
+
+    def test_an_autofix_run_is_caught_twice_over(self):
+        """Once by the argv and once by the fixture bytes.
+
+        NOT the positive control — this is a judge-discrimination case over a SYNTHETIC record, and
+        `fixturePost` below is hand-set. The control is the `autofix-positive-control` step in
+        `trunk-parity-harness.yml`, which runs the pinned action with `--fix` for real; this test
+        only proves the judge would notice if it reported a change.
+        """
+        record = _clean_record()
+        record["invocations"][1].append("--fix")
+        record["tree"]["fixturePost"] = "f2"
+        record["tree"]["post"] = "t2"
+        problems = parity_problems(record)
+        self.assertIn("argv: the action ran `--fix`", problems)
+        self.assertIn(
+            "cell 5: the deliberately-fixable fixture was rewritten — autofix is enabled",
+            problems,
+        )
+        self.assertIn("cell 5: a tracked file's bytes changed during the run", problems)
+
+    def test_a_recorder_that_never_delegated_is_not_mistaken_for_a_clean_tree(self):
+        """A record-and-exit launcher leaves the fixture trivially unchanged. It is caught because the
+        harness must show a `check` invocation carrying the declared exclusion — a fixture that is
+        unchanged because NOTHING RAN is the sink problem wearing a different hat."""
+        record = _clean_record()
+        record["invocations"] = [["version"]]
+        problems = parity_problems(record)
+        self.assertTrue(
+            any("expected exactly one `check` invocation" in p for p in problems),
+            problems,
+        )
+
+    def test_a_missing_upstream_is_caught(self):
+        record = _clean_record()
+        record["invocations"][1] = ["check", "--ci", ARGUMENTS_LITERAL]
+        self.assertIn(
+            "argv: the action passed no `--upstream`", parity_problems(record)
+        )
+
+    def test_a_dropped_exclusion_literal_is_caught(self):
+        record = _clean_record()
+        record["invocations"][1].remove(ARGUMENTS_LITERAL)
+        self.assertIn(
+            "argv: §6.4's declared exclusion did not reach the command line",
+            parity_problems(record),
+        )
+
+    def test_an_empty_resolver_output_is_caught(self):
+        record = _clean_record()
+        record["resolver"]["raw"] = ""
+        self.assertIn(
+            "resolver: did not emit an `upstream=` line", parity_problems(record)
+        )
+
+
+class TheResolverNeedsOnlyWhatGitHubProvides(unittest.TestCase):
+    """REGRESSION: the guard runs OUTSIDE the action and gets none of the action's variables.
+
+    The first real PR run failed here. `pull_request.sh` reads
+    `GITHUB_EVENT_PULL_REQUEST_NUMBER`, which is NOT a GitHub-provided variable -- `action.yaml`
+    SYNTHESISES it from `github.event.pull_request.number` for the scripts it runs. The resolver
+    transcribed the action's LOGIC faithfully and inherited an ENVIRONMENT that is not there, so it
+    fell through to the base-SHA fallback, found that unset too, and failed closed on every PR.
+
+    C5 forbids an `env:` block in the shipped workflows, so supplying the action's variables was never
+    an available fix. These cases therefore run the resolver with ONLY what GitHub gives every step.
+    """
+
+    RESOLVER = REPO / "scripts/ci/resolve-trunk-range.sh"
+
+    def _fixture(self, tmp):
+        """A repo whose HEAD is a merge commit, as `refs/pull/N/merge` is."""
+        root = Path(tmp)
+
+        def run(*args):
+            subprocess.run(
+                ["git", "-C", str(root), *args], check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main", ".")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        (root / "f").write_text("base\n", encoding="utf-8")
+        run("add", "-A")
+        run("commit", "-qm", "base")
+        run("checkout", "-qb", "topic")
+        (root / "f").write_text("base\nchange\n", encoding="utf-8")
+        run("commit", "-qam", "change")
+        run("checkout", "-q", "main")
+        (root / "g").write_text("other\n", encoding="utf-8")
+        run("add", "-A")
+        run("commit", "-qm", "other")
+        run("merge", "-q", "--no-ff", "topic", "-m", "merge")
+        return root
+
+    def _publish(self, root, prs):
+        """Give the fixture the `origin` a real checkout has (COREDEV-2879).
+
+        The merge-ref branch now certifies HEAD^1 against the PR's CURRENT base, which it fetches:
+        `refs/heads/<base>` and `refs/pull/<n>/merge`. A bare repo stands in for GitHub, holding `main`
+        at HEAD^1 and each named PR's merge ref at HEAD, which is the ordinary, current state.
+
+        Its OWN temporary directory, cleaned up with the test: `root` is a `TemporaryDirectory` itself,
+        so a sibling path beside it escaped that cleanup and leaked a bare repo per run (codex review).
+        """
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        bare = Path(holder.name) / "origin.git"
+        subprocess.run(
+            ["git", "clone", "-q", "--bare", str(root), str(bare)],
+            check=True,
+            capture_output=True,
+        )
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD", "HEAD^1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        subprocess.run(
+            ["git", "-C", str(bare), "update-ref", "refs/heads/main", head[1]],
+            check=True,
+        )
+        for pr in prs:
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(bare),
+                    "update-ref",
+                    f"refs/pull/{pr}/merge",
+                    head[0],
+                ],
+                check=True,
+            )
+        subprocess.run(
+            ["git", "-C", str(root), "remote", "add", "origin", bare.as_uri()],
+            check=True,
+        )
+
+    def _resolve(self, root, **env):
+        environment = {"PATH": os.environ["PATH"], "HOME": str(root)}
+        environment.update(env)
+        return subprocess.run(
+            ["bash", str(self.RESOLVER)],
+            check=False,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def test_a_pull_request_resolves_with_no_action_supplied_variables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            self._publish(root, ["84"])
+            expected = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD^1"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            completed = self._resolve(
+                root,
+                GITHUB_EVENT_NAME="pull_request",
+                GITHUB_REF_NAME="84/merge",
+                GITHUB_BASE_REF="main",
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual("upstream=" + expected, completed.stdout.strip())
+
+    def test_the_merge_ref_is_detected_by_pattern_not_by_the_pr_number(self):
+        """Any `<n>/merge` works: the number selects which merge ref to certify against."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            self._publish(root, ["1", "84", "99999"])
+            for ref in ("1/merge", "84/merge", "99999/merge"):
+                with self.subTest(ref=ref):
+                    completed = self._resolve(
+                        root,
+                        GITHUB_EVENT_NAME="pull_request",
+                        GITHUB_REF_NAME=ref,
+                        GITHUB_BASE_REF="main",
+                    )
+                    self.assertEqual(0, completed.returncode, completed.stderr)
+                    self.assertTrue(completed.stdout.startswith("upstream="))
+
+    def test_a_zero_before_push_still_fails_closed(self):
+        """The branch that would send the action down its `--all` path.
+
+        BOTH HASH WIDTHS. The guard compared against a 40-character literal, i.e. SHA-1 only; a
+        repository created with `--object-format=sha256` has a 64-character null oid — verified
+        against git, which reports 65 bytes including the newline — and slipped straight past into
+        the branch this guard exists to block (gemini, PR #84). The width is the operand here, so a
+        test that only ever passes 40 zeros cannot see the defect.
+        """
+        for width in (40, 64):
+            with self.subTest(oid_width=width), tempfile.TemporaryDirectory() as tmp:
+                completed = self._resolve(
+                    self._fixture(tmp),
+                    GITHUB_EVENT_NAME="push",
+                    GITHUB_REF_NAME="main",
+                    GITHUB_EVENT_BEFORE="0" * width,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("--all", completed.stderr)
+
+    def test_a_push_resolves_from_the_event_payload_alone(self):
+        """The SAME defect as the pull_request branch, and the first repair fixed only one half.
+
+        `GITHUB_EVENT_BEFORE` is no more GitHub-provided than `GITHUB_EVENT_PULL_REQUEST_NUMBER` was —
+        `action.yaml` synthesises BOTH. Pattern-matching the merge ref repaired the PR path and left
+        the canary reading a variable that is never set, so it would have died on its first push
+        exactly as the required workflow died on its first PR.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            before = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD~1"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            payload = Path(tmp) / "event.json"
+            payload.write_text(json.dumps({"before": before}), encoding="utf-8")
+            completed = self._resolve(
+                root,
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+                GITHUB_EVENT_PATH=str(payload),
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual("upstream=" + before, completed.stdout.strip())
+
+    def test_a_zero_before_in_the_payload_still_fails_closed(self):
+        """The `--all` branch must stay unreachable however the before-hash arrives."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            payload = Path(tmp) / "event.json"
+            payload.write_text(json.dumps({"before": "0" * 40}), encoding="utf-8")
+            completed = self._resolve(
+                root,
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+                GITHUB_EVENT_PATH=str(payload),
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn("--all", completed.stderr)
+
+    def test_a_push_with_no_before_anywhere_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = self._resolve(
+                self._fixture(tmp),
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF_NAME="main",
+            )
+            self.assertNotEqual(0, completed.returncode)
+
+    def test_unsupported_events_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            for event in ("workflow_dispatch", "merge_group", "schedule"):
+                with self.subTest(event=event):
+                    completed = self._resolve(root, GITHUB_EVENT_NAME=event)
+                    self.assertNotEqual(0, completed.returncode)
+                    self.assertIn("unsupported event", completed.stderr)
+
+
+class TheMergeCommitMustSitOnTheCurrentBase(unittest.TestCase):
+    """COREDEV-2879: a retargeted PR must not satisfy `trunk-check` with a run against its OLD base.
+
+    Observed on PR #110 (main -> alpha): the retarget's run checked out a merge commit GitHub had not yet
+    recomputed, linted main's range and went green. The resolver therefore certifies HEAD^1 against two
+    live references, by FIRST-PARENT membership: the event's base branch tip (catches that race) and the
+    PR's current `refs/pull/<n>/merge` (catches a re-run of a pre-retarget event, whose payload still
+    names the old base).
+
+    THE TOPOLOGY IS THE ONE THAT BROKE REVISION 2 (plan F8). alpha absorbs an OLD main tip as the SECOND
+    parent of a catch-up merge, exactly as alpha `10d57dd` absorbs main `dd84d82`, so plain ancestry
+    calls that main tip "on alpha". Every checkout is a depth-2 clone, as `actions/checkout` makes one,
+    against a bare origin whose refs each case sets.
+
+        main:   c0 - m1 - m2                      (m1 is the OLD main tip alpha absorbs)
+        alpha:  c0 - a1 - A(a1, m1) - a2          (A is the catch-up merge; m1 is its parent 2)
+        head:   m2 - h1                           (the PR, cut from main)
+    """
+
+    RESOLVER = REPO / "scripts/ci/resolve-trunk-range.sh"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        full = self.tmp / "full"
+
+        def git(*args):
+            return subprocess.run(
+                ["git", "-C", str(full), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        def commit(name):
+            (full / name).write_text(name + "\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-qm", name)
+            return git("rev-parse", "HEAD")
+
+        git_init = ["git", "init", "-q", "-b", "main", str(full)]
+        subprocess.run(git_init, check=True, capture_output=True)
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        self.c0 = commit("c0")
+        self.m1 = commit("m1")
+        self.m2 = commit("m2")
+        git("checkout", "-qb", "alpha", self.c0)
+        self.a1 = commit("a1")
+        git("merge", "-q", "--no-ff", "-m", "A", self.m1)
+        self.A = git("rev-parse", "HEAD")
+        self.a2 = commit("a2")
+        git("checkout", "-qb", "head", self.m2)
+        self.h1 = commit("h1")
+
+        def merge_on(base, name):
+            git("checkout", "-q", "--detach", base)
+            git("merge", "-q", "--no-ff", "-m", name, self.h1)
+            sha = git("rev-parse", "HEAD")
+            git("branch", "-f", name, sha)
+            return sha
+
+        self.stale = merge_on(self.m2, "on-main")
+        self.fresh = merge_on(self.a2, "on-alpha")
+        self.older = merge_on(self.A, "on-alpha-before-a2")
+        self.catch = merge_on(self.m1, "on-old-main")
+        self.origin = self.tmp / "origin.git"
+        subprocess.run(
+            ["git", "clone", "-q", "--bare", str(full), str(self.origin)],
+            check=True,
+            capture_output=True,
+        )
+        self.full = full
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _checkout(self, branch):
+        """A depth-2 clone of one merge commit, its `origin` pointed at the bare repo."""
+        work = self.tmp / ("co-" + branch)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "-q",
+                "--depth=2",
+                "--branch",
+                branch,
+                self.full.as_uri(),
+                str(work),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(work),
+                "remote",
+                "set-url",
+                "origin",
+                self.origin.as_uri(),
+            ],
+            check=True,
+        )
+        return work
+
+    def _merge_ref(self, sha):
+        """Set (or, with None, delete) the PR's CURRENT merge ref on the origin."""
+        if sha is None:
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.origin),
+                    "update-ref",
+                    "-d",
+                    "refs/pull/7/merge",
+                ],
+                check=False,
+                capture_output=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "-C", str(self.origin), "update-ref", "refs/pull/7/merge", sha],
+                check=True,
+            )
+
+    def _resolve(self, branch, base, merge_ref, ref_name="7/merge"):
+        self._merge_ref(merge_ref)
+        environment = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(self.tmp),
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF_NAME": ref_name,
+        }
+        if base is not None:
+            environment["GITHUB_BASE_REF"] = base
+        return subprocess.run(
+            ["bash", str(self.RESOLVER)],
+            check=False,
+            cwd=str(self._checkout(branch)),
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def assertResolves(self, completed, upstream):
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual("upstream=" + upstream, completed.stdout.strip())
+
+    def assertRefused(self, completed, reason):
+        self.assertNotEqual(0, completed.returncode, completed.stdout)
+        self.assertIn(reason, completed.stderr)
+        self.assertEqual("", completed.stdout, "a refused run must print no upstream")
+
+    def test_R1_the_race_a_merge_ref_not_yet_recomputed_after_a_retarget(self):
+        """The #110 observation: the event names alpha, the merge commit is still head + main."""
+        self.assertRefused(
+            self._resolve("on-main", "alpha", self.stale), "STALE MERGE REF"
+        )
+
+    def test_R2_a_re_run_of_a_pre_retarget_event_once_the_merge_ref_has_moved(self):
+        """A re-run keeps the old payload (base main) and merge commit; the PR now targets alpha."""
+        self.assertRefused(
+            self._resolve("on-main", "main", self.fresh), "OBSOLETE EVENT"
+        )
+
+    def test_R3_an_ordinary_current_merge_resolves_its_first_parent(self):
+        self.assertResolves(self._resolve("on-alpha", "alpha", self.fresh), self.a2)
+
+    def test_R4_a_base_that_merely_advanced_is_not_refused(self):
+        """The merge commit was computed on A; alpha has since advanced to a2. That is ordinary."""
+        self.assertResolves(
+            self._resolve("on-alpha-before-a2", "alpha", self.fresh), self.A
+        )
+
+    def test_R5_an_ordinary_main_pull_request_resolves(self):
+        self.assertResolves(self._resolve("on-main", "main", self.stale), self.m2)
+
+    def test_R6_an_unfetchable_merge_ref_fails_closed_naming_the_fetch(self):
+        """The REASON is asserted: ignoring the fetch failure still exits 1, but misreports it as
+        `STALE MERGE REF` (plan §4 V5), which only a reason assertion can tell apart."""
+        self.assertRefused(self._resolve("on-alpha", "alpha", None), "could not fetch")
+
+    def test_R8_the_catch_up_race_is_refused_although_m1_is_an_ancestor_of_alpha(self):
+        """m1 reaches alpha only through the catch-up merge's SECOND parent."""
+        self.assertRefused(
+            self._resolve("on-old-main", "alpha", self.catch), "STALE MERGE REF"
+        )
+
+    def test_R9_a_catch_up_obsolete_re_run_is_refused(self):
+        """The case revision 2's ancestry check accepted after recomputation (codex, round 2)."""
+        self.assertRefused(
+            self._resolve("on-old-main", "main", self.fresh), "OBSOLETE EVENT"
+        )
+
+    def test_R10_a_main_merge_on_an_older_main_tip_is_ordinary_advancement(self):
+        """m1 is on main's first-parent chain: refusing it would red unrelated main PRs."""
+        self.assertResolves(self._resolve("on-old-main", "main", self.catch), self.m1)
+
+    def test_an_unset_base_ref_fails_closed(self):
+        self.assertRefused(
+            self._resolve("on-main", None, self.stale), "GITHUB_BASE_REF is unset"
+        )
+
+    def test_a_merge_ref_name_without_a_pr_number_fails_closed(self):
+        self.assertRefused(
+            self._resolve("on-main", "main", self.stale, ref_name="topic/merge"),
+            "cannot read a PR number",
+        )
+
+
+class TheHarnessEvidenceIsAcceptedAgainstTheSchema(unittest.TestCase):
+    """M2c's acceptance step. SKIPS until a real run has produced evidence — never passes vacuously."""
+
+    def test_every_recorded_parity_artifact_is_clean(self):
+        records = (
+            sorted(EVIDENCE_DIR.glob("parity-*.json")) if EVIDENCE_DIR.exists() else []
+        )
+        if not records:
+            self.skipTest(
+                "no parity evidence yet — M2c is not complete until the harness has run on "
+                "`harness-base` / `harness/**` and its artifact is committed under "
+                "docs/planning/evidence/. Cells 1 and 5 stay unowned until then."
+            )
+        seen = set()
+        for path in records:
+            with self.subTest(evidence=path.name):
+                record = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual([], parity_problems(record))
+                seen.add(record["event"])
+        # Both event paths through the pinned action must be exercised: they take different branches.
+        self.assertEqual(
+            {"pull_request", "push"},
+            seen,
+            "both event paths must be observed — they resolve their ranges differently",
+        )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

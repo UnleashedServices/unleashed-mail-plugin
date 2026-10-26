@@ -1,0 +1,1221 @@
+{
+  "c2AndCell16RemoteHalves": {
+    "canaryWorkflowBranches": ["main", "alpha"],
+    "equalityHolds": true,
+    "note": [
+      "The RAW set is never compared directly: `~DEFAULT_BRANCH` is a dynamic alias, so a",
+      "literal comparison both reds against a correct workflow AND cannot see a default-branch",
+      "retarget, in which no string on either side changes."
+    ],
+    "rawTargetSet": {
+      "exclude": [],
+      "include": ["~DEFAULT_BRANCH", "refs/heads/alpha"]
+    },
+    "requiredWorkflowBranches": ["main", "alpha"],
+    "resolvedTargetSet": ["alpha", "main"]
+  },
+  "cell16CanaryNotRequired": {
+    "note": [
+      "A POINT-IN-TIME read. It cannot prove 'never', and claiming so would assert more than",
+      "this owner can see. M4's post-edit readback re-verifies it."
+    ],
+    "requiredContexts": [
+      "validate",
+      "py39-smoke",
+      "secret-scan",
+      "load-check",
+      "redactor-equivalence (ubuntu-latest)"
+    ],
+    "trunkCheckPushAbsent": true
+  },
+  "m4Preconditions": {
+    "integrationIds": [15368],
+    "mergeQueueRulePresent": false,
+    "note": [
+      "`integration_id` is OBTAINED from the existing contexts rather than guessed, which is",
+      "what M4 requires. A merge-queue rule would be a STOP, not a configuration tweak."
+    ],
+    "ruleTypes": ["deletion", "non_fast_forward", "required_status_checks"],
+    "strictRequiredStatusChecksPolicy": false,
+    "trunkCheckAbsentPreM4": true
+  },
+  "observedAt": "2026-09-02T15:56:32Z",
+  "ruleset": {
+    "bypassActors": [],
+    "enforcement": "active",
+    "id": 16082567,
+    "name": "Control"
+  },
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2780",
+  "why": [
+    "\u00a77's ownership rule: a cell asserting a relationship between LOCAL content and REMOTE state is a",
+    "HYBRID -- the Python owner asserts the local shape, and THIS ARTIFACT asserts equality against the",
+    "ruleset as read at rollout time. The Python suite cannot observe the ruleset: CI holds no token",
+    "that can read one, which `validate` demonstrated with `gh api ... exit status 4`."
+  ],
+  "cell16CanaryRuntimeControl": {
+    "what": "\u00a77 row 16's second runtime half: the control proving the Trunk step stays observably failed while the canary job stays non-blocking.",
+    "milestone": "M2b",
+    "observedAt": "2026-09-06T18:35:00Z",
+    "tuple": {
+      "trunkStepOutcome": "failure",
+      "trunkStepConclusion": "failure",
+      "canaryJobConclusion": "failure",
+      "workflowRunConclusion": "success",
+      "note": [
+        "This is the tuple M2b requires, and the shape matters: job-level `continue-on-error` does",
+        "NOT make the job conclude success. It stops the job's failure from failing the WORKFLOW RUN.",
+        "Revision 28 of the plan asked for step-failure with job-success, which that scope cannot",
+        "produce. The canary can never block because its context is NOT REQUIRED \u2014 not because its",
+        "job concludes green."
+      ]
+    },
+    "boundToLintDiagnostic": {
+      "linter": "shellcheck/SC2250",
+      "severity": "low",
+      "path": ".githooks/pre-commit",
+      "line": 64,
+      "column": 46,
+      "message": "Prefer putting braces around variable references even when not strictly required.",
+      "filesChecked": 44,
+      "existingIssues": 382,
+      "newIssues": 1,
+      "why": [
+        "A checkout, setup, download or fetch failure yields the SAME three conclusions while Trunk",
+        "never reached lint evaluation, so an unbound observation certifies a canary that never linted",
+        "anything. This one is bound: Trunk reported a specific linter, file, line and column, and",
+        "reports having checked 44 modified files against 382 existing issues."
+      ]
+    },
+    "provenance": {
+      "base": "alpha",
+      "headSha": "6f5f9de",
+      "workflowPath": ".github/workflows/trunk-check-push.yml",
+      "workflowRunId": 34052149035,
+      "checkRunId": 101537555248,
+      "effectiveCheckName": "trunk-check-push",
+      "effectiveCheckNameNote": "the `name:` value, NOT the YAML job id \u2014 the plan is explicit that a required context matches the effective check name",
+      "event": "push",
+      "trunkCheckMode": "push",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "isRequiredContext": false,
+      "requiredContextsOnAlpha": [
+        "validate",
+        "py39-smoke",
+        "secret-scan",
+        "load-check",
+        "redactor-equivalence (ubuntu-latest)"
+      ]
+    },
+    "howTheStimulusArose": [
+      "STATED PLAINLY BECAUSE IT DIFFERS FROM THE PLAN'S PRESCRIPTION.",
+      "M2b prescribes a provenance-bound disposable fork as the stimulus, and its stated reason is",
+      "that no lint-failing commit can otherwise reach a branch the canary watches: `push.branches` is",
+      "exactly [main, alpha], both are protected by ruleset Control with an empty bypass_actors, and",
+      "no additional in-repo branch can match.",
+      "",
+      "The M2a catch-up merge falsified that assumption. Merging main into alpha (PR #86, 92 commits)",
+      "carried a PRE-EXISTING SC2250 in .githooks/pre-commit that is `new` relative to alpha's older",
+      "baseline but baseline relative to main. The commit reached alpha legitimately, through the PR",
+      "process and its five required checks, and the canary then fired on the push.",
+      "",
+      "The outcome was PREDICTED BEFORE THE MERGE, not rationalised after: the same single SC2250 was",
+      "identified on PR #86's advisory trunk-check run and reported to the maintainer, who elected to",
+      "accept it rather than fix it first. So the diagnostic was known in advance and then observed.",
+      "",
+      "WHAT THIS DOES NOT ESTABLISH: it is not a fork-based stimulus, and it was incidental rather",
+      "than deliberately induced. A reviewer who reads M2b's prescription as normative rather than as",
+      "one means to the end should treat M2b's runtime half as still open and run the fork exercise.",
+      "The argument for accepting it: the requirement is to CAUSE a controlled canary failure and",
+      "record the tuple bound to a lint diagnostic, and this observation is on production",
+      "infrastructure rather than a fork \u2014 the path that actually matters."
+    ],
+    "whatRemainsForM2b": [
+      "If the fork-based stimulus is judged necessary, it still needs: a provenance-bound disposable",
+      "fork whose default branch is named `main`, carrying the same canary workflow at the same SHA",
+      "pins, with GitHub Actions ENABLED in that fork (they are disabled on forks by default, and",
+      "without enabling them the stimulus silently produces nothing and this half is unfalsifiable)."
+    ],
+    "whyItLivesHere": [
+      "It was first written to a standalone `COREDEV-2780-m2b-canary.json`, which the contract has",
+      "never heard of and nothing reads. \u00a77's inventory and its ownership table both already assign",
+      "this observation to THIS file: `cell 16's ruleset read and its canary runtime control`, and",
+      "`the control proving the Trunk step stays observably failed while the job stays non-blocking`.",
+      "The repo has paid for that shape once already \u2014 `_recorded_remote_halves()`'s docstring",
+      "records rollout.json being named as owner in prose and parsed by nothing (codex, PR #84).",
+      "Conforming the evidence to the contract is cheaper and truer than amending the contract to",
+      "match where the evidence happened to land."
+    ]
+  },
+  "cell10AnnotationArtifact": {
+    "what": "\u00a77 row 10's annotation-artifact observation.",
+    "resolves": "Cell 10's annotation observation, which the follow-up plan scheduled under M3 and which this artifact previously listed as unresolved.",
+    "contract": [
+      "The original contract requires three things together: a NON-FORK PR (so there is no 403),",
+      "exercise of the `--github-annotate-file` branch, and a produced `trunk-annotations` artifact.",
+      "It assigns that observation to the committed rollout artifact \u2014 an uncommitted tuple leaves",
+      "the cell skipping, which is why it is recorded here rather than only observed."
+    ],
+    "nonFork": {
+      "green": {
+        "pr": 91,
+        "headRef": "feat/COREDEV-2780-m3-strict-main"
+      },
+      "red": {
+        "pr": 92,
+        "headRef": "evidence/COREDEV-2780-m3-red-main"
+      },
+      "why": "Both heads are branches of this repository, not forks, so `contents: read` suffices and no 403 arises."
+    },
+    "annotateFileBranchExercised": {
+      "mechanism": "`save-annotations: true` in .github/workflows/trunk-check.yml",
+      "effect": "The action writes an annotation artifact INSTEAD of posting annotations, which is why `contents: read` stands (\u00a76.1 option (b)).",
+      "corroboration": "The M2c parity artifact records the resulting invocation carrying `--github-annotate-file=<tmpdir>/annotations.bin` on the pull_request event, and NOT on push."
+    },
+    "artifactProduced": {
+      "name": "trunk-annotations",
+      "green": {
+        "workflowRunId": 34060576498,
+        "artifactId": 9997331764,
+        "sizeBytes": 1468
+      },
+      "red": {
+        "workflowRunId": 34060585595,
+        "artifactId": 9997333826,
+        "sizeBytes": 1874
+      },
+      "note": "Produced by trunk-check ITSELF on both halves \u2014 not only by the M2c parity harness. That is what the artifact previously left unresolved."
+    },
+    "boundToTheProbe": {
+      "member": "annotations.bin",
+      "uncompressedBytes": 8825,
+      "names": [
+        "harness-fixtures/m3-red-probe.sh",
+        "shellcheck",
+        "SC2086",
+        "SC2250"
+      ],
+      "why": "A non-empty artifact is not by itself evidence: an empty or unrelated payload would also be 'produced'. Its content names the probe file and both linters, so the annotation payload is bound to the same diagnostic as the red conclusion."
+    }
+  },
+  "cell12DualBaseCheckRuns": {
+    "what": "\u00a77 row 12's dual-base provenance-bound check runs, and the strict/advisory discrimination they carry.",
+    "milestone": "M3",
+    "base": "main",
+    "observedAt": "2026-09-06T19:20:00Z",
+    "basesRecorded": ["main", "alpha"],
+    "basesRequired": ["main", "alpha"],
+    "why": [
+      "A GREEN run cannot prove the gate is strict. With no findings, advisory and strict both",
+      "conclude success \u2014 they are indistinguishable. Only a RED run discriminates:",
+      "  advisory  Trunk fails -> job failure -> WORKFLOW RUN SUCCEEDS",
+      "  strict    Trunk fails -> job failure -> WORKFLOW RUN FAILS",
+      "That is why M3 requires both per base, and why revision 1 of the plan was wrong to accept a",
+      "context observed only while failures were suppressed \u2014 one that had never been able to fail."
+    ],
+    "stepScope": {
+      "why": [
+        "A check run describes the JOB, so `checkRunConclusion` cannot by itself name which step",
+        "failed. M3's checklist binds the TRUNK STEP's API-reported `conclusion`, so each half below",
+        "records it as `trunkStepConclusion`, read from the workflow-jobs record."
+      ],
+      "source": "GET /repos/{owner}/{repo}/actions/runs/{workflowRunId}/jobs",
+      "jobIdIsCheckRunId": "That endpoint returns the job id, and on both runs below it equals the `checkRunId` already recorded (101560257395, 101560280950), so the step record is addressable from what is here with no second identifier to drift."
+    },
+    "strictGreen": {
+      "pr": 91,
+      "headSha": "e692e1966b46c3e378652037daeba68cfee6a0b2",
+      "workflowPath": ".github/workflows/trunk-check.yml",
+      "workflowRunId": 34060576498,
+      "checkRunId": 101560257395,
+      "event": "pull_request",
+      "effectiveCheckName": "trunk-check",
+      "workflowRunConclusion": "success",
+      "checkRunConclusion": "success",
+      "trunkStepNumber": 6,
+      "trunkStepName": "trunk",
+      "trunkStepConclusion": "success",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "note": [
+        "Meaningful as STRICT green only because the red observation below establishes that this",
+        "workflow version has no continue-on-error. PR #92 is branched from #91, so both ran the",
+        "same strict workflow via the pull_request merge ref."
+      ]
+    },
+    "deliberateRed": {
+      "pr": 92,
+      "headSha": "de88d32094251c64a90294ae34040e190cf61436",
+      "workflowPath": ".github/workflows/trunk-check.yml",
+      "workflowRunId": 34060585595,
+      "checkRunId": 101560280950,
+      "event": "pull_request",
+      "effectiveCheckName": "trunk-check",
+      "workflowRunConclusion": "failure",
+      "checkRunConclusion": "failure",
+      "trunkStepNumber": 6,
+      "trunkStepName": "trunk",
+      "trunkStepConclusion": "failure",
+      "appId": 15368,
+      "appSlug": "github-actions",
+      "boundDiagnostic": {
+        "path": "harness-fixtures/m3-red-probe.sh",
+        "line": 13,
+        "column": 6,
+        "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+        "newIssues": 2,
+        "why": "A setup, checkout or network failure would also fail the run while Trunk never reached lint evaluation. This names the linter, file, line and column, so the failure is bound to lint rather than to infrastructure."
+      },
+      "note": [
+        "THE WORKFLOW RUN CONCLUSION IS WHAT DISCRIMINATES STRICT FROM ADVISORY. Under M2's advisory",
+        "exemption this would read `success` with the job still `failure`. It reads `failure`, so the",
+        "job-scoped continue-on-error is genuinely gone.",
+        "The step conclusion is a SEPARATE requirement, not that inference: `trunk` (step 6) is the only",
+        "step that failed \u2014 steps 1-5, set-up, checkout and the three guards, all concluded `success` \u2014",
+        "so the failure is located at lint evaluation, not upstream of it.",
+        "The PR is never merged, BY INSTRUCTION. Pre-M4 that is DISCIPLINE, not enforcement:",
+        "`trunk-check` is not one of Control's five required contexts (rollout.json records",
+        "`trunkCheckAbsentPreM4: true`), on de88d32 all five required contexts are `success` with only",
+        "`trunk-check` `failure`, and GitHub therefore reports PR #92 `mergeable: MERGEABLE`,",
+        "`mergeStateStatus: UNSTABLE` \u2014 its name for `mergeable, with a non-required check failing`.",
+        "Control's empty bypass_actors guarantees only that those five cannot be WAIVED; it cannot make",
+        "a non-rule block a merge. Its other rules, `deletion` and `non_fast_forward`, do not stop a",
+        "fast-forward push either, so no ruleset route is closed on this SHA (derived from the rules; no",
+        "push was attempted). What holds this commit off `main` is the never-merge instruction plus the",
+        "local pre-commit gate recorded below \u2014 which is itself bypassable. M4 makes this enforcement."
+      ]
+    },
+    "howTheRedCommitWasMade": [
+      "The local pre-commit trunk gate BLOCKED the lint-failing commit, correctly \u2014 stopping new",
+      "findings is its purpose. Producing red-run evidence therefore requires --no-verify, which is",
+      "inherent to the observation rather than a shortcut, and is recorded here so it is not mistaken",
+      "for carelessness. The checks --no-verify skips were run by hand first: gitleaks on the staged",
+      "change (no leaks), version-sync, plugin assembly, hooks manifest."
+    ],
+    "stillOpenForM3": [
+      {
+        "what": "Cell 3(b) / cell 3 as a whole: the gate DOES over-reach. Formatters report pre-existing formatting debt as NEW, so any edit to an unformatted file fails the gate.",
+        "why": [
+          "REOPENED BY REVIEW (codex, PR #101, P1). The observations recorded in `cell3DiffScopeControls`",
+          "are real and stand -- but they establish the property only for LINT findings on a Markdown",
+          "fixture. For the configured FORMATTERS the property is FALSE, and this artifact contains the",
+          "measurement proving it. See `cell3DiffScopeControls.theGateDOESOverReach`.",
+          "16 of 22 sampled tracked files are unformatted (73%), so this is the common case, not an edge."
+        ],
+        "whatISObserved": "cell 3(a): a one-clean-file range passes with the backlog present. cell 3(b): for LINT findings, pre-existing are held and newly-introduced fail. COREDEV-2850 cell 1, on probe PR #103 (never merged; the bundle's six-entry literal through the merge ref): a finding-neutral edit to the recorded reproduction `scripts/validate-hooks.py` went GREEN on the REQUIRED context (`No new issues`, 59 existing), and new lint and new security findings still went RED. Recorded and judged in `COREDEV-2850-probe-observations.json`.",
+        "whatIsNOTObserved": "After COREDEV-2850 Part A the required job does not evaluate formatters at all, so the over-reach this entry recorded no longer occurs on that surface. Its absence is NOT the same as detection, and two things are not observed here: (1) the required job on main with the six-entry literal, observable only after the merge (probe PR #103 ran the same literal pre-merge, through the merge ref); (2) the canary side of arm E, deferred by that plan's cell 6 stimulus constraint.",
+        "resolvesAt": "COREDEV-2850",
+        "resolvesAtMeans": "Closed when the over-reach is remedied, OR when cell 3's governing criterion is explicitly narrowed to lint findings AND the operational consequence is accepted in writing. Not closable by further M3 observation.",
+        "discriminator": "BEHAVIOURAL, against the SHIPPED literal (COREDEV-2850 \u00a76 step 4a). On a checkout of the ref being judged: append a comment to `scripts/validate-hooks.py` (the recorded reproduction in `cell3DiffScopeControls.theGateDOESOverReach`, whose pre-existing isort/black findings make green unable to mean 'already formatted'), then run `trunk check --no-fix --ci --upstream=$(git rev-parse origin/main)` with the REQUIRED job's `arguments:` value read out of `.github/workflows/trunk-check.yml` at that ref, never retyped. The formatter over-reach is OPEN while that run is RED on an `isort`/`black` fmt row the edit did not introduce, and REMEDIED when it is GREEN (`N existing issues` / `No new issues`). A bare invocation with NO `--filter` is not this gate's invocation and cannot flip by construction; that was the previous discriminator's defect. Companion only, never the whole discriminator: `test_trunk_check_workflow.test_the_shipped_literals_are_the_declared_ones`.",
+        "closureRoute": "HYBRID, per COREDEV-2850's plan \u00a75. REMEDY for over-reach: the REQUIRED job filters the five whole-file formatters, so pre-existing formatting debt no longer fails it. WRITTEN NARROWING for what that costs: the required gate no longer detects NEWLY INTRODUCED formatting defects either. That loss is accepted in COREDEV-2850's plan \u00a75 and in COREDEV-2780's plan revisions 38-39 (cell 3(b) 'SUPERSEDED IN PART', \u00a76.4's losing costs). It includes TOML LINTING as well as formatting: `-taplo` also removes taplo's non-formatter `taplo lint` command (COREDEV-2850 \u00a7A4; COREDEV-2780 r39). The pre-commit hook and the push canary still run all five formatters and `taplo lint`.",
+        "closesWhen": [
+          "COREDEV-2850 is merged to main, so the discriminator above runs GREEN on main and not only on its branch.",
+          "COREDEV-2780's plan (revision 39 or later), the governing written narrowing, passes the dual-review gate. Until then, the narrowing is written but not accepted."
+        ]
+      }
+    ],
+    "alpha": {
+      "base": "alpha",
+      "observedAt": "2026-09-07T15:21:00Z",
+      "strictGreen": {
+        "pr": 96,
+        "headSha": "1dc21f7d2c8e11debfcf1a2de9ee34a398d109bc",
+        "workflowPath": ".github/workflows/trunk-check.yml",
+        "workflowRunId": 34137722172,
+        "checkRunId": 101792470154,
+        "event": "pull_request",
+        "effectiveCheckName": "trunk-check",
+        "workflowRunConclusion": "success",
+        "checkRunConclusion": "success",
+        "trunkStepNumber": 6,
+        "trunkStepName": "trunk",
+        "trunkStepConclusion": "success",
+        "appId": 15368,
+        "appSlug": "github-actions",
+        "trunkAnnotationsArtifactId": 10024652854
+      },
+      "deliberateRed": {
+        "pr": 97,
+        "headSha": "9b42ad8f35b355c4219528125cfb6e5e62ebf8c5",
+        "workflowPath": ".github/workflows/trunk-check.yml",
+        "workflowRunId": 34137816785,
+        "checkRunId": 101792769099,
+        "event": "pull_request",
+        "effectiveCheckName": "trunk-check",
+        "workflowRunConclusion": "failure",
+        "checkRunConclusion": "failure",
+        "trunkStepNumber": 6,
+        "trunkStepName": "trunk",
+        "trunkStepConclusion": "failure",
+        "appId": 15368,
+        "appSlug": "github-actions",
+        "trunkAnnotationsArtifactId": 10024688366,
+        "boundDiagnostic": {
+          "path": "harness-fixtures/m3-red-probe-alpha.sh",
+          "line": 10,
+          "column": 6,
+          "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+          "newIssues": 2,
+          "filesChecked": 16,
+          "why": "A setup, checkout or network failure fails the run while Trunk never reaches lint evaluation. `trunk` (step 6) is the ONLY failing step \u2014 steps 1-5, set-up, checkout and the three guards, all concluded `success` \u2014 so the failure is located AT lint evaluation, by observation rather than inference."
+        }
+      },
+      "observedWorkflowWasStrict": {
+        "greenMergeRef": "refs/pull/96/merge",
+        "redMergeRef": "refs/pull/97/merge",
+        "continueOnErrorCount": 0,
+        "why": "Checked in the merge refs THEMSELVES rather than inferred from the PR description. Both observations ran a workflow with no job-scoped `continue-on-error`, which is what makes the red run's `failure` mean strict rather than advisory."
+      },
+      "theRoute": [
+        "The red evidence comes from a PR TARGETING alpha whose head is deliberately red and is NEVER",
+        "MERGED \u2014 the check runs on the PR head, so no broken commit ever lands. Push-event red evidence",
+        "would belong to the non-required canary instead.",
+        "WHY IT IS NEVER MERGED, STATED CORRECTLY. Pre-M4 this is DISCIPLINE, not enforcement.",
+        "`trunk-check` is NOT one of Control's five required contexts (validate, py39-smoke, secret-scan,",
+        "load-check, redactor-equivalence (ubuntu-latest)), so a commit failing only `trunk-check` can",
+        "still satisfy every rule the ruleset enforces. Control's empty bypass_actors guarantees only that",
+        "those five cannot be WAIVED; it cannot make a non-rule block anything. Its other rules, `deletion`",
+        "and `non_fast_forward`, do not stop a fast-forward either. So NO ruleset route is closed on this",
+        "SHA \u2014 the same conclusion the `main` record above reaches, and this key previously contradicted.",
+        "What holds PR #97 off `alpha` is the never-merge instruction plus the local pre-commit gate, which",
+        "is itself bypassable. M4 is what turns this into enforcement."
+      ]
+    },
+    "dualBaseSatisfied": [
+      "`basesRecorded` now equals `basesRequired`. Row 12 asks for DUAL-base provenance-bound check",
+      "runs and both bases are recorded, each with a strict green and a deliberate red bound to a named",
+      "lint diagnostic. Both bases' checked-in workflows are strict \u2014 see `bothBasesCheckedInStrict`,",
+      "which carries a command rather than a claim.",
+      "THAT ALONE WAS NOT M3 COMPLETE, and this paragraph used to stop there \u2014 naming a",
+      "PR-RETARGET observation and cells 3(a)/3(b) as what genuinely remained. ALL THREE ARE NOW",
+      "OBSERVED: see `cell2RetargetObservation` and `cell3DiffScopeControls`.",
+      "At M3 close-out (2026-09-07) two residuals were left in `stillOpenForM3`, neither closable by",
+      "further M3 observation: cell 2's rule-satisfaction half and cell 3's over-reach counterexample",
+      "(COREDEV-2850). The first was later closed by COREDEV-2879 and its live re-observation",
+      "(`cell2RetargetFixReObserved`; listed under `closedSinceLastRevision`).",
+      "This paragraph states NO current count: `stillOpenForM3` is the only list of what remains, and",
+      "its discriminator is the way to read it. Earlier revisions stated the count here and went stale",
+      "twice \u2014 `the single residual` when there were two, then `TWO residuals remain` after one had",
+      "closed. A count restated beside the list it summarises goes stale at every closure.",
+      "REVISION NOTE (codex, PR #101): the superseded sentence was left standing next to the new",
+      "closure key, so the artifact said both 'these remain outstanding' and 'these are closed'.",
+      "The rule is rewritten here rather than annotated, because a correction note beside a stale",
+      "normative sentence leaves the stale sentence normative."
+    ],
+    "closedSinceLastRevision": [
+      {
+        "what": "Cell 2's RULE-SATISFACTION half (the stillOpenForM3 item resolved at COREDEV-2879): the context that satisfies the rule after a retarget is a new run against the NEW base's range.",
+        "closedBy": "COREDEV-2879 (PR #113, merged to main as f3faa0c and to alpha by #118), then its LIVE re-observation on witness PR #117. See `cell2RetargetFixReObserved`."
+      },
+      {
+        "what": "The strict-green + deliberate-red pair on `alpha`.",
+        "closedBy": "This artifact \u2014 see `alpha` above (PRs #96 and #97)."
+      },
+      {
+        "what": "Removing `continue-on-error` on `main`.",
+        "closedBy": "PR #91, merged."
+      },
+      {
+        "what": "Removing `continue-on-error` on `alpha`.",
+        "closedBy": "PR #96, merged. Verify with the discriminator above rather than with this sentence."
+      }
+    ],
+    "bothBasesCheckedInStrict": {
+      "property": "Neither base's CHECKED-IN workflow carries a job-scoped `continue-on-error`.",
+      "discriminator": "git show origin/<base>:.github/workflows/trunk-check.yml | grep -c continue-on-error",
+      "expected": "0 for both `main` and `alpha`; any other value means that base is still advisory.",
+      "whyStatedThisWay": [
+        "Earlier revisions of this key stated PR STATE \u2014 'PR #91 is MERGEABLE but NOT MERGED',",
+        "'Landing PR #96 is additionally required'. Both went stale within hours of being written,",
+        "and one of them was written in the very commit that fixed the previous staleness. PR state",
+        "is mutable; the property is not. A reader runs the discriminator and learns the truth",
+        "rather than trusting a sentence that was true when it was typed."
+      ]
+    },
+    "m3EvidenceClosedOut": {
+      "observedAt": "2026-09-07T17:10:00Z",
+      "what": "The three items this key listed were OBSERVED. At this close-out two residuals were left open, neither closable by further M3 observation: cell 2's rule-satisfaction half, which COREDEV-2879 later closed (`cell2RetargetFixReObserved`), and cell 3's over-reach counterexample (COREDEV-2850). This key records the close-out; it states no current count, and `stillOpenForM3` is the list of what remains.",
+      "where": {
+        "retarget": "cell2RetargetObservation",
+        "cell3a": "cell3DiffScopeControls.cell3a",
+        "cell3b": "cell3DiffScopeControls.cell3b"
+      },
+      "discriminator": "python3 -c \"import json;d=json.load(open('docs/planning/evidence/COREDEV-2780-rollout.json'));s=d['cell12DualBaseCheckRuns']['stillOpenForM3'];print(len(s), sorted(i['resolvesAt'] for i in s))\" \u2014 prints \"1 ['COREDEV-2850']\".",
+      "whatIsStillNotClaimed": [
+        "SUPERSEDED 2026-10-09: M4 and M4a were applied and observed. See `m4RequiredContextAdded`, `cell17EnforcementSmokeTest`, `m4aRollbackRehearsal` and `cell2RuleSatisfactionObservation`. The lines below are the M3-time record.",
+        "M4 remains OUT OF SCOPE and unstarted. Promoting `trunk-check` to a sixth required context in",
+        "ruleset Control needs explicit maintainer instruction.",
+        "ITS ONLY LIVE BLOCKER IS COREDEV-2850 (the gate over-reaches on formatters).",
+        "The OBSERVATIONS are complete for everything observable at M3. What is not complete is cell 3's",
+        "PROPERTY, which is contradicted rather than merely unobserved."
+      ],
+      "postLandingRepairs": [
+        "These observations were recorded, then a nine-lens adversarial pass was run over the RECORD.",
+        "It found four real defects in the recording \u2014 none in the observations themselves:",
+        "  1. strictness bound to merge refs that GitHub drops on close (now API-bound, both cells)",
+        "  2. the ACTION's own upstream never recorded, only the guard's file list (now recorded; the",
+        "     claim that it 'is not echoed' was simply false, and the action's own count independently",
+        "     confirms guard/action parity per run)",
+        "  3. cell 3(b) cannot separate per-ISSUE from per-LINE scoping (now stated)",
+        "  4. cell 3(a)'s positive control lifts only shellcheck (now scoped)",
+        "The repairs are POST-GATE by construction and are declared as such rather than presented as",
+        "though they had been reviewed."
+      ],
+      "coredev2804IsNOTAblocker": {
+        "raisedBy": "codex, PR #101, P2 \u2014 correctly.",
+        "whatThisArtifactSAID": "That COREDEV-2804 blocks M4 because the `.trunk/trunk.yaml` freeze covers only the `lint:` key. That is FALSE and was carried in from a session handoff without being verified.",
+        "whatIsTRUE": [
+          "The defect is REMEDIATED. `_normalised_trunk_config` hashes `yaml.safe_dump` of the WHOLE parsed",
+          "document, normalising only `cli.version` and `plugins.sources[].ref`, and only when they hold a",
+          "canonical version. `plugins.sources[].uri` never normalises.",
+          "The followup plan states it too: `Status: implementation complete for COREDEV-2804 \u2026 2811`."
+        ],
+        "provenByEXECUTION": {
+          "why": "The docstring claiming the fix is not the fix, and a plan's status line is not the code. The ticket's own founding reproduction was re-run against the shipped implementation.",
+          "method": "Load `.trunk/trunk.yaml`, repoint `plugins.sources[0].uri` from trunk-io/plugins to attacker/plugins, and compare `_normalised_trunk_config` of both.",
+          "result": "The digest DIFFERS. Under the original defect it was byte-identical \u2014 that byte-identity is what the ticket was filed on.",
+          "command": "python3 -c \"import importlib.util,pathlib;s=importlib.util.spec_from_file_location('t','scripts/tests/test_trunk_check_workflow.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);o=pathlib.Path('.trunk/trunk.yaml').read_text();print(m._normalised_trunk_config(o)!=m._normalised_trunk_config(o.replace('trunk-io/plugins','attacker/plugins')))\" \u2014 prints True while remediated."
+        },
+        "whatIsSTILLOpenOnIt": "Only the Jira record. COREDEV-2804 is `In Review` and its SUMMARY still carries `[BLOCKER for M4]`. A stale ticket, not a live blocker \u2014 it needs closing, not clearing.",
+        "theLesson": "Neither review arm checks implementation status, and a handoff brief is not evidence. This artifact repeated a blocker claim across four places \u2014 itself, the Jira comment on COREDEV-2780, the session brief and the memory index \u2014 none of which had been checked against the code."
+      }
+    }
+  },
+  "cell2RetargetObservation": {
+    "what": "\u00a77 cell 2's RETARGET case: the `edited` activity type fires on a base change, and the range `trunk check` receives is re-resolved against the NEW base.",
+    "milestone": "M3",
+    "observedAt": "2026-09-07T17:10:00Z",
+    "pr": 99,
+    "headSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+    "why": [
+      "`.github/workflows/trunk-check.yml` carries `types: [opened, synchronize, reopened, edited]`.",
+      "`edited` is the activity type a RETARGET fires; without it a retargeted PR keeps a green check",
+      "computed against the OLD base. That widening was a STATIC clause assertion \u2014 cell 2 records that",
+      "'nothing yet observes that it works'. This key is that observation, made for the first time."
+    ],
+    "directionIsLoadBearing": {
+      "why": [
+        "`main` and `alpha` differ in exactly ONE file, docs/planning/evidence/COREDEV-2780-rollout.json,",
+        "and main's copy is strictly newer (alpha's is an ancestor version). That asymmetry decides",
+        "whether the experiment can discriminate at all, so the direction was MEASURED with",
+        "`git merge-tree --write-tree` against the real SHAs before the PR was opened, not reasoned about."
+      ],
+      "measured": [
+        "cut from main,  retargeted main -> alpha : range 1 file -> 2 files   DISCRIMINATES",
+        "cut from alpha, retargeted alpha -> main : range 1 file -> 1 file    DOES NOT"
+      ],
+      "whyTheOtherDirectionFails": "Cutting from alpha, the merge against main resolves rollout.json to main's newer copy, so the range is identical before and after. The observation would then look the same whether the range was re-resolved or carried over \u2014 an observation consistent with two worlds, which is the shape this project has repeatedly recorded as the benign one."
+    },
+    "theDiscriminator": "docs/planning/evidence/COREDEV-2780-rollout.json can appear in the resolved range ONLY if the upstream was `alpha`: relative to `main` that file is unchanged, so it cannot enter diff(main_tip, merge). The changed-file list therefore IDENTIFIES the base directly rather than inferring it from run timestamps.",
+    "howTheRangeIsObserved": "The `guard-empty-diff` step prints the resolved range to stderr as `  changed: <path>` lines. Retrieved with `gh run view <runId> --log`. The upstream SHA itself is not echoed by that step, so the file list is the observable, which is why the fixture was designed to make the file list differ.",
+    "allRunsOnThisHeadSha": [
+      {
+        "workflowRunId": 34145664830,
+        "createdAt": "2026-09-07T16:59:03Z",
+        "baseAtRunTime": "main",
+        "rangeFileCount": 1,
+        "range": ["harness-fixtures/m3-retarget-probe.sh"],
+        "conclusion": "success",
+        "guardResolvedRange": ["harness-fixtures/m3-retarget-probe.sh"],
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 1,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 1 modified file", "No issues"]
+      },
+      {
+        "workflowRunId": 34145674160,
+        "createdAt": "2026-09-07T16:59:11Z",
+        "baseAtRunTime": "main",
+        "rangeFileCount": 1,
+        "range": ["harness-fixtures/m3-retarget-probe.sh"],
+        "conclusion": "success",
+        "checkRunId": 101817085629,
+        "trunkAnnotationsArtifactId": 10027559424,
+        "guardResolvedRange": ["harness-fixtures/m3-retarget-probe.sh"],
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 1,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 1 modified file", "No issues"]
+      },
+      {
+        "workflowRunId": 34145753546,
+        "createdAt": "2026-09-07T17:00:20Z",
+        "baseAtRunTime": "alpha",
+        "rangeFileCount": 2,
+        "range": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "conclusion": "success",
+        "checkRunId": 101817325885,
+        "trunkAnnotationsArtifactId": 10027591289,
+        "guardResolvedRange": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "actionResolvedUpstreamSha": "7ed1a6ed8afd42be6a79300f488d86fdeef74164",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 2,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 2 modified files", "No issues"]
+      },
+      {
+        "workflowRunId": 34145799940,
+        "createdAt": "2026-09-07T17:00:56Z",
+        "baseAtRunTime": "alpha",
+        "rangeFileCount": 2,
+        "range": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "conclusion": "success",
+        "checkRunId": 101817459742,
+        "guardResolvedRange": [
+          "docs/planning/evidence/COREDEV-2780-rollout.json",
+          "harness-fixtures/m3-retarget-probe.sh"
+        ],
+        "actionResolvedUpstreamSha": "7ed1a6ed8afd42be6a79300f488d86fdeef74164",
+        "actionResolvedUpstreamEqualsBaseTip": true,
+        "actionCheckedFileCount": 2,
+        "actionHeadSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+        "trunkVerdictVerbatim": ["Checked 2 modified files", "No issues"]
+      }
+    ],
+    "retargetedAt": "2026-09-07T17:00:16Z",
+    "theResult": [
+      "FOUR runs exist on the one head SHA fd60453, and they partition EXACTLY at the retarget:",
+      "  before 17:00:16 \u2014 two runs, range 1 file,  computed against main",
+      "  after  17:00:16 \u2014 two runs, range 2 files, computed against alpha",
+      "All four are recorded above rather than the two that make the cleanest pair, because a selective",
+      "record of a four-run population is not evidence. The new run appeared 4 SECONDS after the base",
+      "change, so `edited` fired; and its range contains rollout.json, so it was resolved against alpha.",
+      "The head SHA never changed, which is the whole point: the same commit, ranged against two bases."
+    ],
+    "observedWorkflowWasStrict": {
+      "whyTheEarlierBindingFAILED": [
+        "REVISION NOTE. This key first bound strictness to `refs/pull/99/merge`. That ref NO LONGER",
+        "RESOLVES \u2014 `git fetch origin refs/pull/99/merge` returns `fatal: couldn't find remote ref`,",
+        "measured after PR #99 was closed. GitHub drops the merge ref when a PR closes, so the original",
+        "sentence became SELF-ATTESTED: true when written, unverifiable by any later reader.",
+        "Every other observation in this artifact binds API-persistent fields. This one now does too."
+      ],
+      "boundTo": "GET /repos/{owner}/{repo}/contents/.github/workflows/trunk-check.yml?ref=<sha>",
+      "continueOnErrorCountAtSha": {
+        "fd60453820fe5a7f0ed939ac823af04476f7cb68 (PR #99 head)": 0,
+        "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd (origin/main, the first base)": 0,
+        "7ed1a6ed8afd42be6a79300f488d86fdeef74164 (origin/alpha, the base after retarget)": 0
+      },
+      "whyThisIsEQUIVALENT": "The runs executed `refs/pull/99/merge`, a merge of the head and the base. Neither side MODIFIES `.github/workflows/trunk-check.yml` relative to the other \u2014 the file is identical at all three SHAs \u2014 so the merge necessarily carried the same file. Binding all three commits is therefore a durable statement of what ran, and unlike the merge ref it is still checkable today."
+    },
+    "doesNotEstablish": [
+      "It does not establish anything about a REQUIRED context. `trunk-check` is not one of Control's five",
+      "required contexts until M4, so this observes range RE-RESOLUTION, not rule satisfaction. The cell's",
+      "phrase 'the context that satisfies the rule' cannot be observed before M4 and is not claimed here.",
+      "It does not establish the AUTOMATED-retarget case. \u00a71 records that a workflow-token retarget fires",
+      "`edited` without producing a run; no workflow in this repository retargets PRs, and this observation",
+      "was a human/CLI retarget via `gh pr edit --base`.",
+      "It does not measure a race between the base change and GitHub recomputing refs/pull/99/merge. Both",
+      "post-retarget runs happened to resolve the new range; a run that fired before the merge ref settled",
+      "would be a distinct hazard, unobserved here."
+    ],
+    "theActionsOwnUpstreamIsRECORDED": {
+      "why": [
+        "REVISION NOTE \u2014 the first revision of this key recorded only the GUARD's resolved file list, and",
+        "said the upstream SHA 'is not echoed'. THAT WAS FALSE. The pinned action prints its own resolution:",
+        "  Detected merge commit, using HEAD^1 (<sha>) as upstream and HEAD^2 (<sha>) as head",
+        "As first recorded, the evidence would have been byte-identical in a world where the ACTION's",
+        "scoping diverged from the GUARD's \u2014 the guard is a transcription of the action's logic, not the",
+        "action itself, and cell 1 exists precisely because two independently-correct-looking resolvers drift."
+      ],
+      "whatIsNowBound": [
+        "Per run, the ACTION's OWN `HEAD^1` upstream, read from its own log line, and its OWN",
+        "`Checked N modified file(s)` count \u2014 alongside the guard's file list."
+      ],
+      "theResult": [
+        "The action's upstream is EXACTLY the base tip in every run, by SHA equality and not by inference:",
+        "  34145664830  upstream 4d15c34 == origin/main   1 file",
+        "  34145674160  upstream 4d15c34 == origin/main   1 file",
+        "  34145753546  upstream 7ed1a6e == origin/alpha  2 files",
+        "  34145799940  upstream 7ed1a6e == origin/alpha  2 files",
+        "The action's checked-file count equals the guard's range size in all four runs (1,1,2,2), so the",
+        "guard and the action agreed on the range PER RUN \u2014 cell 1's parity claim, observed here rather",
+        "than assumed. This is a stronger binding than the file list alone: it is the resolver's own output."
+      ],
+      "howRetrieved": "gh run view <runId> --log | grep -o 'using HEAD\\^1 ([0-9a-f]\\{40\\})'"
+    },
+    "retargetDiscriminatorIsTIMEBOUND": [
+      "The file-list half of this observation depends on `main` and `alpha` differing in exactly one file,",
+      "with main's copy newer, AT THE TIME OF OBSERVATION. That delta changes as the branches move \u2014 this",
+      "very artifact is the file in question. The observation stands as a historical record bound to the",
+      "run ids and SHAs above; it is NOT a recipe that can be replayed later without first re-measuring the",
+      "main/alpha delta. The action-upstream binding above does not have this dependency and is the",
+      "durable half."
+    ],
+    "observedAtMeans": "The time the EVIDENCE WAS HARVESTED \u2014 after every run below had completed and its log had been read. It is NOT the time of the underlying events, which are carried per-run by `createdAt` and by `retargetedAt`. REVISION NOTE (codex, PR #101): this field first read `17:00:00Z`, which is BEFORE the retarget at 17:00:16Z and before the two post-retarget runs at 17:00:20Z and 17:00:56Z \u2014 the artifact claimed the observation was made before the evidence existed. An impossible chronology in an audit record is a defect even when every other value is right.",
+    "lastUnderlyingEventAt": "2026-09-07T17:00:56Z"
+  },
+  "cell3DiffScopeControls": {
+    "what": "\u00a77 cell 3: the gate does not over-reach. (a) a PR touching one clean file passes with the backlog present; (b) a PR touching a historically dirty file passes for its pre-existing findings while still failing for newly introduced ones.",
+    "milestone": "M3",
+    "observedAt": "2026-09-07T17:10:00Z",
+    "backlogWasPresent": {
+      "why": [
+        "The cell says 'with the 9027-issue backlog present', so the record must show the backlog EXISTED",
+        "at observation time rather than citing a number from an older document. `trunk check --all` is",
+        "prohibited by \u00a71 (it is the 9027-finding whole-tree run the gate exists to avoid), so the backlog",
+        "is evidenced as a MEASURED LOWER BOUND from scoped per-file checks at origin/main = 4d15c34."
+      ],
+      "method": "trunk check --no-progress --no-fix --show-existing <file>, one file at a time",
+      "measuredLowerBound": {
+        "scripts/lib/hook-io.sh": 83,
+        "mcp/review-synthesizer/synthesize.py": 58,
+        "scripts/validate-hooks.py": 55,
+        "README.md": 2,
+        "CHANGELOG.md": 2,
+        "totalOverTheseFiveFilesOnly": 200
+      },
+      "claim": "AT LEAST 200 pre-existing findings across five files at the observed SHA. This is a lower bound, deliberately: it is not a re-derivation of 9027 and must not be read as one."
+    },
+    "cell3a": {
+      "property": "A PR whose resolved range is exactly one CLEAN file passes, with the backlog present.",
+      "pr": 99,
+      "workflowRunId": 34145674160,
+      "checkRunId": 101817085629,
+      "headSha": "fd60453820fe5a7f0ed939ac823af04476f7cb68",
+      "range": ["harness-fixtures/m3-retarget-probe.sh"],
+      "rangeFileCount": 1,
+      "conclusion": "success",
+      "trunkStepNumber": 6,
+      "trunkStepConclusion": "success",
+      "trunkSummary": "Checked 1 modified file / No issues",
+      "theFileIsCleanByPOSITIVECONTROL": [
+        "A green run on a file nothing lints would satisfy this cell while proving nothing \u2014 'Found no",
+        "applicable linters' also exits 0. So the fixture's cleanliness was positive-controlled locally:",
+        "  unmutated                      -> Checked 1 file / No issues",
+        "  mutated to `target=$1; echo $target` -> harness-fixtures/m3-retarget-probe.sh:18:6",
+        "                                    shellcheck/SC2086 + shellcheck/SC2250, 2 new lint issues",
+        "shellcheck is therefore LIVE on harness-fixtures/*.sh, so the green means CHECKED AND CLEAN."
+      ],
+      "thisRunIsSHAREDWithCell2": [
+        "This is the same run as cell2RetargetObservation's first pre-retarget observation, and that is",
+        "stated rather than hidden. The two cells assert INDEPENDENT properties of it: cell 3(a) asserts",
+        "that a one-clean-file range passes with the backlog present; cell 2 asserts that the range later",
+        "changed when the base did. Neither claim depends on the other.",
+        "A dedicated PR was considered and rejected as a literal duplicate: every CLEAN file already in the",
+        "tree is either digest-frozen (scripts/ci/resolve-trunk-range.sh by C6a, .trunk/configs/** by cell",
+        "4b) or is itself an evidence record, so a dedicated fixture could only have been a newly-added",
+        "clean file \u2014 which is exactly what this run already is."
+      ],
+      "trunkSummaryNote": "REVISION NOTE: first recorded as `Checked 1 file / No issues`, which is the LOCAL (unscoped) string. CI prints `Checked 1 modified file` \u2014 and the word `modified` is itself the diff-scope evidence, so dropping it discarded the very thing the cell is about.",
+      "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+      "actionCheckedFileCount": 1,
+      "guardResolvedRange": ["harness-fixtures/m3-retarget-probe.sh"],
+      "thePositiveControlLIFTSONLYSHELLCHECK": "SCOPE OF THE CLEANLINESS CLAIM. The mutation control introduced SC2086+SC2250 and observed them reported, which proves SHELLCHECK is live on `harness-fixtures/*.sh`. It does NOT prove every linter applicable to a `.sh` file is live. The claim this cell supports is therefore `the file was checked and is clean under at least shellcheck`, not `zero findings of any kind under the full frozen linter set`. Recorded narrow rather than allowed to read as the wider claim."
+    },
+    "cell3b": {
+      "property": "A PR touching a HISTORICALLY DIRTY file passes for its pre-existing findings while still failing for newly introduced ones.",
+      "pr": 100,
+      "whyItWasStillOpen": "#92 and #97 both added a BRAND-NEW file, so they showed only 'fails on new findings' and never the pre-existing-versus-new discrimination.",
+      "fixture": {
+        "file": "CHANGELOG.md",
+        "preExistingFindings": [
+          {
+            "path": "CHANGELOG.md",
+            "line": 2692,
+            "column": 0,
+            "linter": "markdownlint/MD038"
+          },
+          {
+            "path": "CHANGELOG.md",
+            "line": 3018,
+            "column": 0,
+            "linter": "markdownlint/MD038"
+          }
+        ],
+        "whyThisFile": [
+          "It is dirty, it is already correctly FORMATTED, and validate-version-sync.sh asserts only that",
+          "a `## [x.y.z]` heading is PRESENT \u2014 appending at EOF cannot disturb that."
+        ],
+        "candidatesRejectedAndWhy": [
+          "scripts/validate-hooks.py (55 pre-existing findings) CANNOT HAVE A GREEN HALF. Touching it",
+          "surfaces its pre-existing isort/black formatting as NEW: formatting is evaluated whole-file and",
+          "is not suppressed the way lint findings are. Measured locally before any CI round was spent \u2014",
+          "this is the single most useful thing the local rehearsal caught.",
+          "README.md works but is load-bearing for validate-version-sync.sh (H1, What's-New, asset counts).",
+          "mcp/review-synthesizer/synthesize.py is byte-anchored by a mutation test",
+          "(mcp/review-synthesizer/tests/test_synthesize.py:31 does `src.replace(old, new)`)."
+        ]
+      },
+      "theControl": "ONE PR, ONE base, ONE file, TWO commits. The only variable between the two runs is whether a finding is NEWLY INTRODUCED. Two separate PRs would have varied the head, the range and the run identity as well.",
+      "greenHalf": {
+        "commit": "15b0f6c677156785924bfc458ce707738baa7358",
+        "workflowRunId": 34146115875,
+        "checkRunId": 101818404323,
+        "range": ["CHANGELOG.md"],
+        "workflowRunConclusion": "success",
+        "trunkStepNumber": 6,
+        "trunkStepConclusion": "success",
+        "trunkSummary": "Checked 1 modified file / 2 existing issues / No new issues",
+        "trunkAnnotationsArtifactId": 10027712569,
+        "whyThisGreenIsNotVACUOUS": "The run reports `2 existing issues` ALONGSIDE `No new issues`. Trunk therefore read the file and SAW its pre-existing findings, and withheld them deliberately. That is the positive evidence separating 'passed' from 'checked nothing' \u2014 without it a green here would be the weakest possible signal.",
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionCheckedFileCount": 1,
+        "trunkVerdictVerbatim": [
+          "Checked 1 modified file",
+          "2 existing issues (use --show-existing to see them)",
+          "No new issues"
+        ]
+      },
+      "redHalf": {
+        "commit": "191e1df9befa686a83a260918e7ccb468e05e7fd",
+        "workflowRunId": 34146268825,
+        "checkRunId": 101818867930,
+        "range": ["CHANGELOG.md"],
+        "workflowRunConclusion": "failure",
+        "trunkStepNumber": 6,
+        "trunkStepConclusion": "failure",
+        "trunkSummary": "Checked 1 modified file / 2 existing issues / 1 new lint issue",
+        "trunkAnnotationsArtifactId": 10027761365,
+        "boundDiagnostic": {
+          "path": "CHANGELOG.md",
+          "line": 3046,
+          "column": 0,
+          "linters": ["markdownlint/MD040"],
+          "newIssues": 1,
+          "why": "Steps 1-5 (set-up, checkout and the three guards) all concluded `success` and only step 6 `trunk` failed, so the failure is located AT lint evaluation rather than upstream of it. Naming the linter, file, line and column is what separates 'lint rejected this' from 'the job broke'."
+        },
+        "anEarlierCandidateWasDISCARDED": "A first red-half candidate went red on a bare `prettier` fmt complaint reported as `-:-` with no line or column. It would have failed the run, but a fmt finding with no position is a materially weaker binding than cell 12's standard, so it was discarded rather than recorded.",
+        "actionResolvedUpstreamSha": "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd",
+        "actionCheckedFileCount": 1,
+        "trunkVerdictVerbatim": [
+          "Checked 1 modified file",
+          "2 existing issues (use --show-existing to see them)",
+          "1 new lint issue",
+          " 3046:0  low  Fenced code blocks should have a language specified  markdownlint/MD040"
+        ]
+      },
+      "theDiscrimination": [
+        "Same file. Same base. Same PR. The two pre-existing MD038 findings at 2692 and 3018 stayed",
+        "SUPPRESSED IN BOTH RUNS \u2014 `2 existing issues` appears in the green half and in the red half alike.",
+        "What changed is one newly-introduced MD040 at 3046, and that alone moved the run from success to",
+        "failure. The gate scopes to something FINER THAN THE CHANGED FILE \u2014 the file was checked, its two pre-existing findings were seen, and only the new one failed the run. Whether that finer unit is the FINDING'S NOVELTY or merely the TOUCHED LINE is NOT settled by this evidence; see `aTHIRDWORLDTHISCANNOTSEPARATE` immediately below. The previous revision concluded `newly introduced findings, not changed files`, which asserts the novelty reading the adjacent key says is unproven (codex, PR #101)."
+      ],
+      "aTHIRDWORLDTHISCANNOTSEPARATE": {
+        "what": "Per-ISSUE novelty versus per-touched-LINE scoping.",
+        "why": [
+          "The two held findings (MD038) sit at lines 2692 and 3018, which this PR does not touch. The",
+          "reported finding (MD040) sits at 3046, which it does. So two mechanisms produce IDENTICAL evidence:",
+          "  (i)  the gate holds findings that are not NEW            <- what the cell claims",
+          "  (ii) the gate holds findings on lines that did not CHANGE <- indistinguishable here",
+          "The recorded observation does not separate them, and the fixture as built never could: both edits",
+          "are appends at EOF, so every pre-existing finding is necessarily on an untouched line."
+        ],
+        "whatWouldSeparateThem": "A third commit that MODIFIES a line already carrying a pre-existing finding without introducing a new one. Under (i) it stays green; under (ii) it goes red. Not performed.",
+        "statedRatherThanImplied": "Recorded because the cell's wording ('passes for its pre-existing findings') reads as claim (i), and an unqualified record would let a later reader take (i) as observed when only the conjunction of (i)-or-(ii) is."
+      }
+    },
+    "observedWorkflowWasStrict": {
+      "whyTheEarlierBindingFAILED": "As with cell 2: `refs/pull/100/merge` no longer resolves once the PR is closed (`fatal: couldn't find remote ref`, measured). Re-bound to API-persistent commits.",
+      "boundTo": "GET /repos/{owner}/{repo}/contents/.github/workflows/trunk-check.yml?ref=<sha>",
+      "continueOnErrorCountAtSha": {
+        "191e1df9befa686a83a260918e7ccb468e05e7fd (PR #100 red head)": 0,
+        "4d15c341d2f8ffbbac1e2e6665fa0a6f5e93dbcd (origin/main, the base)": 0
+      }
+    },
+    "doesNotEstablish": [
+      "Neither half says anything about a REQUIRED context; that is M4.",
+      "Cell 3(b) is observed for markdownlint on a Markdown file. It is not a claim that every linter in the",
+      "configured set scopes to new findings the same way \u2014 and the rejected validate-hooks.py candidate is",
+      "on any modified file regardless of whether the finding pre-existed. That asymmetry is a real property",
+      "of the gate, discovered here, and it is NOT covered by cell 3(b) as written.",
+      "The backlog figure is a measured lower bound over five files, not a re-derivation of 9027.",
+      "It does not separate per-ISSUE novelty from per-touched-LINE scoping \u2014 see `cell3b.aTHIRDWORLDTHISCANNOTSEPARATE`. Both produce identical evidence on this fixture.",
+      "Cell 3(a)'s cleanliness is positive-controlled for SHELLCHECK ONLY, not for every linter applicable to a .sh file \u2014 see `cell3a.thePositiveControlLIFTSONLYSHELLCHECK`.",
+      "It does not establish cell 3's NAMED PROPERTY ('the gate does not over-reach'). For the configured formatters that property is observed to be FALSE -- see `theGateDOESOverReach` and COREDEV-2850. This key records instances (a) and (b) for LINT findings only."
+    ],
+    "observedAtMeans": "Harvest time, as in cell 2. It first read `17:07:00Z`, which precedes the red half's run (created 17:07:24Z). Codex flagged only cell 2; this cell carried the SAME defect and is fixed with it rather than left for a later round to re-find.",
+    "lastUnderlyingEventAt": "2026-09-07T17:07:24Z",
+    "theGateDOESOverReach": {
+      "severity": "COUNTEREXAMPLE to cell 3's stated property. Not a scope note.",
+      "ticket": "COREDEV-2850 \u2014 BLOCKER for M4",
+      "raisedBy": "codex, PR #101, P1",
+      "theProperty": "Cell 3 is titled 'The gate does not over-reach'. (a) and (b) are INSTANCES of that property, not a definition of it.",
+      "theCounterexample": [
+        "Under `--upstream`, the two families of finding are scoped DIFFERENTLY:",
+        "  linters    (shellcheck, markdownlint, ruff, mypy) -- pre-existing findings on a touched file",
+        "             are reported as `N existing issues` and SUPPRESSED. Correct.",
+        "  formatters (isort, black, prettier) -- evaluated WHOLE-FILE and reported as NEW on any",
+        "             modified file, whether or not the file was already unformatted.",
+        "So an otherwise clean edit to an already-misformatted file FAILS THE GATE FOR DEBT IT DID NOT",
+        "INTRODUCE. That is the behaviour cell 3 exists to forbid."
+      ],
+      "reproduction": {
+        "file": "scripts/validate-hooks.py",
+        "edit": "append a comment block; introduce nothing",
+        "result": [
+          "-:-  fmt  Incorrect formatting  isort",
+          "-:-  fmt  Incorrect formatting  black",
+          "Checked 1 modified file / 55 existing issues / 1 unformatted file -> RED"
+        ],
+        "control": "The same edit to CHANGELOG.md -- dirty in LINT, clean in FORMATTING -- is GREEN (`2 existing issues / No new issues`). The two families differ, not the two files."
+      },
+      "scale": {
+        "method": "bounded sample of 22 tracked .py/.sh/.md/.json/.yaml files; `trunk check --all` is prohibited",
+        "unformatted": 16,
+        "sampled": 22,
+        "share": "73%",
+        "corroboration": "`trunk fmt --all` rewrote 191 files (COREDEV-2771) -- i.e. ~191 tracked files are currently unformatted and would red the gate on any edit."
+      },
+      "whyThisIsAnM4BLOCKER": "Promoting `trunk-check` to a required context with this behaviour would block MOST PRs in this repository for pre-existing formatting debt. Recording it as a limitation while marking the cell satisfied would let M4 promote a context that blocks unrelated edits.",
+      "whatIWrongLYDidWithIt": [
+        "The previous revision DISCOVERED this and filed it under `doesNotEstablish` -- a scope note",
+        "saying cell 3(b) 'does not cover' formatters -- and then marked the cell's evidence satisfied on",
+        "a Markdown fixture where the property happens to hold.",
+        "That understates it. This is not a gap in coverage; it is an OBSERVED COUNTEREXAMPLE to the",
+        "property the cell is named for. Finding the counterexample and filing it as a footnote is the",
+        "same defect as closing an item on the half where it holds."
+      ]
+    }
+  },
+  "m4RequiredContextAdded": {
+    "milestone": "M4",
+    "observedAt": "2026-10-09T20:52:03Z",
+    "maintainerInstruction": [
+      "2026-10-09: 'move on to the next milestone; M4', then, after the auto-mode classifier",
+      "refused the write, the explicit 'approve the M4 ruleset write'."
+    ],
+    "preflightReadFresh": {
+      "baseTips": {
+        "main": "665796eed931a5e478c8977a646e1283045af948",
+        "alpha": "10d57dd9323f63df66891514a6d07e0116a85493"
+      },
+      "enforcement": "active",
+      "bypassActors": [],
+      "mergeQueueRulePresent": false,
+      "strictRequiredStatusChecksPolicy": false,
+      "resolvedTargetSet": ["alpha", "main"],
+      "resolvedTargetSetEqualsBothWorkflowsBranches": true,
+      "workflowBlobsByteIdenticalOnBothTips": {
+        ".github/workflows/trunk-check.yml": "38848ada1d789cd28983188b463c48d2ea390e72",
+        ".github/workflows/trunk-check-push.yml": "13021a885896a182965d10edabac89c4ebc16ad2"
+      },
+      "requiredJobHasContinueOnError": false,
+      "canaryRequired": false,
+      "openPRsOnEitherBase": 0,
+      "forkPrContributorApprovalPolicy": "first_time_contributors",
+      "alphaProducesTheContextWithTheCurrentBytes": "PR #105 (into alpha, 2026-10-03, after the 2026-10-02 trunk-check.yml change) ran trunk-check 3x, github-actions, all success.",
+      "alphaDeliberateRedUnderCurrentBytes": {
+        "why": "M4 requires a strict green AND a deliberate red on BOTH bases. alpha's red was last observed under the pre-COREDEV-2850 workflow (#97). Recording that as a gap while marking M4 done claimed the checklist passed when it had not (codex, PR #112, P1). It is now OBSERVED.",
+        "orderingStated": "This observation was made AFTER the M4 write (2026-10-10, not before 2026-10-09's write), so the prerequisite was satisfied post hoc, not in the plan's intended order. It is recorded as such and not backdated.",
+        "pr": 116,
+        "base": "alpha",
+        "headSha": "1d93bb20a81213d6cd0f11cffe7d5d051020e5f4",
+        "workflowPath": ".github/workflows/trunk-check.yml",
+        "event": "pull_request",
+        "workflowRunId": 38090527887,
+        "workflowRunConclusion": "failure",
+        "checkRunId": 114325846769,
+        "checkRunConclusion": "failure",
+        "trunkStepNumber": 6,
+        "trunkStepName": "trunk",
+        "trunkStepConclusion": "failure",
+        "actionResolvedUpstreamSha": "10d57dd9323f63df66891514a6d07e0116a85493",
+        "upstreamEqualsAlphaTip": true,
+        "boundDiagnostic": {
+          "path": "harness-fixtures/m4-alpha-red-witness.sh",
+          "line": 10,
+          "column": 6,
+          "linters": ["shellcheck/SC2086", "shellcheck/SC2250"]
+        },
+        "enforcementObserved": {
+          "observedAt": "2026-10-10T22:22:43Z",
+          "mergeStateStatus": "BLOCKED",
+          "restMergeableState": "blocked",
+          "failingRequiredContexts": ["trunk-check"],
+          "everyOtherRequiredContext": "success"
+        },
+        "howTheRedCommitWasMade": "Through the GitHub contents API; the local pre-commit trunk gate was not bypassed.",
+        "closedNeverMerged": true,
+        "alphaTipUnchangedAfterwards": "10d57dd9323f63df66891514a6d07e0116a85493"
+      }
+    },
+    "integrationId": {
+      "value": 15368,
+      "appSlug": "github-actions",
+      "readFrom": "cell12DualBaseCheckRuns.strictGreen: PR #91, workflow run 34060576498, check run 101560257395, workflowPath .github/workflows/trunk-check.yml, effectiveCheckName trunk-check, appId 15368, appSlug github-actions. That is the provenance-checked run the plan's M4 names as the source (codex, PR #112). Corroborated at write time by PR #109's live trunk-check check run 113584224225 (head 303f3b3, run attempt 1, pull_request event), which carries the same app id."
+    },
+    "write": "One PUT of the writable projection {name,target,enforcement,bypass_actors,conditions,rules}; never a piped GET.",
+    "readback": {
+      "direction": "`trunk-check` absent before, present after with integration_id 15368.",
+      "remainder": "Everything outside that entry byte-identical. An independent jq diff of the before/after projections shows exactly the one added entry.",
+      "rulesetUpdatedAt": {
+        "before": "2026-08-07T22:27:24.651-06:00",
+        "after": "2026-10-09T14:52:02.633-06:00"
+      }
+    },
+    "postWriteRead": {
+      "what": "The immediate post-write re-read that M4's checklist requires (codex, PR #112). The ruleset values are DERIVED from the post-write snapshot the driver saved.",
+      "snapshot": "20261009T205203Z-m4-after.json",
+      "rulesetUpdatedAt": "2026-10-09T14:52:02.633-06:00",
+      "enforcement": "active",
+      "resolvedTargets": ["alpha", "main"],
+      "canaryRequired": false,
+      "trunkCheckRequired": true,
+      "strictRequiredStatusChecksPolicy": false,
+      "mergeQueueRulePresent": false,
+      "notSnapshottedButComparedByTheDriver": "Immediately after the write, `m4.py m4-apply` re-ran invariants(): a fresh fetch of both base tips, both workflows' blobs, the effective check name, the freshly resolved target set (with ~DEFAULT_BRANCH expanded from the live repository), canary absence, and active enforcement. It compared the result with the pre-write invariants recorded in `preflightReadFresh`, and would have restored the pre-read projection on any difference. The write was not rolled back, so the post-write values EQUAL those recorded pre-write. The post-write fetch itself was not saved as a separate snapshot; that is stated, not reconstructed."
+    },
+    "requiredContextsAfter": [
+      "validate",
+      "py39-smoke",
+      "secret-scan",
+      "load-check",
+      "redactor-equivalence (ubuntu-latest)",
+      "trunk-check"
+    ]
+  },
+  "cell17EnforcementSmokeTest": {
+    "observedAt": "2026-10-09T21:10:06Z",
+    "observedAtMeans": "Completion: both halves observed. The red half was read first, at red.observedAt (codex, PR #112: the object-level time had been the red half's, which is earlier than the mandatory green half).",
+    "mergeEndpointCalled": false,
+    "red": {
+      "observedAt": "2026-10-09T21:01:22Z",
+      "pr": 111,
+      "headSha": "dd96149d3d0c1f557ce1501ac307a102f0320e87",
+      "mergeStateStatus": "BLOCKED",
+      "restMergeableState": "blocked",
+      "failingRequiredContexts": ["trunk-check"],
+      "everyOtherRequiredContext": "success",
+      "fixture": "harness-fixtures/m4a-red-witness.sh (SC2086, SC2250)",
+      "howTheRedCommitWasMade": "Through the GitHub contents API, so the local pre-commit trunk gate, which correctly refuses it, was never bypassed with --no-verify (contrast M3's red, recorded in howTheRedCommitWasMade above)."
+    },
+    "green": {
+      "pr": 110,
+      "headSha": "942013a77fcf3d4515f37f69952be5a32d044e41",
+      "observedAt": "2026-10-09T21:10:06Z",
+      "mergeStateStatus": "CLEAN",
+      "restMergeableState": "clean",
+      "allTenChecks": "success",
+      "closedImmediatelyAfterTheObservation": true
+    }
+  },
+  "m4aRollbackRehearsal": {
+    "model": "SUBSTITUTION, never a removal: the repository stays blocked throughout (plan §6.2a).",
+    "substitution": {
+      "at": "2026-10-09T21:13:05Z",
+      "direction": "`trunk-check` gone, `trunk-check-rollback-rehearsal` present (integration 15368)",
+      "remainder": "byte-identical",
+      "state": "REHEARSAL",
+      "maintainerInstruction": "'approve the M4a rehearsal writes' (the classifier had refused the write as CI Bypass)"
+    },
+    "underThePlaceholder": {
+      "pr": 111,
+      "at": "2026-10-09T21:13:16Z",
+      "mergeStateStatus": "BLOCKED",
+      "trunkCheckRunsConclusion": "failure",
+      "trunkCheckRunsRequired": false,
+      "presentFailingRequiredContexts": [],
+      "meaning": "Still blocked, and the block no longer names trunk-check: the documented call removes the entry it targets."
+    },
+    "restore": {
+      "at": "2026-10-09T21:13:30Z",
+      "direction": "placeholder gone, `trunk-check` present (integration 15368)",
+      "netResultEqualsPreM4aCanonicalRuleset": true
+    },
+    "afterRestore": {
+      "pr": 111,
+      "at": "2026-10-09T21:13:40Z",
+      "mergeStateStatus": "BLOCKED",
+      "failingRequiredContexts": ["trunk-check"]
+    },
+    "greenReobserved": {
+      "pr": 110,
+      "reopenedAt": "2026-10-09T21:13:52Z",
+      "at": "2026-10-09T21:28:35Z",
+      "mergeStateStatus": "CLEAN"
+    },
+    "witnessesClosedNeitherMerged": [110, 111],
+    "baseTipsUnchangedAfterwards": {
+      "main": "665796eed931a5e478c8977a646e1283045af948",
+      "alpha": "10d57dd9323f63df66891514a6d07e0116a85493"
+    },
+    "finalState": "trunk-check required with integration_id 15368, no placeholder, canonical ruleset identical to its pre-M4a bytes.",
+    "decidingReads": {
+      "what": "The read taken IMMEDIATELY BEFORE each of the three ruleset writes, recorded per transition (codex, PR #112: the outcome records alone could not show that these reads happened). Every value below is DERIVED from the full ruleset snapshot the driver saved at that read, not retyped.",
+      "reads": [
+        {
+          "transition": "M4 write",
+          "write": "add trunk-check",
+          "snapshot": "20261009T205202Z-m4-before.json",
+          "rulesetUpdatedAt": "2026-08-07T22:27:24.651-06:00",
+          "stateAtTheDecidingRead": "UNGATED",
+          "enforcement": "active",
+          "bypassActors": [],
+          "strictRequiredStatusChecksPolicy": false,
+          "mergeQueueRulePresent": false,
+          "resolvedTargets": ["alpha", "main"],
+          "requiredContexts": [
+            "validate",
+            "py39-smoke",
+            "secret-scan",
+            "load-check",
+            "redactor-equivalence (ubuntu-latest)"
+          ]
+        },
+        {
+          "transition": "rehearsal substitution",
+          "write": "trunk-check -> placeholder",
+          "snapshot": "20261009T211304Z-sub-before.json",
+          "rulesetUpdatedAt": "2026-10-09T14:52:02.633-06:00",
+          "stateAtTheDecidingRead": "GATED",
+          "enforcement": "active",
+          "bypassActors": [],
+          "strictRequiredStatusChecksPolicy": false,
+          "mergeQueueRulePresent": false,
+          "resolvedTargets": ["alpha", "main"],
+          "requiredContexts": [
+            "validate",
+            "py39-smoke",
+            "secret-scan",
+            "load-check",
+            "redactor-equivalence (ubuntu-latest)",
+            "trunk-check"
+          ],
+          "remainderEqualsSavedPreM4aRemainder": true
+        },
+        {
+          "transition": "rehearsal restore",
+          "write": "placeholder -> trunk-check",
+          "snapshot": "20261009T211329Z-restore-before.json",
+          "rulesetUpdatedAt": "2026-10-09T15:13:04.627-06:00",
+          "stateAtTheDecidingRead": "REHEARSAL",
+          "enforcement": "active",
+          "bypassActors": [],
+          "strictRequiredStatusChecksPolicy": false,
+          "mergeQueueRulePresent": false,
+          "resolvedTargets": ["alpha", "main"],
+          "requiredContexts": [
+            "validate",
+            "py39-smoke",
+            "secret-scan",
+            "load-check",
+            "redactor-equivalence (ubuntu-latest)",
+            "trunk-check-rollback-rehearsal"
+          ],
+          "remainderEqualsSavedPreM4aRemainder": true
+        }
+      ],
+      "checkedButNotSnapshotted": "At each deciding read the driver also listed the open PRs against main and alpha, and refused to write if any had auto-merge armed. For the M4 write it additionally re-checked both base tips' workflow blobs, the effective check name, and that the canary is not required (`m4.py` invariants()). Those reads returned inside the driver and were NOT saved as separate snapshots. Each one is a hard stop in the driver, so a write that proceeded is the evidence they passed. This is stated, not reconstructed.",
+      "driver": "~/.claude/handoffs/coredev-2780/m4/m4.py (deciding_read / invariants); its selftest is mutation-verified 6/6."
+    }
+  },
+  "cell2RuleSatisfactionObservation": {
+    "pr": 110,
+    "headSha": "942013a77fcf3d4515f37f69952be5a32d044e41",
+    "retarget": "main -> alpha via `gh pr edit --base alpha`",
+    "retargetedAt": "2026-10-09T21:28:57Z",
+    "whyItDiscriminates": "plugin-ci's pull_request takes the default types (no `edited`), so trunk-check is the ONLY required context that re-runs on a retarget. While its new run is pending the PR is BLOCKED if the rule is evaluated against the new run, and stays CLEAN if the earlier same-SHA success still satisfies it.",
+    "whilePending": {
+      "at": "2026-10-09T21:29:02Z",
+      "base": "alpha",
+      "mergeStateStatus": "BLOCKED",
+      "requiredNotPassing": [["trunk-check", "IN_PROGRESS"]]
+    },
+    "afterNewRun": {
+      "at": "2026-10-09T21:29:47Z",
+      "base": "alpha",
+      "mergeStateStatus": "CLEAN",
+      "workflowRunId": 37993706657,
+      "checkRunId": 114034182483,
+      "conclusion": "success"
+    },
+    "counterexample": {
+      "actionResolvedUpstreamSha": "665796eed931a5e478c8977a646e1283045af948",
+      "newBaseTipAtRunTime": "10d57dd9323f63df66891514a6d07e0116a85493",
+      "upstreamEqualsNewBaseTip": false,
+      "rangeFileCount": 1,
+      "rangeAgainstAlphaWouldInclude": "the 46 files main..alpha differ in",
+      "meaning": "The only post-retarget run checked out refs/pull/110/merge before GitHub recomputed it against the new base. M3's #99 run fired 4 s after its retarget and happened to see the new ref; its `doesNotEstablish` named this race as unobserved. It is now observed.",
+      "ticket": "COREDEV-2879"
+    },
+    "relatedPreExisting": "The other five required contexts (plugin-ci) do not re-run on a retarget at all, so their OLD-base results satisfy the new base's rule. Recorded on COREDEV-2879."
+  },
+  "cell2RetargetFixReObserved": {
+    "what": "COREDEV-2879 §5 step 6 (6.1-6.4). This is the LIVE re-observation that closes cell 2's rule-satisfaction half. A green witness opened against main was retargeted to alpha after the fix shipped (main f3faa0c, 2.8.32); then a pre-retarget trunk-check run was re-run (`theObsoleteRerun`).",
+    "pr": 117,
+    "headSha": "4edf3b2c326c97fa0087bf5b875d548143eccd91",
+    "retarget": "main -> alpha",
+    "retargetedAt": "2026-10-11T18:04:22Z",
+    "theRetargetRun": {
+      "workflowRunId": 38162268775,
+      "createdAt": "2026-10-11T18:04:22Z",
+      "conclusion": "failure",
+      "resolverMessage": "STALE MERGE REF: HEAD^1 f3faa0c350b1b0c6116d15ac4d986305bbb79448 is not on the event's base `alpha` (tip 10d57dd9323f63df66891514a6d07e0116a85493) — GitHub had not recomputed refs/pull/117/merge.",
+      "meaning": "This is the same race that let #110 go green against main's range. It now goes RED, and names the stale ref. That is the first acceptable outcome in the closing discriminator."
+    },
+    "theNextEventsRun": {
+      "workflowRunId": 38163526042,
+      "createdAt": "2026-10-11T18:22:19Z",
+      "conclusion": "success",
+      "actionResolvedUpstreamSha": "10d57dd9323f63df66891514a6d07e0116a85493",
+      "upstreamEqualsNewBaseTip": true,
+      "rangeFileCount": 54,
+      "trigger": "A later `edited` event on #117. Its source was not identified, because I did not edit the PR in that window. Any event after the merge ref settles has the same effect.",
+      "pluginCiSameEvent": {
+        "workflowRunId": 38163526065,
+        "conclusion": "success"
+      },
+      "meaning": "The deciding trunk-check run's range was resolved against alpha's tip, which is the second acceptable outcome. plugin-ci re-ran on the same event, so all six required contexts came from one post-retarget merge commit."
+    },
+    "finalState": {
+      "observedAt": "2026-10-11T18:50:51Z",
+      "mergeStateStatus": "CLEAN",
+      "base": "alpha",
+      "note": "The observe helper's `failingRequired` listed every required name, because it counts ALL check runs on the commit, including the superseded ones: the red retarget run and the cancelled plugin-ci jobs. GitHub's own CLEAN is authoritative. It does NOT simply take the newest run per context; see `theObsoleteRerun.finding`. The helper's list is an over-count and was not used as evidence."
+    },
+    "theObsoleteRerun": {
+      "planStep": "COREDEV-2879 §5 step 6.3. The first revision of this record closed the item WITHOUT it; codex's PR #119 review caught the omission (P2). This observation is what closes the item.",
+      "restoringTheMergeRef": "#117 had been closed and its head branch deleted, so refs/pull/117/merge no longer existed, and a re-run would have failed on that fetch instead of on the property. The branch was restored at the SAME head SHA (4edf3b2, no new commit) and the PR reopened at 2026-10-12T18:20:14Z (its `reopened` event). GitHub then recomputed refs/pull/117/merge as 38ed416, whose first parent is c189ea7, alpha's tip.",
+      "rerunOf": {
+        "workflowRunId": 38160411113,
+        "originalCreatedAt": "2026-10-11T17:37:16Z",
+        "originalConclusion": "success",
+        "originalMergeCommit": "4c6aa57: 4edf3b2 merged into f3faa0c, main's tip before the retarget"
+      },
+      "attempt": 2,
+      "rerunStartedAt": "2026-10-12T18:22:35Z",
+      "checkedOut": "4c6aa57. The re-run reused the original event's merge commit, as F2 says it does.",
+      "conclusion": "failure",
+      "resolverMessage": "OBSOLETE EVENT: HEAD^1 f3faa0c350b1b0c6116d15ac4d986305bbb79448 is not on the base of the PR's CURRENT merge ref (c189ea71f8e418c4c764264d0a5bd21f7d728304) — this run belongs to an event from before a retarget. Push a commit, or close and reopen the PR",
+      "whyTheFirstCheckPassed": "Predicted before the re-run, and observed: the re-run's event base is main, and f3faa0c is on main's first-parent chain (main had since advanced to a100645), so STALE MERGE REF cannot fire. Only the second reference catches an obsolete event. f3faa0c reached alpha solely as #118's SECOND parent, so it is not on alpha's first-parent chain.",
+      "decidesTheContext": false,
+      "theContextAfterEveryRunSettled": {
+        "observedAt": "2026-10-12T18:39:27Z",
+        "mergeStateStatus": "CLEAN",
+        "restMergeableState": "clean",
+        "statusCheckRollup": "SUCCESS",
+        "newestTrunkCheckRun": "check run 114949097381, started 2026-10-12T18:22:38Z, FAILURE: this re-run, in suite 103388684057, created 2026-10-11T17:37:16Z",
+        "newestTrunkCheckSuite": "suite 103743577407, created 2026-10-12T18:20:16Z (the reopen run 38290219720), SUCCESS",
+        "aReadThatLooksLikeTheOpposite": "At 18:23 the PR read BLOCKED with this re-run as its newest trunk-check run. plugin-ci was still pending then, and the BLOCKED was plugin-ci's. Read again once every run had settled, it is CLEAN. Read merge state only after every required context has settled."
+      },
+      "finding": "This CONTRADICTS the second half of COREDEV-2879's F3 ('a re-run CREATES a new run, so a re-run of an obsolete event becomes the deciding run'). That half was an inference; F3's observed half (#110: a newer run in progress kept an earlier success from satisfying the rule) involved a newer SUITE. Here the newest RUN is red, yet GitHub, both the merge state and the commit rollup, took the newest SUITE's green. Consistent with: GitHub decides a context from its newest check suite, and a re-run adds a run to an OLD suite. Not discriminated from: GitHub disregards a suite whose event base (main) differs from the PR's current base (alpha). Under either reading, while a post-retarget suite exists, an obsolete re-run decides nothing.",
+      "meaning": "Step 6.3 holds as the plan states it: the obsolete re-run is RED, OBSOLETE EVENT, so it can never be a green against the old base's range. Its effect on the rule is weaker than F3 predicted. GitHub did not let it decide the context at all, so on this path the OBSOLETE check is a second protection, not the only one, for the case observed (a newer suite exists). One observation; COREDEV-2881's residual is assessed in its ticket, not here."
+    },
+    "theReopenControl": {
+      "workflowRunId": 38290219720,
+      "createdAt": "2026-10-12T18:20:16Z",
+      "conclusion": "success",
+      "checkedOut": "54bc532: 4edf3b2 merged into 10d57dd",
+      "eventBaseSha": "10d57dd9323f63df66891514a6d07e0116a85493",
+      "alphaTipAtReopen": "c189ea71f8e418c4c764264d0a5bd21f7d728304",
+      "note": "The reopen event carried the merge commit GitHub held from when #117 was closed. Its base is alpha's tip at THAT time (10d57dd), not alpha's tip now (c189ea7), and GitHub recomputed the merge ref only after this run. The resolver accepted it, by design: 10d57dd is c189ea7's FIRST parent, so this is the base-advanced case (§6, bounded at 64 commits) on the right branch, not a wrong-branch range. It is a staleness every PR has under `strict_required_status_checks_policy: false`, not a retarget path. Recorded so that this green is not mistaken for a range resolved against the current tip."
+    },
+    "closedNeverMerged": true,
+    "reopenedOnceForStep63": "Reopened 2026-10-12T18:20:14Z for `theObsoleteRerun`, closed again 2026-10-12T18:41:19Z, and its head branch deleted again. Never merged.",
+    "liveObserverCrash": "The observer's own polling died on a network timeout immediately after the retarget, so it missed the 'BLOCKED while pending' read. Every value above was reconstructed afterwards from the runs' API records and logs, which are authoritative and timestamped."
+  }
+}

@@ -1,88 +1,158 @@
 ---
 name: gemini-review
-description: Plan and debug review via the Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Use before implementing any plan or fix.
-# MIN-27: this user-invoked workflow is nothing BUT pty-capture Bash pipelines, yet granted no tools — so
-# every one of the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly
-# what the body runs (the plugin's scripts, the CLI probe, and `agy`); do not grant unscoped Bash.
-effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
+description: Plan and debug review via the `gemini` CLI, run isolated (binary `gemini`, model: the `DEFAULT_MODEL` that `isolated-gemini-review.sh` declares, asserted from the CLI's own JSON stats). Use before implementing any plan or fix.
+# MIN-27: this user-invoked workflow is nothing BUT capture pipelines, yet granted no tools — so every one of
+# the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly what the body
+# runs (the plugin's capture and preflight scripts); do not grant unscoped Bash, and do NOT grant
+# `Bash(gemini *)`: a raw launch bypasses the adapter's model assertion, the deny policy and the isolation
+# harness, and headless plan mode is NOT read-only (COREDEV-2887).
+# The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
+# step prompted for permission (or was denied) before the newly narrowed capture grant could run —
+# so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
+# per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
+# Edit(...), NOT Write(...): since Claude Code 2.1.210 file-permission rules are consulted for
+# `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but NEVER consulted (docs:
+# "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
+# CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
+# An Edit(path) allow rule covers all built-in file-editing tools on that path, the Write tool included.
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh), Edit(.agy-prompt-*.md), Read
 ---
 
-# Antigravity (`agy`) Review
+# Gemini Review (the `gemini` CLI, isolated)
 
-All plans and debugging sessions must be reviewed by the `agy` CLI before implementation. Non-negotiable — paired with `/codex-review`. The canonical workspace command is the bare `/gemini-review` (the plugin also bundles it as `/unleashed-mail:gemini-review`); the name is kept for muscle memory while the underlying CLI is Antigravity (Google retired the older `gemini` CLI in May 2026).
+All plans and debugging sessions must be reviewed by the Gemini arm before implementation. Non-negotiable — paired with `/codex-review`. **The canonical invocation is the namespaced `/unleashed-mail:gemini-review`** — the plugin registers its skills namespaced, so that form always resolves; the bare `/gemini-review` resolves only where the consumer workspace ships its own local copy (AGENT_CONTRACTS Cross-references; 2026-08-17 audit, AF-6).
 
-| Trigger | When |
-|---------|------|
+**History.** Until COREDEV-2887 (2026-10-14) this arm ran the Antigravity CLI (`agy`). Gemini 3.1 Pro was retired there, and `agy`'s Flash arm stopped answering, so the arm now runs Google's `gemini` CLI with the 3.1 Pro preview, inside the same isolation harness. The per-round prompt keeps its historical `.agy-prompt-<T>r<N>.md` name: the `.gitignore` glob, this skill's `Edit` grant and every existing gate document use it.
+
+| Trigger                           | When                       |
+| --------------------------------- | -------------------------- |
 | New plan or architecture decision | BEFORE any code is written |
-| Bug investigation or debugging | BEFORE proposing fixes |
+| Bug investigation or debugging    | BEFORE proposing fixes     |
+
+## Scope and round hygiene (read before dispatching)
+
+- **The granted capture wrapper is PLAN-ONLY.** `capture-gemini-review.sh` requires a `<plan>` operand
+  and `bind-prompt.py` binds only `docs/planning/*_PLAN.md` documents — a prompt naming no plan (or a
+  non-plan target like `docs/planning/ISSUE-42.md`) is refused with "the prompt never names a plan"
+  **before the reviewer launches**. This is by design: the digest-bound, gate-bearing artifact chain
+  exists for plans. **Debug/bug-investigation reviews are ADVISORY** — they produce no verdict artifact
+  and never satisfy the `/unleashed-mail:implement` gate. Run them by writing the investigation up as a
+  `*_PLAN.md` (a diagnosis plan is a plan — this makes the round gate-bearing and isolated). Do not run
+  the `gemini` CLI against the working tree for one: it is not read-only (below). Do not fight the "never
+  names a plan" refusal by renaming arbitrary files to `*_PLAN.md`. (2026-08-17 audit, AF-3; a scripted
+  non-plan `--target` binding is tracked in COREDEV-2654.)
+- **Write BOTH per-round prompt files BEFORE launching either arm, then freeze the tree.** The
+  isolation harnesses fingerprint the live checkout before and after each round and **void the round on
+  ANY surviving difference — a new untracked file included** (exit 3). Writing `.codex-prompt-*.md`
+  while the gemini round is still running voids that round at the finish line in any repo that does not
+  git-ignore these files; so does unrelated untracked churn (build logs, editor droppings). Order:
+  write `.agy-prompt-<T>r<N>.md` AND `.codex-prompt-<T>r<N>.md`, then dispatch both captures, and make
+  no working-tree changes until both rounds land. **Consumer repos must add the ignore globs**
+  `.agy-*.md`, `.codex-*.md`, `.kimi-*.md`, `.gate-*-prompt.md` (see README → Installation).
+  (2026-08-17 audit, AF-5.)
+- **The assembled prompt has a 1000-byte floor.** The wrapper passes `--min-bytes 1000` to
+  `stage-prompt.py`; the read-only guard it prepends is ~381 bytes, so your prompt file itself must
+  carry a real review specification (roughly 620+ bytes — the schematic example under "Invocation
+  patterns" is illustrative, not sufficient). A refusal naming the floor means the prompt was too
+  thin or truncated, not that the CLI failed. (2026-08-17 audit, AF-9.)
+- **A NON-ZERO CAPTURE IS `MISSING`, whatever its transcript says.** Exit 3 is a VOID (the reviewer
+  changed the tree or the staged basis), 4 is a REFUSED run (another model answered, the CLI reported an
+  error, its output was not the expected JSON, or an environment file would configure the reviewer), and
+  any other status is the CLI's own (173 is a capacity error). A voided round's transcript can still hold
+  the reviewer's `VERDICT:` line, and nothing downstream reads the capture status — neither
+  `/unleashed-mail:review-synthesis` nor `persist-verdict.sh` — so **never pass a non-zero capture's
+  transcript to synthesis**: record that reviewer as `MISSING` for the round. (Making persistence require
+  proof of a clean round is COREDEV-2888.)
 
 ## Setup
 
-- **Tool:** Antigravity CLI binary `agy` — resolve via `$PATH` (typical install: `~/.local/bin/agy`). Current verified version: 1.0.1 (2026-05-23). Call it directly via Bash — do NOT use an MCP wrapper.
-- **Auth:** OAuth-personal handled by the CLI's own login. Creds cached at `~/.gemini/oauth_creds.json` (the `~/.gemini/` dir is reused by Antigravity for backward compatibility). DO NOT set `GEMINI_API_KEY` or `GOOGLE_CLOUD_PROJECT` (user rejected Vertex 2026-04-20).
-- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success): `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` with `grep -qi pong` (**case-insensitive, and do not require the `!`** — across 3 measured runs agy answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let me know how I can help you today.`; a `Pong!`-exact check calls a healthy CLI unavailable ~1 run in 3). Any of those from a real terminal is valid. If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
-- **`--print-timeout` is REQUIRED for a real review.** `agy -p` defaults to `--print-timeout 5m0s`; a plan review that reads several files routinely exceeds it and dies with `Error: timeout waiting for response` (a ~36-byte transcript, exit 1). Always pass `agy --print-timeout 18m -p "Read and follow .agy-prompt.md"` — the slim-argv form recommended below, NOT `-p "$(cat .agy-prompt.md)"`, which inlines the whole prompt into argv. **A healthy ping (`grep -qi pong`) plus a failed review means the invocation is wrong, NOT that the CLI is unavailable** — fix the flag and re-run; do not treat it as a reviewer-unavailable case. A tiny transcript is a *failure*, never a verdict, and never an APPROVE.
-- **Model selection — NO `-m` flag.** The model is set globally in `~/.gemini/settings.json` under `"model": { "name": "gemini-3.1-pro" }`. Verify with `cat ~/.gemini/settings.json | grep model`. For plan-review fallback to `gemini-2.5-pro`, temporarily edit settings.json and restore after. For debug review: NO fallback — fail the review rather than degrade.
-- **NO `-o` flag.** Output is plaintext only.
-- **Workspace access — NOT persistent.** Each `agy -p` invocation is a fresh session. Either pass `--add-dir /absolute/path/to/workspace` on every invocation, OR use absolute paths in the prompt. The interactive `/add-dir` slash command (inside `agy -i` sessions) updates persistent state but doesn't affect `-p` runs.
+- **Tool:** the `gemini` CLI (verified 0.64.0, 2026-10-14; typical install `/opt/homebrew/bin/gemini`), resolved via `$PATH`. Call it only through this skill's two scripts — never directly, and never through an MCP wrapper.
+- **Auth:** OAuth-personal through the CLI's own login (run `gemini` interactively once, in a scratch directory, to sign in). The CLI loads the operator's home environment file (`~/.gemini/.env`, else `~/.env`) as before; **any OTHER `.env` or `.gemini/.env` the CLI would reach above the reviewer's working directory refuses the run** (exit 4), because a repository-controlled one could set the reviewer's endpoint or credentials (COREDEV-2887 F14). **The home file may set only credentials:** `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, which is the CLI's own allowlist for an untrusted workspace. Any other key refuses the run, naming the key but never its value. Set other variables in your shell instead: the CLI loads the file after the adapter's checks, so nothing it sets would be checked.
+- **Smoke test / preflight:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh"` — ONE granted command. It allocates its own per-run ping path (a shared path lets a preflight that dies before writing leave the PREVIOUS run's `pong` in place, so a dead CLI reads as healthy — deep review, P2), pings through the SAME adapter a review runs through, from a scratch directory, with the checkout fingerprinted before and after, and keeps the CLI's diagnostics at `<ping>.diag`. It is healthy only when the asserted model answered `pong` as its WHOLE answer (case-insensitive, optionally ending in `.` or `!`), and every failure line names the model. **If the Gemini arm is unavailable (fresh machine / CI / capacity), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the _user_ choose the recovery (install/authenticate the CLI, retry later as a new round, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+- **Model:** the harness runs its `DEFAULT_MODEL` (read it with `grep DEFAULT_MODEL scripts/review/isolated-gemini-review.sh`; the preflight reads the same literal, so the two cannot disagree). The `gemini` CLI has no model-listing command, so there is nothing to resolve from: a retired model fails the preflight and the round CLOSED, naming itself. **The answering model is ASSERTED** — the adapter requests `-o json` and refuses the round unless the CLI's `stats.models` names exactly the requested model, so an automatic fallback or a plan-mode route to Flash can never be recorded as this arm's review. The model a round ran is recorded beside its transcript, in `<transcript>.model`. To run one round on another model, pass it as the SIXTH OPERAND — not as a `MODEL=` prefix, which is a different command shape and does not match this skill's capture grant: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" <ticket> <round> <prompt> <plan> 1800 <model>`. Moving the default is a one-line, reviewed change to `DEFAULT_MODEL`. For debug review: NO fallback — fail the review rather than degrade.
+- **Trust and settings:** the reviewer runs in a disposable checkout the CLI has never seen, so the adapter passes `--skip-trust` and sets `GEMINI_CLI_TRUST_WORKSPACE=true` (the CLI loads workspace settings BEFORE `--skip-trust` takes effect). The harness stages that checkout's own `.gemini/settings.json` with plan-mode model routing OFF, settings-level hooks OFF, and the CLI's `.gitignore`/`.geminiignore` file filtering OFF (the staged prompt can sit under a path the reviewed repo ignores, and a committed `.geminiignore` must not hide the plan); it never touches your global settings. A reviewed repository that COMMITS a `.gemini` or `.env` entry, or a `GEMINI.md` context file at any depth — or a file under any other context name your user or system Gemini settings configure (the CLI injects those into every prompt, and no setting removes the default name) — is refused (exit 1) before anything is staged, as is a committed `.agents` entry (workspace Agent Skills); Gemini settings that add `context.includeDirectories` (extra readable roots), or that cannot be parsed, refuse too. **Nothing the reviewed branch commits runs as the arm's own code** (`scripts/review/reviewer-env.sh`, sourced first by every entrypoint):
+- **PATH:** only absolute entries outside the live checkout are kept.
+- **Python:** every `python3` the arm's scripts run is isolated (`-I -B`), so a committed `json.py` cannot replace the standard library.
+- **The `gemini` binary:** the adapter resolves it, through any symlink, to a real file outside both the disposable and the live checkout, and runs that file.
+- **Environment:** the adapter refuses a `GEMINI_CLI_HOME`, `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`, `GEMINI_CLI_TRUSTED_FOLDERS_PATH` or `GEMINI_EXP` that is relative or points inside the disposable or live checkout.
+- **Temporary files:** the arm refuses a `TMPDIR` inside the checkout.
+- **Custom tools:** Gemini settings that configure command-based custom tools (`tools.discoveryCommand` / `tools.callCommand`) refuse the round. Those commands run outside the deny policy.
+- **Policies and skills:** Gemini settings that add policy files (`policyPaths` / `adminPolicyPaths`) refuse the round. The staged settings switch your user Agent Skills off for the review.
+- **Shell startup file:** start the arm with `BASH_ENV` unset. The arm unsets it for every shell it starts, but the shell you start has already read it (COREDEV-2892). It does not pass on `GEMINI_SYSTEM_MD`, `NODE_OPTIONS`, `NODE_PATH` or the IDE's workspace folders.
 
-## ⚠️ Critical: non-TTY invocation requires a Python PTY wrapper
+The preflight stages the same workspace settings for its ping (`scripts/review/gemini-review-settings.json`). A committed `.mcp.json` is fine: the CLI does not read it.
 
-`agy -p` uses a TTY-only "text drip" typewriter-style streaming UI. When stdout is piped or redirected (`> file`, `| tee`, Claude's Bash tool environment), the drip has nowhere to render → **0 bytes captured**, even though agy itself completed the task successfully. The conversation file in `~/.gemini/antigravity-cli/conversations/*.pb` is encrypted/opaque and cannot be extracted from.
+- **No MCP server is started.** The adapter passes `--allowed-mcp-server-names` with a name generated per run from 128 random bits, so no server configured anywhere can match it (a fixed name was matched by a server configured under it; an EMPTY allowlist means unrestricted).
 
-**The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): run `agy` inside a pseudo-terminal via the committed, command-agnostic wrapper [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs the command under a controlling PTY via `pty.fork()` so the text-drip renders, ANSI-strips the output, writes it to `<out-path>`, and propagates the child's exit code. The **same wrapper** captures `codex exec` for [`codex-review`](../codex-review/SKILL.md) — one PTY wrapper, both review CLIs.
-
-> ## ⚠️ `agy` IS NOT READ-ONLY — NEVER POINT IT AT THE WORKING TREE
+> ## ⚠️ The `gemini` CLI IS NOT READ-ONLY HEADLESS — NEVER POINT IT AT THE WORKING TREE
 >
-> On 2026-07-29 a plan review **implemented the plan instead of reviewing it**: 6 shipped scripts
-> modified, 5 files created, including a stray `marketplace.json` at the repo root (COREDEV-2607). It
-> emitted no `VERDICT:` line so the gate failed closed — the *fortunate* failure mode — but the edits
-> persisted. The concurrent `codex` review only stayed trustworthy because it independently
-> re-anchored its citations to committed `HEAD`; nothing in the gate required that.
+> **Plan mode is not a boundary in headless use.** In non-interactive runs the CLI's policy engine
+> auto-approves `exit_plan_mode`, and leaving plan mode switches to YOLO, which auto-approves every tool.
+> Observed 2026-10-14 in a scratch directory: asked to leave plan mode and write, 3.1 Pro did — it created
+> a file, ran a shell command and overwrote another (COREDEV-2887 F4).
 >
-> **These flags were TESTED and none of them prevents writes. Do not re-try them:**
+> | invocation (headless, no deny policy) | wrote the file?                            |
+> | ------------------------------------- | ------------------------------------------ |
+> | `--approval-mode plan`                | **yes** (via `exit_plan_mode`, then YOLO)  |
+> | `--approval-mode yolo`                | **yes**                                    |
+> | either, with the shipped `--policy`   | no — the tools are withheld from the model |
 >
-> | invocation | wrote the file? |
-> |---|---|
-> | `agy` (no flags) | **yes** |
-> | `agy --mode plan` | **yes** |
-> | `agy --sandbox` | **yes** |
-> | `agy --sandbox --mode plan` | **yes** |
->
-> All four exited 0. `--mode` is "agent execution mode (accept-edits, plan)" and `--sandbox` is
-> "terminal restrictions"; neither restricts file writes in print mode. This is the asymmetry with
-> [`codex-review`](../codex-review/SKILL.md), which already runs `-s read-only`. **Isolate instead of
-> constraining** — that is what the wrapper below does.
+> The arm therefore has THREE layers, and only the last is the guarantee: plan mode; a per-run deny
+> policy (`scripts/review/gemini-review-policy.toml`: `exit_plan_mode`, `write_file`, `replace`,
+> `run_shell_command`, `invoke_agent` and every MCP tool, priority 999, in every mode); and the isolation
+> harness — a disposable checkout, fingerprinted before and after, the round VOID (exit 3) on any
+> surviving change. **Isolate instead of constraining.** The origin is COREDEV-2607: on 2026-07-29 an
+> `agy` plan review **implemented the plan instead of reviewing it** — 6 shipped scripts modified, 5
+> files created — and emitted no `VERDICT:` line, so the gate failed closed but the edits persisted.
+> That is the asymmetry with [`codex-review`](../codex-review/SKILL.md), which runs `-s read-only`.
 
-Interface: `isolated-agy-review.sh <prompt-file> <out-path> [timeout]`. The prompt path is **relative
-to the repo root**; the wrapper rewrites absolute paths inside it to point at the disposable copy.
+Interface: `capture-gemini-review.sh <ticket> <round> <prompt-file> <plan> [timeout] [model]`.
+
+**`isolated-gemini-review.sh` is the harness that entrypoint calls, not a command to run directly.** This
+skill's `allowed-tools` grants the capture wrapper and not the harness, so invoking the harness yourself
+prompts or is denied; and the plan is its _fourth_ operand, so a hand-written three-argument call skips
+plan staging entirely and the reviewer reads the COMMITTED plan instead of the uncommitted edits that are
+the normal state during review iteration (PR #63 recheck, P2). Use the complete recipe under "Required
+invocation inputs" below; never derive or normalize the allocated path.
 
 ```bash
-# Creates a disposable DETACHED worktree at the reviewed commit, rewrites the prompt's absolute paths
-# to point there, prepends a read-only guard, runs agy against THAT copy, then asserts the real
-# working tree is byte-identical before/after. A tree mutation exits 3 and VOIDS the round rather than
-# being cleaned up silently.
+# capture-gemini-review.sh allocates the per-run leaf, binds the prompt AND the plan to it, and hands
+# off to scripts/review/isolated-gemini-review.sh, which creates a disposable DETACHED checkout of the
+# reviewed commit, refuses a committed .gemini/.env, stages the bound plan snapshot into it —
+# authenticated against the `.plan` digest, so bytes substituted after binding are refused rather than
+# reviewed — rewrites the prompt's absolute paths to point there, prepends a read-only guard, and runs
+# scripts/review/gemini-review-run.py (the adapter) against THAT copy under pty-capture.py. The adapter
+# runs the CLI with the deny policy, asserts the answering model, and prints ONLY the validated response:
+# the CLI's stderr and every refusal go to `<leaf>.diag`, so a refused run leaves the transcript EMPTY.
+# The harness then asserts the real working tree and the disposable copy are unchanged. A mutation exits
+# 3 and VOIDS the round rather than being cleaned up silently.
 #
-# It also pre-cleans the transcript (an ABSENT file maps to MISSING -> the gate fails closed; a STALE
-# one would be read as this round's verdict) and extracts the verdict with an ANCHORED grep — a loose
-# `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
-    .agy-prompt.md /tmp/agy-out.txt 1500
-# -> EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
-# Exit 3 = the reviewer mutated the tree. Exit 1 = setup/prompt failure (e.g. a truncated prompt,
-# which the wrapper refuses to launch on rather than burning 20 minutes).
+# Staleness protection comes from the PER-RUN ALLOCATED PATH — the wrapper no longer pre-cleans, and
+# must not (an ABSENT transcript maps to MISSING -> the gate fails closed; a STALE one would be read as
+# this round's verdict). Each round gets its own leaf, so absence is guaranteed without deleting
+# anything. The wrapper additionally REFUSES a non-empty reserved leaf, so a retry is forced to
+# re-allocate rather than overwrite a previous round's bytes. It extracts the verdict with an ANCHORED
+# grep — a loose `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
+    "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# -> UNLEASHED_TRANSCRIPT=<the allocated leaf>  (printed BEFORE the capture starts, so a timeout keeps it)
+#    EXIT=0 BYTES=… TREE=clean MODEL=<the model> VERDICT=VERDICT: APPROVE_WITH_NOTES
+# Exit 3 = a VOID (the reviewer changed the tree or the staged basis). Exit 4 = the adapter REFUSED the
+# run; the harness prints its reason, `gemini arm (<model>): GEMINI ARM FAILED [...] — <reason>`. Exit 1 =
+# setup/prompt failure (e.g. a truncated prompt, which the wrapper refuses to launch on rather than
+# burning a review). ANY non-zero exit is MISSING (see "Scope and round hygiene").
 ```
 
-**Timeouts are unchanged and still load-bearing.** `--print-timeout 18m` is passed by the wrapper
-because `agy`'s own default is 5m and a real plan review blows past it; the pty wrapper's timeout
-(default 1500s) is deliberately ABOVE that, because a lower wrapper cap SIGTERMs `agy` before its
-own print-timeout can fire, giving a masked exit 124 instead of `agy`'s diagnosable
-`Error: timeout waiting for response`.
+**One timeout, the whole review's wall clock.** The fifth operand (default **1800 s**) bounds the
+review; the `gemini` CLI has no print-timeout of its own, so there is nothing to keep it above. (The
+retired `agy` arm had to keep its wrapper cap ABOVE `agy --print-timeout`; that coupling, and the flag,
+are gone — passing `--print-timeout` to the `gemini` CLI is an unknown-argument error.) A capacity error
+(`429 … No capacity available`, the CLI exiting 173) is a failed round: retry later as a NEW round.
 
-Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across four Codex + Gemini review rounds):
-- **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
-- **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` (agy's text-drip, codex) render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
+The capture runs under the committed, command-agnostic [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`) — the same wrapper [`codex-review`](../codex-review/SKILL.md) uses. The `gemini` CLI itself needs no TTY with `-o json`; the wrapper is there for the allocated-leaf protocol, the capture provenance (`<leaf>.captureid`) and the bounded teardown. Its hardening contract (verified across four Codex + Gemini review rounds):
+
+- **Command passed after `--`** — wraps any command (the Gemini adapter, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
+- **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
 - **Sane PTY window size** — a fresh PTY in a non-TTY context reports `0x0`; the wrapper sets `TIOCSWINSZ` (inherits `COLUMNS`/`LINES`, else 80×24) so width-aware CLIs don't wrap to nothing or emit empty/garbled transcripts.
 - **Capture preserved on `SIGTERM`/`SIGHUP`** — a wrapper-level SIGTERM or SIGHUP (CI timeout, process manager, terminal close / SSH disconnect) is turned into a `SystemExit` whose unwinding still runs `finally`, which reaps the child **and writes the partial transcript** before exiting. Output is never lost; the child is never orphaned.
 - **Teardown reaches helpers, never hangs** — the leader is killed directly with `os.kill(pid, …)` (reliable: it's our own child); the child's process group is signalled best-effort for any helpers (`os.killpg`, tolerant of macOS's spurious `ESRCH`), and closing the PTY hangs up the session as a final backstop. The SIGKILL reap is **bounded** — a denied/failed signal can never block the wrapper forever (the prior unbounded `waitpid(pid, 0)` could deadlock against a `SIGTERM`-trapping child whose group `killpg` had ESRCH'd).
@@ -92,136 +162,130 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 - **Exit-code fidelity** — `os.waitstatus_to_exitcode` propagates the child's code; a signal death (negative status) is normalized to the Unix `128 + signum` convention rather than a masked 8-bit value.
 - **`execvp` failure is diagnosable** — the child writes `pty-capture: failed to execute …` to its PTY stderr (captured in the output file) and `os._exit(127)`, instead of leaving an empty file.
 - **Output dir auto-created** — `os.makedirs(exist_ok=True)` on the out-path parent, so a missing directory doesn't raise `FileNotFoundError`.
-- **Unix newlines** — the PTY's `\r\n` (ONLCR) is normalized to `\n` in the captured file.
+- **Unix newlines** — the PTY's `\r\n` (ONLCR) is normalized to `\n` in the captured file. (The Gemini adapter normalizes the response's own CRLF and lone CR to LF first, because the PTY would double a CR.)
 - **`InterruptedError` → `continue`** (not `break`) — signals during `select`/`read` (e.g., SIGWINCH from terminal resize, SIGCHLD when child exits) retry the loop instead of terminating a healthy child.
 - **Bounded termination ladder** — finally requests SIGTERM, waits up to `SIGTERM_GRACE_SEC` (5 s) polling with `WNOHANG`, then escalates to SIGKILL with a further bounded (`SIGKILL_REAP_SEC`, 2 s) `WNOHANG` reap — never an unbounded blocking wait. Worst case for a CLI that fully ignores SIGTERM is ~grace + reap, then exit.
 - **Drain before close on every path** — the read loop drains on natural exit, and the cancellation (`SIGTERM`/`SIGHUP`) path drains the PTY again after reaping and before closing, so final diagnostics the CLI emits while handling the signal (and bytes buffered when `select` was interrupted) still reach `<out-path>`. Both drains are bounded (≤ 0.5 s).
 
-**Things that do NOT work from non-TTY context:**
-- `agy -p "..." > /tmp/out.txt` — 0 bytes
-- `agy -p "..." | tee /tmp/out.txt` — same
-- `script -q out.txt agy -p "..."` — errors `tcgetattr/ioctl: Operation not supported on socket`
-- Bash `&` + watcher loop with `kill` at timeout — kills agy mid-drip
-
-**It does work** in a true terminal (interactive shell) without the wrapper — that's why a human running `agy -p "..."` from Terminal.app sees output, while a script doesn't.
+**Why not just `gemini -p "…" > review.txt`?** A raw run has none of the arm's guarantees: no model
+assertion (a fallback answer would be recorded as 3.1 Pro's), no deny policy (headless plan mode can reach
+YOLO and write), no isolation (it runs in, and can change, the tree under review), and no binding of the
+transcript to the plan it reviewed. This skill grants no `Bash(gemini *)` for exactly that reason.
 
 ## Invocation patterns
 
-### Slim-argv + workspace prompt file (recommended)
+### Slim-argv + workspace prompt file (the only gate path)
 
-Put the full review/task spec in a workspace markdown file (e.g., `.agy-prompt.md`), then pass a short `-p` that points to it. Keeps argv small AND makes the prompt editable/version-controllable.
-
-```bash
-# 1. From the project root, write the prompt to a workspace file.
-#    Use an absolute path so agy resolves it regardless of how it was launched.
-cat > .agy-prompt.md <<EOF
-# Review task
-
-Read $(pwd)/docs/planning/FEATURE_PLAN.md
-and provide architectural assessment. Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
-EOF
-
-# 2. Invoke agy through the shared PTY wrapper:
-#    pty-capture.py <out-path> -- <command> [args...]
-# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
-# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
-# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
-# `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
-# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (agy absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
-# previous-round transcript that review-synthesis would read as THIS round's APPROVE. Absent (not stale)
-# maps to MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
-# SUPERSEDED — this raw form points agy at the WORKING TREE, which it can write to (COREDEV-2607).
-# Use scripts/review/isolated-agy-review.sh instead; it wraps exactly this pipeline, but against a
-# disposable detached checkout, and asserts the real tree is unchanged afterwards.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" .agy-prompt.md /tmp/agy-out.txt 1500
-```
-
-### From an interactive terminal (no wrapper needed)
-
-The drip animation renders to a real TTY directly. Read the output in your terminal; do NOT pipe to a file (the drip cannot capture through a pipe — that's the whole reason the PTY wrapper exists for non-TTY contexts).
-
-> **Even here, `agy` can write to the workspace** (COREDEV-2607). Interactively that is at least
-> *visible* — you are watching it — but for anything gate-bearing prefer the isolated wrapper, and
-> check `git status` afterwards either way.
+Put the full review/task spec in a PER-ROUND workspace markdown file — `.agy-prompt-${TICKET}r${ROUND}.md`, never a shared `.agy-prompt.md`, because two concurrent rounds sharing one prompt cross-wire prompt and transcript (deep review, P1). The harness stages it and hands the reviewer a short `Read and follow <path>` prompt. Keeps argv small AND makes the prompt editable/version-controllable.
 
 ```bash
-# Plan review — agy -p with workspace flag in same invocation.
-# Run from the project root so "$(pwd)" resolves to the workspace.
-# NOTE: this points agy at the real tree. For a gate round use the isolated wrapper above.
-agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
+# 1. WRITE the prompt to the per-round workspace file with the **Write tool**, not a shell heredoc.
+#    This skill grants `Edit(.agy-prompt-*.md)` (the Edit-form rule pre-approves all built-in
+#    file-editing tools on that path, Write included; a Write-form rule is never consulted on
+#    CLI >= 2.1.210); a `cat > … <<EOF` is a Bash redirect matching no Bash
+#    grant, so it PROMPTS on every gate round — the exact reprompt the granted flow exists to avoid
+#    (PR #63 recheck, P2). Same shape as codex-review's `Edit(.codex-prompt-*.md)` step. Give the file
+#    an absolute plan reference — the harness rewrites the checkout root to the disposable copy, e.g.:
+#
+#        Write(.agy-prompt-${TICKET}r${ROUND}.md):
+#          # Review task
+#          Read $(pwd)/docs/planning/FEATURE_PLAN.md
+#          and provide architectural assessment.
+#          Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
 
-# For record-keeping: use the PTY wrapper above instead of `> file`.
-# A redirect like `agy ... > /tmp/review.md` will produce 0 bytes because
-# the text-drip print mode cannot render to a non-TTY stream.
-
-# Interactive follow-up
-agy -i "Review the v3 plan and continue the discussion"
+# 2. Capture it through the GRANTED wrapper. It allocates the per-run leaf (MAJ-10: staleness protection
+# comes from that PER-RUN ALLOCATED PATH, so a wrapper that never starts leaves the leaf ABSENT — never a
+# STALE previous-round transcript — and absent maps to MISSING), binds the prompt and plan to it, runs the
+# adapter against a disposable detached checkout, and asserts the real tree is unchanged afterwards.
+# DO NOT `rm -f` THE RESERVED LEAF. The allocator creates it 0-byte and pty-capture.py --allocated opens
+# it WITHOUT O_CREAT; deleting it makes the final write fail on a missing file after the whole review has
+# already run, losing the round (PR #63 review, gaps 13-14). Retries must RE-ALLOCATE, which the wrapper
+# enforces by refusing a non-empty reserved leaf.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
+    "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# -> the same UNLEASHED_TRANSCRIPT= marker; the capture lands in that allocated leaf and nowhere else.
 ```
 
-### Interactive slash commands (require `agy -i` real TTY)
+### From an interactive terminal
 
-Inside an `agy -i` session you can use:
-- `/goal` — long-running task; tells the agent to be extra thorough and not stop until the goal is achieved.
-- `/schedule` — recurring/timed instruction or one-time wake-up timer.
-- `/grill-me` — interactive interview where agy asks YOU questions to clarify design.
-- `/add-dir <path>` — register a workspace dir for the current session (persists differently than `--add-dir` CLI flag).
+Running `gemini` interactively in a real terminal is fine for exploration, and you can watch what it does — but it is **not** a gate round, and it **can write to the workspace** (COREDEV-2607, and F4 above). Run it from a scratch directory, never the reviewed checkout, and check `git status` afterwards either way. A gate-bearing review always goes through the capture wrapper.
 
-Slash commands are NOT available via `-p`; you must be inside an interactive `agy -i` session in a real terminal.
+## Flags the adapter passes (`gemini --help`)
 
-## Key flags (`agy --help`)
-
-| Flag | Purpose |
-|------|---------|
-| `-p` / `--print` / `--prompt` | Non-interactive single prompt |
-| `-i` / `--prompt-interactive` | Run initial prompt and stay interactive |
-| `-c` / `--continue` | Resume the most recent conversation |
-| `--conversation <ID>` | Resume specific conversation by ID |
-| `--add-dir <path>` | Add workspace directory (repeatable, per-invocation) |
-| `--print-timeout` | Print-mode wait timeout (default 5m) |
-| `--sandbox` | Run with terminal restrictions enabled |
-| `--dangerously-skip-permissions` | Auto-approve all tool permission requests |
-
-**Removed/changed since the old gemini-cli:**
-- `-m / --model` → removed (model in `~/.gemini/settings.json`)
-- `-o / --output-format` → removed (always plaintext)
-- `--include-directories` → renamed `--add-dir`
+| Flag                                   | Why                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `--skip-trust`                         | The disposable checkout is untrusted; without it the CLI refuses (rc 55) |
+| `-m <model>`                           | The harness's `DEFAULT_MODEL`, or the sixth operand                      |
+| `--approval-mode plan`                 | A layer, not the boundary (see the warning above)                        |
+| `--policy <gemini-review-policy.toml>` | Withholds every write, shell, delegation and MCP tool, in every mode     |
+| `--allowed-mcp-server-names <random>`  | Starts no MCP server: a per-run name nothing is configured under         |
+| `--extensions none`                    | Activates no extension: their context and hooks would bypass the policy  |
+| `-o json`                              | `stats.models` names the model that answered; the adapter asserts it     |
+| `-p "Read and follow <prompt>"`        | One headless turn                                                        |
 
 ## Workflow
 
-1. **Smoke-test:** `agy -p "ping"` → expect a `pong` (case-insensitive; the `!` is not guaranteed). If empty, re-login interactively.
-2. **Check current model:** `grep -A1 model ~/.gemini/settings.json` → confirm `gemini-3.1-pro`.
-3. **Write the task** to a workspace prompt file (e.g., `.agy-prompt.md`) with all context including absolute paths to any files agy must read.
-4. **Invoke** via PTY wrapper from non-TTY contexts, or directly from a real terminal.
-5. **Continue the conversation** with `agy -c` or `agy -i` for follow-up questions. Do not treat the first response as final.
-6. **Capture output** — if invoking from Claude Code's Bash tool, the PTY wrapper writes to `/tmp/agy-out.txt`. Read that file back into context.
-7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES.
-8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/agy-out.txt` + `/tmp/codex-out.txt` into one auditable **Combined verdict** block before implementation. Make sure each review prompt asks the reviewer to finish with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the synthesis can read it deterministically.
+<!-- prettier-ignore -->
+1. **Smoke-test:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh"` → it pings the model the gate will run and prints `gemini preflight: healthy` when that model answered `pong`. If it reports unavailable, its line names the model and the reason; re-login interactively (in a scratch directory) if it is an auth failure.
+2. **Check the model the GATE will use:** the harness's `DEFAULT_MODEL` (or your sixth-operand override); the round records it in `<transcript>.model` and on its `MODEL=` summary line — read either.
+3. **Write the task** to a PER-ROUND workspace prompt file (`.agy-prompt-${TICKET}r${ROUND}.md`) with all context including absolute paths to any files the reviewer must read.
+4. **Invoke** the capture wrapper (the recipe under "Required invocation inputs").
+5. **Read the capture's exit and summary line.** Non-zero is `MISSING` for the round — do not read a verdict out of that transcript (see "Scope and round hygiene").
+6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that
+   allocated file back into context; do not reconstruct its name.
+7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES. Each round is
+   a NEW capture (a new leaf); there is no conversation to continue.
+8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke
+   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer
+   "<name>=<STATUS>:<allocated-path>"` argument. Make sure each review prompt asks the reviewer to finish
+   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the
+   synthesis can read it deterministically.
 
 Do not skip to save time. Do not treat as a rubber stamp.
 
+## Required invocation inputs
+
+/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+
+Ticket and round are required operands received from that invocation; never infer either from the plan,
+branch, or prior transcript. If either is absent, stop before allocation. Bind the received operands to
+`TICKET`, `ROUND` and `PLAN` in the same Bash invocation, then run this complete recipe. The marker remainder
+is copied with shell prefix removal only; every later expansion is quoted so the path remains one opaque
+argument.
+
+```bash
+# Write this round's prompt to a PER-ROUND file first — `.agy-prompt-${TICKET}r${ROUND}.md`, never a
+# shared `.agy-prompt.md`. A shared prompt is the same MAJ-10 hazard as a shared transcript: two
+# concurrent rounds each get a unique leaf, but the second overwrites the prompt before the first
+# wrapper reads it, so the first round records a fresh, valid transcript OF THE OTHER PLAN under its
+# own ticket and round. The helper records the prompt's digest beside the transcript.
+# COREDEV2619_GEMINI_CAPTURE_BEGIN
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# COREDEV2619_GEMINI_CAPTURE_END
+```
+
 ## Diagnostics
 
-If `agy -p` is failing, check in order:
+If a round fails, check in order:
 
-1. `agy --version` — should be ≥ 1.0.1 (2026-05-23). If older, `agy update`.
-2. `agy -p "ping"` — should return a `pong` (case varies) in < 2 s in a real terminal.
-3. `tail ~/.gemini/antigravity-cli/cli.log` — most-recent log entries; non-zero size = startup succeeded.
-4. `ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head -3` — 0-byte logs = agy died at launch (often non-TTY drip issue, OR macOS sandbox/TCC permission denial).
-5. `ls -lt ~/.gemini/antigravity-cli/conversations/ | head -3` — most-recent conversation file growing = agy IS doing work even if your stdout shows 0 bytes (TTY-drip issue, use PTY wrapper).
+1. **The harness's stderr.** A refused run prints `gemini arm (<model>): GEMINI ARM FAILED [...] — <reason>`; a void prints `GATE FAILED — …` and the change it saw.
+2. **`<transcript>.diag`** — the CLI's own stderr for that round, and the adapter's refusal line. A `429 … No capacity available` there is Google's capacity (retry later as a new round), not your quota or your prompt.
+3. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-gemini.sh"` — should print `gemini preflight: healthy`; every failure line names the model.
+4. `gemini --version` — verified 0.64.0. A much newer CLI may have changed a flag the adapter passes; the preflight goes through the same adapter, so it catches that too.
 
-## One-shot preamble (REQUIRED for the automated `agy -p` path)
+## One-shot preamble (REQUIRED for the automated path)
 
-The two system prompts below are written for an **interactive** session (`agy -i`): they invite
-clarifying questions and end with "Start by asking me…". The automated gate feeds them to a **one-shot**
-`agy -p` through `pty-capture.py` — a reviewer following them verbatim replies with a *counter-question*,
-producing a transcript `/unleashed-mail:review-synthesis` cannot parse, which burns a gate round.
+The two system prompts below are written for an **interactive** session: they invite clarifying questions
+and end with "Start by asking me…". The automated gate gives the reviewer exactly ONE headless turn — a
+reviewer following them verbatim replies with a _counter-question_, producing a transcript
+`/unleashed-mail:review-synthesis` cannot parse, which burns a gate round.
 
-**So when building `.agy-prompt.md` for the one-shot path, prepend this preamble** (it overrides the
+**So when building the per-round prompt file for the one-shot path, prepend this preamble** (it overrides the
 ask-first/opener instructions below) and append the target path:
 
 ```markdown
 ONE-SHOT MODE — you have exactly ONE response; there is no follow-up turn.
+
 - Do NOT ask clarifying questions and do NOT ask what to review. Review the artifact at the absolute
   path given below, right now, using only what you can read from disk.
 - If something is genuinely unresolvable from the files, state the assumption you made and continue —
@@ -234,7 +298,7 @@ REVIEW TARGET: <absolute path to the plan / the issue description>
 ```
 
 The `VERDICT:` line is what makes synthesis deterministic (Workflow step 8) — without it the verdict must
-be inferred from prose and confidence drops. The interactive prompts below are unchanged for `agy -i` use.
+be inferred from prose and confidence drops. The interactive prompts below are unchanged for interactive use.
 
 ## Plan review — system prompt
 
@@ -243,6 +307,7 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > When I share a development plan, feature spec, architecture document, or technical approach, review and discuss the following aspects conversationally:
 >
 > **Architecture & Design**
+>
 > - Overall system architecture and component relationships
 > - Design pattern selection and appropriateness
 > - Separation of concerns and modularity
@@ -250,12 +315,14 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > - Data flow and state management approach
 >
 > **Framework & Technology Choices**
+>
 > - Framework suitability for the stated requirements
 > - Dependency evaluation (maturity, maintenance status, licensing)
 > - Compatibility between chosen technologies
 > - Performance implications of the tech stack
 >
 > **Planning & Requirements**
+>
 > - Completeness of requirements and acceptance criteria
 > - Edge cases, error scenarios, and failure modes not accounted for
 > - Dependency mapping and sequencing of work
@@ -263,6 +330,7 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > - Scope clarity — anything ambiguous or underspecified
 >
 > **Code Quality & Standards**
+>
 > - Adherence to modern best practices as documented in current official documentation (always reference Context7 for the latest documentation on any frameworks, libraries, or tools being discussed)
 > - API design and contract clarity
 > - Security considerations and potential vulnerabilities
@@ -270,12 +338,14 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > - Accessibility and compliance requirements where applicable
 >
 > **Developer Experience & Maintainability**
+>
 > - Naming conventions and organizational structure
 > - Documentation needs
 > - CI/CD and deployment considerations
 > - Logging, monitoring, and observability planning
 >
 > Important guidelines:
+>
 > - Always consult and reference Context7 for the most current documentation, best practices, and API references for any technology being discussed. Do not rely on potentially outdated training data when current docs are available.
 > - Be conversational — ask clarifying questions, challenge assumptions, and propose alternatives through discussion rather than code.
 > - Flag risks and concerns with clear reasoning, not just warnings.
@@ -287,8 +357,8 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 >
 > Start by asking me what I'd like to review today.
 
-> **Interactive (`agy -i`) only.** On the automated one-shot `agy -p` path this opener does NOT apply —
-> the One-shot preamble above overrides it (review the given path immediately; end with `VERDICT:`).
+> **Interactive sessions only.** On the automated one-shot path this opener does NOT apply — the
+> One-shot preamble above overrides it (review the given path immediately; end with `VERDICT:`).
 
 ## Debug review — system prompt
 
@@ -297,35 +367,41 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 > When I share a bug report, error log, unexpected behavior, or code snippet for investigation, work through the following conversationally:
 >
 > **Issue Characterization**
+>
 > - Clarify the expected vs. actual behavior
 > - Identify whether the issue is deterministic or intermittent
 > - Establish the scope — is this isolated or potentially systemic
 > - Determine when the issue was introduced if possible (recent change, always existed, environmental)
 >
 > **Codebase Analysis**
+>
 > - Trace the execution path related to the issue
 > - Identify relevant components, modules, and their interactions
 > - Examine data flow, state transitions, and side effects along the path
 > - Review error handling and boundary conditions in the affected area
 >
 > **Root Cause Investigation**
+>
 > - Develop and evaluate hypotheses for the root cause
 > - Identify the most likely cause and explain the reasoning
 > - Consider secondary or contributing factors
 > - Check for related issues that may share the same root cause
 >
 > **Context & Best Practices Validation**
+>
 > - Always reference Context7 for the latest documentation on any frameworks, libraries, or APIs involved in the issue. Verify that current usage aligns with documented behavior and best practices — do not rely on potentially outdated training data.
 > - Identify if the issue stems from deprecated patterns, misused APIs, or deviation from documented conventions.
 > - Note if the relevant library or framework version has known issues or breaking changes.
 >
 > **Fix Strategy & Prevention**
+>
 > - Describe the conceptual approach to fixing the issue (without writing the fix)
 > - Identify what areas of the codebase would need to change
 > - Suggest what tests should be added or updated to cover this case
 > - Recommend any preventive measures to avoid similar issues (architectural, process, or tooling)
 >
 > Important guidelines:
+>
 > - Always consult and reference Context7 for current documentation and known issues related to any technology involved. This is critical for ensuring any diagnosis accounts for the actual documented behavior of dependencies.
 > - Be conversational — walk through the investigation like a pair debugging session. Ask me questions about behavior, environment, and reproduction steps.
 > - Think out loud — share your reasoning as you narrow down hypotheses so I can follow and contribute.
@@ -337,5 +413,5 @@ be inferred from prose and confidence drops. The interactive prompts below are u
 >
 > Start by asking me to describe the issue I'm investigating.
 
-> **Interactive (`agy -i`) only.** On the automated one-shot `agy -p` path this opener does NOT apply —
-> the One-shot preamble above overrides it (investigate the given issue immediately; end with `VERDICT:`).
+> **Interactive sessions only.** On the automated one-shot path this opener does NOT apply — the
+> One-shot preamble above overrides it (investigate the given issue immediately; end with `VERDICT:`).

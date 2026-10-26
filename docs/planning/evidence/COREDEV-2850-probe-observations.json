@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "ticket": "COREDEV-2850",
+  "planStep": "COREDEV-2850_FORMATTER_OVERREACH_PLAN.md §6 step 3",
+  "observedAt": "2026-10-03T19:31:00Z",
+  "pr": {
+    "number": 103,
+    "base": "main",
+    "baseSha": "5f877ec8f570212fd767ad7eb19fce060ca7620e",
+    "head": "evidence/COREDEV-2850-probe",
+    "cutFromSha": "f796a198b78151b69df8b59775f8c32d83072dbb",
+    "neverMerged": true
+  },
+  "workflowPath": ".github/workflows/trunk-check.yml",
+  "effectiveCheckName": "trunk-check",
+  "event": "pull_request",
+  "observations": {
+    "cell1and2b": {
+      "cells": ["1", "2b"],
+      "expectedConclusion": "success",
+      "headSha": "bcd32b3a19bd6d69bb11a5fdc31251abb1aeb1d2",
+      "upstream": "5f877ec8f570212fd767ad7eb19fce060ca7620e",
+      "actionInputs": {
+        "uses": "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa",
+        "observedWith": {
+          "arguments": "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo",
+          "save-annotations": "true"
+        },
+        "canonical": "{\"arguments\":\"--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo\",\"save-annotations\":true}",
+        "digest": "2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe"
+      },
+      "trunkSummary": {
+        "checkedModifiedFiles": 22,
+        "existingIssues": 59,
+        "newIssues": {}
+      },
+      "runs": [
+        {
+          "workflowRunId": 37147664266,
+          "checkRunId": 111274833950,
+          "checkRunConclusion": "success",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        },
+        {
+          "workflowRunId": 37147671952,
+          "checkRunId": 111274856476,
+          "checkRunConclusion": "success",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        },
+        {
+          "workflowRunId": 37147708094,
+          "checkRunId": 111274962388,
+          "checkRunConclusion": "success",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "probeEdits": {
+        "cell1": {
+          "path": "scripts/validate-hooks.py",
+          "edit": "one trailing comment line appended",
+          "recordedPreExistingFormatterFindings": ["isort", "black"],
+          "recordedIn": "docs/planning/evidence/COREDEV-2780-rollout.json#cell3DiffScopeControls.theGateDOESOverReach"
+        },
+        "cell2b": {
+          "path": "scripts/tests/test_trunk_check_workflow.py",
+          "edit": "a FORMAT-ONLY defect: three blank lines between two top-level defs (black: two)",
+          "formatterCleanOn": ["origin/main 5f877ec", "bundle head f796a19"]
+        }
+      }
+    },
+    "cell2": {
+      "cells": ["2"],
+      "expectedConclusion": "failure",
+      "headSha": "f9c6a2e3ee7ab49558bcda505a87b92605514f78",
+      "upstream": "5f877ec8f570212fd767ad7eb19fce060ca7620e",
+      "actionInputs": {
+        "uses": "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa",
+        "observedWith": {
+          "arguments": "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo",
+          "save-annotations": "true"
+        },
+        "canonical": "{\"arguments\":\"--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo\",\"save-annotations\":true}",
+        "digest": "2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe"
+      },
+      "trunkSummary": {
+        "checkedModifiedFiles": 23,
+        "existingIssues": 59,
+        "newIssues": {
+          "lint": 2
+        }
+      },
+      "runs": [
+        {
+          "workflowRunId": 37147842283,
+          "checkRunId": 111275354455,
+          "checkRunConclusion": "failure",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "boundDiagnostic": {
+        "category": "lint",
+        "findings": [
+          {
+            "path": "harness-fixtures/2850-lint-probe.sh",
+            "line": 5,
+            "column": 4,
+            "severity": "low",
+            "linter": "shellcheck/SC2250"
+          },
+          {
+            "path": "harness-fixtures/2850-lint-probe.sh",
+            "line": 5,
+            "column": 4,
+            "severity": "low",
+            "linter": "shellcheck/SC2086"
+          }
+        ],
+        "linters": ["shellcheck/SC2086", "shellcheck/SC2250"],
+        "newIssues": {
+          "lint": 2
+        }
+      }
+    },
+    "cell3": {
+      "cells": ["3"],
+      "expectedConclusion": "failure",
+      "headSha": "299dcba8e1095ac747b49c78c734e9256d7296ae",
+      "upstream": "5f877ec8f570212fd767ad7eb19fce060ca7620e",
+      "actionInputs": {
+        "uses": "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa",
+        "observedWith": {
+          "arguments": "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo",
+          "save-annotations": "true"
+        },
+        "canonical": "{\"arguments\":\"--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo\",\"save-annotations\":true}",
+        "digest": "2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe"
+      },
+      "trunkSummary": {
+        "checkedModifiedFiles": 24,
+        "existingIssues": 59,
+        "newIssues": {
+          "security": 2
+        }
+      },
+      "runs": [
+        {
+          "workflowRunId": 37147946809,
+          "checkRunId": 111275654855,
+          "checkRunConclusion": "failure",
+          "appId": 15368,
+          "appSlug": "github-actions"
+        }
+      ],
+      "boundDiagnostic": {
+        "category": "security",
+        "findings": [
+          {
+            "path": "harness_fixtures/probe_2850_security.py",
+            "line": 3,
+            "column": 0,
+            "severity": "low",
+            "linter": "bandit/B404"
+          },
+          {
+            "path": "harness_fixtures/probe_2850_security.py",
+            "line": 8,
+            "column": 0,
+            "severity": "high",
+            "linter": "bandit/B602"
+          }
+        ],
+        "linters": ["bandit/B404", "bandit/B602"],
+        "newIssues": {
+          "security": 2
+        }
+      }
+    }
+  },
+  "localObservations": {
+    "cell5": {
+      "cells": ["5", "2b (hook half)"],
+      "what": "The local pre-commit hook (`.githooks/pre-commit`, the hook/canary literal) BLOCKED the staged probe commit 1 on formatter findings — executed, not asserted.",
+      "hookBlocked": true,
+      "otherChecksPassed": true,
+      "findings": [
+        {
+          "path": "scripts/tests/test_trunk_check_workflow.py",
+          "linter": "black"
+        },
+        {
+          "path": "scripts/validate-hooks.py",
+          "linter": "black"
+        },
+        {
+          "path": "scripts/validate-hooks.py",
+          "linter": "isort"
+        }
+      ],
+      "transcriptSha256": "4265c78de37c6cf51f3bd7ffcd42ca3b086399095d344d8d6964685885c27c25"
+    },
+    "hookOnCell2Commit": {
+      "hookBlocked": true,
+      "otherChecksPassed": true,
+      "findings": [
+        {
+          "path": "harness-fixtures/2850-lint-probe.sh",
+          "linter": "shellcheck/SC2086"
+        },
+        {
+          "path": "harness-fixtures/2850-lint-probe.sh",
+          "linter": "shellcheck/SC2250"
+        },
+        {
+          "path": "scripts/tests/test_trunk_check_workflow.py",
+          "linter": "black"
+        },
+        {
+          "path": "scripts/validate-hooks.py",
+          "linter": "black"
+        },
+        {
+          "path": "scripts/validate-hooks.py",
+          "linter": "isort"
+        }
+      ],
+      "transcriptSha256": "bb3a080632dd6acc2901bfc89cf30ff6aa215646eef32a6eaa0e9c92308be3ef"
+    },
+    "hookOnCell3Commit": {
+      "hookBlocked": true,
+      "otherChecksPassed": true,
+      "findings": [
+        {
+          "path": "harness_fixtures/probe_2850_security.py",
+          "linter": "bandit/B404"
+        },
+        {
+          "path": "harness_fixtures/probe_2850_security.py",
+          "linter": "bandit/B602"
+        },
+        {
+          "path": "scripts/tests/test_trunk_check_workflow.py",
+          "linter": "black"
+        },
+        {
+          "path": "scripts/validate-hooks.py",
+          "linter": "isort"
+        },
+        {
+          "path": "scripts/validate-hooks.py",
+          "linter": "black"
+        }
+      ],
+      "transcriptSha256": "a50c85269866ecfa002f549999f660659797ae4596a3524f5f26d635fc2ca835"
+    }
+  },
+  "deferred": {
+    "cell6": "The canary (`trunk-check-push.yml`) fires only on `push` to main/alpha, so a never-merged probe PR cannot trigger it. It needs the provenance-bound disposable fork with Actions ENABLED (plan §4 cell 6); that environment was not stood up, so this cell is DEFERRED, not closed on the check-runs API oracle.",
+    "cell2bCanaryHalf": "Arm E's canary half is bound by the same stimulus constraint as cell 6: DEFERRED. Its required-job half (green) and hook half (blocked) are observed above."
+  }
+}

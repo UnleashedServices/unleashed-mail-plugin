@@ -6,7 +6,6 @@ description: >
   Invoke when writing tests, maintaining test suites, analyzing coverage, or setting
   up automated testing workflows. Invoke automatically when adding new features,
   refactoring code, fixing bugs, or when test failures occur.
-effort: xhigh
 model: inherit
 skills:
   - swift-tdd
@@ -113,6 +112,7 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
 ```
 
 **Rules:**
+
 - Mocks track call counts and parameters for verification
 - Use `shouldThrow` for error path testing
 - Stub data with realistic values (e.g., non-empty strings, valid dates)
@@ -125,6 +125,7 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
 `TestEnvironment.isRunningTests`) — this avoids macOS authorization dialogs that block tests.
 
 **Mandatory:**
+
 - Call `KeychainManager.resetInMemoryStore()` in `tearDown()` of any test that touches keychain-backed code
 - **Do NOT call `SecItem*` (`SecItemAdd`, `SecItemUpdate`, etc.) directly in tests** — bypasses the in-memory store and triggers authorization prompts that hang CI
 - Tests should depend on `KeychainManager` exclusively for credential operations
@@ -183,6 +184,7 @@ final class InboxViewModelTests: XCTestCase {
 ```
 
 **Rules:**
+
 - One behavior per test method
 - Use descriptive names: `test_[method]_[condition]_[expectedResult]`
 - Test both success and error paths
@@ -254,6 +256,7 @@ final class EmailDatabaseTests: XCTestCase {
 ```
 
 **Rules:**
+
 - Use production migrator to ensure schema matches
 - Test CRUD operations: insert, update, delete, fetch
 - **Every fetch test must filter by `account_email`** — bare `fetchAll` and bare `fetchOne` model the leak pattern, not the production pattern. Add a "doesNotLeakAcrossAccounts" companion test for any new table.
@@ -300,6 +303,7 @@ final class FullAppFlowTests: XCTestCase {
 ```
 
 **Rules:**
+
 - Use `XCUIApplication` for UI tests
 - Set launch arguments to enable test mode (e.g., mock services)
 - Test critical user journeys: compose, send, search, delete
@@ -322,6 +326,7 @@ xcrun xccov view --report /tmp/TestResults.xcresult
 ```
 
 **Target coverage:**
+
 - ViewModels: 90%+
 - Services: 85%+
 - Database models: 80%+
@@ -356,9 +361,9 @@ name: Test
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x
+      - uses: actions/checkout@<40-char-sha> # actions/checkout v4.x
       - name: Run tests
         run: |
           xcodebuild test \
@@ -367,10 +372,11 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath /tmp/TestResults.xcresult
       - name: Upload coverage
-        uses: codecov/codecov-action@<40-char-sha>  # codecov-action v4.x
+        uses: codecov/codecov-action@<40-char-sha> # codecov-action v4.x
 ```
 
 **Rules:**
+
 - Tests must pass on every PR
 - Coverage reports uploaded to Codecov
 - No flaky tests in CI — fix or disable with clear TODO
@@ -378,6 +384,7 @@ jobs:
 ## Handoff
 
 When your testing work is done, you produce:
+
 1. Test files with comprehensive coverage
 2. Mock implementations for all protocols
 3. Coverage reports and gap analysis

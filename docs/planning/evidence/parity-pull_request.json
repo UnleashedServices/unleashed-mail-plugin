@@ -1,0 +1,47 @@
+{
+  "action": {
+    "controlOutcome": "success",
+    "outcome": "failure",
+    "primaryDiagnostic": {
+      "column": 7,
+      "line": 3,
+      "linter": "shellcheck/SC2250",
+      "path": "harness-fixtures/fixable.sh"
+    }
+  },
+  "actionInputs": {
+    "canonical": "{\"arguments\":\"--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo\",\"save-annotations\":true}",
+    "digest": "2e74b4a7806b1b4c579e14bc59038e1707dbad23a171cdae0d6ea495308931fe",
+    "uses": "trunk-io/trunk-action@e1234e67a86010d61ddac8d8ebf4b783e2ffd2fa"
+  },
+  "event": "pull_request",
+  "invocations": [
+    ["version"],
+    [
+      "check",
+      "--ci",
+      "--upstream",
+      "c17c73084aef2943bd1ffa1a1d0538fa7755a281",
+      "--github-commit",
+      "e71b0bfec92cd14bafce75de6be40d44f3a9e1ac",
+      "--github-label",
+      "",
+      "--github-annotate-file=/tmp/tmp.VCZknTOok3/annotations.bin",
+      "--filter=-markdown-link-check,-black,-isort,-prettier,-shfmt,-taplo"
+    ]
+  ],
+  "ref": "89/merge",
+  "resolver": {
+    "raw": "upstream=c17c73084aef2943bd1ffa1a1d0538fa7755a281"
+  },
+  "schemaVersion": 1,
+  "sha": "25bb1803c049320912bd66758f0d4fe128bb1cda",
+  "tree": {
+    "controlPost": "2737ee88e44dc626917348223153f7d3ec140443d1293490e4b5b08c7ddbca73",
+    "fixture": "harness-fixtures/fixable.sh",
+    "fixturePost": "77337cf6c62d90487d4590ae648ad07ebd8fad998a5465f2a2b362512ded9a54",
+    "fixturePre": "77337cf6c62d90487d4590ae648ad07ebd8fad998a5465f2a2b362512ded9a54",
+    "post": "811f197742c9e63fa3b141fb83bf95a3094a5284681bc983ec4074b19c91019b",
+    "pre": "811f197742c9e63fa3b141fb83bf95a3094a5284681bc983ec4074b19c91019b"
+  }
+}

@@ -2,7 +2,7 @@
 
 **This repo is a Claude Code _plugin_**, not the app. It ships the agents, skills, commands, hooks,
 and a bundled MCP server used to develop **UnleashedMail** (a native macOS email client, in a
-separate repo). You are working on the *plugin's own assets* here — treat them as software.
+separate repo). You are working on the _plugin's own assets_ here — treat them as software.
 
 > **App-development knowledge lives in the shipped assets, not in this file.** Swift/SwiftUI/GRDB/
 > MSAL/Gmail/Graph/Curator conventions are carried by the plugin's `agents/*.md` and `skills/*/SKILL.md`
@@ -16,7 +16,7 @@ separate repo). You are working on the *plugin's own assets* here — treat them
 ```
 agents/      21 subagents (*.md)                 skills/     21 skills (*/SKILL.md)
 hooks/       hooks.json (10 events)              (incl. workflow skills brainstorm/implement/pr-review,
-                                                  disable-model-invocation — commands merged into skills)
+                                                  model-invocable — commands merged into skills)
 mcp/review-synthesizer/  1 bundled stdio MCP server (.mcp.json)
 scripts/     hook scripts + validators + lib/    docs/       planning/ (+ audits/ on later branches)
 .claude-plugin/  plugin.json + marketplace.json
@@ -26,6 +26,7 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 ## Authoring rules (verified against code.claude.com/docs — the audit fixed real drift here)
 
 **Sub-agent frontmatter** (`agents/*.md`) — keys are **camelCase**:
+
 - `tools:` (allowlist; **omit to inherit ALL tools incl. MCP**), `disallowedTools:` (deny-list). **There is
   no `allowed-tools` for sub-agents** — that key is silently ignored (it's a skills/commands key). The CI
   validator now rejects it.
@@ -33,12 +34,15 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
   under install-defined server prefixes (Atlassian, Context7), **omit `tools:`** and scope with
   `disallowedTools:` (see jira-manager, modern-standards-planner).
 - `model:` ∈ the runtime alias table — `sonnet` | `opus` | `haiku` | `fable` | `best` | `opusplan` |
-  the long-context forms `sonnet[1m]` / `opus[1m]` / `fable[1m]` — plus `inherit` (default) or a full
-  model id. There is **no** `default` alias, and only sonnet/opus/fable take `[1m]`.
+  the long-context forms `sonnet[1m]` / `opus[1m]` / `fable[1m]` — plus `inherit` (default). A **full
+  model id is rejected** by the validator, for agents and skills alike (COREDEV-2875): a pin goes stale
+  silently, while an alias resolves to the newest model of its family. There is **no** `default` alias
+  (it is rejected too), and only sonnet/opus/fable take `[1m]`.
   `opus` is an **alias** that tracks the current Opus generation; `claude-opus-5` is a hard version
-  pin. Prefer the alias. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
+  pin, which CI rejects. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
   conflated the two and is superseded by AGENT_CONTRACTS §11's consequence-based tiering.)
-- **`effort:` is mandatory** — every agent and every skill pins `effort: xhigh`; CI enforces it.
+- **`effort:` is a FLOOR, not a pin** — assets omit `effort:` and **inherit** the session level, so a
+  `max` session is not silently pulled down. CI rejects any pin below `xhigh`; `xhigh`/`max` are legal.
   Frontmatter effort is an override in BOTH directions (it pulls a `max` session down), and
   `CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor is not enforceable from inside the plugin.
 - `skills:` (YAML list) preloads a skill's **SKILL.md body** (not its `references/`) at startup.
@@ -46,7 +50,7 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
   (it silently re-grants write access; this bit swift-reviewer once).
 
 **Skills/commands** use kebab `allowed-tools:` — a **pre-approval grant, not a restriction** (`allowed-tools`
-itself never denies; to *remove* tools for a skill's active window use the separate `disallowed-tools:`
+itself never denies; to _remove_ tools for a skill's active window use the separate `disallowed-tools:`
 key, cleared on the next user message). Don't grant unscoped `Bash, Write, Edit` on a pure-knowledge skill.
 
 **Hooks** (`hooks/hooks.json` + `scripts/*.sh`): PostToolUse runs **after** the tool and cannot block —
@@ -63,10 +67,31 @@ VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json
 bash scripts/test-hooks.sh                                         # hook stdin-contract harness
 python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
 python3 -m unittest discover -s scripts/tests                      # scripts suite (review-verdict gate)
-shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
+shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh scripts/ci/*.sh .githooks/pre-commit
+python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md   # line-pinned citations rot when files shift
+git diff --check "$(git merge-base origin/alpha HEAD)" HEAD                                             # whitespace vs the PR's base, as CI does: origin/alpha; origin/main for a promotion
+python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv
 ```
 
-The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
+**Run the whole list, not the first six** — CI's `validate` job was red on PR #67 for two review passes
+because the plan-citation linter (added there in the same PR) was never part of the local gate, and
+the local suite kept passing while a shifted line pin failed the linter's own self-test.
+
+**Then review the diff locally, before `gh pr create` and before pushing fixes to an open PR:**
+`codex -c model_reasoning_effort=ultra review --base origin/alpha`. Use the PR's own base:
+`origin/alpha` for feature work, `origin/main` only for an `alpha` → `main` promotion. The plan gate
+reviews intent, not code, so skipping this makes the PR bots the first code reviewers, which is what
+happened on #106–#108.
+
+The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) also runs
+**`trunk check --index --no-fix --filter=-markdown-link-check`** — the staged diff only, never `--all`,
+bounded by a **180s** macOS-portable timeout (measured: 30.8s cold-bootstrap envelope x ~6 headroom,
+`docs/planning/evidence/COREDEV-2780-m5a-timeout-measurement.json`). It BLOCKS on a new finding and does
+**not** block on a timeout — a timeout is infrastructure, and blocking there teaches people `--no-verify`,
+which disables every other check too. It also runs the **COREDEV-2801 drift detector** (advisory, never
+blocking). The hook AGGREGATES its exit code: appending a passing command after a failing one would
+otherwise mask the failure. It runs the
 version-sync/assembly/hooks validators + an **advisory** secret/PII pattern scan over all staged text files
 (enforced by `gitleaks --staged` when installed, and by the history-aware gitleaks job in CI). It does
 **not** build/test the Swift app (this is a
@@ -75,8 +100,8 @@ Linux-friendly plugin repo — no Xcode).
 ## Mandatory processes
 
 - **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
-  reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, `gemini-3.1-pro`) and `/unleashed-mail:codex-review`
-  (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
+  reviewed by **both** `/unleashed-mail:gemini-review` (the `gemini` CLI, run isolated, model: the `DEFAULT_MODEL` that `isolated-gemini-review.sh` declares) and `/unleashed-mail:codex-review`
+  (`codex exec -c model_reasoning_effort=ultra -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.
   **Create the feature worktree FIRST**, then create the plan, snapshot, review, synthesize and
@@ -90,17 +115,59 @@ Linux-friendly plugin repo — no Xcode).
 - **Context7 (mandatory)** for any library/framework/API/CLI lookup (Swift, SwiftUI, GRDB, MSAL, Gmail/Graph,
   Claude Code docs) — do not rely on training data.
 - **Parallel tool calls** for independent work.
+- **`harness-base` and `harness/**` are PERMANENT branches, not scratch refs.**
+  `.github/workflows/trunk-parity-harness.yml` fires on `pull_request: [harness-base]` and
+  `push: ['harness/**']`. Those are REAL events deliberately: the pinned Trunk action maps
+  `workflow_dispatch` to `check-mode=all` — the mode banned from `trunk-check` — and
+  `GITHUB_EVENT_NAME` cannot be overridden, so a dispatch-driven harness measures a mode the gate
+  never runs. Deleting these branches is a change, not tidying: they are needed again at every
+  Dependabot bump of the action pin, to re-derive the extension-point enumeration cells 1 and 5
+  depend on. **A branch-CREATING push measures nothing** — GitHub sends an all-zero `before` and
+  `resolve-trunk-range.sh` fails closed — so the push observation needs a second push to an
+  already-existing `harness/**` branch.
 
 ## Repository conventions
 
+- **`harness-base` and `harness/**` are PERMANENT repository refs, not scratch branches** (COREDEV-2780
+  M2c). `.github/workflows/trunk-parity-harness.yml` fires on real `pull_request` / `push` events
+  against them because the pinned Trunk action maps `workflow_dispatch` to `check-mode=all` and
+  `GITHUB_EVENT_NAME` cannot be overridden — so a dispatch-only harness could never produce the PR and
+  push ranges cell 1 compares. They are needed again at **every Dependabot bump of the action pin**, to
+  re-derive the extension-point enumeration that re-running mutants does not cover. **Deleting them is
+  a change, not tidying.**
 - **Branches:** `feat/COREDEV-XXXX-short-description` (use the Epic key when spanning children). Work in a
-  dedicated `.claude/worktrees/<name>` worktree — never flip the main checkout's branch.
+  dedicated `.claude/worktrees/<name>` worktree branched off `origin/alpha` — never flip the main checkout's
+  branch. Feature and fix PRs target `alpha` (see **Branch flow** below).
 - **Commits:** `type(COREDEV-XXXX): description` — ticket is **mandatory**. Types: `feat`, `fix`, `chore`,
   `refactor`, `test`, `docs`.
-- **Versioning:** `plugin.json` `version` (e.g. `2.4.2`) must stay in sync with the README H1 / What's-New
-  heading and the asset counts — enforced by `validate-version-sync.sh`. Bump + CHANGELOG on release.
+- **Versioning — BUMP ON EVERY CHANGE THAT SHIPS, not on release.** The version is the _only_ signal a
+  consumer install has that anything changed. **An unbumped fix is a fix nobody receives** — even after
+  it is promoted to `main`, no installed plugin pulls it. This is why the rule differs from ordinary
+  release practice, and it has already bitten: a merged harness fix stayed undelivered because the
+  version had not moved. Bump on the PR into `alpha`; installs receive it when `alpha` is promoted.
+
+  A bump touches **five** places, all asserted by `validate-version-sync.sh` (`strict` in CI, `warn` in
+  pre-commit — so a partial bump passes locally and fails CI):
+  1. `.claude-plugin/plugin.json` `version` — the anchor
+  2. `README.md` H1 — `… Plugin vX.Y.Z`
+  3. `README.md` newest `### vX.Y.Z` What's-New section
+  4. `README.md` bold asset counts — `**N agents · N skills · N commands · N MCP server(s)**`
+  5. `.claude-plugin/marketplace.json` — the plugin entry's `version`. Without it, Claude Code picks the
+     installed version by raw cache-directory order and can reinstate an old one (COREDEV-2801).
+
+  Plus a `CHANGELOG.md` `## [X.Y.Z] — YYYY-MM-DD` section. The plugin uses plain `MAJOR.MINOR.PATCH`
+  — **not** the UnleashedMail _app's_ `MAJOR.MINOR|STATE.YYMMBB` scheme; the two repos differ.
+
 - **CI actions are SHA-pinned** (AGENT_CONTRACTS §6) — never `@vN` tags; Dependabot updates the pins.
-- **Trunk:** `main` is the integration trunk; the canonical remote is `UnleashedServices/unleashed-mail-plugin`.
+- **Branch flow: `main` > `alpha` > feature work** (maintainer decision, COREDEV-2883). Feature and fix
+  PRs target `alpha`; `main` receives work only through an `alpha` → `main` promotion PR. `main` is the
+  release channel that installed plugins update from by default. To install `alpha` instead, add the
+  marketplace as `UnleashedServices/unleashed-mail-plugin#alpha` (README "Release channels", COREDEV-2885);
+  to try one checkout, use `claude --plugin-dir <worktree>`. A promotion, and a `main` →
+  `alpha` catch-up, each need the maintainer's word. Dependabot opens version updates against `alpha`
+  (`.github/dependabot.yml` `target-branch`); its SECURITY updates still open against `main`, which GitHub
+  does not let a config change, so each one needs a catch-up afterwards. The canonical remote is
+  `UnleashedServices/unleashed-mail-plugin`.
 
 ## The bundled MCP server
 

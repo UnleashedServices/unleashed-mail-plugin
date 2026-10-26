@@ -42,6 +42,10 @@ case "$AGENT" in
 esac
 
 SLUG="$(context_branch_slug "$(context_branch)")"
+# COREDEV-2617 / D': an unresolved base persists nothing. Skip the capture entirely and exit 0 —
+# this hook passes the composed root into Python and otherwise continues through lookup, capture
+# and clear, so it needs an explicit skip rather than relying on a primitive no-op.
+unleashed_base_ok || exit 0
 ROOT="$(context_reviews_dir)"
 # agent_id (distinct per subagent, identical on a true duplicate) lets capture.py tell a duplicate
 # SubagentStop from a genuine re-review deterministically — see select_round.
